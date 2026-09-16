@@ -173,6 +173,124 @@ function migrationHasColumn(db: Database.Database, table: string, column: string
  * only declines to run migrations it has not reached yet, which is the same
  * thing an older build does.
  */
+/**
+ * The same DDL with any `CHECK (…)` that constrains `backend` removed, or null
+ * when there is none to remove (genie#702).
+ *
+ * Textual, because the constraint is INLINE in a column definition and SQLite
+ * offers no way to drop one — the table has to be rebuilt from its own DDL. The
+ * scan walks balanced parentheses rather than matching a fixed shape: the
+ * fossil's exact spelling varies by however old the install is, and a regex that
+ * assumed one spelling would silently leave the constraint in place.
+ */
+export function withoutBackendCheck(sql: string): string | null {
+    let out = sql;
+    let removed = false;
+    let from = 0;
+    for (;;) {
+        const rest = out.slice(from);
+        const offset = rest.search(/\bCHECK\s*\(/i);
+        if (offset === -1) break;
+        const start = from + offset;
+        let depth = 0;
+        let end = -1;
+        for (let i = out.indexOf('(', start); i < out.length; i += 1) {
+            if (out[i] === '(') depth += 1;
+            else if (out[i] === ')') {
+                depth -= 1;
+                if (depth === 0) {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        if (end === -1) break;
+        const clause = out.slice(start, end + 1);
+        if (!/\bbackend\b/i.test(clause)) {
+            // Somebody else's constraint — `shape IN ('agi','simple')` is a real
+            // one this table still wants. Step OVER it and keep looking; an
+            // earlier version of this stopped here, found the shape check first,
+            // and reported a fossil-carrying database as clean.
+            from = end + 1;
+            continue;
+        }
+        out = `${out.slice(0, start).trimEnd()}${out.slice(end + 1)}`;
+        removed = true;
+        from = start;
+    }
+    return removed ? out : null;
+}
+
+/**
+ * REPAIR A DATABASE OLD ENOUGH TO FORBID ITS OWN VALUES (genie#702).
+ *
+ * An install created by an early Genie carries `CHECK (backend IN
+ * ('tynn','aionima'))` inline on `workspaces.backend`. Today's v2 adds that
+ * column with no check and says why; nothing ever retrofitted the databases
+ * written before that. v77 is the first statement to write a value the fossil
+ * forbids, and it throws inside `initDatabase()` — before a single IPC handler
+ * is registered, so the window hangs on "signing in" and no host service, site
+ * or pty-host starts either.
+ *
+ * It runs HERE, ahead of the migration loop, for a reason that is not stylistic:
+ * `workspaces` is a parent table, the rebuild has to drop it, and `PRAGMA
+ * foreign_keys` is SILENTLY IGNORED inside a transaction — which is where every
+ * migration runs. A later migration could not repair this either, since v77
+ * throws long before one would be reached.
+ *
+ * No-ops on every database that does not carry the fossil, which is all of them
+ * from here on: the check is one `sqlite_master` read.
+ */
+export function repairLegacyWorkspaceBackendCheck(d: Database.Database): boolean {
+    const table = d
+        .prepare<[], { sql: string } | undefined>(
+            `SELECT sql FROM sqlite_master WHERE type='table' AND name='workspaces'`,
+        )
+        .get();
+    const sql = table?.sql;
+    if (!sql) return false;
+    const rebuilt = withoutBackendCheck(sql);
+    if (!rebuilt) return false;
+
+    // The indexes go with the dropped table, so they are replayed from their own
+    // stored DDL rather than re-declared here — this file must not have to know
+    // which indexes a database of any age happens to carry.
+    const indexes = d
+        .prepare<[], { sql: string }>(
+            `SELECT sql FROM sqlite_master
+              WHERE type='index' AND tbl_name='workspaces' AND sql IS NOT NULL`,
+        )
+        .all();
+
+    const TEMP = 'workspaces_genie702';
+    d.pragma('foreign_keys = OFF');
+    try {
+        d.exec('BEGIN');
+        try {
+            d.exec(rebuilt.replace(/CREATE\s+TABLE\s+("?workspaces"?)/i, `CREATE TABLE ${TEMP}`));
+            // Column-for-column, in the table's own order: the rebuilt DDL is the
+            // stored one minus the constraint, so nothing is dropped or reordered.
+            d.exec(`INSERT INTO ${TEMP} SELECT * FROM workspaces`);
+            d.exec('DROP TABLE workspaces');
+            d.exec(`ALTER TABLE ${TEMP} RENAME TO workspaces`);
+            for (const index of indexes) d.exec(index.sql);
+            const violations = d.pragma('foreign_key_check') as unknown[];
+            if (violations.length > 0) {
+                throw new Error(
+                    `workspaces rebuild left ${violations.length} foreign-key violation(s)`,
+                );
+            }
+            d.exec('COMMIT');
+        } catch (e) {
+            d.exec('ROLLBACK');
+            throw e;
+        }
+    } finally {
+        d.pragma('foreign_keys = ON');
+    }
+    return true;
+}
+
 export function runMigrations(
     d: Database.Database,
     options: { upTo?: number } = {},
@@ -188,6 +306,12 @@ export function runMigrations(
     const current = row?.version ?? 0;
     const applied: number[] = [];
     let ambiguousLinks: number | null = null;
+
+    // BEFORE the loop, and outside any transaction — see the function's own note
+    // (genie#702). A database old enough to carry the fossil CHECK cannot get
+    // past v77 without this, and v77 taking `initDatabase` down means no IPC
+    // handlers register at all.
+    repairLegacyWorkspaceBackendCheck(d);
 
     const migrations: Array<{ version: number; runner: (db: Database.Database) => void }> = [
         {
