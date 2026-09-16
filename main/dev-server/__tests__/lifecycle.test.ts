@@ -1024,3 +1024,144 @@ describe('workspace remove', () => {
         });
     });
 });
+
+// --- hibernation (genie#672) ----------------------------------------------------
+
+describe('hibernation (genie#672)', () => {
+    /** Two workspaces on one shared Postgres; `beta` also has a Postgres of its own. */
+    function hibernationWorld(asleep: Set<string>) {
+        const runtime = fakeRuntime();
+        const serviceConfigs: Record<string, DevServices> = {
+            [WS.id]: { 'svc-a': PG },
+            [OTHER.id]: { 'svc-b': PG },
+        };
+        const services = serviceManager(runtime, serviceConfigs, [WS, OTHER], {
+            isWorkspaceHibernated: (id) => asleep.has(id),
+        });
+        const spawn = deadHostSpawn();
+        const siteConfigs: Record<string, DevSites> = { [OTHER.id]: { 'site-b': { ...HOST_SITE, genName: 'web.beta.gen' } } };
+        const sites = siteManager(runtime, siteConfigs, [WS, OTHER], {
+            hostSpawn: spawn.binding,
+            allocateFreePort: async () => 5321,
+            isWorkspaceHibernated: (id) => asleep.has(id),
+        });
+        const lifecycle = createDevServerLifecycle({
+            resolveRuntime: async () => ({ runtime, detection: await runtime.detect() }),
+            workspaceFor: (id) => [WS, OTHER].find((w) => w.id === id) ?? null,
+            devSitesFor: (id) => siteConfigs[id] ?? {},
+            devServicesFor: (id) => serviceConfigs[id] ?? {},
+            sites: () => sites,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+            isHibernated: (id) => asleep.has(id),
+        });
+        return { runtime, services, sites, spawn, lifecycle };
+    }
+
+    it('hibernating releases a SHARED engine — it keeps serving the other workspace — and stops the site', async () => {
+        const asleep = new Set<string>();
+        const w = hibernationWorld(asleep);
+        await w.services.acquire(WS.id, 'svc-a');
+        await w.services.acquire(OTHER.id, 'svc-b');
+        await w.sites.start(OTHER.id, 'site-b');
+        expect(w.sites.list(OTHER.id)[0]?.state).toBe('running');
+        expect(w.services.list(WS.id)[0]?.holders).toBe(2);
+
+        asleep.add(OTHER.id);
+        const result = await w.lifecycle.onWorkspaceHibernate(OTHER.id);
+        expect(result.errors).toEqual([]);
+
+        const shared = w.runtime.containers.get(serviceContainerNameFor('postgres-16'))?.id;
+        expect(shared).toBeTruthy();
+        expect(w.runtime.stopped).not.toContain(shared);
+        expect(w.services.list(WS.id)[0]?.holders).toBe(1);
+        expect(w.sites.list(OTHER.id)[0]?.state).toBe('stopped');
+    });
+
+    it('hibernating STOPS an engine no other workspace holds, so it is not burning for nobody', async () => {
+        const asleep = new Set<string>();
+        const w = hibernationWorld(asleep);
+        await w.services.acquire(OTHER.id, 'svc-b');
+        const engine = w.runtime.containers.get(serviceContainerNameFor('postgres-16'))?.id;
+        expect(engine).toBeTruthy();
+        expect(w.runtime.stopped).not.toContain(engine);
+
+        asleep.add(OTHER.id);
+        await w.lifecycle.onWorkspaceHibernate(OTHER.id);
+        expect(w.runtime.stopped).toContain(engine);
+    });
+
+    it('boot does not resume an enabled site in a hibernated workspace', async () => {
+        const w = hibernationWorld(new Set([OTHER.id]));
+        await w.lifecycle.onBoot();
+        expect(w.spawn.started).toEqual([]);
+        expect(w.sites.list(OTHER.id)[0]?.state).toBe('stopped');
+    });
+
+    it('POSITIVE CONTROL: the same site resumes at boot when its workspace is awake', async () => {
+        const w = hibernationWorld(new Set());
+        await w.lifecycle.onBoot();
+        expect(w.spawn.started).toEqual(['site-b']);
+    });
+
+    it('boot adoption does not make a hibernated workspace a holder of an engine still running for others', async () => {
+        const w = hibernationWorld(new Set([OTHER.id]));
+        await w.services.acquire(WS.id, 'svc-a');
+        // A fresh manager, as after a restart, finding the shared engine running.
+        const after = serviceManager(w.runtime, { [WS.id]: { 'svc-a': PG }, [OTHER.id]: { 'svc-b': PG } }, [WS, OTHER], {
+            isWorkspaceHibernated: (id) => id === OTHER.id,
+        });
+        await after.adopt();
+        expect(after.list(WS.id)[0]?.holders).toBe(1);
+        expect(after.list(OTHER.id)[0]?.state).toBe('stopped');
+    });
+
+    it('opening a hibernated workspace starts nothing', async () => {
+        const host = fakeHostWebSockets();
+        const runtime = fakeRuntime();
+        const services = serviceManager(runtime, { [WS.id]: { 'ws-a': WEBSOCKETS } }, [WS], {
+            hostWebSockets: host.service,
+            isWorkspaceHibernated: () => true,
+        });
+        const lifecycle = createDevServerLifecycle({
+            resolveRuntime: async () => ({ runtime, detection: DOCKER_OK }),
+            workspaceFor: () => WS,
+            devSitesFor: () => ({}),
+            devServicesFor: () => ({ 'ws-a': WEBSOCKETS }),
+            sites: () => null,
+            services: () => services,
+            platform: 'linux',
+            hostIds: null,
+            isHibernated: () => true,
+        });
+        const result = await lifecycle.onWorkspaceOpen(WS.id);
+        expect(result).toEqual({ ensured: false, reason: 'hibernating' });
+        expect(host.acquired).toEqual([]);
+        expect(runtime.ran).toEqual([]);
+    });
+
+    it('a site start in a hibernated workspace is refused, naming why', async () => {
+        const w = hibernationWorld(new Set([OTHER.id]));
+        const status = await w.sites.start(OTHER.id, 'site-b');
+        expect(status.state).toBe('failed');
+        expect(status.error).toMatch(/hibernat/i);
+        expect(w.spawn.started).toEqual([]);
+    });
+
+    it('a service acquire in a hibernated workspace is refused', async () => {
+        const w = hibernationWorld(new Set([OTHER.id]));
+        const status = await w.services.acquire(OTHER.id, 'svc-b');
+        expect(status.state).not.toBe('running');
+        expect(w.runtime.ran).toEqual([]);
+    });
+
+    it('waking brings back the workspace’s enabled services and sites — and only that workspace’s', async () => {
+        const asleep = new Set<string>();
+        const w = hibernationWorld(asleep);
+        // `acme` is awake with a site the user never started; it must stay down.
+        await w.lifecycle.onWorkspaceWake(OTHER.id);
+        expect(w.services.list(OTHER.id).map((r) => r.state)).toEqual(['running']);
+        expect(w.spawn.started).toEqual(['site-b']);
+    });
+});

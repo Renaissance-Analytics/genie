@@ -46,6 +46,7 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[] } {
         sentDmReceipts: () => [],
         clearChannel: () => 0,
         deleteDmThread: () => 0,
+        deleteDmsFor: () => 0,
         getMessage: (id) => rows.find((m) => m.id === id) ?? null,
         getAttachment: (id) => {
             for (const m of rows) {

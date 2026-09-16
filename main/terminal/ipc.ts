@@ -25,7 +25,9 @@ import {
     markWorkspaceAgentTransportState,
     type TerminalSpecRow,
     type TerminalSpecMeta,
+    isWorkspaceHibernated,
 } from '../db';
+import { hibernationSpawnRefusal } from '../workspace/hibernation';
 import {
     UNLIMITED,
     countAgentTerminals,
@@ -89,6 +91,7 @@ import {
     recordProcessOutput,
     getProcessLog,
     clearProcessLog,
+    stopProcessForHibernation,
 } from './process-supervisor';
 import { getScheduleInfo, runScheduleNow } from './process-scheduler';
 import {
@@ -485,6 +488,13 @@ export function createAgentTerminal(opts: {
         action?: 'notify' | 'wake';
     };
 }): { id: string; scrollback: string; existing: boolean; command?: string; chatSessionId: string | null } {
+    // A sleeping workspace opens no terminal (genie#672) — an agent's, a remote
+    // window's or a person's. Refused before an id is minted or anything spawns.
+    // The lookup is passed as a THUNK, so a db that cannot answer is caught by
+    // `hibernationSpawnRefusal` and read as awake rather than thrown from here.
+    const asleep = hibernationSpawnRefusal(opts.workspaceId, (id) => isWorkspaceHibernated(id));
+    if (asleep) throw new Error(asleep);
+
     const id = opts.id ?? crypto.randomUUID();
     const resolved = resolveDefaultShell(dbSettingsProvider());
 
@@ -1234,6 +1244,12 @@ export function registerTerminalIpc(): void {
             // instead of an interactive login session. Override the args from
             // the spec's meta.command (the shell is resolved above).
             const spec = getTerminalSpec(opts.id);
+            // A panel mounting in a sleeping workspace must not bring its terminal
+            // back (genie#672): the same refusal every other spawn path gets.
+            const asleep = hibernationSpawnRefusal(spec?.workspace_id, (id) =>
+                isWorkspaceHibernated(id),
+            );
+            if (asleep) throw new Error(asleep);
             if (spec?.type === 'process' && spec.meta?.command) {
                 opts = {
                     ...opts,
@@ -1604,6 +1620,28 @@ export function stopWorkspaceTerminals(workspaceId: string): string[] {
             killTerminalById(spec.id);
         } catch {
             /* best-effort — one stubborn terminal can't block the teardown */
+        }
+        stopped.push(spec.id);
+    }
+    return stopped;
+}
+
+/**
+ * Stop EVERY terminal and process in a workspace because it is HIBERNATING
+ * (genie#672). {@link stopWorkspaceTerminals}, with one difference: a process is
+ * stopped without recording a user pause, so the wake brings back what a fresh
+ * boot would. Returns the ids stopped.
+ */
+export function stopWorkspaceTerminalsForHibernation(workspaceId: string): string[] {
+    if (!workspaceId) return [];
+    const stopped: string[] = [];
+    for (const spec of listTerminalSpecs()) {
+        if (spec.workspace_id !== workspaceId) continue;
+        try {
+            if (spec.type === 'process') stopProcessForHibernation(spec.id);
+            else killTerminalById(spec.id);
+        } catch {
+            /* best-effort — one stubborn terminal can't hold the workspace awake */
         }
         stopped.push(spec.id);
     }

@@ -1,4 +1,5 @@
 import { getTerminalSpec, listTerminalSpecs, updateTerminalSpec } from '../db';
+import { inHibernatingWorkspace } from './process-supervisor';
 import { agentInboxBroker } from '../agentinbox/broker';
 import { mobileEmit } from '../mobile/server';
 import { broadcastLocal } from '../remote';
@@ -98,6 +99,8 @@ function isArmable(spec: SpecLike | null | undefined): boolean {
     if (!scheduleOf(spec)) return false;
     if (spec!.enabled === false) return false;
     if (spec!.meta?.schedule_pending_approval === true) return false;
+    // A sleeping workspace's tasks do not fire (genie#672); waking re-arms them.
+    if (inHibernatingWorkspace(spec as { workspace_id?: string | null })) return false;
     return true;
 }
 
@@ -278,6 +281,8 @@ export function runScheduleNow(specId: string): void {
 function run(specId: string, trigger: 'schedule' | 'manual'): void {
     const spec = getTerminalSpec(specId);
     if (!spec || !scheduleOf(spec)) return;
+    // Not even a run-now while the workspace is asleep (genie#672).
+    if (inHibernatingWorkspace(spec)) return;
     const st = state(specId);
     const at = Date.now();
 
@@ -401,6 +406,21 @@ export function startSchedules(): void {
     ensureWired();
     for (const spec of listTerminalSpecs()) {
         if (isArmable(spec)) armSchedule(spec.id);
+    }
+}
+
+/** Disarm every scheduled task in one workspace — a HIBERNATE (genie#672). */
+export function disarmWorkspaceSchedules(workspaceId: string): void {
+    for (const spec of listTerminalSpecs()) {
+        if (spec.workspace_id === workspaceId) disarmSchedule(spec.id);
+    }
+}
+
+/** Arm every armable task in one workspace — a WAKE (genie#672). */
+export function armWorkspaceSchedules(workspaceId: string): void {
+    ensureWired();
+    for (const spec of listTerminalSpecs()) {
+        if (spec.workspace_id === workspaceId && isArmable(spec)) armSchedule(spec.id);
     }
 }
 

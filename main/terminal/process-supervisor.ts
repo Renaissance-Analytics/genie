@@ -5,9 +5,25 @@ import {
 } from '@particle-academy/fancy-term-host';
 import {
     getTerminalSpec,
+    isWorkspaceHibernated,
     listTerminalSpecs,
     updateTerminalSpec,
 } from '../db';
+
+/**
+ * Is this spec's workspace HIBERNATING (genie#672)? Nothing in a sleeping
+ * workspace starts until the user wakes it. A question that cannot be answered
+ * reads as awake: it must not hold a workspace's processes down.
+ */
+export function inHibernatingWorkspace(spec: { workspace_id?: string | null } | null | undefined): boolean {
+    const id = spec?.workspace_id;
+    if (!id) return false;
+    try {
+        return isWorkspaceHibernated(id) === true;
+    } catch {
+        return false;
+    }
+}
 import { dbSettingsProvider } from './genie-adapter';
 import { buildProcessArgs } from './process-spawn';
 import { decideOnExit, type ProcessStatus } from './process-lifecycle';
@@ -292,6 +308,8 @@ export function getProcessStatuses(): Record<string, ProcessStatus> {
 export function startProcess(specId: string): void {
     const spec = getTerminalSpec(specId);
     if (!spec || spec.type !== 'process' || !spec.meta?.command) return;
+    // Asleep until the user wakes the workspace (genie#672) — whoever is asking.
+    if (inHibernatingWorkspace(spec)) return;
     const st = ensure(specId);
     if (st.status === 'running' || st.status === 'restarting') {
         // Already live — treat a redundant start as a restart instead.
@@ -438,6 +456,30 @@ export async function stopProcess(
     };
 }
 
+/**
+ * Stop a process because its workspace is HIBERNATING (genie#672).
+ *
+ * Not {@link stopProcess}: that records the USER'S pause (`user_stopped`) and
+ * clears `was_running`, and a wake brings back everything enabled — so a process
+ * stopped for a hibernation must come back the way a relaunch would bring it
+ * back. The in-memory stop is enough to keep its exit from restarting it, and
+ * `startProcess` refuses anyway while the workspace is asleep.
+ */
+export function stopProcessForHibernation(specId: string): void {
+    const st = ensure(specId);
+    clearTimer(st);
+    st.userStopped = true;
+    st.restartRequested = false;
+    st.attempt = 0;
+    let killed = false;
+    try {
+        killed = terminalManager().kill(specId);
+    } catch {
+        killed = false;
+    }
+    if (!killed) setStatus(specId, 'stopped');
+}
+
 /** Restart a process: kill then respawn once the old pty's exit lands. */
 export function restartProcess(specId: string): void {
     const st = ensure(specId);
@@ -555,8 +597,11 @@ export function onProcessPtyExit(
  * and it used to restart, on every launch, a process the user had just stopped.
  * The user's own decision does not get outvoted by config.
  */
-export function startAutostartProcesses(): void {
+export function startAutostartProcesses(onlyWorkspaceId?: string): void {
     for (const spec of listTerminalSpecs()) {
+        // `onlyWorkspaceId` is a WAKE bringing one workspace back (genie#672).
+        if (onlyWorkspaceId !== undefined && spec.workspace_id !== onlyWorkspaceId) continue;
+        if (inHibernatingWorkspace(spec)) continue;
         if (
             spec.type === 'process' &&
             spec.enabled !== false &&

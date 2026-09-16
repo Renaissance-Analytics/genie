@@ -1,5 +1,6 @@
 import { IconBox, IconLayoutGrid } from './icons';
 import TerminalGrid from './TerminalGrid';
+import { HibernatedFloor } from './Hibernation';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import type { LayoutMode } from './TerminalGrid';
@@ -61,14 +62,31 @@ export interface FloorState {
     /** Status bar: how many projects have a live panel, and how many are running. */
     projectCount: number;
     activeCount: number;
+    /** Set when the ACTIVE workspace is hibernating (genie#672). Its panels are
+     *  not mounted — nothing in it may start — so the floor says so and offers
+     *  the way back. */
+    hibernated?: { name: string; waking: boolean; onWake: () => void };
 }
 
 export default function Floor(state: FloorState) {
-    const { projectCount, activeCount, ...grid } = state;
+    const { projectCount, activeCount, hibernated, ...grid } = state;
     return (
         <>
             <div className="gbody">
-                <TerminalGrid {...grid} />
+                <TerminalGrid
+                    {...grid}
+                    // In place of the empty workspace's Add tiles, so the OTHER
+                    // workspaces' background panels stay mounted behind it.
+                    emptyState={
+                        hibernated ? (
+                            <HibernatedFloor
+                                name={hibernated.name}
+                                waking={hibernated.waking}
+                                onWake={hibernated.onWake}
+                            />
+                        ) : undefined
+                    }
+                />
             </div>
             <StatusBar
                 panelCount={state.specs.length}

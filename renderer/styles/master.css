@@ -7665,3 +7665,100 @@ body.gutter-dragging .grid-gutter {
     border-radius: 999px;
     padding: 0 6px;
 }
+
+/* ===== HIBERNATING WORKSPACE (genie#672) ================================== */
+/* The owner: "A Hibernated workspace is styled grey with a set of 3 zzz in front
+   of the agent avatar with each z a little bigger in size." Grey is the whole
+   row, desaturated and dimmed — it is asleep, not merely idle — while the z's
+   stay legible so the row says WHY it is grey. */
+.tproj.is-hibernated > .tproj-head > *:not(.ws-zzz) {
+    filter: grayscale(1);
+    opacity: 0.55;
+}
+.tproj.is-hibernated > .tproj-head .pname {
+    color: var(--fg-3);
+    font-weight: 500;
+}
+.crail-btn.is-hibernated {
+    filter: grayscale(1);
+    opacity: 0.5;
+}
+
+/* Three z's, each a little bigger, riding up as they grow. */
+.ws-zzz {
+    display: inline-flex;
+    align-items: flex-end;
+    flex: none;
+    gap: 1px;
+    margin-right: 4px;
+    color: var(--fg-3);
+    font-weight: 700;
+    line-height: 1;
+    user-select: none;
+}
+.ws-zzz > span:nth-child(1) {
+    font-size: 8px;
+}
+.ws-zzz > span:nth-child(2) {
+    font-size: 10px;
+    transform: translateY(-2px);
+}
+.ws-zzz > span:nth-child(3) {
+    font-size: 13px;
+    transform: translateY(-5px);
+}
+/* Still going to sleep: the agents are being asked for their handoffs, which
+   takes as long as they take. The drift says the workspace is mid-change rather
+   than already asleep. */
+.ws-zzz.is-busy > span {
+    animation: ws-zzz-drift 1.4s ease-in-out infinite;
+}
+.ws-zzz.is-busy > span:nth-child(2) {
+    animation-delay: 0.18s;
+}
+.ws-zzz.is-busy > span:nth-child(3) {
+    animation-delay: 0.36s;
+}
+@keyframes ws-zzz-drift {
+    0%,
+    100% {
+        opacity: 0.35;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ws-zzz.is-busy > span {
+        animation: none;
+        opacity: 0.7;
+    }
+}
+
+/* The floor of a sleeping workspace — where the Add tiles would be. */
+.hibernated-floor {
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    max-width: 420px;
+    padding: 28px 32px;
+    text-align: center;
+    border: 1.5px dashed var(--border-2);
+    border-radius: var(--radius-xl);
+    background: var(--bg-0);
+}
+.hibernated-floor .ws-zzz {
+    margin-right: 0;
+}
+.hibernated-floor-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-2);
+}
+.hibernated-floor-body {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-3);
+}

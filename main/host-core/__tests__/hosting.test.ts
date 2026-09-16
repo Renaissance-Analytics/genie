@@ -194,6 +194,14 @@ describe('buildHostingDeps — the host-core hosting seam', () => {
         expect(d.lifecycle.resolveRuntime).toBe(ports.resolveRuntime);
     });
 
+    it('hands ONE hibernation answer to the site manager, the service manager and the lifecycle (genie#672)', () => {
+        const isWorkspaceHibernated = (id: string) => id === 'asleep';
+        const d = buildHostingDeps(fakePorts({ isWorkspaceHibernated }));
+        expect(d.sites.isWorkspaceHibernated).toBe(isWorkspaceHibernated);
+        expect(d.services.isWorkspaceHibernated).toBe(isWorkspaceHibernated);
+        expect(d.lifecycle.isHibernated).toBe(isWorkspaceHibernated);
+    });
+
     it('probes SERVICES (no in-container check) but not SITES (they probe through Caddy already)', () => {
         const d = buildHostingDeps(fakePorts());
         expect(typeof d.services.probeReady).toBe('function');

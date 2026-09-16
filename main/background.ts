@@ -179,7 +179,7 @@ import { terminalIsBlocked } from './agents/injection-guard';
 import { getChangelog } from './updater/changelog';
 import { deliverNudge, type NudgeIO } from './agentinbox/nudge-delivery';
 import { dbAgentInboxStore } from './agentinbox/store';
-import { getWorkspaceAgentAccess } from './db';
+import { getWorkspaceAgentAccess, isWorkspaceHibernated } from './db';
 import { getTynnBackend } from './backend/registry';
 import { installKnowledgeBroadcast } from './knowledge/presence';
 import {
@@ -1732,6 +1732,8 @@ app.whenReady().then(async () => {
     };
     hostingHandles = initHosting({
         resolveRuntime: () => resolveContainerRuntime(),
+        // A hibernating workspace starts nothing until it is woken (genie#672).
+        isWorkspaceHibernated: (id) => isWorkspaceHibernated(id),
         listWorkspaces: () => listWorkspaces().map(asDevWorkspace),
         workspaceFor: (id) => {
             const row = getWorkspace(id);
@@ -2034,6 +2036,9 @@ app.whenReady().then(async () => {
         agentInboxBroker.setWorkspaceAccessResolver((workspaceId) =>
             getWorkspaceAgentAccess(workspaceId),
         );
+        // A hibernating workspace's agents are asleep: not listed, not messageable
+        // (genie#672).
+        agentInboxBroker.setHibernationResolver((workspaceId) => isWorkspaceHibernated(workspaceId));
         // Server-push: on live delivery, nudge the recipient's MCP GET SSE stream
         // (the "inbox over a hooked connection" path). Route per-agent via its
         // terminal's session when the client echoed one; else fall back to the

@@ -5,6 +5,8 @@ import {
     IconGlobe,
     IconMaximize,
     IconMessage,
+    IconPause,
+    IconPlay,
     IconPlus,
     IconServer,
     IconSettings,
@@ -38,6 +40,11 @@ interface Props {
     onProcessManager?: () => void;
     /** Send feedback about GENIE to this workspace's Tynn project (Tynn #249). */
     onFeedback?: () => void;
+    /** HIBERNATION (genie#672) — asleep, or going either way right now. */
+    hibernated?: boolean;
+    busy?: 'hibernating' | 'waking' | null;
+    onHibernate?: () => void;
+    onWake?: () => void;
     onRemove: () => void;
 }
 
@@ -60,6 +67,10 @@ export default function ProjectContextMenu({
     onSiteManager,
     onProcessManager,
     onFeedback,
+    hibernated = false,
+    busy = null,
+    onHibernate,
+    onWake,
     onRemove,
 }: Props) {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -122,26 +133,33 @@ export default function ProjectContextMenu({
                         onClose();
                     }}
                 />
-                <CtxItem
-                    icon={<IconPlus size={14} />}
-                    label="Add Terminal"
-                    onClick={() => {
-                        onAddTerminal();
-                        onClose();
-                    }}
-                />
+                {/* A sleeping workspace opens no terminal and starts no agent —
+                    main refuses both — so neither is offered here. Waking is what
+                    there is to do, and it is the first thing in the menu. */}
+                {!hibernated && (
+                    <CtxItem
+                        icon={<IconPlus size={14} />}
+                        label="Add Terminal"
+                        onClick={() => {
+                            onAddTerminal();
+                            onClose();
+                        }}
+                    />
+                )}
                 {/* An AGENT, not a terminal. Creating one was MCP-only until now —
                     the form existed and was unreachable, because `panelLauncherTypes()`
                     filters out every specialized type. Right-clicking the workspace is
                     where a person looks for this. */}
-                <CtxItem
-                    icon={<IconPlus size={14} />}
-                    label="New agent…"
-                    onClick={() => {
-                        onNewAgent();
-                        onClose();
-                    }}
-                />
+                {!hibernated && (
+                    <CtxItem
+                        icon={<IconPlus size={14} />}
+                        label="New agent…"
+                        onClick={() => {
+                            onNewAgent();
+                            onClose();
+                        }}
+                    />
+                )}
                 {/* The workspace's AGENTS — the roster, and the `.agents/*`
                     files it has that Genie has not registered (genie#465). Its
                     own entry, beside the other "go and do something with this
@@ -215,6 +233,33 @@ export default function ProjectContextMenu({
             <div className="proj-popover-divider" />
 
             <div className="proj-popover-section">
+                {/* HIBERNATE / WAKE (genie#672). Not destructive — nothing is
+                    deleted — but it is the one item that stops a whole workspace,
+                    so it sits down here with removal rather than among the
+                    everyday "open something" actions. */}
+                {hibernated
+                    ? onWake && (
+                          <CtxItem
+                              icon={<IconPlay size={14} />}
+                              label={busy === 'waking' ? 'Waking…' : 'Wake workspace'}
+                              onClick={() => {
+                                  if (busy) return;
+                                  onWake();
+                                  onClose();
+                              }}
+                          />
+                      )
+                    : onHibernate && (
+                          <CtxItem
+                              icon={<IconPause size={14} />}
+                              label={busy === 'hibernating' ? 'Hibernating…' : 'Hibernate workspace'}
+                              onClick={() => {
+                                  if (busy) return;
+                                  onHibernate();
+                                  onClose();
+                              }}
+                          />
+                      )}
                 <CtxItem
                     icon={<IconTrash size={14} />}
                     label="Remove from Genie"

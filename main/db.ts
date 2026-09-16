@@ -2855,6 +2855,22 @@ export function runMigrations(
                 db.exec(`DROP TABLE IF EXISTS backend_connections`);
             },
         },
+        {
+            // HIBERNATION (genie#672): when the user put the whole workspace to
+            // sleep, or NULL while it is awake. Machine-local like `site_run_state`
+            // — a workspace asleep here is not asleep on another machine — and read
+            // by every path that starts something on its own, so a hibernated
+            // workspace stays asleep through upgrades, restarts and crash recovery.
+            // Idempotent ADD COLUMN like every other one here — a replay onto a
+            // database that already carries the column must no-op, not throw.
+            version: 78,
+            runner: (db) => {
+                const cols = workspaceColumns(db);
+                if (!cols.has('hibernated_at')) {
+                    db.exec(`ALTER TABLE workspaces ADD COLUMN hibernated_at INTEGER`);
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3789,6 +3805,9 @@ export interface WorkspaceRow {
      *  pre-feature behaviour where channels were ungoverned. Resolve via
      *  {@link getWorkspaceAgentAccess}, never read raw. */
     agent_access: WorkspaceAgentAccess;
+    /** HIBERNATION (genie#672): epoch ms the user put this workspace to sleep, or
+     *  NULL when it is awake. Resolve via {@link isWorkspaceHibernated}. */
+    hibernated_at?: number | null;
     /** WORKSTATION OPERATOR (Tynn #248): 1 = this workspace's agent may act on
      *  every workspace on this machine. 0/absent = no. Resolve via
      *  {@link isWorkstationOperator}, never read raw. */
@@ -5016,6 +5035,50 @@ export function deleteAppGrant(appId: string): void {
 }
 
 /** Grant or revoke the workstation-operator designation. */
+/**
+ * Put a workspace to sleep, or wake it (genie#672). Only the flag: what hibernating
+ * or waking DOES to terminals, sites and services is `workspace/hibernation.ts`.
+ */
+export function setWorkspaceHibernatedIn(
+    d: Database.Database,
+    id: string,
+    on: boolean,
+    at: number = Date.now(),
+): void {
+    d.prepare('UPDATE workspaces SET hibernated_at = ? WHERE id = ?').run(on ? at : null, id);
+}
+
+export function setWorkspaceHibernated(id: string, on: boolean): void {
+    setWorkspaceHibernatedIn(getDb(), id, on);
+}
+
+/** Is this workspace asleep? An unknown workspace reads as awake. */
+export function isWorkspaceHibernatedIn(d: Database.Database, id: string): boolean {
+    const row = d
+        .prepare<[string], { hibernated_at: number | null } | undefined>(
+            'SELECT hibernated_at FROM workspaces WHERE id = ?',
+        )
+        .get(id);
+    return row?.hibernated_at != null;
+}
+
+export function isWorkspaceHibernated(id: string): boolean {
+    return isWorkspaceHibernatedIn(getDb(), id);
+}
+
+/** Every hibernated workspace's id. */
+export function hibernatedWorkspaceIdsIn(d: Database.Database): string[] {
+    return (
+        d.prepare('SELECT id FROM workspaces WHERE hibernated_at IS NOT NULL ORDER BY id').all() as Array<{
+            id: string;
+        }>
+    ).map((r) => r.id);
+}
+
+export function hibernatedWorkspaceIds(): string[] {
+    return hibernatedWorkspaceIdsIn(getDb());
+}
+
 export function setWorkstationOperator(id: string, on: boolean): void {
     getDb()
         .prepare('UPDATE workspaces SET workstation_operator = ? WHERE id = ?')

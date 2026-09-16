@@ -371,6 +371,12 @@ export interface HostProcessRun {
 
 export interface DevSiteManagerDeps {
     /**
+     * Is this workspace HIBERNATING (genie#672)? Nothing in a sleeping workspace
+     * starts on its own — not at boot, not on open, not from a caller — until the
+     * user wakes it. Absent ⇒ never.
+     */
+    isWorkspaceHibernated?: (workspaceId: string) => boolean;
+    /**
      * Which runtime, and is it usable. Called per action rather than resolved
      * once: a user who installs Docker must not have to restart Genie.
      */
@@ -645,9 +651,11 @@ export interface DevSiteManager {
      * Bring back the ENABLED sites that are not running (genie#190, genie#216).
      * Boot only, and strictly after {@link adopt} — what survived is adopted, what
      * did not is started. A site nobody enabled is never started, and neither is
-     * one the user stopped (genie#407). Never throws.
+     * one the user stopped (genie#407), nor any in a HIBERNATING workspace
+     * (genie#672). `workspaceId` narrows it to one workspace — how a wake brings
+     * its sites back. Never throws.
      */
-    resumeEnabledSites(): Promise<void>;
+    resumeEnabledSites(workspaceId?: string): Promise<void>;
     /** RUNNING http sites as Testing-Browser rows. Synchronous. */
     genSites(): DevGenSite[];
     /** The browser-exposed HOST-NATIVE routes across all workspaces — the RUNNING
@@ -2211,7 +2219,27 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         };
     }
 
+    /** See {@link DevSiteManagerDeps.isWorkspaceHibernated}. A predicate that
+     *  throws reads as awake: an unanswerable question must not hold a site down. */
+    function isHibernated(workspaceId: string): boolean {
+        try {
+            return deps.isWorkspaceHibernated?.(workspaceId) === true;
+        } catch {
+            return false;
+        }
+    }
+
     async function start(workspaceId: string, siteId: string): Promise<DevSiteStatus> {
+        // A sleeping workspace starts nothing (genie#672) — refused BEFORE the
+        // user-stop below is lifted, so a refused start changes nothing it records.
+        if (isHibernated(workspaceId)) {
+            return failed(
+                workspaceId,
+                siteId,
+                findSite(workspaceId, siteId)?.config ?? null,
+                'This workspace is hibernating. Wake it to start its sites.',
+            );
+        }
         // Starting a site LIFTS the stop that was remembered for it (genie#407).
         // Every caller means the same thing by it — the user clicked Start, an
         // agent ran `manageSite start`, a restart is going through — and boot
@@ -2648,7 +2676,7 @@ ${hint}` : main;
             }
         },
 
-        async resumeEnabledSites() {
+        async resumeEnabledSites(onlyWorkspaceId) {
             // Resolved ONCE, and only to answer "is a container runtime up yet".
             // Docker Desktop routinely finishes starting after Genie does, and
             // trying anyway would stamp every container site with a "no container
@@ -2661,6 +2689,9 @@ ${hint}` : main;
                 hasRuntime = false;
             }
             for (const workspace of deps.listWorkspaces()) {
+                if (onlyWorkspaceId !== undefined && workspace.id !== onlyWorkspaceId) continue;
+                // Asleep until the user wakes it (genie#672).
+                if (isHibernated(workspace.id)) continue;
                 for (const [siteId, config] of Object.entries(deps.devSitesFor(workspace.id))) {
                     // `enabled` IS the ask that this site be SERVED — configured,
                     // and stored in the git-tracked envelope. A site nobody

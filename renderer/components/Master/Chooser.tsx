@@ -60,6 +60,8 @@ import {
 } from '../../lib/workspace-kind';
 import { useProcessRuntime } from '../../lib/use-process-runtime';
 import { issueWatchBadge } from '../../lib/issuewatch';
+import { isHibernated } from '../../lib/workspace-hibernation';
+import { HibernationZzz } from './Hibernation';
 import { railSitesTitle, railSitesTone } from '../../lib/dev-server';
 import {
     enterableWorkspaceIds,
@@ -142,6 +144,9 @@ interface Props {
     agentCustomCommand?: string;
     pluginPanels?: PluginPanelView[];
     onAddPluginPanel?: (workspaceId: string, panel: PluginPanelView) => void;
+    /** Workspaces with a hibernate or wake RUNNING right now (genie#672) — the
+     *  row says so while its agents are still being asked for their handoffs. */
+    hibernationBusy?: Record<string, 'hibernating' | 'waking'>;
 }
 
 /**
@@ -187,6 +192,7 @@ export default function Chooser({
     agentCustomCommand,
     pluginPanels = [],
     onAddPluginPanel,
+    hibernationBusy = {},
 }: Props) {
     // Portal target: NEVER document.body -- Genie's surface tokens live on
     // .gwrap/.genie-overlay-root, and a portal outside that subtree resolves
@@ -698,14 +704,16 @@ export default function Chooser({
                             type="button"
                             className={`crail-btn${live > 0 ? ' active' : ''}${
                                 isActive ? ' is-active' : ''
-                            }${wsAttention ? ' attention' : ''}${
+                            }${isHibernated(ws) ? ' is-hibernated' : ''}${
+                                wsAttention ? ' attention' : ''
+                            }${
                                 pulsingWs.has(ws.id) ? ' pulsing' : ''
                             }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                 enteringWs.has(ws.id) ? ' ws-enter' : ''
                             }${kindClass ? ` ${kindClass}` : ''}`}
                             onClick={() => onActivateWorkspace(ws.id)}
                             title={`${ws.project_name}${kindLabel ? ` · ${kindLabel}` : ''}${
-                                live > 0 ? ` · ${live} live` : ''
+                                isHibernated(ws) ? ' · hibernating' : live > 0 ? ` · ${live} live` : ''
                             }`}
                         >
                             {workspaceIcon(ws)}
@@ -867,6 +875,8 @@ export default function Chooser({
                                     ws.shape === 'agi' ? ' agi' : ''
                                 }${wsAttention ? ' attention' : ''}${
                                     wsThumb ? ' ws-thumb' : ''
+                                }${isHibernated(ws) ? ' is-hibernated' : ''}${
+                                    hibernationBusy[ws.id] ? ' is-hibernation-busy' : ''
                                 }${pulsingWs.has(ws.id) ? ' pulsing' : ''
                                 }${activeWs.has(ws.id) ? ' agent-active' : ''}${
                                     enteringWs.has(ws.id) ? ' ws-enter' : ''
@@ -888,9 +898,11 @@ export default function Chooser({
                                     title={
                                         system
                                             ? 'System Workspace — click to activate'
-                                            : // The ring says a GDW is different; the
-                                              // tooltip is where it says WHAT.
-                                              `${kindLabel ? `${kindLabel} · ` : ''}Click to activate · drag to reorder`
+                                            : isHibernated(ws)
+                                              ? 'Hibernating — everything in it is stopped. Right-click to wake it.'
+                                              : // The ring says a GDW is different; the
+                                                // tooltip is where it says WHAT.
+                                                `${kindLabel ? `${kindLabel} · ` : ''}Click to activate · drag to reorder`
                                     }
                                     onClick={() => onActivateWorkspace(ws.id)}
                                     onContextMenu={(e) => {
@@ -962,6 +974,13 @@ export default function Chooser({
                                         the same rows the grid does -- a second
                                         derivation from terminal specs is how the row
                                         and the grid would come to disagree. */}
+                                    {/* ASLEEP: three z's, each a little bigger,
+                                        IN FRONT of the agent avatars (owner). They
+                                        show even when the workspace has no agents —
+                                        the row still has to read as hibernating. */}
+                                    {!system && isHibernated(ws) && (
+                                        <HibernationZzz busy={!!hibernationBusy[ws.id]} />
+                                    )}
                                     {!system && (() => {
                                         const record = agentRecords[ws.id];
                                         if (!record) return null;
@@ -971,7 +990,11 @@ export default function Chooser({
                                                 // be a reduced one: the popover
                                                 // runs the SAME actions the
                                                 // expanded grid's menu does.
-                                                onAct={(entry, action) => {
+                                                // An asleep workspace's agents are
+                                                // asleep too: main refuses to start
+                                                // one, so the popover offers facts
+                                                // rather than buttons that fail.
+                                                onAct={isHibernated(ws) ? undefined : (entry, action) => {
                                                     if (action === 'start') {
                                                         onActivateWorkspace(ws.id);
                                                         void api()
