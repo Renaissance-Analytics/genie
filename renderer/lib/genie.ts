@@ -1360,6 +1360,8 @@ export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     /** Collapsed sidebar workspace rows — JSON-encoded string[] of workspace
      *  ids. Persists the expand/collapse state across restarts. */
     collapsed_workspaces?: string;
+    /** The ForceTheQuestion modal's remembered size, JSON {width,height} (genie#703). */
+    ask_modal_size?: string;
     default_env_file?: string;
     global_hotkey?: string;
     /** Terminal-scoped hotkeys (Tynn #246/#247) — NOT OS-wide: they bind only

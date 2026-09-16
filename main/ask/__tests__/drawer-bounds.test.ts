@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     ASK_DRAWER_WIDTH,
     ASK_MODAL_WIDTH,
-    askWindowBounds,
-} from '../drawer-bounds';
+    askWindowBounds, askWindowFit, parseAskModalSize, askModalStartSize } from '../drawer-bounds';
 
 /**
  * Where the ask window goes when the file drawer opens (Tynn story #272).
@@ -160,5 +159,143 @@ describe('askWindowBounds', () => {
         });
         expect(b.height).toBe(733);
         expect(b.y).toBe(260);
+    });
+});
+
+/**
+ * THE WINDOW HAS TO BE ON THE SCREEN (genie#703).
+ *
+ * Reported on Omarchy (Hyprland): the question modal rendered with its action
+ * row — Cancel and Submit — nowhere to be found, and the screenshot shows the
+ * window's left, top and right borders but NO bottom one. The window is not
+ * clipping its footer; the window runs off the bottom of the display.
+ *
+ * `createAskWindow` asks for 560px tall and `resizable: false`. A tiling WM does
+ * not honour either, and nothing in Genie ever checked the result against the
+ * display: `askWindowBounds` deliberately leaves the vertical axis alone (the
+ * drawer only changes width), and no other path looks at it.
+ *
+ * No stylesheet can rescue a window whose bottom edge is past the screen, which
+ * is why the first attempt at this — `min-height: 0` on the scroll region — was
+ * a no-op: the layout was never the problem.
+ */
+describe('askWindowFit — the modal is pulled back onto the display', () => {
+    const workArea = { x: 0, y: 0, width: 1280, height: 800 };
+
+    it('shrinks a window taller than the display, so its footer is on screen', () => {
+        // The reported shape: a WM handed the modal more height than the screen.
+        const fitted = askWindowFit({
+            current: { x: 100, y: 0, width: 760, height: 1000 },
+            workArea,
+        });
+        expect(fitted.height).toBe(800);
+        expect(fitted.y + fitted.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    });
+
+    it('MOVES a window that fits but hangs off the bottom, rather than shrinking it', () => {
+        // Losing height that the display can afford would be a second, unasked
+        // change to a window someone is reading.
+        const fitted = askWindowFit({
+            current: { x: 100, y: 600, width: 760, height: 560 },
+            workArea,
+        });
+        expect(fitted.height).toBe(560);
+        expect(fitted.y).toBe(240);
+    });
+
+    it('leaves a window that already fits exactly as it is', () => {
+        // POSITIVE CONTROL: every ordinary show must be a no-op, or this becomes
+        // a window that jumps on each question.
+        const current = { x: 260, y: 120, width: 760, height: 560 };
+        expect(askWindowFit({ current, workArea })).toEqual(current);
+    });
+
+    it('respects a second monitor: the work area is not at the origin', () => {
+        // `workArea.x/y` are non-zero on a second display, and clamping against
+        // 0 would throw the window onto the primary one.
+        const second = { x: 1280, y: 40, width: 1024, height: 768 };
+        const fitted = askWindowFit({
+            current: { x: 1300, y: 700, width: 760, height: 560 },
+            workArea: second,
+        });
+        expect(fitted.y).toBe(second.y + second.height - 560);
+        expect(fitted.x).toBeGreaterThanOrEqual(second.x);
+    });
+
+    it('pins the top-left on screen when the display reports nothing usable', () => {
+        // A work area of zero is not a reason to produce a window nobody can
+        // reach — the same fallback the horizontal clamp already keeps.
+        const fitted = askWindowFit({
+            current: { x: -500, y: -500, width: 760, height: 560 },
+            workArea: { x: 0, y: 0, width: 0, height: 0 },
+        });
+        expect(fitted.x).toBe(0);
+        expect(fitted.y).toBe(0);
+    });
+});
+
+/**
+ * THE USER CAN RESIZE THE MODAL, AND IT REMEMBERS (genie#703, owner).
+ *
+ * The window was deliberately fixed-size — "nothing about a question wants a
+ * drag handle" — and that is exactly why a window a tiling WM had mangled could
+ * not be rescued by hand. The owner's call: make it resizable, "make sure that
+ * size is default what it is now and the setting is a client setting."
+ *
+ * So the DEFAULT is unchanged (760x560, what it has always opened at), a size
+ * the user chose is remembered, and anything unusable is refused rather than
+ * stored — a window remembered at 12x8 is a window nobody can answer.
+ */
+describe('parseAskModalSize — a remembered size is only honoured if it is usable', () => {
+    it('reads back a size the user chose', () => {
+        expect(parseAskModalSize('{"width":900,"height":700}')).toEqual({
+            width: 900,
+            height: 700,
+        });
+    });
+
+    it('refuses a size too small to answer a question in', () => {
+        expect(parseAskModalSize('{"width":40,"height":20}')).toBeNull();
+    });
+
+    it('refuses junk, a missing value, and the wrong types', () => {
+        expect(parseAskModalSize(undefined)).toBeNull();
+        expect(parseAskModalSize('')).toBeNull();
+        expect(parseAskModalSize('not json')).toBeNull();
+        expect(parseAskModalSize('{"width":"900","height":700}')).toBeNull();
+        expect(parseAskModalSize('{"width":null,"height":null}')).toBeNull();
+    });
+
+    it('falls back to the size the modal has always opened at', () => {
+        // The owner's requirement, pinned: no remembered size means 760x560.
+        expect(askModalStartSize(null)).toEqual({ width: ASK_MODAL_WIDTH, height: 560 });
+        expect(askModalStartSize(parseAskModalSize('garbage'))).toEqual({
+            width: ASK_MODAL_WIDTH,
+            height: 560,
+        });
+    });
+});
+
+describe('askWindowBounds — the drawer widens from the size the USER chose', () => {
+    const workArea = { x: 0, y: 0, width: 2560, height: 1400 };
+
+    it('adds the drawer to a remembered width, and gives it back on close', () => {
+        // Without this, opening a file and closing it again would snap a window
+        // the user had widened back to the stock 760 — silently discarding the
+        // size we just promised to remember.
+        const current = { x: 0, y: 0, width: 900, height: 700 };
+        const open = askWindowBounds({ current, workArea, drawerOpen: true, baseWidth: 900 });
+        expect(open.width).toBe(900 + ASK_DRAWER_WIDTH);
+
+        const closed = askWindowBounds({ current: open, workArea, drawerOpen: false, baseWidth: 900 });
+        expect(closed.width).toBe(900);
+    });
+
+    it('still uses the stock width when no size was remembered', () => {
+        // POSITIVE CONTROL: the default path is untouched by the new parameter.
+        const current = { x: 0, y: 0, width: ASK_MODAL_WIDTH, height: 560 };
+        expect(askWindowBounds({ current, workArea, drawerOpen: false }).width).toBe(
+            ASK_MODAL_WIDTH,
+        );
     });
 });
