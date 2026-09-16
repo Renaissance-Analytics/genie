@@ -1121,6 +1121,15 @@ Genie Apps, driving terminals and other agents, workspaces — is in
 the running Genie version first. Harness-specific setup (your on-finish hook)
 is there too, not here.
 
+**Write paths and commands the way THIS WORKSTATION does.** Genie runs on the
+user's machine, and the OS it runs on decides what a path looks like: on Windows
+that is \`C:\\Projects\\thing\` with backslashes and a drive letter, not
+\`/c/Projects/thing\` or \`~/Projects/thing\`. Your shell's own dialect is not the
+machine's — a path in it is one the person cannot paste and a command they cannot
+run, and you will not see them stall over it. \`connectToGenie\` reports this
+workspace's real paths; quote them rather than translating by hand, and when a
+path is only for a command YOU run in YOUR shell, use whatever that shell needs.
+
 **Engineering standard — NO BANDAIDS, EVER.** Fix the ROOT CAUSE, never paper
 over a symptom. Don't mask a vulnerable transitive dependency with an overrides
 pin when the real fix is updating the dependency that pulls it; don't swallow an

@@ -530,6 +530,21 @@ describe('the protocol is stated once', () => {
         }
     });
 
+    it('tells every agent to write paths the way THIS workstation writes them', async () => {
+        // Reported friction: an agent handed the user a path in its own shell's
+        // dialect, on a machine that does not speak it. A path a person cannot
+        // paste is a stalled turn, and the agent cannot see that it stalled — so
+        // this belongs in the protocol every agent gets at connect, not in a
+        // reference nobody reads until they already know to ask.
+        const res = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+        const instructions = (res?.result as { instructions: string }).instructions;
+        expect(instructions).toMatch(/workstation/i);
+        expect(instructions).toMatch(/path/i);
+        // It has to name the actual mistake, not gesture at "be careful": the
+        // Windows/POSIX split is the one that keeps happening.
+        expect(instructions).toContain('C:\\Projects');
+    });
+
     it('keeps the full manual reachable on demand', () => {
         expect(GENIE_MCP_GUIDE.length).toBeGreaterThan(20_000);
     });
