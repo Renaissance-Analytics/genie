@@ -342,11 +342,6 @@ export function makeRemoteBridge(local: GenieApi): GenieApi {
                     ok: boolean;
                 }
             ).ok,
-        touch: async (id) =>
-            (await req('/api/desktop/terminal-spec/touch', {
-                method: 'POST',
-                json: { id },
-            })) as { ok: boolean },
         // Panel order lives on the HOST's terminal_specs rows (WORK/CONTENT
         // state), so a remote window's drag-reorder writes through the bridge —
         // same as create/update/remove above.

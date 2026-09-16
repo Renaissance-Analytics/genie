@@ -26,6 +26,7 @@ import {
     type TerminalSpecRow,
     type TerminalSpecMeta,
     isWorkspaceHibernated,
+    touchTerminalSpec,
 } from '../db';
 import { hibernationSpawnRefusal } from '../workspace/hibernation';
 import {
@@ -223,6 +224,23 @@ const ownersByTerminal = new Map<string, OwnerEntry>();
  * read it via lastActiveTerminalForWorkspace().
  */
 const lastActiveByWorkspace = new Map<string, string>();
+
+/**
+ * Record that a panel was OPENED (genie#585) — the recency the restore's
+ * `max_views` cap ranks by.
+ *
+ * Best-effort, like every other persisted intent here: a spec deleted between
+ * the open and this write, or a db that cannot be written, must not stop a
+ * terminal from opening. Losing one timestamp costs a panel its place in a
+ * ranking; throwing here would cost the user their shell.
+ */
+function notePanelOpened(specId: string): void {
+    try {
+        touchTerminalSpec(specId);
+    } catch {
+        /* best-effort — recency is not worth failing a spawn over */
+    }
+}
 
 /** Record that a terminal saw activity, so it becomes its workspace's default. */
 function noteTerminalActivity(terminalId: string): void {
@@ -689,6 +707,11 @@ export function createAgentTerminal(opts: {
     // prompt, which is what that bug looks like from the user's side.
     if (reviving && !preparedCodex) maybeRelaunchAgent(id, result.existing);
     else if (launchCommand && !result.existing && !preparedCodex) deliverAgentLaunch(id, launchCommand);
+
+    // A panel was opened — record when (genie#585). The same event the
+    // `terminal:create` handler records, reached from the MCP tools, a remote
+    // window or mobile instead of a desktop window mounting a pane.
+    notePanelOpened(id);
 
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
@@ -1255,6 +1278,16 @@ export function registerTerminalIpc(): void {
                     ...opts,
                     args: buildProcessArgs(opts.shell ?? '', spec.meta.command),
                 };
+            } else if (spec) {
+                // A PANEL is being opened — record when (genie#585). This is the
+                // recency the restore's `max_views` cap ranks by, and until now
+                // nothing wrote it: the IPC that did was plumbed to the renderer
+                // and called by nobody, so every spec tied on `null`. Written
+                // HERE because this is the event itself — a renderer that has to
+                // remember to report it is how it came to be reported by none.
+                // A process runner is excluded: it has no panel and never
+                // competes for a slot.
+                notePanelOpened(spec.id);
             }
             // Load the managed provider credentials + workspace env, and
             // reconstruct TYNN_AGENT_TOKEN from the authoritative literal MCP
