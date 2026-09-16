@@ -29,7 +29,15 @@ import {
     type PersistedQuestion,
     type QuestionStorePort,
 } from './question-store';
-import { ASK_MODAL_WIDTH, askWindowBounds, askWindowFit } from './drawer-bounds';
+import {
+    ASK_MODAL_MIN_HEIGHT,
+    ASK_MODAL_MIN_WIDTH,
+    ASK_MODAL_WIDTH,
+    askModalStartSize,
+    askWindowBounds,
+    askWindowFit,
+    parseAskModalSize,
+} from './drawer-bounds';
 import {
     asFtqAvailability,
     resolveDndMessage,
@@ -986,6 +994,45 @@ function itemBySender(senderId: number): QueueItem | undefined {
  */
 const DRAFTS_SETTING = 'ask_drafts';
 
+/** The key the remembered modal size lives under — a CLIENT setting, so it is
+ *  deliberately absent from `HOST_SOURCED_SETTINGS_KEYS` and a remote window
+ *  keeps its own (genie#703). */
+const MODAL_SIZE_SETTING = 'ask_modal_size';
+
+function readAskModalSizeSetting(): string | undefined {
+    try {
+        return (getAllSettings() as Record<string, string | undefined>)[MODAL_SIZE_SETTING];
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Remember the size the user dragged the window to.
+ *
+ * Written on `resize`, which fires continuously through a drag — so it is
+ * debounced, and a size below the window's own minimum is never stored (the
+ * minimum is enforced by Electron, but a stored value outlives this build's
+ * idea of it). Best-effort throughout: failing to remember a size must never
+ * take a question down.
+ */
+let sizeSaveTimer: ReturnType<typeof setTimeout> | null = null;
+function rememberAskModalSize(w: BrowserWindow): void {
+    if (sizeSaveTimer) clearTimeout(sizeSaveTimer);
+    sizeSaveTimer = setTimeout(() => {
+        sizeSaveTimer = null;
+        try {
+            if (w.isDestroyed()) return;
+            const { width, height } = w.getBounds();
+            if (width < ASK_MODAL_MIN_WIDTH || height < ASK_MODAL_MIN_HEIGHT) return;
+            setSettings({ [MODAL_SIZE_SETTING]: JSON.stringify({ width, height }) } as never);
+        } catch {
+            /* a forgotten size is a smaller loss than a dropped question */
+        }
+    }, 400);
+    if (typeof sizeSaveTimer.unref === 'function') sizeSaveTimer.unref();
+}
+
 function readDrafts(): AskDraftStore {
     try {
         return parseDraftStore(
@@ -1068,7 +1115,11 @@ function setAskDrawerOpen(senderId: number, open: boolean): void {
         // user never gets a grab edge either way.
         const resizable = win.isResizable();
         if (!resizable) win.setResizable(true);
-        win.setBounds(askWindowBounds({ current, workArea, drawerOpen: open }));
+        // Widen from the size the user chose, not the stock width — otherwise
+        // closing the drawer would discard a window they had resized (genie#703).
+        const baseWidth =
+            askModalStartSize(parseAskModalSize(readAskModalSizeSetting())).width;
+        win.setBounds(askWindowBounds({ current, workArea, drawerOpen: open, baseWidth }));
         if (!resizable) win.setResizable(false);
     } catch {
         /* No display / a screen module that throws under test: the drawer still
@@ -1111,12 +1162,22 @@ function fitAskWindowToDisplay(w: BrowserWindow): void {
 
 function createAskWindow(): BrowserWindow {
     if (!config) throw new Error('ForceTheQuestion IPC not registered');
+    // The size the user last chose, or the one the modal has always opened at
+    // (genie#703). A CLIENT setting: in a remote window the size belongs to the
+    // machine showing the question, not the host that asked it.
+    const startSize = askModalStartSize(parseAskModalSize(readAskModalSizeSetting()));
     const w = new BrowserWindow({
-        width: ASK_MODAL_WIDTH,
-        height: 560,
+        width: startSize.width,
+        height: startSize.height,
+        // RESIZABLE, by the owner's decision (genie#703). It was fixed because
+        // "nothing about a question wants a drag handle", and that is exactly why
+        // a window a tiling window manager had mangled could not be rescued by
+        // hand. The default size is unchanged; only the ability to change it is new.
+        minWidth: ASK_MODAL_MIN_WIDTH,
+        minHeight: ASK_MODAL_MIN_HEIGHT,
         show: false,
         frame: false,
-        resizable: false,
+        resizable: true,
         minimizable: false,
         maximizable: false,
         fullscreenable: false,
@@ -1158,6 +1219,9 @@ function createAskWindow(): BrowserWindow {
     } else {
         w.loadFile(path.join(__dirname, 'ask.html'));
     }
+    // The size the user chooses is theirs to keep (genie#703).
+    w.on('resize', () => rememberAskModalSize(w));
+
     w.once('ready-to-show', () => {
         // ON THE DISPLAY, whatever the window manager made of the request
         // (genie#703). The window asks for a fixed height and is not resizable;
