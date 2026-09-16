@@ -29,6 +29,34 @@ describe('siteAdvisoryNotes', () => {
         expect(notes[0]).toMatch(/hostServe/);
     });
 
+    it('warns when TWO server definitions are stored, and says which one runs (genie#626)', () => {
+        // The owner's site carried `hostServe: {mode:"php"}` AND a `command`
+        // running artisan serve. One of them silently won, so the stored config
+        // described a server the site was not running — and the docs say each of
+        // these "names a SERVER". Genie serves `hostServe` and ignores the
+        // `command`, which is a fact, so it can be said rather than left to be
+        // discovered by reading a process list.
+        const notes = siteAdvisoryNotes({
+            hostServe: { mode: 'php', root: 'public' },
+            command: ['php', 'artisan', 'serve'],
+        });
+        expect(notes).toHaveLength(1);
+        expect(notes[0]).toMatch(/hostServe/);
+        expect(notes[0]).toMatch(/command/);
+        // It must say which one WINS — a warning that both exist and stops there
+        // leaves the reader exactly where they started.
+        expect(notes[0]).toMatch(/hostServe.*(runs|serves|wins)|ignored/i);
+        // And how to end it.
+        expect(notes[0]).toMatch(/null/);
+    });
+
+    it('says nothing when only ONE server definition is stored', () => {
+        // POSITIVE CONTROL for the note above: the ordinary shapes must stay quiet,
+        // or the advisory becomes noise on every single call.
+        expect(siteAdvisoryNotes({ hostServe: { mode: 'php', root: 'public' } })).toEqual([]);
+        expect(siteAdvisoryNotes({ command: ['npm', 'run', 'dev'] })).toEqual([]);
+    });
+
     it('has nothing to say for a plain create with no custom image', () => {
         expect(siteAdvisoryNotes({})).toEqual([]);
         expect(siteAdvisoryNotes({ image: undefined })).toEqual([]);

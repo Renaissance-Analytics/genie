@@ -513,8 +513,15 @@ export function sanitizeDevSitePatch(
     // portableArgv strips a machine-specific absolute toolchain path (e.g. Herd's
     // php.exe) out of every stored command — project.json is the cloned envelope
     // (genie #199), same reason env is stripped here (#168).
-    const command = cleanArgv(patch.command);
-    if (command) out.command = portableArgv(command);
+    // PRESENCE decides, exactly like `hostServe` below (genie#626): a patch that
+    // MENTIONS the command is setting it, so the key is always emitted — a usable
+    // argv is stored, and an explicit clear (or junk) drops to `undefined`, which
+    // is what overrides the stored row when the patch is merged over it. A patch
+    // that does not mention it leaves the site's server alone.
+    if ('command' in patch) {
+        const command = cleanArgv(patch.command);
+        out.command = command ? portableArgv(command) : undefined;
+    }
 
     const serve = cleanArgv(patch.serve);
     if (serve) out.serve = portableArgv(serve);

@@ -403,6 +403,48 @@ describe('manageSiteSummary', () => {
         expect(text).toMatch(/logs/);
     });
 
+    it('names the DEAD PHP WORKER rather than sending the reader after the app (genie#626)', () => {
+        // The owner, on a `hostServe: php` site: the site said its process was up
+        // and "nothing is answering on port 50668 … the app bound a DIFFERENT
+        // port". Something WAS listening on 50668 — Genie's own front proxy,
+        // answering 502 — and the app had bound nothing because it was not
+        // running. The message sent them hunting a port-binding mistake in an app
+        // that was innocent. Genie knows which of its two processes is missing, so
+        // it must say that instead of proposing a cause.
+        const text = manageSiteSummary({
+            ok: true,
+            affectedId: 'abc',
+            sites: [
+                site({
+                    ready: false,
+                    runMode: 'host',
+                    hostPort: 50668,
+                    hostServe: { mode: 'php', root: 'public' },
+                    workerDown: true,
+                    workerPort: 50675,
+                }),
+            ],
+        });
+        expect(text).toMatch(/worker/i);
+        // BOTH ports, because they differ and the reader has to dial them apart.
+        expect(text).toContain('50668');
+        expect(text).toContain('50675');
+        // And NOT the accusation that misdirected the report.
+        expect(text).not.toMatch(/bound a DIFFERENT port/i);
+    });
+
+    it('still says what it used to when Genie does NOT know which half is missing', () => {
+        // POSITIVE CONTROL for the message above: an ordinary dev-server site has
+        // one process, and "the app bound a different port" is a real possibility
+        // there — the genie#227 wording stays exactly as it was.
+        const text = manageSiteSummary({
+            ok: true,
+            affectedId: 'abc',
+            sites: [site({ ready: false, runMode: 'host', hostPort: 5173 })],
+        });
+        expect(text).toMatch(/bound a DIFFERENT port/i);
+    });
+
     it('says a PENDING action is still going, and never reads the stale row as the outcome (genie#194)', () => {
         // A start that outlives the tool call comes back early with `pending`. The
         // row still says `stopped`, because that is what it was before the start

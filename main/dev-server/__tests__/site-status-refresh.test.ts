@@ -535,3 +535,40 @@ describe('a php-cgi worker is never left dead by its own request limit', () => {
         expect(m.list('acme')[0]?.ready).toBe(true);
     });
 });
+
+/**
+ * A DEAD WORKER SAYS SO — WHICH OF GENIE'S TWO PROCESSES IS MISSING (genie#626).
+ *
+ * Genie noticing the worker is gone (above) is what makes `ready:false` honest.
+ * It is not what the reporter needed: the status TEXT still said "nothing is
+ * answering on port 50668 … the app bound a DIFFERENT port", while 50668 was
+ * Genie's own proxy answering 502 and the app had bound nothing because it was
+ * not running. The message can only stop guessing if the status carries the
+ * fact, so the manager records WHICH half is down and on what port.
+ */
+describe('a php site reports which half of it is missing', () => {
+    it('marks the worker down, with the port it should be answering on', async () => {
+        const spawn = fakeHostSpawn();
+        // The reported shape exactly: the site port answers, the FastCGI port does not.
+        const m = phpManager(async (req) => req.port !== FCGI_PORT, { hostSpawn: spawn });
+
+        await m.start('acme', SITE_ID).catch(() => {});
+        await m.refresh('acme');
+
+        const status = m.list('acme')[0];
+        expect(status?.ready).toBe(false);
+        expect(status?.workerDown).toBe(true);
+        expect(status?.workerPort).toBe(FCGI_PORT);
+    });
+
+    it('POSITIVE CONTROL: a healthy php site says nothing about a dead worker', async () => {
+        const m = phpManager(async () => true, { hostSpawn: fakeHostSpawn() });
+
+        await m.start('acme', SITE_ID);
+        await m.refresh('acme');
+
+        const status = m.list('acme')[0];
+        expect(status?.ready).toBe(true);
+        expect(status?.workerDown).toBeUndefined();
+    });
+});

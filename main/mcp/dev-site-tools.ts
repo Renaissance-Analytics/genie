@@ -167,6 +167,10 @@ function toInfo(row: DevSiteRow): DevSiteInfo {
         enabled: row.enabled,
         state: row.state,
         ...(row.ready === undefined ? {} : { ready: row.ready }),
+        // WHICH half of a php site is missing (genie#626) — the fact that lets
+        // the summary name Genie's dead worker instead of accusing the app.
+        ...(row.workerDown ? { workerDown: true } : {}),
+        ...(row.workerPort ? { workerPort: row.workerPort } : {}),
         ...(row.port ? { port: row.port } : {}),
         ...(row.hostPort ? { hostPort: row.hostPort } : {}),
         ...(row.origin ? { origin: row.origin } : {}),
@@ -354,8 +358,20 @@ export async function manageSiteForMcp(
  * silent trap (genie #125). Surfaced on UPDATE too, because that is where it was
  * silent: `update {image}` recorded the ref and reported success (genie#191).
  */
-export function siteAdvisoryNotes(req: Pick<ManageSiteRequest, 'image' | 'build'>): string[] {
+export function siteAdvisoryNotes(
+    req: Pick<ManageSiteRequest, 'image' | 'build' | 'hostServe' | 'command'>,
+): string[] {
     const notes: string[] = [];
+    // TWO SERVER DEFINITIONS, ONE SERVER (genie#626). The reporter's site stored
+    // `hostServe: {mode:'php'}` AND a `command` running `artisan serve`; the
+    // stored config therefore described a server the site was not running, and
+    // nothing said so. `hostServe` is what the start path reads first, so that is
+    // the one that runs — a fact, which is what makes this sayable.
+    if (req.hostServe && req.command?.length) {
+        notes.push(
+            'This site stores TWO server definitions: `hostServe` and `command`. Genie serves it with `hostServe` — Caddy plus (for php) a FastCGI worker — and the `command` is IGNORED, so the stored config describes a server that is not running. Clear the one you do not want: `command: null` or `hostServe: null`.',
+        );
+    }
     if (req.image) {
         notes.push(
             'The custom `image` is recorded but NOT used at runtime — a site runs its command inside the workspace dev sandbox, not a per-site image container. Put extra runtime tools in the workspace / its dev image, not a per-site `image`.',
@@ -854,7 +870,14 @@ export async function runManageSite(
                 if (req.runMode !== undefined) patch.runMode = req.runMode;
                 if (req.image !== undefined) patch.image = req.image;
                 if (req.build !== undefined) patch.build = toBuildSteps(req.build);
-                if (req.command !== undefined) patch.command = req.command;
+                // `null` or `[]` CLEARS it (genie#626), exactly like `hostServe:
+                // null` below — the key is still SET, with undefined, so the merge
+                // overrides the stored command instead of leaving it in place. An
+                // OMITTED command leaves it untouched.
+                if (req.command !== undefined) {
+                    patch.command =
+                        req.command === null || req.command.length === 0 ? undefined : req.command;
+                }
                 if (req.serve !== undefined) patch.serve = req.serve;
                 if (req.port !== undefined) patch.port = req.port;
                 if (req.exposed !== undefined) patch.exposed = req.exposed as never;
@@ -915,7 +938,15 @@ export async function runManageSite(
                     // non-`.gen` name would mint a cert the session must not trust
                     // — so this reports rather than relaxes.
                     ...describeDroppedSiteFields(patch),
-                    ...siteAdvisoryNotes(req),
+                    // The EFFECTIVE config, not the request: a site that already
+                    // stores two server definitions has to say so whatever this
+                    // update happened to touch (genie#626), while the `image` and
+                    // `build` notes stay about what was just passed.
+                    ...siteAdvisoryNotes({
+                        ...req,
+                        hostServe: after?.hostServe,
+                        command: after?.command,
+                    }),
                     ...(status ? [] : [pendingNote('restart', newId)]),
                 ];
                 return {
