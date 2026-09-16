@@ -87,6 +87,16 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     await expect(confirm).toContainText(`Hibernate ${seed.workspaceName}?`);
     await confirm.getByRole('button', { name: 'Hibernate' }).click();
 
+    // IT LEAVES THE RAIL (genie#705). Hibernating a workspace is how you get it
+    // out of the way, so the row goes — that is the first thing to be true, and
+    // it is why the grey row has to be REVEALED before anything can assert on it.
+    await expect(block).toHaveCount(0, { timeout: 60_000 });
+
+    // The control says how many it is hiding, then shows them.
+    const reveal = page.locator('.rail-hibernated-toggle');
+    await expect(reveal).toHaveAttribute('aria-label', /Show 1 hibernated workspace\b/);
+    await reveal.click();
+
     // GREY, with three z's — each bigger than the last — in front of the agents.
     await expect(block).toHaveClass(/\bis-hibernated\b/, { timeout: 60_000 });
     const zzz = block.locator('.ws-zzz');
@@ -105,7 +115,16 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
         .not.toContain(seed.terminalId);
 });
 
+/** Hibernated workspaces are hidden by default (genie#705) — make sure they are
+ *  showing, whatever the previous test left behind. */
+async function revealHibernated(): Promise<void> {
+    const reveal = page.locator('.rail-hibernated-toggle');
+    if ((await reveal.count()) === 0) return; // nothing hibernated to reveal
+    if ((await reveal.getAttribute('aria-pressed')) !== 'true') await reveal.click();
+}
+
 test('the floor of a sleeping workspace says so, and is the way to wake it', async () => {
+    await revealHibernated();
     // POSITIVE CONTROL, and the reason it is first: the OTHER workspace still
     // opens its panel while its neighbour sleeps — hibernating one workspace
     // must not disturb the rest — and it proves this window mounts panels at
