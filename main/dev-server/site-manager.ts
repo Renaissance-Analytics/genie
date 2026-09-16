@@ -130,6 +130,14 @@ export interface DevSiteStatus {
     /** True when the `.gen` answered through Caddy. Only meaningful while `state`
      *  is `running`. */
     ready?: boolean;
+    /** WHICH HALF IS MISSING (genie#626). A `hostServe: php` site is two host
+     *  processes — Genie's proxy on {@link hostPort} and a `php-cgi` worker on
+     *  {@link workerPort} behind it. True when the proxy is up and the worker is
+     *  not: the state that reads as a 502 and used to be reported as "the app
+     *  bound a different port", about an app that was not running at all. */
+    workerDown?: boolean;
+    /** The port that worker should answer on, when Genie allocated one. */
+    workerPort?: number;
     /** The sandbox container the site's process runs in. */
     containerId?: string;
     /** The sandbox's published Caddy port — the one door every `.gen` is reached
@@ -755,6 +763,8 @@ interface Live {
         attempts: number;
     };
     ready: boolean;
+    /** See {@link DevSiteStatus.workerDown}. */
+    workerDown?: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
      *  `genSites()` stays synchronous. */
     routes: DevGenSite[];
@@ -1490,7 +1500,15 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      * than a full HTTP budget spent on a Caddy that will answer either way.
      */
     async function probeHostNativeReady(entry: Live, httpTimeoutMs: number): Promise<boolean> {
-        if (!(await fcgiBackendUp(entry))) return false;
+        // Recorded, not inferred: the caller of a status cannot tell a proxy that
+        // answers 502 from an app that bound the wrong port, and Genie can
+        // (genie#626). Cleared on the way through, so a revived worker stops
+        // being reported dead.
+        if (!(await fcgiBackendUp(entry))) {
+            entry.workerDown = true;
+            return false;
+        }
+        entry.workerDown = false;
         return probe({
             port: entry.caddyHostPort,
             kind: 'http',
@@ -2206,6 +2224,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             genName: config.genName,
             state: 'running',
             ready: entry.ready,
+            ...(entry.workerDown
+                ? {
+                      workerDown: true,
+                      ...(entry.fcgiPort === undefined ? {} : { workerPort: entry.fcgiPort }),
+                  }
+                : {}),
             containerId: entry.containerId,
             hostPort: entry.caddyHostPort,
             // The `.gen` origin exists only for an HTTP surface.

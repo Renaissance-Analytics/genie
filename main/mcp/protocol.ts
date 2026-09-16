@@ -922,6 +922,13 @@ export interface DevSiteInfo {
     /** Whether the published port ACCEPTED a connection. `running` only says
      *  the container is up; this says the production server has bound. */
     ready?: boolean;
+    /** A `hostServe: php` site is TWO processes — Genie's front proxy and a
+     *  `php-cgi` worker behind it. True when the proxy is up and the WORKER is
+     *  not, which is the state that used to read as "the app bound a different
+     *  port" (genie#626). Absent for every one-process shape. */
+    workerDown?: boolean;
+    /** The port that worker should be answering on, when Genie allocated one. */
+    workerPort?: number;
     /** The port inside the container. */
     port?: number;
     /** The loopback port this site is reached on from THIS machine: the sandbox's
@@ -1042,8 +1049,12 @@ export interface ManageSiteRequest {
     build?: Array<{ label?: string; command: string[]; optional?: boolean }>;
     /** create/update: the USER-CONTROLLED startup argv (NOT a shell string) Genie
      *  runs against the LIVE source in the sandbox. The canonical way to start a
-     *  site; supersedes {@link serve}. */
-    command?: string[];
+     *  site; supersedes {@link serve}.
+     *
+     *  `null` (or `[]`) on an UPDATE CLEARS it, the way `hostServe: null` does —
+     *  which is how a site that stores both stops describing a server it is not
+     *  running (genie#626). Omitting it leaves the stored command untouched. */
+    command?: string[] | null;
     /** create: LEGACY production server argv. Prefer {@link command}. */
     serve?: string[];
     /** create: the port the site's command listens on INSIDE the sandbox; Caddy
@@ -2415,7 +2426,7 @@ const MANAGE_SITE_TOOL = {
                 type: 'array',
                 items: { type: 'string' },
                 description:
-                    'create/update: the USER-CONTROLLED startup argv Genie runs against the LIVE source inside the workspace sandbox — LITERAL ARGV, not a shell string: ["npm","run","dev"], ["php","artisan","serve","--host=0.0.0.0"], a binary, anything. Genie makes NO assumptions (no forced dev server, no build). The command must bind `port` on loopback inside the sandbox; Caddy fronts `.gen` to it over https. This is the canonical way to start a site.',
+                    'create/update: the USER-CONTROLLED startup argv Genie runs against the LIVE source inside the workspace sandbox — LITERAL ARGV, not a shell string: ["npm","run","dev"], ["php","artisan","serve","--host=0.0.0.0"], a binary, anything. Genie makes NO assumptions (no forced dev server, no build). The command must bind `port` on loopback inside the sandbox; Caddy fronts `.gen` to it over https. This is the canonical way to start a site. On an UPDATE, `null` (or `[]`) CLEARS it — the way `hostServe: null` does — so a site that stores both stops describing a server it is not running.',
             },
             serve: {
                 type: 'array',
@@ -3499,6 +3510,21 @@ export function manageSiteSummary(result: ManageSiteResult): string {
         const isHost = target.runMode === 'host';
         const noun = isHost ? 'process' : 'container';
         const watching = target.hostPort ?? target.port;
+        // THE WORKER, NOT THE APP (genie#626). A `hostServe: php` site is Genie's
+        // own proxy plus a `php-cgi` worker, and when the worker dies the proxy
+        // stays bound and answers 502 — so the sentence below, which proposes that
+        // the app bound a port of its own, accused an app that was not even
+        // running. Genie knows which of ITS two processes is missing; say that.
+        if (target.workerDown) {
+            const worker = target.workerPort ?? '?';
+            return (
+                `${target.name}'s PHP worker is not running — Genie's proxy on port ${watching ?? '?'} ` +
+                `is up and cannot reach the FastCGI worker on port ${worker}, so every request 502s. ` +
+                `This is Genie's own worker, not your app: nothing in the app can bind ${worker} or fix it. ` +
+                `Genie restarts it a bounded number of times; \`manageSite {action:'restart', id:'${result.affectedId}'}\` ` +
+                `starts a fresh one, and \`logs\` carries what the worker printed as it died.`
+            );
+        }
         return (
             `${target.name}'s ${noun} is up, but nothing is answering on port ${watching ?? '?'} — ` +
             `the port Genie allocated and is proxying to. Either it is still starting, or the app ` +

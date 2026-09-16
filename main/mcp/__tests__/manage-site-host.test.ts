@@ -163,6 +163,22 @@ describe('status is a LIVE question (genie#305)', () => {
         expect(res.sites[0]?.ready).toBe(false);
     });
 
+    it('carries WHICH half is missing through to the caller (genie#626)', async () => {
+        // The manager records that the proxy is up and the php-cgi worker is not,
+        // and `manageSiteSummary` says so naming both ports — but only if the fact
+        // survives the shaping between them. It did not exist before, so nothing
+        // was carrying it, and the message would have been unreachable in
+        // production while passing its own unit test.
+        manager.list.mockReturnValue([
+            row({ ready: false, hostPort: 50668, workerDown: true, workerPort: 50675 }),
+        ]);
+
+        const res = await runManageSite(WS, { action: 'list' });
+
+        expect(res.sites[0]?.workerDown).toBe(true);
+        expect(res.sites[0]?.workerPort).toBe(50675);
+    });
+
     it('leaves `list` on the cached state — it is the inventory, not a health check', async () => {
         // `list` is what the Site Manager panel and every result envelope call, so
         // making it probe would put a network round-trip behind every action.
@@ -269,6 +285,47 @@ describe('a start that outlives the call (genie#194)', () => {
         expect(res.notes?.join(' ')).toContain(SITE_ID);
         // …and the live phase rides along, so the poll is informed.
         expect(res.sites[0]?.phase).toBe('pulling');
+    });
+
+    /**
+     * The other half of genie#626: the STORED config described a server the site
+     * was not running, and `update` could not undo it.
+     */
+    it('warns about a site that ALREADY stores two server definitions, whatever this update touched', async () => {
+        store.sites[SITE_ID] = {
+            ...SITE,
+            hostServe: { mode: 'php', root: 'public' },
+            command: ['php', 'artisan', 'serve', '--port=8080'],
+        };
+        manager.reconfigure.mockResolvedValue(status());
+
+        // An update about something else entirely — the conflict is a property of
+        // the site, not of this request.
+        const res = await runManageSite(WS, { action: 'update', id: SITE_ID, browserExposed: true });
+
+        expect(res.notes?.join(' ')).toMatch(/TWO server definitions/i);
+    });
+
+    it('clears a stored `command` when passed null, the way `hostServe: null` clears', async () => {
+        store.sites[SITE_ID] = {
+            ...SITE,
+            hostServe: { mode: 'php', root: 'public' },
+            command: ['php', 'artisan', 'serve', '--port=8080'],
+        };
+        manager.reconfigure.mockResolvedValue(status());
+
+        const res = await runManageSite(WS, { action: 'update', id: SITE_ID, command: null });
+
+        expect(res.ok).toBe(true);
+        // The PATCH, not a third argument that does not exist — an assertion read
+        // off the wrong call index passes for every implementation.
+        const patch = db.setWorkspaceDevSite.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+        // The key must be PRESENT and cleared: an omitted key leaves the stored
+        // command exactly where it was, which is the bug being fixed.
+        expect(Object.keys(patch)).toContain('command');
+        expect(patch.command).toBeUndefined();
+        // …and with only one server definition left, the conflict note is gone.
+        expect(res.notes?.join(' ') ?? '').not.toMatch(/TWO server definitions/i);
     });
 
     it('an `update` that triggers a restart is the same — it never blocks past the budget', async () => {

@@ -247,6 +247,25 @@ describe('sites-config', () => {
         expect(sanitizeDevSitePatch({ genName: 'WEB.acme.GEN' }).genName).toBe('web.acme.gen');
     });
 
+    it('CLEARS a command that is explicitly emptied, and leaves an omitted one alone (genie#626)', () => {
+        // The reporter's site stored both `hostServe` and a `command`, and
+        // `update` could not remove the command — `command: []` was ignored and
+        // there was no documented null, so project.json had to be hand-edited.
+        // `hostServe` already works this way: PRESENCE decides, and the
+        // present-but-undefined key is what overrides the stored row on merge.
+        const cleared = sanitizeDevSitePatch({ command: undefined } as never);
+        expect(Object.keys(cleared)).toContain('command');
+        expect(cleared.command).toBeUndefined();
+
+        const emptied = sanitizeDevSitePatch({ command: [] });
+        expect(Object.keys(emptied)).toContain('command');
+        expect(emptied.command).toBeUndefined();
+
+        // POSITIVE CONTROL: a patch that does not MENTION the command must not
+        // touch it, or every cosmetic edit would wipe the site's server.
+        expect(Object.keys(sanitizeDevSitePatch({ name: 'web' }))).not.toContain('command');
+    });
+
     it('keeps a command as literal argv and drops anything that is not', () => {
         expect(sanitizeDevSitePatch({ command: ['npm', 'run', 'dev'] }).command).toEqual([
             'npm',

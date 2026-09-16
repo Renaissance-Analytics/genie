@@ -87,3 +87,31 @@ only inside that browser — nothing is exposed to the wider network. The Genie
 Browser is on by default and can be toggled in
 **[Settings → Hosting Manager](08-settings.md)**; turning it off means a `.gen`
 site opens nowhere.
+
+## When a PHP site 502s
+
+A site Genie serves with `hostServe: {mode: "php"}` is **two processes**: Genie's
+own web server on the site's port, and a `php-cgi` FastCGI worker behind it. If
+the worker goes down, the front server stays bound and answers every request with
+a 502 — so "something is listening" says nothing about whether the site works.
+
+Genie checks the worker, not just the front door: a site whose worker is gone is
+reported **not ready**, with the worker's own port named, and Genie restarts that
+worker a bounded number of times before leaving it honestly down (a worker whose
+PHP is broken would otherwise be respawned forever).
+
+If you see a 502, ask for the site's status: it will say the PHP worker is not
+running and give both ports — Genie's proxy and the worker — rather than
+suggesting your app bound the wrong port. It is Genie's worker, not yours.
+
+## One site, one server
+
+`command` and `hostServe` each name a SERVER, and a site should store only one.
+When both are stored, Genie serves the site with `hostServe` and **ignores** the
+`command` — so the stored config describes a server that is not running. Genie
+now says so whenever such a site is updated. Clear the one you do not want:
+
+```
+manageSite { action: "update", id: "<id>", command: null }     # keep hostServe
+manageSite { action: "update", id: "<id>", hostServe: null }   # keep the command
+```
