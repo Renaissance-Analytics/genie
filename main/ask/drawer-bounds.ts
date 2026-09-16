@@ -77,3 +77,40 @@ export function askWindowBounds({
     const x = Math.max(workArea.x, Math.min(centred, maxX));
     return { x, y: current.y, width, height: current.height };
 }
+
+export interface AskWindowFitInput {
+    /** Where the window is now — whatever the window manager made of it. */
+    current: AskWindowGeometry;
+    /** The display's usable area (Electron's `screen` work area). */
+    workArea: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * The bounds that put the whole window on the display (genie#703).
+ *
+ * `createAskWindow` asks for a fixed height and `resizable: false`; a tiling
+ * window manager honours neither. On the reported machine the modal ended up
+ * taller than the screen with its bottom — and therefore its Cancel/Submit row —
+ * past the edge, which reads exactly like a clipped footer and is not one. No
+ * stylesheet can pull a window back onto a display, which is why the first fix
+ * attempted for this (a flex `min-height`) changed nothing.
+ *
+ * SHRINK ONLY WHEN THE DISPLAY CANNOT AFFORD THE SIZE. A window that fits but
+ * hangs off the edge is MOVED: taking height the screen could have given is a
+ * second, unasked-for change to a window someone is already reading.
+ *
+ * Separate from {@link askWindowBounds} on purpose — that one answers "how wide
+ * for this drawer state" and deliberately never touches the vertical axis, so
+ * folding a display clamp into it would make every drawer toggle reposition the
+ * window too.
+ */
+export function askWindowFit({ current, workArea }: AskWindowFitInput): AskWindowGeometry {
+    const height = Math.min(current.height, workArea.height);
+    const width = Math.min(current.width, workArea.width);
+    // `max` last, so a work area reported as zero (or smaller than the window)
+    // still pins the top-left on screen instead of producing a window nobody can
+    // reach — the same fallback the horizontal clamp above keeps.
+    const y = Math.max(workArea.y, Math.min(current.y, workArea.y + workArea.height - height));
+    const x = Math.max(workArea.x, Math.min(current.x, workArea.x + workArea.width - width));
+    return { x, y, width, height };
+}

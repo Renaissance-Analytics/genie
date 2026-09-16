@@ -28,7 +28,7 @@ import {
     type PersistedQuestion,
     type QuestionStorePort,
 } from './question-store';
-import { ASK_MODAL_WIDTH, askWindowBounds } from './drawer-bounds';
+import { ASK_MODAL_WIDTH, askWindowBounds, askWindowFit } from './drawer-bounds';
 import {
     asFtqAvailability,
     resolveDndMessage,
@@ -1076,6 +1076,38 @@ function setAskDrawerOpen(senderId: number, open: boolean): void {
     }
 }
 
+/**
+ * Pull the ask window fully onto the display it is on (genie#703).
+ *
+ * Best-effort and never fatal: a question that cannot be repositioned is still a
+ * question the user should see, so a screen module that throws leaves the window
+ * exactly where it was rather than taking the modal down.
+ */
+function fitAskWindowToDisplay(w: BrowserWindow): void {
+    try {
+        const current = w.getBounds();
+        const workArea = screen.getDisplayMatching(current).workArea;
+        const fitted = askWindowFit({ current, workArea });
+        if (
+            fitted.x === current.x &&
+            fitted.y === current.y &&
+            fitted.width === current.width &&
+            fitted.height === current.height
+        ) {
+            return; // already on screen — do not touch a window nobody needs moved
+        }
+        // The modal is deliberately not user-resizable, and a non-resizable
+        // window can refuse a programmatic resize — lift it for the one call,
+        // exactly as the drawer resize does, then put it back.
+        const resizable = w.isResizable();
+        if (!resizable) w.setResizable(true);
+        w.setBounds(fitted);
+        if (!resizable) w.setResizable(false);
+    } catch {
+        /* No display, or a screen module that throws under test. */
+    }
+}
+
 function createAskWindow(): BrowserWindow {
     if (!config) throw new Error('ForceTheQuestion IPC not registered');
     const w = new BrowserWindow({
@@ -1126,6 +1158,12 @@ function createAskWindow(): BrowserWindow {
         w.loadFile(path.join(__dirname, 'ask.html'));
     }
     w.once('ready-to-show', () => {
+        // ON THE DISPLAY, whatever the window manager made of the request
+        // (genie#703). The window asks for a fixed height and is not resizable;
+        // a tiling WM honours neither, and the reported machine ended up with
+        // the modal taller than the screen and its Cancel/Submit row past the
+        // bottom edge — which reads as a clipped footer and is not one.
+        fitAskWindowToDisplay(w);
         w.show();
         w.focus();
     });
