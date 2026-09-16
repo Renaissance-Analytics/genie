@@ -136,6 +136,9 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     layout_json: 'user',
     view_state_json: 'user',
     collapsed_workspaces: 'user',
+    // The question modal's size belongs to the MACHINE showing it — a client
+    // setting, so it stays off HOST_SOURCED_SETTINGS_KEYS (genie#703).
+    ask_modal_size: 'workstation',
     active_workspace: 'user',
     last_terminal_type: 'user',
     max_views: 'user',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     ASK_DRAWER_WIDTH,
     ASK_MODAL_WIDTH,
-    askWindowBounds, askWindowFit } from '../drawer-bounds';
+    askWindowBounds, askWindowFit, parseAskModalSize, askModalStartSize } from '../drawer-bounds';
 
 /**
  * Where the ask window goes when the file drawer opens (Tynn story #272).
@@ -231,5 +231,71 @@ describe('askWindowFit — the modal is pulled back onto the display', () => {
         });
         expect(fitted.x).toBe(0);
         expect(fitted.y).toBe(0);
+    });
+});
+
+/**
+ * THE USER CAN RESIZE THE MODAL, AND IT REMEMBERS (genie#703, owner).
+ *
+ * The window was deliberately fixed-size — "nothing about a question wants a
+ * drag handle" — and that is exactly why a window a tiling WM had mangled could
+ * not be rescued by hand. The owner's call: make it resizable, "make sure that
+ * size is default what it is now and the setting is a client setting."
+ *
+ * So the DEFAULT is unchanged (760x560, what it has always opened at), a size
+ * the user chose is remembered, and anything unusable is refused rather than
+ * stored — a window remembered at 12x8 is a window nobody can answer.
+ */
+describe('parseAskModalSize — a remembered size is only honoured if it is usable', () => {
+    it('reads back a size the user chose', () => {
+        expect(parseAskModalSize('{"width":900,"height":700}')).toEqual({
+            width: 900,
+            height: 700,
+        });
+    });
+
+    it('refuses a size too small to answer a question in', () => {
+        expect(parseAskModalSize('{"width":40,"height":20}')).toBeNull();
+    });
+
+    it('refuses junk, a missing value, and the wrong types', () => {
+        expect(parseAskModalSize(undefined)).toBeNull();
+        expect(parseAskModalSize('')).toBeNull();
+        expect(parseAskModalSize('not json')).toBeNull();
+        expect(parseAskModalSize('{"width":"900","height":700}')).toBeNull();
+        expect(parseAskModalSize('{"width":null,"height":null}')).toBeNull();
+    });
+
+    it('falls back to the size the modal has always opened at', () => {
+        // The owner's requirement, pinned: no remembered size means 760x560.
+        expect(askModalStartSize(null)).toEqual({ width: ASK_MODAL_WIDTH, height: 560 });
+        expect(askModalStartSize(parseAskModalSize('garbage'))).toEqual({
+            width: ASK_MODAL_WIDTH,
+            height: 560,
+        });
+    });
+});
+
+describe('askWindowBounds — the drawer widens from the size the USER chose', () => {
+    const workArea = { x: 0, y: 0, width: 2560, height: 1400 };
+
+    it('adds the drawer to a remembered width, and gives it back on close', () => {
+        // Without this, opening a file and closing it again would snap a window
+        // the user had widened back to the stock 760 — silently discarding the
+        // size we just promised to remember.
+        const current = { x: 0, y: 0, width: 900, height: 700 };
+        const open = askWindowBounds({ current, workArea, drawerOpen: true, baseWidth: 900 });
+        expect(open.width).toBe(900 + ASK_DRAWER_WIDTH);
+
+        const closed = askWindowBounds({ current: open, workArea, drawerOpen: false, baseWidth: 900 });
+        expect(closed.width).toBe(900);
+    });
+
+    it('still uses the stock width when no size was remembered', () => {
+        // POSITIVE CONTROL: the default path is untouched by the new parameter.
+        const current = { x: 0, y: 0, width: ASK_MODAL_WIDTH, height: 560 };
+        expect(askWindowBounds({ current, workArea, drawerOpen: false }).width).toBe(
+            ASK_MODAL_WIDTH,
+        );
     });
 });

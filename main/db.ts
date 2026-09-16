@@ -3486,6 +3486,8 @@ export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
      *  ids (k/v values are text, like notifications_muted). Persists the
      *  sidebar expand/collapse state across restarts. Default '[]'. */
     collapsed_workspaces?: string;
+    /** The ForceTheQuestion modal's remembered size, JSON {width,height} (genie#703). */
+    ask_modal_size?: string;
     /** The MACHINE's default language version per tool, JSON-encoded
      *  (`{"php":"8.3.33","node":"24.19.0"}`). Only versions Genie itself
      *  installed under `<userData>/toolchain` may appear; a stale or foreign
@@ -3641,6 +3643,7 @@ export function getAllSettings(): Settings {
         // open minimised (genie#580). An absent row must stay absent; the Chooser
         // materialises a real list on the first toggle.
         collapsed_workspaces: out['collapsed_workspaces'],
+        ask_modal_size: out['ask_modal_size'],
         // Every provider's command + flags, defaulted from TUI_REGISTRY
         // (genie#261) with the stored value winning where one exists.
         ...Object.fromEntries(
