@@ -61,9 +61,12 @@ const railRow = (name: string) => page.locator('.tproj-head').filter({ hasText: 
 const workspaceBlock = (name: string) =>
     page.locator('.tproj').filter({ has: page.locator('.tproj-head', { hasText: name }) });
 
+/** The workspace context menu. Scoped, because the floor offers Wake too. */
+const menu = () => page.locator('.proj-popover');
+
 async function openWorkspaceMenu(name: string): Promise<void> {
     await railRow(name).locator('.pname').click({ button: 'right' });
-    await expect(page.locator('.proj-popover')).toBeVisible();
+    await expect(menu()).toBeVisible();
 }
 
 test('hibernating a workspace greys it, marks it with three z\'s, and really stops its terminals', async () => {
@@ -77,7 +80,7 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     expect(await readLiveTerminals(app)).toContain(seed.terminalId);
 
     await openWorkspaceMenu(seed.workspaceName);
-    await page.getByRole('button', { name: 'Hibernate workspace' }).click();
+    await menu().getByRole('button', { name: 'Hibernate workspace' }).click();
 
     // The confirm says what it costs; hibernation is a shutdown, not a toggle.
     const confirm = page.locator('.prompt-card');
@@ -126,8 +129,8 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     // The menu offers waking, and stops offering the things a sleeping workspace
     // cannot do.
     await openWorkspaceMenu(seed.workspaceName);
-    await expect(page.getByRole('button', { name: 'Wake workspace' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Add Terminal', exact: true })).toHaveCount(0);
+    await expect(menu().getByRole('button', { name: 'Wake workspace' })).toBeVisible();
+    await expect(menu().getByRole('button', { name: 'Add Terminal', exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
     await floor.getByRole('button', { name: 'Wake workspace' }).click();
