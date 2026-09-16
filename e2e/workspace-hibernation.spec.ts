@@ -108,8 +108,15 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     const floor = page.locator('.hibernated-floor');
     await expect(floor).toBeVisible();
     await expect(floor).toContainText(`${seed.workspaceName} is hibernating`);
-    // No panel mounts: a mounted one would ask main for a pty and be refused.
-    await expect(page.locator('.tpanel')).toHaveCount(0);
+    // Its own panels are UNMOUNTED: a mounted one asks main for a pty as it
+    // mounts, and in a sleeping workspace that is refused.
+    await expect(page.locator('.tpanel').filter({ hasText: seed.terminalLabel })).toHaveCount(0);
+    // But only its own. Another workspace's panels stay mounted (hidden) behind
+    // this floor so their ptys survive the switch — hibernating one workspace
+    // must not disturb the rest.
+    await expect(
+        page.locator('.tpanel').filter({ hasText: seed.peerTerminalLabel }),
+    ).toHaveCount(1);
 
     // The menu offers waking, and stops offering the things a sleeping workspace
     // cannot do.
