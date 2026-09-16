@@ -2621,3 +2621,166 @@ describe('no two migrations claim the same version', () => {
         expect(applied.length).toBe(declaredVersions().length);
     });
 });
+
+/**
+ * A LEGACY `CHECK` ON `workspaces.backend` MUST NOT BRICK THE APP (genie#702).
+ *
+ * v77 retires Aionima with `UPDATE workspaces SET backend = 'none' WHERE backend
+ * = 'aionima'`. On a workstation upgrading to beta.328 that threw
+ *
+ *     SqliteError: CHECK constraint failed: backend IN ('tynn', 'aionima')
+ *
+ * and took the whole app down — not just that migration. The throw happens
+ * inside `initDatabase()`, BEFORE any IPC handler is registered, so the renderer
+ * asks `auth:whoami` and nothing answers: Genie sits on "signing in" forever,
+ * with no host service, no sites and no pty-host either.
+ *
+ * The constraint is a fossil. Today's v2 adds `backend` with NO check and says
+ * why (SQLite < 3.25 rejects CHECK on ALTER ADD COLUMN), but a database created
+ * by an older Genie carries it inline, and nothing has ever retrofitted those.
+ * Every such install hits this the first time it runs v77 — which is every
+ * install, since v77 is new.
+ *
+ * The repair therefore cannot be a LATER migration: v77 throws before one could
+ * run. It has to happen before the migration loop, where the foreign-key pragma
+ * can still be toggled — inside a migration's transaction, `PRAGMA
+ * foreign_keys` is silently ignored, and `workspaces` is a parent table.
+ */
+describe('db migration v77 (Aionima retired) against a legacy CHECK', () => {
+    /** The DDL an older Genie wrote: today's columns, plus the inline CHECK. */
+    function withLegacyBackendCheck(db: Database.Database): void {
+        const sql = db
+            .prepare<[], { sql: string }>(
+                `SELECT sql FROM sqlite_master WHERE type='table' AND name='workspaces'`,
+            )
+            .get()!.sql;
+        // Reconstruct the old shape from the CURRENT one, so the fixture carries
+        // every column this schema has rather than a hand-written subset — a
+        // rebuild that drops a column has to fail this test.
+        const legacy = sql
+            .replace(/CREATE TABLE workspaces/i, 'CREATE TABLE workspaces_legacy')
+            .replace(
+                /(\bbackend\s+TEXT[^,)]*)/i,
+                "$1 CHECK (backend IN ('tynn', 'aionima'))",
+            );
+        // A real legacy install carries its indexes too, so the fixture replays
+        // them — otherwise the repair would be asked to preserve something that
+        // was never there, and the assertion about it would prove nothing.
+        const indexes = db
+            .prepare<[], { sql: string }>(
+                `SELECT sql FROM sqlite_master
+                  WHERE type='index' AND tbl_name='workspaces' AND sql IS NOT NULL`,
+            )
+            .all();
+        db.pragma('foreign_keys = OFF');
+        db.exec(legacy);
+        db.exec('INSERT INTO workspaces_legacy SELECT * FROM workspaces');
+        db.exec('DROP TABLE workspaces');
+        db.exec('ALTER TABLE workspaces_legacy RENAME TO workspaces');
+        for (const index of indexes) db.exec(index.sql);
+        db.pragma('foreign_keys = ON');
+    }
+
+    function seedAionimaWorkspace(db: Database.Database): void {
+        db.prepare(
+            `INSERT INTO workspaces (id, backend, project_id, project_name, tynn_project_id,
+                                     tynn_project_name, shape, path, created_by_genie)
+             VALUES ('ws-old', 'aionima', 'p1', 'Old', 'p1', 'Old', 'simple', '/work/old', 1)`,
+        ).run();
+    }
+
+    /** Put the database back where a real upgrade starts: v77 not yet applied. */
+    function rerun77(db: Database.Database): ReturnType<typeof runMigrations> {
+        db.prepare('DELETE FROM schema_version WHERE version >= 77').run();
+        return runMigrations(db);
+    }
+
+    it('completes the upgrade instead of throwing, and retires the Aionima row', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seedAionimaWorkspace(db);
+        withLegacyBackendCheck(db);
+
+        expect(() => rerun77(db)).not.toThrow();
+
+        expect(
+            db.prepare<[], { backend: string }>(
+                `SELECT backend FROM workspaces WHERE id = 'ws-old'`,
+            ).get()?.backend,
+        ).toBe('none');
+    });
+
+    it('leaves the stale CHECK gone, so the NEXT write of a new backend value also works', () => {
+        // Retiring the one row is not the fix — the constraint forbids every
+        // value the app uses today, so it has to be off the table for good.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seedAionimaWorkspace(db);
+        withLegacyBackendCheck(db);
+        rerun77(db);
+
+        expect(() =>
+            db.prepare(
+                `INSERT INTO workspaces (id, backend, project_id, project_name, tynn_project_id,
+                                         tynn_project_name, shape, path, created_by_genie)
+                 VALUES ('ws-new', 'none', 'p2', 'New', 'p2', 'New', 'simple', '/work/new', 1)`,
+            ).run(),
+        ).not.toThrow();
+    });
+
+    it('keeps every column, row and index the rebuild passed through', () => {
+        // The danger of a table rebuild is losing something quietly. This pins
+        // the shape either side of it.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        seedAionimaWorkspace(db);
+        const columnsBefore = db
+            .prepare<[], { name: string }>(`SELECT name FROM pragma_table_info('workspaces')`)
+            .all()
+            .map((c) => c.name);
+        withLegacyBackendCheck(db);
+
+        rerun77(db);
+
+        const columnsAfter = db
+            .prepare<[], { name: string }>(`SELECT name FROM pragma_table_info('workspaces')`)
+            .all()
+            .map((c) => c.name);
+        expect(columnsAfter).toEqual(columnsBefore);
+        expect(
+            db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM workspaces').get()?.n,
+        ).toBe(1);
+        expect(
+            db
+                .prepare<[], { name: string }>(
+                    `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='workspaces'
+                       AND name = 'idx_workspaces_last_opened'`,
+                )
+                .get()?.name,
+        ).toBe('idx_workspaces_last_opened');
+        // And the database is internally consistent afterwards — a rebuild that
+        // stranded a child row would show up here.
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+    });
+
+    it('POSITIVE CONTROL: a database with no stale CHECK is left exactly as it is', () => {
+        // The repair must not rebuild every workspaces table on every launch.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const before = db
+            .prepare<[], { sql: string }>(
+                `SELECT sql FROM sqlite_master WHERE type='table' AND name='workspaces'`,
+            )
+            .get()!.sql;
+
+        rerun77(db);
+
+        expect(
+            db
+                .prepare<[], { sql: string }>(
+                    `SELECT sql FROM sqlite_master WHERE type='table' AND name='workspaces'`,
+                )
+                .get()!.sql,
+        ).toBe(before);
+    });
+});
