@@ -29,9 +29,59 @@ export function codexAppServerLaunch(input: {
 
 const REMOTE_FLAG = /(^|\s)--remote(?:=|\s)/;
 
+/**
+ * Where the standalone `--` is, or -1. Quote-aware, because a `-c` value may
+ * legitimately contain one (`-c "notice='ship -- now'"`) and the separator this
+ * is looking for is the real one, not a substring of an argument.
+ */
+function promptSeparatorIndex(command: string): number {
+    let quote: "'" | '"' | null = null;
+    for (let i = 0; i < command.length; i += 1) {
+        const ch = command[i];
+        if (quote) {
+            if (ch === quote) quote = null;
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            quote = ch;
+            continue;
+        }
+        if (
+            ch === '-' &&
+            command[i + 1] === '-' &&
+            (i === 0 || /\s/.test(command[i - 1]!)) &&
+            (i + 2 === command.length || /\s/.test(command[i + 2]!))
+        ) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Bind a Codex TUI to Genie's App Server — the harness-native transport that
+ * carries AgentInbox mail into a running thread.
+ *
+ * THE FLAGS GO BEFORE `--`, and that is the whole subtlety. `--remote` is an
+ * OPTION of the interactive CLI, and `--` ENDS option parsing: everything after
+ * it is positional. Appended to a launch that already carries `-- "<prompt>"`,
+ * the binding lands where codex can only read it as a subcommand name, which is
+ * what it says:
+ *
+ *     $ codex --yolo -c "…" -- "<instructions>" --remote ws://127.0.0.1:62811 …
+ *     error: unrecognized subcommand '--remote'
+ *
+ * MEASURED on codex-cli 0.151.0: the TUI exits to a shell prompt, so the agent
+ * does not merely lose its mail transport — it never starts. A command with no
+ * prompt still appends, since there is nothing to insert before.
+ */
 export function codexRemoteTuiLaunch(command: string, address: string): string {
     if (REMOTE_FLAG.test(command)) return command;
-    return `${command.trim()} --remote ${address} --remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`;
+    const binding = `--remote ${address} --remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`;
+    const trimmed = command.trim();
+    const separator = promptSeparatorIndex(trimmed);
+    if (separator === -1) return `${trimmed} ${binding}`;
+    return `${trimmed.slice(0, separator).trimEnd()} ${binding} ${trimmed.slice(separator)}`;
 }
 
 export function codexAppServerConfigArgs(command: string): string[] {
