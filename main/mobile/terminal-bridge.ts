@@ -109,6 +109,20 @@ const bySocket = new WeakMap<WebSocket, SocketEntry>();
  */
 const ptyGrowFloor = new Map<string, { cols: number; rows: number }>();
 
+/**
+ * Main-side callback that asks the local desktop owner(s) of a terminal to
+ * re-fit after the final remote viewer leaves. The renderer owns the real
+ * viewport, so the bridge must not guess a replacement grid itself.
+ */
+let refitHandler: ((terminalId: string) => void) | null = null;
+
+/** Wire the desktop refit request. Pass null to clear (tests/shutdown). */
+export function setTerminalRefitHandler(
+    fn: ((terminalId: string) => void) | null,
+): void {
+    refitHandler = fn;
+}
+
 /** ~20 ms batching window — coalesces a burst of tiny pty writes into one frame. */
 const BATCH_MS = 20;
 
@@ -206,7 +220,16 @@ export function attachTerminalSocket(terminalId: string, ws: WebSocket): () => v
         const s = byTerminal.get(terminalId);
         if (s) {
             s.delete(entry);
-            if (s.size === 0) byTerminal.delete(terminalId);
+            if (s.size === 0) {
+                byTerminal.delete(terminalId);
+                // The grow-only floor belongs to the REMOTE attachment lifetime,
+                // not the pty lifetime. Leaving it behind pins the shared pty to
+                // the largest departed viewer until an incidental desktop layout
+                // change happens to resize it. Drop the floor, then let the
+                // desktop re-send the grid from its authoritative viewport.
+                ptyGrowFloor.delete(terminalId);
+                refitHandler?.(terminalId);
+            }
         }
         bySocket.delete(ws);
     };
@@ -293,4 +316,5 @@ export function _resetBridgeForTest(): void {
     ptyGrowFloor.clear();
     repaintCooldown.clear();
     repaintHandler = null;
+    refitHandler = null;
 }

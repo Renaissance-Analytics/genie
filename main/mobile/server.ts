@@ -983,7 +983,11 @@ export {
     listSessions,
 } from './auth';
 // Re-export the terminal fanout so ipc.ts taps it with a single import.
-export { mobileTermFanout, mobileTermClose } from './terminal-bridge';
+export {
+    mobileTermFanout,
+    mobileTermClose,
+    setTerminalRefitHandler,
+} from './terminal-bridge';
 export { mobileEmit } from './bus';
 
 /** Status for Settings → Mobile (drives the URL / PIN / QR / conflict banner). */

@@ -101,7 +101,12 @@ import {
     unregisterTerminalEndpoint,
     workspaceEndpointUrl,
 } from '../mcp/server';
-import { mobileEmit, mobileTermFanout, mobileTermClose } from '../mobile/server';
+import {
+    mobileEmit,
+    mobileTermFanout,
+    mobileTermClose,
+    setTerminalRefitHandler,
+} from '../mobile/server';
 import { broadcastLocal } from '../remote';
 import { terminalNoticeFacts } from '../attention/terminal-facts';
 import { planInboxIncomingNotice } from '../attention/inbox-incoming-notice';
@@ -1191,6 +1196,22 @@ export function registerTerminalIpc(): void {
     // backend (in-process ↔ host client) under us; capturing it once would
     // leave handlers pointed at a stale backend after a fallback.
     const mgr = () => terminalManager();
+
+    // A remote viewer can grow the shared pty beyond the local xterm's grid.
+    // When the final viewer leaves, ask every LOCAL owner to fit and re-send its
+    // own viewport; main deliberately does not guess which window's size wins.
+    setTerminalRefitHandler((id) => {
+        const entry = ownersByTerminal.get(id);
+        if (!entry) return;
+        for (const target of entry.owners) {
+            if (target.isDestroyed()) continue;
+            try {
+                target.send('terminal:refit', { id });
+            } catch {
+                /* owner is tearing down — another live owner may still refit */
+            }
+        }
+    });
 
     const trackOwner = (id: string, sender: WebContents) => {
         let entry = ownersByTerminal.get(id);
