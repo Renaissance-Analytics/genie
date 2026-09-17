@@ -4,7 +4,7 @@ import { agentRef, isAgentTui } from '../../agents/identity';
 import { planHandoff } from '../../agents/handoff';
 import { agentBootPrompt } from '../../agents/boot-prompt';
 import { guideTopics } from '../guide-topics';
-import { handleMcpMessage, type McpContext } from '../protocol';
+import { CORE_TOOLS, handleMcpMessage, type McpContext } from '../protocol';
 
 /**
  * The agent-facing GUIDE must not drift from what the tools actually do.
@@ -986,5 +986,53 @@ describe('the protocol is written for the OS Genie is installed on', () => {
         const res = await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' }, ctx);
         const instructions = (res?.result as { instructions: string }).instructions;
         expect(instructions).toBe(genieProtocolBrief(process.platform));
+    });
+});
+
+/**
+ * A USERLIST ITEM IS SOMETHING TO DO; A QUESTION IS A ForceTheQuestion (owner).
+ *
+ * The owner, after an agent parked a question on their to-do list: "the UserList
+ * should not be used for things you need an answer on. They are things a User
+ * needs to DO, like 'create an account and provide API key'. FTQ is for things
+ * where the agent needs a response."
+ *
+ * The old wording invited exactly that mistake. It split the two by BLOCKING —
+ * "FTQ parks you until a human answers; a UserList item lets you carry on … reach
+ * for it instead of blocking whenever you don't need the answer right now" — so
+ * an agent with a question it did not need answered immediately was told, in so
+ * many words, to put the question on the list.
+ *
+ * The split is by KIND, not by urgency: a TASK for the person goes on the list, a
+ * QUESTION for you goes to FTQ, blocking or not.
+ */
+describe('the lists surface says what a UserList item IS', () => {
+    const listsDescription = (): string => {
+        const tool = CORE_TOOLS.find((t) => t.name === 'lists');
+        if (!tool) throw new Error('lists tool not advertised');
+        return tool.description;
+    };
+
+    it('tells an agent a UserList item is an ACTION the person performs', () => {
+        expect(listsDescription()).toMatch(/\bDO\b|\bdoes\b|\bperform|\btask\b/);
+        // The owner's own example is the clearest statement of the kind.
+        expect(listsDescription()).toMatch(/API key|account/i);
+    });
+
+    it('sends QUESTIONS to ForceTheQuestion, in both surfaces', () => {
+        for (const text of [listsDescription(), GENIE_MCP_GUIDE]) {
+            expect(text).toMatch(/ForceTheQuestion/);
+        }
+        expect(listsDescription()).toMatch(/(question|answer)[^.]*ForceTheQuestion|ForceTheQuestion[^.]*(question|answer)/i);
+    });
+
+    it('no longer tells an agent to use the list when it does not need an answer YET', () => {
+        // The sentence that produced the misuse. Its absence is the fix; pinning
+        // it stops the framing coming back the next time this is reworded.
+        for (const text of [listsDescription(), GENIE_MCP_GUIDE]) {
+            expect(text).not.toMatch(/instead of blocking whenever/i);
+            expect(text).not.toMatch(/don't need the answer right now/i);
+            expect(text).not.toMatch(/do not need the answer right now/i);
+        }
     });
 });
