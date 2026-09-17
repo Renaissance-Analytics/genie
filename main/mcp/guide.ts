@@ -755,11 +755,16 @@ re-minted every launch — the same rule the handoff note uses). Whatever is sti
 open on it rides every \`imDone\` you send, which is what stops a half-finished
 checklist from vanishing when a terminal dies.
 
-The **UserList** is the counterpart to \`ForceTheQuestion\`. FTQ parks you until a
-human answers; a UserList item lets you **carry on** while they do something, and
-when they mark it done you get a nudge carrying their comment. Reach for it
-instead of blocking whenever you don't need the answer right now. Up to 5 open
-items per workspace, shared by every agent, and each one shows who asked.
+The **UserList** is for things the PERSON has to **DO** — an action only they can
+perform: create an account and hand you the API key, revoke a share, plug the
+device in, click Reinstall. When they tick one off you get a nudge carrying their
+comment. Up to 5 open items per workspace, shared by every agent, and each one
+shows who asked.
+
+**It is not for questions.** Anything you need an ANSWER or a DECISION about is a
+\`ForceTheQuestion\`, blocked on it or not — the split is by KIND, not by urgency.
+A question parked on someone's to-do list reads as a chore rather than a thing to
+answer, so it sits there while you wait for a reply that is not coming.
 
 Args: \`action\` (\`show\` — the default — / \`add\` / \`done\` / \`clear\`),
 \`text\` plus optional \`list\` (\`agent\` default, or \`user\`) for \`add\`,
@@ -1161,11 +1166,10 @@ them.
 **Genie already owns the surfaces you would otherwise improvise, and an
 improvised one is invisible to the human, unreviewable, and dies with your
 session.** Same rule as AgentInbox above, restated because the same thing keeps
-happening. Use \`lists\` for your own checklist and for things a PERSON has to do —
-your AgentList is filed under your agent NAME, so it survives a restart and
-rides along on every \`imDone\`, while a UserList item is the NON-BLOCKING
-counterpart to \`ForceTheQuestion\`: it lets you carry on, and nudges you when they
-tick it off. Use \`knowledge\` for anything worth remembering after this session —
+happening. Use \`lists\` for your own checklist and for things a PERSON must DO — an ACTION
+only they can take (create an account, hand over an API key, revoke a share).
+A QUESTION is never a list item: anything you need ANSWERED goes to
+\`ForceTheQuestion\`, blocked on it or not. Use \`knowledge\` for anything worth remembering after this session —
 it files into your workspace by default, so say \`scope: 'system'\` for what every
 agent on this machine should find. Use \`manageFlows\` for work that repeats or
 fires on a schedule, never a shell loop you leave running or a cron line of your
