@@ -112,6 +112,11 @@ interface Props {
     onAddWorkspace: () => void;
     systemRevealed?: boolean;
     onToggleSystemWorkspace?: () => void;
+    /** Hibernated workspaces are hidden until revealed (genie#705). */
+    hibernatedRevealed?: boolean;
+    /** How many the rail is hiding, so the control can say so. */
+    hiddenHibernated?: number;
+    onToggleHibernated?: () => void;
     /** Persist a new sidebar order (full ordered list of workspace ids). */
     onReorderWorkspaces: (ids: string[]) => void;
     /** Open a workspace's Processes modal (the process box's click). */
@@ -178,6 +183,9 @@ export default function Chooser({
     onAddWorkspace,
     systemRevealed = false,
     onToggleSystemWorkspace,
+    hibernatedRevealed = false,
+    hiddenHibernated = 0,
+    onToggleHibernated,
     onReorderWorkspaces,
     onShowProcessManager,
     issueWatchCounts = {},
@@ -780,6 +788,36 @@ export default function Chooser({
                             aria-pressed={systemRevealed}
                         >
                             <IconMonitorCog size={16} />
+                        </button>
+                    )}
+                    {/* HIBERNATED WORKSPACES (genie#705). Offered only when there
+                        is something to reveal, or while they ARE revealed — a
+                        toggle that hides nothing is a control with no effect, and
+                        the rail is short of room as it is. */}
+                    {onToggleHibernated && (hiddenHibernated > 0 || hibernatedRevealed) && (
+                        <button
+                            type="button"
+                            className={`gicon rail-hibernated-toggle${
+                                hibernatedRevealed ? ' on' : ''
+                            }`}
+                            onClick={onToggleHibernated}
+                            title={
+                                hibernatedRevealed
+                                    ? 'Hide hibernated workspaces'
+                                    : `Show ${hiddenHibernated} hibernated workspace${
+                                          hiddenHibernated === 1 ? '' : 's'
+                                      }`
+                            }
+                            aria-label={
+                                hibernatedRevealed
+                                    ? 'Hide hibernated workspaces'
+                                    : `Show ${hiddenHibernated} hibernated workspace${
+                                          hiddenHibernated === 1 ? '' : 's'
+                                      }`
+                            }
+                            aria-pressed={hibernatedRevealed}
+                        >
+                            {hibernatedRevealed ? <IconEye size={16} /> : <IconEyeOff size={16} />}
                         </button>
                     )}
                     <button

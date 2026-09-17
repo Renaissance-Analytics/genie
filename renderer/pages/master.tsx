@@ -61,6 +61,11 @@ import {
     isHibernated,
     wakeOutcome,
 } from '../lib/workspace-hibernation';
+import {
+    activeAfterHiding,
+    hiddenHibernatedCount,
+    withoutHibernated,
+} from '../lib/hibernated-visibility';
 import { gappLaunchLabel, gappLaunchTargets } from '../lib/gapp-launch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
 import SignInPrompt from '../components/SignInPrompt';
@@ -481,6 +486,23 @@ function MasterInner() {
     // The System Workspace row is hidden by default; the sidebar's chip toggles
     // it. Distinct from `genieOsOpen`, which is the full-screen Genie OS layer.
     const [systemRevealed, setSystemRevealed] = useState(false);
+    // Hibernated workspaces are hidden by default (genie#705) — the point of
+    // hibernating one is to get it out of the way. Persisted, so the choice
+    // survives a restart the way the collapse state does.
+    const [hibernatedRevealed, setHibernatedRevealed] = useState(false);
+    useEffect(() => {
+        let alive = true;
+        void api()
+            .settings.get()
+            .then((s) => {
+                if (!alive) return;
+                setHibernatedRevealed(s?.reveal_hibernated === 'on');
+            })
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, []);
     useEffect(() => {
         if (isRemoteWindow()) return;
         void api().app.genieOsStatus().then(({ setup }) => {
@@ -982,12 +1004,15 @@ function MasterInner() {
     const displayWorkspaces = useMemo(
         () =>
             sidebarWorkspaceRows(
-                workspaces,
+                // Hibernated workspaces drop out of the rail unless revealed
+                // (genie#705). Filtered BEFORE the System row is prepended: the
+                // System Workspace is Genie's own and never hibernates.
+                withoutHibernated(workspaces, hibernatedRevealed),
                 systemWorkspace,
                 systemRevealed,
                 genieOsSpec?.cwd,
             ),
-        [workspaces, systemWorkspace, systemRevealed, genieOsSpec?.cwd],
+        [workspaces, systemWorkspace, systemRevealed, hibernatedRevealed, genieOsSpec?.cwd],
     );
 
     // id → workspace resolver. ALWAYS includes the System Workspace (even when
@@ -2426,6 +2451,23 @@ function MasterInner() {
                                     // don't keep pointing at a now-hidden row.
                                     activateWorkspace(workspaces[0]?.id ?? null);
                                 }
+                                return next;
+                            });
+                        }}
+                        hibernatedRevealed={hibernatedRevealed}
+                        hiddenHibernated={hiddenHibernatedCount(workspaces)}
+                        onToggleHibernated={() => {
+                            setHibernatedRevealed((on) => {
+                                const next = !on;
+                                void api()
+                                    .settings.set({ reveal_hibernated: next ? 'on' : 'off' })
+                                    .catch(() => {});
+                                // Hiding the row you are STANDING on would leave the
+                                // floor showing a workspace the rail denies exists
+                                // (genie#705) — the same fallback the System toggle
+                                // makes, for the same reason.
+                                const stay = activeAfterHiding(activeWorkspaceId, workspaces, next);
+                                if (stay && stay !== activeWorkspaceId) activateWorkspace(stay);
                                 return next;
                             });
                         }}

@@ -136,6 +136,9 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     layout_json: 'user',
     view_state_json: 'user',
     collapsed_workspaces: 'user',
+    // Which rail rows you want to SEE is a per-person view preference, like
+    // the collapse state above — not a property of the machine (genie#705).
+    reveal_hibernated: 'user',
     active_workspace: 'user',
     last_terminal_type: 'user',
     max_views: 'user',
