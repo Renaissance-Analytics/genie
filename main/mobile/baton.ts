@@ -40,6 +40,11 @@ export interface BatonPrincipal {
     emoji: string;
     /** Owners may TAKE the baton; everyone else can only be GIVEN it. */
     isOwner: boolean;
+    /**
+     * A read-only guest: on the roster (the host sees them connected) but never a
+     * driver — they cannot claim, take or be given the baton. Absent ⇒ may drive.
+     */
+    readonly?: boolean;
     /** Connected-since (epoch ms), for the roster. */
     since: number;
 }
@@ -75,6 +80,9 @@ export interface BatonDecision {
     /** True when `state` differs from the input (drives the control:changed push). */
     changed: boolean;
 }
+
+/** Why a read-only principal is refused the baton. */
+const READ_ONLY_REASON = 'read-only access cannot take control';
 
 /** A baton with nobody connected and nobody driving. */
 export function emptyBaton(): BatonState {
@@ -130,6 +138,7 @@ export function decideBaton(state: BatonState, req: BatonRequest): BatonDecision
         case 'take': {
             const by = find(state, req.by);
             if (!by) return refuse(state, 'not connected');
+            if (by.readonly) return refuse(state, READ_ONLY_REASON);
             if (state.holder === by.id) return { allowed: true, state, changed: false };
             // A free baton is CLAIMED, not taken — nobody is being interrupted, so
             // the owner-only rule doesn't apply.
@@ -147,7 +156,10 @@ export function decideBaton(state: BatonState, req: BatonRequest): BatonDecision
             if (state.holder !== req.from) {
                 return refuse(state, 'only the user holding control can hand it over');
             }
-            if (!find(state, req.to)) return refuse(state, 'that user is not connected');
+            const to = find(state, req.to);
+            if (!to) return refuse(state, 'that user is not connected');
+            // Handing it to someone who cannot type would leave nobody driving.
+            if (to.readonly) return refuse(state, `${to.name} has read-only access and cannot take control`);
             return allow(state, { holder: req.to, participants: state.participants });
         }
 
@@ -161,6 +173,7 @@ export function decideBaton(state: BatonState, req: BatonRequest): BatonDecision
         case 'drive': {
             const by = find(state, req.by);
             if (!by) return refuse(state, 'not connected');
+            if (by.readonly) return refuse(state, READ_ONLY_REASON);
             if (state.holder === by.id) return { allowed: true, state, changed: false };
             if (state.holder !== null) {
                 const holder = find(state, state.holder);

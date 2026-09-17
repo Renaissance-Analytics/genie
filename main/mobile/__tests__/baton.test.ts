@@ -199,6 +199,46 @@ describe('baton: presence', () => {
     });
 });
 
+/**
+ * A READ-ONLY principal — a guest whose share is `readonly` — is on the roster (the
+ * host can see them connected) but never drives. Spec §3.3: "Read-only guests never
+ * enter the baton at all". Handing them the baton would leave nobody able to type
+ * (genie#681), and claiming a free one would let a viewer's first keystroke through.
+ */
+describe('baton: a read-only principal never drives', () => {
+    const viewer = (id = 'viewer-1'): BatonPrincipal => ({ ...member(id, '👀'), readonly: true });
+
+    it('refuses a read-only principal claiming a FREE baton', () => {
+        const state = joined(viewer());
+
+        const d = decideBaton(state, { kind: 'drive', by: 'viewer-1' });
+        expect(d.allowed).toBe(false);
+        expect(d.state.holder).toBeNull();
+        expect(d.reason).toMatch(/read-only/);
+    });
+
+    it('refuses a read-only principal taking the baton, even a free one', () => {
+        const d = decideBaton(joined(viewer()), { kind: 'take', by: 'viewer-1' });
+        expect(d.allowed).toBe(false);
+        expect(d.state.holder).toBeNull();
+    });
+
+    it('refuses handing the baton to a read-only principal, and the holder keeps it', () => {
+        const state = run(joined(member('m-1'), viewer()), { kind: 'drive', by: 'm-1' });
+
+        const d = decideBaton(state, { kind: 'give', from: 'm-1', to: 'viewer-1' });
+        expect(d.allowed).toBe(false);
+        expect(d.state.holder).toBe('m-1');
+    });
+
+    it('still lets a read-only principal join the roster (positive control)', () => {
+        const state = joined(member('m-1'), viewer());
+        expect(state.participants.map((p) => p.id)).toEqual(['m-1', 'viewer-1']);
+        // …and a control member beside them still drives.
+        expect(decideBaton(state, { kind: 'drive', by: 'm-1' }).allowed).toBe(true);
+    });
+});
+
 describe('baton: the invariant holds through any sequence', () => {
     it('never yields two holders or a holder who is not connected', () => {
         const sequence: BatonRequest[] = [
