@@ -56,6 +56,8 @@ type Json = Record<string, unknown>;
 /** The workspaces this guest reaches on this host — the one set every rule reads. */
 export class GuestScope {
     readonly visible: Set<string>;
+    /** The policy with its workspace scopes written in this host's own ids. */
+    readonly servedPolicy: HostAccessPolicy;
     private readonly byPath: Map<string, string>;
 
     constructor(
@@ -65,7 +67,10 @@ export class GuestScope {
         // The SERVED workspaces only (`listWorkspaces` excludes the protected System
         // Workspace), so no grant — not even `host:all` — reaches the operator's.
         const served = deps.listWorkspaces();
-        this.visible = visibleWorkspaceIds(policy, served.map((w) => w.id));
+        this.visible = visibleWorkspaceIds(policy, served.map((w) => w.id), deps.workspaceTynnProjectId);
+        this.servedPolicy = policy.workspaceScopes.includes('host:all')
+            ? policy
+            : { ...policy, workspaceScopes: [...this.visible].map((id) => `workspace:${id}` as const) };
         this.byPath = new Map(served.map((w) => [w.path, w.id]));
     }
 
@@ -101,7 +106,7 @@ export class GuestScope {
     siteGranted(site: { workspaceId: string; siteId: string }): boolean {
         return (
             this.has(site.workspaceId) &&
-            policyAllowsSite(this.policy, { workspaceId: site.workspaceId, siteId: site.siteId }).allowed
+            policyAllowsSite(this.servedPolicy, { workspaceId: site.workspaceId, siteId: site.siteId }).allowed
         );
     }
 }
@@ -479,7 +484,7 @@ export function guestMayUseSite(
 ): boolean {
     const scope = new GuestScope(policy, deps);
     if (!scope.has(site.workspaceId)) return false;
-    const decision = policyAllowsSite(policy, { ...site, ...request });
+    const decision = policyAllowsSite(scope.servedPolicy, { ...site, ...request });
     if (!decision.allowed) return false;
     const interactive = request.websocket === true || !['GET', 'HEAD', 'OPTIONS'].includes((request.method ?? 'GET').toUpperCase());
     return !interactive || policy.capability === 'control';

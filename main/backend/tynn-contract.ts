@@ -227,6 +227,19 @@ export const TYNN_ENDPOINTS: readonly TynnEndpoint[] = [
         breaks: 'A member cannot heartbeat its grant, so a live remote session reads as revoked.',
     },
     {
+        method: 'GET',
+        path: '/api/v1/workstations/grants/public-keys',
+        caller: 'main/host-core/relay-host/service.ts',
+        breaks: 'A desktop relay host cannot verify any member grant, so nobody can connect to it over Tynn.',
+    },
+    {
+        method: 'POST',
+        path: '/api/v1/workstations/{workstation}/relay-ticket',
+        caller: 'main/host-core/relay-host/service.ts',
+        evidence: '/relay-ticket',
+        breaks: 'A desktop cannot register on its relay, so it cannot be reached over Tynn (genie#680).',
+    },
+    {
         method: 'POST',
         path: '/api/v1/workstations/{workstation}/enroll',
         caller: 'main/tynn/local-workstation.ts',

@@ -32,6 +32,7 @@ import {
     initAuth,
     listSessions,
     revokeGuestSessions,
+    revokeSessionToken,
     validateSession,
     sessionPrincipal,
     type ConfirmPairHook,
@@ -104,8 +105,9 @@ export interface MobileServerDeps {
     /** The user-configured fixed port (Settings → Mobile). */
     configuredPort: () => number;
     /** Explicit network exposure policy. Omitted preserves the legacy
-     * Tailscale-only listener for compatibility. */
-    networkAccess?: RemoteNetworkAccess;
+     * Tailscale-only listener for compatibility. A function is read at every bind,
+     * so a restart binds what Settings allows now (genie#685). */
+    networkAccess?: RemoteNetworkAccess | (() => RemoteNetworkAccess);
     /** Reused terminal/process/workspace/question functions (built in background.ts). */
     data: MobileDataDeps;
     /**
@@ -222,6 +224,23 @@ export function disconnectGuest(principalId: string): number {
         guestSocketsByToken.delete(token);
     }
     return dropped;
+}
+
+/**
+ * End ONE relay-minted session now (its relay session closed, or its grant stopped
+ * introspecting): revoke the token and close every socket it opened. Returns
+ * whether the session existed.
+ */
+export function endRelaySession(token: string): boolean {
+    for (const ws of guestSocketsByToken.get(token) ?? []) {
+        try {
+            ws.close(4403, 'access ended');
+        } catch {
+            /* already closing */
+        }
+    }
+    guestSocketsByToken.delete(token);
+    return revokeSessionToken(token);
 }
 
 /** The remotes currently connected to `/ws/events` (drives host presence). */
@@ -517,10 +536,8 @@ function attachWebSocket(srv: http.Server | https.Server): void {
             socketServer.handleUpgrade(req, socket, head, (ws) => {
                 // Registered BEFORE the socket joins the set, so no push can reach a
                 // guest socket unfiltered.
-                if (session.access) {
-                    guestPolicyByEventSocket.set(ws, session.access);
-                    trackGuestSocket(session.token, ws);
-                }
+                if (session.access) guestPolicyByEventSocket.set(ws, session.access);
+                if (session.access || session.ephemeral) trackGuestSocket(session.token, ws);
                 eventSockets.add(ws);
                 peerByEventSocket.set(ws, {
                     ip,
@@ -565,7 +582,8 @@ function attachWebSocket(srv: http.Server | https.Server): void {
             // A GUEST attaches only to a terminal in a workspace its grant reaches —
             // judged on the terminal's own workspace, never on a tag the client sent.
             // Outside it, the terminal does not exist.
-            const guestPolicy = validateSession(token)?.access;
+            const termSession = validateSession(token);
+            const guestPolicy = termSession?.access;
             if (guestPolicy && !guestMayAttachTerminal(guestPolicy, deps.data, terminalId)) {
                 socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
                 socket.destroy();
@@ -578,7 +596,7 @@ function attachWebSocket(srv: http.Server | https.Server): void {
             // phone-safe behavior.
             const isDesktopClient = url.searchParams.get('client') === 'desktop';
             socketServer.handleUpgrade(req, socket, head, (ws) => {
-                if (guestPolicy) trackGuestSocket(token!, ws);
+                if (guestPolicy || termSession?.ephemeral) trackGuestSocket(token!, ws);
                 attachTerminalSocketAndDrive(ws, terminalId, token!, isDesktopClient);
             });
             return;
@@ -706,10 +724,16 @@ function persistState(): void {
  * Resolve the bind IP: the test override (127.0.0.1, no tailnet needed) or the
  * detected Tailscale IP. Returns null when no tailnet is present (fail closed).
  */
+function currentNetworkAccess(): RemoteNetworkAccess | undefined {
+    const access = deps?.networkAccess;
+    return typeof access === 'function' ? access() : access;
+}
+
 function resolveBindIps(): string[] {
     if (deps?.bindIpOverride) return [deps.bindIpOverride];
-    if (deps?.networkAccess) {
-        return resolveNetworkListeners(deps.networkAccess)
+    const access = currentNetworkAccess();
+    if (access) {
+        return resolveNetworkListeners(access)
             // LAN must not carry bearer sessions over plaintext HTTP. It remains
             // fail-closed until the host certificate/enrollment phase can give
             // direct LAN peers an authenticated TLS path.
@@ -896,7 +920,7 @@ export async function startMobileServer(d: MobileServerDeps): Promise<void> {
     const ips = resolveBindIps();
     if (ips.length === 0) {
         // No enabled/detected local listener → bind nothing.
-        notDetected = d.networkAccess?.tailscale ?? true;
+        notDetected = currentNetworkAccess()?.tailscale ?? true;
         return;
     }
     for (const ip of ips) await bind(ip, d.configuredPort());
@@ -947,7 +971,7 @@ export async function restartMobileServer(): Promise<void> {
     if (!deps.enabled) return;
     const ips = resolveBindIps();
     if (ips.length === 0) {
-        notDetected = deps.networkAccess?.tailscale ?? true;
+        notDetected = currentNetworkAccess()?.tailscale ?? true;
         return;
     }
     notDetected = false;

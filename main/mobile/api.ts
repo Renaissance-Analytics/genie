@@ -340,6 +340,12 @@ export interface MobileDataDeps {
         path: string;
     }>;
     /**
+     * The Tynn project a served workspace is linked to, or null. A shared guest's
+     * grant may name a workspace by it rather than by this host's id (genie#687).
+     * Absent on a host whose workspace ids ARE the project ids (genie-cloud).
+     */
+    workspaceTynnProjectId?: (workspaceId: string) => string | null;
+    /**
      * The PROTECTED System Workspace, asked for BY ID — the one affordance
      * `listWorkspaces()`'s exclusion leaves open, and the ONLY way this surface
      * ever learns of the row. Kept separate from `listWorkspaces` on purpose: that

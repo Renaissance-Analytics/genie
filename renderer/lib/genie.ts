@@ -19,6 +19,7 @@ import type { SoundSettingKeys } from '../../main/notify-sound-kinds';
 import type { RestartMode } from '../../main/agents/restart-options';
 import type { AgentCliToolId } from '../../main/agents/agent-cli-catalog';
 import type { PinReason } from '../../main/remote/pairing-reason';
+import type { RelayHostStatus } from './relay-status-note';
 /* The agent MANAGER's wire types (Tynn #709 / story #263).
  *
  * From `agent-manager-types.ts` — a ZERO-IMPORT leaf — and from NOTHING else,
@@ -1610,6 +1611,8 @@ export interface MobileStatus {
         /** Where the unreadable store was moved so it can still be recovered. */
         preservedPath: string | null;
     } | null;
+    /** Whether this computer is reachable over Tynn, and why not (genie#680). */
+    relay: RelayHostStatus;
 }
 
 /** A remote/phone currently connected to THIS host. */
@@ -3413,6 +3416,8 @@ export interface GenieApi {
         giveControl: (
             principalId: string,
         ) => Promise<MobileStatus & { ok: boolean; error?: string }>;
+        /** Live changes to whether this computer is reachable over Tynn. */
+        onRelay: (cb: (s: RelayHostStatus) => void) => () => void;
     };
     tailscale: {
         status: () => Promise<TailscaleStatus>;

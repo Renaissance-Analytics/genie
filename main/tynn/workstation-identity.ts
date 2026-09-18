@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import os from 'node:os';
 
 import { getAllSettings, setSettings, type Settings } from '../db';
@@ -80,6 +80,14 @@ export interface WorkstationIdentity {
     workstationId: string;
     /** The host proof header for this workstation's own channel; `now` injectable. */
     authHeader(now?: number): string;
+    /**
+     * Sign with the enrolled host key (genie#680): the relay hello and the site E2E
+     * handshake, when this machine is a relay host. Closes over the key like
+     * `authHeader`, so no caller ever holds it.
+     */
+    sign(data: Buffer): Buffer;
+    /** SHA-256 fingerprint of the enrolled public key ({@link fingerprintSpki}). */
+    fingerprint: string;
 }
 
 /** The persisted identity fields, read from settings. Injectable for tests. */
@@ -101,9 +109,19 @@ export function readWorkstationIdentity(read: IdentityReader = defaultRead): Wor
     if (!id || !keyEnc) return null;
     const pem = decryptSecret(keyEnc);
     if (!pem) return null;
+    let key: ReturnType<typeof createPrivateKey>;
+    try {
+        key = createPrivateKey(pem);
+    } catch {
+        return null;
+    }
+    const publicSpkiB64 = (createPublicKey(key).export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
     return {
         workstationId: id,
         authHeader: (now: number = Date.now()) => buildWorkstationAuthHeader(pem, id, now),
+        // Ed25519 is pure EdDSA — the algorithm MUST be null.
+        sign: (data: Buffer) => sign(null, data, key),
+        fingerprint: fingerprintSpki(publicSpkiB64),
     };
 }
 

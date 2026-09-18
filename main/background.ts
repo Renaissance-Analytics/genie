@@ -212,7 +212,16 @@ import { SHUTTLE_WIRE_GENERATION } from './updater/system-generation';
 import { onPluginToolsChanged } from './plugins/tools-changed';
 import { shuttleOutlivesQuit } from './mcp-shuttle/quit-rule';
 import { startControlServer } from './control';
-import { startMobileServer, DEFAULT_MOBILE_PORT } from './mobile/server';
+import { startMobileServer, mobileServerState, DEFAULT_MOBILE_PORT } from './mobile/server';
+import { startRelayHost } from './host-core/relay-host/service';
+import {
+    RelayHostController,
+    relayLocalTarget,
+    setRelayHostController,
+    syncRelayHost,
+} from './tynn/relay-host-controller';
+import { readWorkstationIdentity } from './tynn/workstation-identity';
+import { resolveTynnLinkForRow } from './workspace/tynn-link';
 import {
     listPendingQuestions,
     answerPendingQuestion,
@@ -2601,6 +2610,9 @@ app.whenReady().then(async () => {
             managedCredentialsHandle = await startManagedCredentials({
                 log: (m) => console.log('[managed-credentials]', m),
             });
+            // The relay host dials as this workstation, which may have enrolled
+            // just now.
+            syncRelayHost();
         };
         void isSignedIn().then((signedIn) => {
             if (signedIn) return startIssueWatch();
@@ -2642,11 +2654,16 @@ app.whenReady().then(async () => {
             (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
         mobileUiEnabled: (getAllSettings() as Record<string, string>)['mobile_enabled'] === 'on',
         remoteEnabled: (getAllSettings() as Record<string, string>)['remote_enabled'] === 'on',
-        networkAccess: {
-            local: (getAllSettings() as Record<string, string>)['remote_network_local'] !== 'off',
-            lan: (getAllSettings() as Record<string, string>)['remote_network_lan'] === 'on',
-            tailscale: (getAllSettings() as Record<string, string>)['remote_network_tailscale'] !== 'off',
-            tynn: (getAllSettings() as Record<string, string>)['remote_network_tynn'] !== 'off',
+        // Read at every bind, so the Allowed networks switches take effect on the
+        // restart Settings triggers rather than at the next app start (genie#685).
+        networkAccess: () => {
+            const settings = getAllSettings() as Record<string, string>;
+            return {
+                local: settings['remote_network_local'] !== 'off',
+                lan: settings['remote_network_lan'] === 'on',
+                tailscale: settings['remote_network_tailscale'] !== 'off',
+                tynn: settings['remote_network_tynn'] !== 'off',
+            };
         },
         configuredPort: () => {
             const raw = (getAllSettings() as Record<string, string>)['mobile_port'];
@@ -2691,6 +2708,13 @@ app.whenReady().then(async () => {
                     project_name: w.project_name,
                     path: w.path,
                 })),
+            // A shared guest's grant may name a workspace by its Tynn project rather
+            // than this host's id — the same effective link the inventory reports
+            // (genie#687).
+            workspaceTynnProjectId: (id) => {
+                const w = getWorkspace(id);
+                return w ? (resolveTynnLinkForRow(w)?.projectId ?? null) : null;
+            },
             // The protected System Workspace, asked for BY ID — the affordance
             // `listWorkspaces()`'s exclusion leaves open. A paired device gets full
             // access to every workspace on this host, the workstation operator's own
@@ -2800,6 +2824,25 @@ app.whenReady().then(async () => {
             listEnabledSites: () => listLocalEnabledGenSites(),
         },
     }).catch((e) => console.error('[mobile] failed to start', e));
+    // This computer as a relay host (genie#680): reachable over Tynn with no inbound
+    // port, when Genie Remote is on and the Tynn network is allowed. It proxies onto
+    // the Local listener started above. Re-synced when Settings restarts the server
+    // and once this machine's workstation enrollment settles. Skipped under E2E (no
+    // live Tynn).
+    if (!isE2E()) {
+        setRelayHostController(
+            new RelayHostController({
+                settings: () => getAllSettings() as Record<string, string>,
+                identity: () => readWorkstationIdentity(),
+                tynnApiBaseUrl: () => new TynnBackend().host(),
+                localBaseUrl: () => relayLocalTarget(mobileServerState().listeners),
+                start: (deps) => startRelayHost(deps),
+                broadcast: (status) => broadcastToWindows('mobile:relay', status),
+                log: (m) => console.log('[relay-host]', m),
+            }),
+        );
+        syncRelayHost();
+    }
     // Docs viewer IPC (docs:list / docs:read). __dirname is the compiled main
     // bundle dir; resolveDocsDir uses it to find the bundled docs/ in both dev
     // and the packaged asar.
