@@ -2595,6 +2595,7 @@ function MasterInner() {
                         agentRecord={activeAgentRecord ?? undefined}
                         onRuntimesChanged={reloadActiveAgents}
                         specs={selectedSpecs}
+                        allSpecs={specs}
                         backgroundSpecs={backgroundSpecs}
                         workspacesById={workspacesById}
                         activeWorkspaceId={activeWorkspaceId}

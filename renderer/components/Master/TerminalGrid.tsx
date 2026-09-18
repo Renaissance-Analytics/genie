@@ -10,6 +10,7 @@ import TerminalPanel from './TerminalPanel';
 import AgentPanel from './AgentPanel';
 import type { ReactNode } from 'react';
 import { agentForSpec } from '../../lib/agent-for-spec';
+import { agentSidecarScreen } from '../../lib/agent-sidecar-screen';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import CodePanel from '../Code/CodePanel';
@@ -47,6 +48,8 @@ export type { LayoutMode } from '../../lib/terminal-grid-layout';
 interface Props {
     /** Active-workspace specs only — these lay out the visible grid. */
     specs: TerminalSpec[];
+    /** Includes disabled specs that own a paired sidecar agent's screen. */
+    allSpecs?: TerminalSpec[];
     /**
      * Off-workspace selected specs. Rendered mounted-hidden (display:none)
      * so their PTYs survive a workspace switch (Decision 1: keep-alive).
@@ -139,6 +142,7 @@ export default function TerminalGrid({
     agentRecord,
     onRuntimesChanged,
     specs,
+    allSpecs,
     backgroundSpecs = [],
     emptyState,
     workspacesById,
@@ -240,6 +244,7 @@ export default function TerminalGrid({
             onRuntimesChanged={onRuntimesChanged}
             mode={mode}
             ordered={ordered}
+            allSpecs={allSpecs ?? [...specs, ...backgroundSpecs]}
             panelDrag={panelDrag}
             background={backgroundSpecs}
             empty={empty}
@@ -278,6 +283,7 @@ interface ResizableGridProps {
     mode: ResolvedMode;
     /** Active-workspace visible specs, ordered for the resolved mode. */
     ordered: TerminalSpec[];
+    allSpecs: TerminalSpec[];
     /** Off-workspace selected specs (kept mounted-hidden). */
     background: TerminalSpec[];
     /** True when the active workspace has no visible panels. */
@@ -323,6 +329,7 @@ const ResizableGrid = ({
     onRuntimesChanged,
     mode,
     ordered,
+    allSpecs,
     background,
     empty,
     emptyState,
@@ -548,6 +555,7 @@ const ResizableGrid = ({
                     >
                         <PanelFor
                             spec={p.spec}
+                            allSpecs={allSpecs}
                             workspacesById={workspacesById}
                             agentRecord={agentRecord}
                             onRuntimesChanged={onRuntimesChanged}
@@ -573,6 +581,8 @@ const ResizableGrid = ({
                             onRestartAgent={onRestartAgent}
                             onMarkActive={() => onMarkActive(p.spec.id)}
                             onMarkInactive={() => onMarkInactive(p.spec.id)}
+                            onMarkSpecActive={onMarkActive}
+                            onMarkSpecInactive={onMarkInactive}
                             // Off-workspace (display:none) panels aren't on
                             // screen — no drag wiring for them.
                             drag={p.visible ? panelDrag(p.spec.id) : undefined}
@@ -744,6 +754,7 @@ function Gutters({
 
 interface PanelForProps {
     spec: TerminalSpec;
+    allSpecs: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
     focused: boolean;
     /** Is this panel on the ACTIVE workspace? Off-workspace panels stay mounted
@@ -769,6 +780,8 @@ interface PanelForProps {
     onRestartAgent?: (spec: TerminalSpec, mode: RestartMode) => void;
     onMarkActive: () => void;
     onMarkInactive: () => void;
+    onMarkSpecActive: (id: string) => void;
+    onMarkSpecInactive: (id: string) => void;
     /** Drag-reorder wiring for this tile (undefined = not reorderable). */
     drag?: PanelDragHandlers;
     /** The workspace's registered agents + their TUIs, so an agent panel can
@@ -786,6 +799,7 @@ interface PanelForProps {
  */
 function PanelFor({
     spec,
+    allSpecs,
     workspacesById,
     focused,
     onScreen,
@@ -803,12 +817,21 @@ function PanelFor({
     onRestartAgent,
     onMarkActive,
     onMarkInactive,
+    onMarkSpecActive,
+    onMarkSpecInactive,
     drag,
     agentRecord,
     onRuntimesChanged,
 }: PanelForProps) {
-    const workspace = spec.workspace_id
-        ? workspacesById.get(spec.workspace_id)
+    // The tile is keyed by `spec.id`; the screen inside it may be the paired
+    // `<name>-slave` agent's terminal. Keeping that choice HERE preserves the
+    // grid slot while AgentPanel remounts only the terminal being viewed.
+    const [shownSpecId, setShownSpecId] = useState(spec.id);
+    const [screenSwitching, setScreenSwitching] = useState(false);
+    useEffect(() => setShownSpecId(spec.id), [spec.id]);
+    const shownSpec = allSpecs.find((candidate) => candidate.id === shownSpecId) ?? spec;
+    const workspace = shownSpec.workspace_id
+        ? workspacesById.get(shownSpec.workspace_id)
         : undefined;
 
     if (spec.type === 'code') {
@@ -870,34 +893,71 @@ function PanelFor({
             ? agentForSpec({
                   agents: agentRecord.agents,
                   runtimes: agentRecord.runtimes,
-                  specId: spec.id,
+                  specId: shownSpec.id,
               })
             : null;
+        const otherScreen = agentRecord
+            ? agentSidecarScreen({
+                  owner,
+                  agents: agentRecord.agents,
+                  runtimes: agentRecord.runtimes,
+                  specs: allSpecs,
+              })
+            : null;
+        const switchScreen = otherScreen
+            ? async () => {
+                  if (screenSwitching) return;
+                  setScreenSwitching(true);
+                  try {
+                      // Retain BEFORE remounting. Terminal's cleanup detaches,
+                      // and the last detach kills a non-retained pty — exactly
+                      // the conversation this affordance promises to preserve.
+                      const kept = await api().terminal.setRetained(shownSpec.id, true);
+                      if (!kept.ok) return;
+                      await api().terminal.setRetained(otherScreen.spec.id, false);
+                      setShownSpecId(otherScreen.spec.id);
+                  } finally {
+                      setScreenSwitching(false);
+                  }
+              }
+            : undefined;
         return (
             <AgentPanel
-                spec={spec}
+                key={shownSpec.id}
+                spec={shownSpec}
                 agentId={owner?.id}
                 agentAvatar={owner?.avatar ?? null}
                 agentAllowedTuis={owner?.allowedTuis ?? []}
-                agentCurrentTui={String(spec.meta.agent ?? '')}
+                agentCurrentTui={String(shownSpec.meta.agent ?? '')}
                 runtimes={agentRecord?.runtimes ?? []}
                 onRuntimesChanged={onRuntimesChanged}
+                screenSwitch={otherScreen && switchScreen ? {
+                    label:
+                        otherScreen.target === 'sidecar'
+                            ? `View ${otherScreen.agent.name} sidecar screen`
+                            : `Back to ${otherScreen.agent.name} driver screen`,
+                    name: otherScreen.agent.name,
+                    target: otherScreen.target,
+                    busy: screenSwitching,
+                    onClick: switchScreen,
+                } : undefined}
                 workspace={workspace}
                 attention={attention}
                 pendingNudge={pendingNudge}
                 onSendPendingNudge={onSendPendingNudge}
                 onAttentionClear={onAttentionClear}
                 focused={focused}
+                onScreen={onScreen}
                 maximized={maximized}
                 style={style}
                 onClose={onClose}
                 onMaximize={onMaximize}
                 onMinimize={onMinimize}
                 onDisable={onDisable}
-                onAgentSettings={onAgentSettings ? () => onAgentSettings(spec) : undefined}
-                onRestartAgent={onRestartAgent ? (mode) => onRestartAgent(spec, mode) : undefined}
-                onMarkActive={onMarkActive}
-                onMarkInactive={onMarkInactive}
+                onAgentSettings={onAgentSettings ? () => onAgentSettings(shownSpec) : undefined}
+                onRestartAgent={onRestartAgent ? (mode) => onRestartAgent(shownSpec, mode) : undefined}
+                onMarkActive={() => onMarkSpecActive(shownSpec.id)}
+                onMarkInactive={() => onMarkSpecInactive(shownSpec.id)}
                 drag={drag}
             />
         );

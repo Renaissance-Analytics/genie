@@ -8,17 +8,17 @@ import { agentTerminalTypes } from '../../lib/terminal-types';
 import { BrandMark } from './BrandMark';
 
 /**
- * Switch the TUI an agent runs under, and see its sidecars — from the panel's
+ * Switch the TUI an agent runs under, and see its previous drivers — from the panel's
  * own controls, where the agent actually is.
  *
  * An agent is not its TUI: claude, codex, kiwi and the Genie TUI are drivers it
  * moves between. The one it moves AWAY from keeps its pty and its conversation
- * as a hidden sidecar to flip straight back to, which is what makes switching
+ * as a hidden previous driver to flip straight back to, which is what makes switching
  * safe at all — a Claude transcript means nothing to Codex, so continuity is
- * per-TUI and the sidecar is where each thread waits.
+ * per-TUI and the previous driver is where each thread waits.
  *
  * NOTHING here stops a TUI. Adding a driver and fronting it are the only two
- * actions; a running sidecar is listed, never killed. Stopping one costs a live
+ * actions; a previous driver is listed, never killed. Stopping one costs a live
  * process and a conversation, so it stays an explicit, confirmed act elsewhere —
  * the manager's Driver tab, which is this control's full-size counterpart.
  *
@@ -51,7 +51,7 @@ export default function AgentTuiSwitcher({
     const [switchError, setSwitchError] = useState<string | null>(null);
     const mine = runtimes.filter((r) => r.agentId === agentId);
     const fronted = mine.find((r) => r.fronted);
-    const sidecars = mine.filter((r) => !r.fronted);
+    const previousDrivers = mine.filter((r) => !r.fronted);
 
     const rows = driverRows({
         drivers: agentTerminalTypes().map((type) => ({
@@ -105,15 +105,17 @@ export default function AgentTuiSwitcher({
                     title={
                         fronted
                             ? `Running ${fronted.tui}${
-                                  sidecars.length > 0 ? ` · ${sidecars.length} sidecar(s)` : ''
+                                  previousDrivers.length > 0
+                                      ? ` · ${previousDrivers.length} previous driver${previousDrivers.length === 1 ? '' : 's'}`
+                                      : ''
                               }`
                             : 'No TUI yet'
                     }
                     onClick={(e) => e.stopPropagation()}
                 >
                     {fronted ? <Mark provider={fronted.tui} /> : <span>·</span>}
-                    {sidecars.length > 0 && (
-                        <span className="agent-tui-count">{sidecars.length}</span>
+                    {previousDrivers.length > 0 && (
+                        <span className="agent-tui-count">{previousDrivers.length}</span>
                     )}
                 </span>
             </Popover.Trigger>
@@ -172,7 +174,7 @@ export function TuiSwitcherMenu({
                         <Mark provider={row.tui} />
                         <span className="agent-tui-label">{row.label}</span>
                         <span className="agent-tui-state">
-                            {row.state === 'sidecar' ? 'sidecar' : ''}
+                            {row.state === 'sidecar' ? 'previous' : ''}
                         </span>
                     </button>
                 ) : (
@@ -204,8 +206,8 @@ export function TuiSwitcherMenu({
                 </div>
             )}
             <div className="agent-tui-note">
-                Switching keeps this agent — its inbox, history and prompt. The TUI you leave
-                keeps its conversation as a sidecar; nothing is stopped.
+                Switching keeps this agent — its inbox, history and prompt. The previous
+                driver keeps its conversation; nothing is stopped.
             </div>
             <div className="agent-tui-head">Avatar</div>
             <div className="agent-tui-avatar">

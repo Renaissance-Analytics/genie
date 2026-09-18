@@ -207,7 +207,7 @@ export function seedMasterE2E(): MasterSeed {
         label: TERMINAL_LABEL,
         cwd: dir,
         type: 'terminal',
-        meta: { agent: 'claude' },
+        meta: { agent: 'claude', agent_id: DRIVER_AGENT_ID },
     });
     createTerminalSpec({
         id: SIDECAR_TERMINAL_ID,
@@ -215,7 +215,7 @@ export function seedMasterE2E(): MasterSeed {
         label: SIDECAR_TERMINAL_LABEL,
         cwd: dir,
         type: 'terminal',
-        meta: { agent: 'codex' },
+        meta: { agent: 'codex', agent_id: SIDECAR_AGENT_ID },
     });
     // The sidecar owns a real terminal but is NOT a second floor tile. The
     // screen-flip control is the only route to it, which proves the feature
