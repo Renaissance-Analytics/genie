@@ -305,6 +305,33 @@ describe('the modal is a blurred-backdrop two-pane sheet', () => {
 });
 
 /**
+ * A long shutdown roster must consume the middle row, not enlarge it. The
+ * sheet is height-capped; leaving that row implicit (`auto`) lets its min-content
+ * height escape the cap and pushes the only emergency exit below the window.
+ */
+describe('a long agent roster keeps the upgrade actions in the viewport', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../styles/master.css'), 'utf8');
+
+    const rule = (selector: string): string => {
+        const start = css.indexOf(selector);
+        expect(start, `${selector} is not in the stylesheet`).toBeGreaterThan(-1);
+        const end = css.indexOf('}', start);
+        expect(end).toBeGreaterThan(start);
+        return css.slice(start, end);
+    };
+
+    it('gives the roster a shrinkable middle row between the header and footer', () => {
+        expect(rule('.upgrade-modal {')).toMatch(
+            /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)\s+auto/,
+        );
+    });
+
+    it('scrolls the roster inside that row', () => {
+        expect(rule('.upgrade-modal .um-notes-scroll,')).toMatch(/overflow-y:\s*auto/);
+    });
+});
+
+/**
  * THE MODAL HAS TO ACTUALLY BE ON TOP.
  *
  * master.css documents the trap in its own words: a rung number *"only
