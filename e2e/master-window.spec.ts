@@ -301,7 +301,7 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // the active workspace contributes one and the inactive peer contributes
     // none. Keeping the surface qualifier also guards the distinct AgentPanel
     // contract instead of folding system agents back into terminal counts.
-    await expect(page.locator('.tpanel.terminal-panel:visible')).toHaveCount(1);
+    await expect(page.locator('.gbody .tpanel:visible')).toHaveCount(1);
 
     // A panel with no terminal in it is a box. The floor's job is to host a live
     // shell, so the assertion goes as far as the xterm the panel mounts.
@@ -317,7 +317,7 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
 });
 
 test('an agent panel flips to its sidecar screen and back without adding a panel (genie#707)', async () => {
-    const visiblePanels = page.locator('.tpanel.terminal-panel:visible');
+    const visiblePanels = page.locator('.gbody .tpanel:visible');
     await expect(visiblePanels).toHaveCount(1);
     await expect(panel(seed.terminalLabel)).toBeVisible();
     await expect(panel(seed.sidecarTerminalLabel)).toHaveCount(0);
