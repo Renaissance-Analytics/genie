@@ -7,6 +7,7 @@ import {
     Notification,
     session,
 } from 'electron';
+import { initialWindowTheme, rememberTitleBarOverlay } from './window-theme';
 import fs from 'fs';
 import path from 'path';
 import { createTray, rebuildMenu } from './tray';
@@ -642,17 +643,11 @@ export function showMasterWindow(): void {
         // Windows; macOS keeps inset traffic lights.
         title: 'Genie',
         titleBarStyle: 'hidden',
-        ...(process.platform !== 'darwin'
-            ? {
-                  titleBarOverlay: {
-                      color: '#0a0a0c',
-                      symbolColor: '#a1a1aa',
-                      height: 46,
-                  },
-              }
-            : {}),
+        ...initialWindowTheme(
+            false,
+            process.platform !== 'darwin' ? 46 : undefined,
+        ),
         autoHideMenuBar: true,
-        backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -660,6 +655,7 @@ export function showMasterWindow(): void {
             sandbox: false,
         },
     });
+    if (process.platform !== 'darwin') rememberTitleBarOverlay(win, 46);
 
     if (isDev) {
         win.loadURL('http://localhost:8888/master');
@@ -695,17 +691,11 @@ export function showStageWindow(workspaceId?: string): void {
         // Same hidden-titlebar treatment as the master window — one chrome.
         title: 'Genie',
         titleBarStyle: 'hidden',
-        ...(process.platform !== 'darwin'
-            ? {
-                  titleBarOverlay: {
-                      color: '#0a0a0c',
-                      symbolColor: '#a1a1aa',
-                      height: 46,
-                  },
-              }
-            : {}),
+        ...initialWindowTheme(
+            false,
+            process.platform !== 'darwin' ? 46 : undefined,
+        ),
         autoHideMenuBar: true,
-        backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -713,6 +703,7 @@ export function showStageWindow(workspaceId?: string): void {
             sandbox: false,
         },
     });
+    if (process.platform !== 'darwin') rememberTitleBarOverlay(win, 46);
     const query = workspaceId
         ? `?stage=${encodeURIComponent(workspaceId)}`
         : '?stage=1';
@@ -757,17 +748,11 @@ export function showHostWindow(host: RemoteHost, connKey: string): void {
         // Same hidden-titlebar chrome as the master/stage windows.
         title: `Genie — ${host.hostname}`,
         titleBarStyle: 'hidden',
-        ...(process.platform !== 'darwin'
-            ? {
-                  titleBarOverlay: {
-                      color: '#0a0a0c',
-                      symbolColor: '#a1a1aa',
-                      height: 46,
-                  },
-              }
-            : {}),
+        ...initialWindowTheme(
+            false,
+            process.platform !== 'darwin' ? 46 : undefined,
+        ),
         autoHideMenuBar: true,
-        backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -775,6 +760,7 @@ export function showHostWindow(host: RemoteHost, connKey: string): void {
             sandbox: false,
         },
     });
+    if (process.platform !== 'darwin') rememberTitleBarOverlay(win, 46);
     const wcId = win.webContents.id;
     // Bind BEFORE load so the renderer's first myBinding() already reads remote.
     bindWindowToConnection(wcId, connKey);
@@ -980,7 +966,7 @@ function createSettingsWindow(restricted = false, connKey: string | null = null)
         show: false,
         frame: true,
         title: 'Genie Settings',
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -1031,7 +1017,7 @@ function createDocsWindow(): BrowserWindow {
         show: false,
         frame: true,
         title: 'Genie Documentation',
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -1089,7 +1075,7 @@ function createFlowEditorWindow(flowId: string, connKey: string | null = null): 
         // A fallback only: the page sets `document.title` to the flow's name once
         // it loads, which is what the taskbar shows when several are open.
         title: 'Flow Editor',
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -1133,7 +1119,7 @@ function createKnowledgeWindow(): BrowserWindow {
         show: false,
         frame: true,
         title: 'Knowledge Graph',
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -3388,7 +3374,7 @@ function showE2EWindow(): void {
         height: 760,
         show: true,
         title: 'Genie E2E',
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,

@@ -96,6 +96,12 @@ import { checkedAgoLabel, pluginSummaryLine } from '../lib/plugins-view';
 import { tailscalePanelView } from '../lib/tailscale-panel';
 import { relayStatusNote } from '../lib/relay-status-note';
 import {
+    PREFERS_DARK_QUERY,
+    THEME_CHANGE_EVENT,
+    THEME_STORAGE_KEY,
+    resolveDarkTheme,
+} from '../lib/theme-boot';
+import {
     engineActionAvailability,
     engineGroups,
     engineStatusLabel,
@@ -1262,7 +1268,7 @@ function AppearanceCard() {
 
     useEffect(() => {
         try {
-            const saved = window.localStorage.getItem('genie.theme');
+            const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
             if (saved === 'light' || saved === 'dark') setTheme(saved);
             else setTheme('system');
         } catch {
@@ -1273,15 +1279,16 @@ function AppearanceCard() {
     const applyTheme = (next: 'system' | 'light' | 'dark') => {
         setTheme(next);
         try {
-            window.localStorage.setItem('genie.theme', next);
+            window.localStorage.setItem(THEME_STORAGE_KEY, next);
         } catch {
             /* private mode — still apply for this session */
         }
-        const dark =
-            next === 'dark' ||
-            (next === 'system' &&
-                window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const dark = resolveDarkTheme(next, window.matchMedia(PREFERS_DARK_QUERY).matches);
         document.documentElement.classList.toggle('dark', dark);
+        // localStorage's `storage` event only fires in OTHER documents. Wake the
+        // shared _app listener in this Settings window too, so it repaints this
+        // BrowserWindow's native frame immediately.
+        window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
     };
 
     return (

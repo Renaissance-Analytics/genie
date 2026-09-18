@@ -3870,6 +3870,8 @@ export interface GenieApi {
         get: () => Promise<string>;
     };
     app: {
+        /** Keep Electron's native frame in step with this renderer's resolved theme. */
+        setWindowTheme: (dark: boolean) => void;
         /** True once when the Feedback hotkey fired while this page was loading. */
         claimPendingFeedback: () => Promise<boolean>;
         /** The user's home directory (roots the synthetic System Workspace). */

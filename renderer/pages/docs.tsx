@@ -88,7 +88,7 @@ export default function DocsPage() {
     if (!hasGenieBridge()) {
         return (
             <div className="surface" style={{ padding: 24 }}>
-                <Text size="sm" className="text-zinc-500">
+                <Text size="sm" style={{ color: 'var(--fg-3)' }}>
                     The Docs viewer runs inside the Genie desktop app.
                 </Text>
             </div>
@@ -105,7 +105,7 @@ export default function DocsPage() {
                 style={{
                     width: 248,
                     flex: '0 0 248px',
-                    borderRight: '1px solid rgba(255,255,255,0.08)',
+                    borderRight: '1px solid var(--border-1)',
                     overflowY: 'auto',
                     padding: '16px 8px',
                 }}
@@ -116,12 +116,12 @@ export default function DocsPage() {
                     </Heading>
                 </div>
                 {loadingList && (
-                    <Text size="xs" className="text-zinc-500" style={{ padding: '0 8px' }}>
+                    <Text size="xs" style={{ padding: '0 8px', color: 'var(--fg-3)' }}>
                         Loading…
                     </Text>
                 )}
                 {!loadingList && entries.length === 0 && (
-                    <Text size="xs" className="text-zinc-500" style={{ padding: '0 8px' }}>
+                    <Text size="xs" style={{ padding: '0 8px', color: 'var(--fg-3)' }}>
                         No documentation found.
                     </Text>
                 )}
@@ -142,10 +142,8 @@ export default function DocsPage() {
                                         border: 'none',
                                         cursor: 'pointer',
                                         fontSize: 13,
-                                        background: on
-                                            ? 'rgba(255,255,255,0.10)'
-                                            : 'transparent',
-                                        color: on ? '#fafafa' : '#a1a1aa',
+                                        background: on ? 'var(--bg-2)' : 'transparent',
+                                        color: on ? 'var(--fg-1)' : 'var(--fg-3)',
                                     }}
                                 >
                                     {e.title}
@@ -168,7 +166,7 @@ export default function DocsPage() {
                     </Text>
                 ) : (
                     <article
-                        className="prose prose-invert max-w-3xl"
+                        className="prose max-w-3xl dark:prose-invert"
                         aria-label={activeTitle}
                     >
                         <ContentRenderer value={markdown} format="markdown" />

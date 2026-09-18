@@ -56,10 +56,10 @@ export default function HostBuildNudge({
                 maxWidth: 'calc(100vw - 32px)',
                 padding: '10px 14px',
                 borderRadius: 10,
-                background: 'rgba(24, 24, 27, 0.97)',
-                border: '1px solid #3f3f46',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-                color: '#e4e4e7',
+                background: 'color-mix(in srgb, var(--card) 97%, transparent)',
+                border: '1px solid var(--border-2)',
+                boxShadow: 'var(--shadow-lg)',
+                color: 'var(--fg-2)',
                 fontSize: 13,
                 WebkitAppRegion: 'no-drag',
             } as React.CSSProperties}
@@ -76,7 +76,7 @@ export default function HostBuildNudge({
                         {host} is on an older build — you're on <b>v{build.localVersion}</b>.
                     </>
                 )}
-                {err && <span style={{ color: '#f87171', marginLeft: 8 }}>{err}</span>}
+                {err && <span style={{ color: 'var(--rose-400)', marginLeft: 8 }}>{err}</span>}
             </span>
             <button
                 type="button"
@@ -97,10 +97,10 @@ export default function HostBuildNudge({
                 .nudge-btn {
                     font: inherit; font-size: 12px; font-weight: 600;
                     padding: 6px 12px; border-radius: 7px; cursor: pointer;
-                    color: #e4e4e7; background: #27272a; border: 1px solid #3f3f46;
+                    color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--border-2);
                     white-space: nowrap;
                 }
-                .nudge-btn:hover { background: #3f3f46; }
+                .nudge-btn:hover { background: var(--bg-3); }
                 .nudge-btn:disabled { opacity: 0.6; cursor: default; }
                 .nudge-btn-primary { background: #7c3aed; border-color: #7c3aed; color: #fff; }
                 .nudge-btn-primary:hover { background: #6d28d9; }

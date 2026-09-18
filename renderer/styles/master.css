@@ -3898,14 +3898,14 @@ body.gutter-dragging .grid-gutter {
     gap: 3px;
     padding: 3px 6px;
     border-radius: 999px;
-    background: #1a1726;
+    background: color-mix(in srgb, var(--violet-500) 12%, var(--card));
     border: 1px solid color-mix(in srgb, var(--violet-500) 55%, transparent);
     box-shadow:
         0 8px 24px rgba(0, 0, 0, 0.45),
         0 0 0 1px rgba(167, 139, 250, 0.15);
 }
 .editor-wand .editor-wand-mark {
-    color: #c4b5fd;
+    color: var(--violet-400);
     font-size: 11px;
     padding: 0 2px;
 }

@@ -2379,8 +2379,8 @@ function MasterInner() {
                     minHeight: '100vh',
                     display: 'grid',
                     placeItems: 'center',
-                    background: '#0a0a0c',
-                    color: '#a1a1aa',
+                    background: 'var(--bg-0)',
+                    color: 'var(--fg-3)',
                     fontSize: 13,
                 }}
             >
@@ -4512,7 +4512,7 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
         borderRadius: 7,
         padding: '6px 8px',
         cursor: 'pointer',
-        color: '#e4e4e7',
+        color: 'var(--fg-2)',
     };
 
     const Row = ({
@@ -4534,11 +4534,11 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
             style={rowStyle}
             title={title}
             onClick={onClick}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#26262e')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-2)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
             <span style={{ fontWeight: 600 }}>{name}</span>
-            <span style={{ fontSize: 11, color: '#a1a1aa' }}>{sub}</span>
+            <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>{sub}</span>
         </button>
     );
 
@@ -4554,24 +4554,24 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                 width: 300,
                 maxHeight: 420,
                 overflowY: 'auto',
-                background: '#141418',
-                border: '1px solid #2a2a33',
+                background: 'var(--bg-1)',
+                border: '1px solid var(--border-1)',
                 borderRadius: 10,
                 boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
                 padding: 8,
                 fontSize: 12,
-                color: '#e4e4e7',
+                color: 'var(--fg-2)',
             }}
         >
             <div style={{ padding: '4px 6px 2px' }}>
-                <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>
+                <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: 'var(--fg-3)' }}>
                     DEV SITES
                 </strong>
             </div>
             {data === null ? (
-                <div style={{ padding: '10px 6px', color: '#a1a1aa' }}>Finding .gen sites…</div>
+                <div style={{ padding: '10px 6px', color: 'var(--fg-3)' }}>Finding .gen sites…</div>
             ) : empty ? (
-                <div style={{ padding: '10px 6px', color: '#a1a1aa', lineHeight: 1.5 }}>
+                <div style={{ padding: '10px 6px', color: 'var(--fg-3)', lineHeight: 1.5 }}>
                     No enabled <code>.gen</code> sites. Host one from a workspace&apos;s
                     <em> Hosting</em> panel.
                 </div>
@@ -4833,34 +4833,34 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                     width: 320,
                     maxHeight: 420,
                     overflowY: 'auto',
-                    background: '#141418',
-                    border: '1px solid #2a2a33',
+                    background: 'var(--bg-1)',
+                    border: '1px solid var(--border-1)',
                     borderRadius: 10,
                     boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
                     padding: 8,
                     fontSize: 12,
-                    color: '#e4e4e7',
+                    color: 'var(--fg-2)',
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 8px' }}>
-                    <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: '#a1a1aa' }}>HOSTS</strong>
+                    <strong style={{ fontSize: 11, letterSpacing: '0.04em', color: 'var(--fg-3)' }}>HOSTS</strong>
                     <button type="button" className="gicon" title="Rescan the tailnet" onClick={() => void load()} aria-label="Refresh hosts" style={{ width: 20, height: 20 }}>⟳</button>
                 </div>
-                {loading && <div style={{ padding: '8px 6px', color: '#71717a' }}>Scanning…</div>}
+                {loading && <div style={{ padding: '8px 6px', color: 'var(--fg-3)' }}>Scanning…</div>}
                 {!loading && rows.length === 0 && workstations.length === 0 && (
-                    <div style={{ padding: '8px 6px', color: '#71717a', lineHeight: 1.4 }}>
+                    <div style={{ padding: '8px 6px', color: 'var(--fg-3)', lineHeight: 1.4 }}>
                         No hosts or workstations found. Enable Work Mode on another Genie on your
                         tailnet, or get access to a Virtual Workstation in Tynn, then rescan.
                     </div>
                 )}
                 {err && <div style={{ padding: '6px', color: '#f87171' }}>{err}</div>}
                 {rows.map((row) => (
-                    <div key={row.connKey} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
+                    <div key={row.connKey} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: 'var(--card)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: row.connected ? '#22c55e' : row.online ? '#eab308' : '#52525b' }} title={row.connected ? 'Connected' : row.online ? 'Online' : 'Offline / not on the tailnet now'} />
+                            <span style={{ width: 7, height: 7, borderRadius: 999, flex: '0 0 auto', background: row.connected ? '#22c55e' : row.online ? '#eab308' : 'var(--fg-4)' }} title={row.connected ? 'Connected' : row.online ? 'Online' : 'Offline / not on the tailnet now'} />
                             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 <span style={{ fontWeight: 600 }}>{row.name || row.hostname}</span>
-                                <span style={{ color: '#71717a', marginLeft: 6 }}>{row.ip}:{row.port}</span>
+                                <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>{row.ip}:{row.port}</span>
                             </span>
                             <button
                                 type="button"
@@ -4878,7 +4878,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                         {pinFor === row.connKey && (
                             <>
                             {pinWhy && (
-                                <div style={{ marginTop: 6, color: '#a1a1aa', lineHeight: 1.4 }}>{pinWhy}</div>
+                                <div style={{ marginTop: 6, color: 'var(--fg-3)', lineHeight: 1.4 }}>{pinWhy}</div>
                             )}
                             <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
                                 <input
@@ -4888,7 +4888,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                                     onKeyDown={(e) => { if (e.key === 'Enter') void openHost(row, pin); }}
                                     placeholder="Pairing PIN from the host"
                                     inputMode="numeric"
-                                    style={{ flex: 1, background: '#0f0f13', border: '1px solid #2a2a33', borderRadius: 6, color: '#e4e4e7', padding: '5px 8px', fontSize: 12 }}
+                                    style={{ flex: 1, background: 'var(--bg-0)', border: '1px solid var(--border-1)', borderRadius: 6, color: 'var(--fg-1)', padding: '5px 8px', fontSize: 12 }}
                                 />
                                 <button type="button" className="gbtn gbtn-sm" disabled={!pin.trim() || busy === row.connKey} onClick={() => void openHost(row, pin)}>Pair</button>
                             </div>
@@ -4909,7 +4909,7 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                             );
                             const visual = cloudHostVisual(ws, !!liveRow, liveRow?.activeTerminals ?? false);
                             return (
-                            <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: '#1b1b21' }}>
+                            <div key={`ws:${ws.id}`} style={{ borderRadius: 8, padding: '7px 8px', marginBottom: 2, background: 'var(--card)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                     <span
                                         title={visual.title}
@@ -4918,8 +4918,8 @@ function HostsPanel({ onClose }: { onClose: () => void }) {
                                     >☁</span>
                                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                         <span style={{ fontWeight: 600 }}>{ws.name}</span>
-                                        {ws.capability && <span style={{ color: '#71717a', marginLeft: 6 }}>{ws.capability}</span>}
-                                        {ws.source && ws.source !== 'owner' && <span style={{ color: '#52525b', marginLeft: 6 }}>via {ws.source}</span>}
+                                        {ws.capability && <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>{ws.capability}</span>}
+                                        {ws.source && ws.source !== 'owner' && <span style={{ color: 'var(--fg-4)', marginLeft: 6 }}>via {ws.source}</span>}
                                     </span>
                                     {st.showRetry && (
                                         <button type="button" className="gicon" title="Rescan for this workstation" aria-label="Retry workstation" onClick={() => void load()} style={{ width: 20, height: 20, flex: '0 0 auto' }}>⟳</button>

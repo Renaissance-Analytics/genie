@@ -1091,6 +1091,8 @@ const api = {
     },
 
     app: {
+        /** Keep Electron's native frame in step with the renderer's resolved theme. */
+        setWindowTheme: (dark: boolean) => ipcRenderer.send('app:set-window-theme', dark),
         /** True once when the Feedback hotkey fired while this page was loading. */
         claimPendingFeedback: () => ipcRenderer.invoke('app:claim-pending-feedback') as Promise<boolean>,
         /** The user's home directory (the System Workspace row's fallback path). */

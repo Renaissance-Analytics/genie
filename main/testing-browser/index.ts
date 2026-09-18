@@ -24,6 +24,7 @@ import { createLocalSiteCarrier, type LocalTarget } from '../sites/local-carrier
 import { listLocalEnabledGenSites, localTargetsBySiteId } from '../sites/local-sites';
 import { DEVICE_PRESETS, devicePreset, initialGenUrl, normalizeNavUrl } from './chrome';
 import { SITE_VIEW_WEB_PREFERENCES, isSecureBrowserUrl } from './site-view';
+import { initialWindowTheme, rememberTitleBarOverlay } from '../window-theme';
 
 /** The connKey the LOCAL Testing Browser instance uses (this machine's own
  *  loopback dev sites — no host connection). */
@@ -255,17 +256,11 @@ export async function openTestingBrowser(
         // space). The overlay keeps the native min/max/close cluster on Windows;
         // macOS keeps inset traffic lights. Menu bar hidden (nav is in-chrome).
         titleBarStyle: 'hidden',
-        ...(process.platform !== 'darwin'
-            ? {
-                  titleBarOverlay: {
-                      color: '#131318',
-                      symbolColor: '#a1a1aa',
-                      height: 34,
-                  },
-              }
-            : {}),
+        ...initialWindowTheme(
+            false,
+            process.platform !== 'darwin' ? 34 : undefined,
+        ),
         autoHideMenuBar: true,
-        backgroundColor: '#0a0a0c',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -273,6 +268,7 @@ export async function openTestingBrowser(
             sandbox: false,
         },
     });
+    if (process.platform !== 'darwin') rememberTitleBarOverlay(win, 34);
 
     const inst: TestingBrowserInstance = {
         connKey,

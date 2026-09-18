@@ -23,6 +23,7 @@ import type {
 import type { QuestionTransport } from '../host-core/ports';
 import { insertByPriority, type QuestionPriority } from './question-priority';
 import { deriveAskKey } from './ask-key';
+import { initialWindowTheme } from '../window-theme';
 import {
     dbQuestionStore,
     type PersistedQuestion,
@@ -1089,7 +1090,7 @@ function createAskWindow(): BrowserWindow {
         fullscreenable: false,
         alwaysOnTop: true,
         center: true,
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         title: 'Genie — a question for you',
         webPreferences: {
             preload: config.preloadPath,
