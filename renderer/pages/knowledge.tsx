@@ -60,9 +60,10 @@ import {
 // SAME surface Genie's Markdown editor plugin uses (components/Plugins/…).
 const DocumentEditorLazy = lazy(() => import('../components/Plugins/DocumentEditor'));
 
-const ACCENT = '#a78bfa';
-const ACCENT_DIM = '#8b5cf6';
-const BORDER = '1px solid rgba(255,255,255,0.08)';
+const ACCENT = 'var(--violet-400)';
+const ACCENT_DIM = 'var(--violet-500)';
+const BORDER = '1px solid var(--border-1)';
+const mutedTextStyle: CSSProperties = { color: 'var(--fg-3)' };
 
 type Mode = 'view' | 'edit' | 'create';
 type LeftView = 'list' | 'graph';
@@ -300,7 +301,7 @@ export default function KnowledgePage() {
     if (!hasGenieBridge()) {
         return (
             <div className="surface" style={{ padding: 24 }}>
-                <Text size="sm" className="text-zinc-500">
+                <Text size="sm" style={mutedTextStyle}>
                     The Knowledge Graph runs inside the Genie desktop app.
                 </Text>
             </div>
@@ -340,7 +341,7 @@ export default function KnowledgePage() {
                 <Heading as="h1" size="sm">
                     Knowledge Graph
                 </Heading>
-                <Text size="xs" className="text-zinc-500">
+                <Text size="xs" style={mutedTextStyle}>
                     {nodes.length} {nodes.length === 1 ? 'memory' : 'memories'}
                 </Text>
                 <span style={{ flex: 1 }} />
@@ -360,7 +361,7 @@ export default function KnowledgePage() {
                 <div
                     style={{
                         padding: '8px 16px',
-                        color: '#fda4af',
+                        color: 'var(--rose-400)',
                         fontSize: 12,
                         borderBottom: BORDER,
                     }}
@@ -469,7 +470,7 @@ export default function KnowledgePage() {
                                                 style={{
                                                     ...listItemStyle,
                                                     background: on
-                                                        ? 'rgba(167,139,250,0.14)'
+                                                        ? 'color-mix(in srgb, var(--violet-500) 14%, transparent)'
                                                         : 'transparent',
                                                 }}
                                             >
@@ -531,7 +532,7 @@ export default function KnowledgePage() {
                         ) : (
                             <div style={emptyPaneStyle}>
                                 <IconGraph size={30} />
-                                <Text size="sm" className="text-zinc-500" style={{ marginTop: 10 }}>
+                                <Text size="sm" style={{ ...mutedTextStyle, marginTop: 10 }}>
                                     Select a memory, or add a new one.
                                 </Text>
                             </div>
@@ -602,8 +603,10 @@ function Segmented<T extends string>({
                             fontSize: 12,
                             border: 'none',
                             cursor: 'pointer',
-                            background: on ? 'rgba(167,139,250,0.18)' : 'transparent',
-                            color: on ? '#ede9fe' : '#a1a1aa',
+                            background: on
+                                ? 'color-mix(in srgb, var(--violet-500) 18%, transparent)'
+                                : 'transparent',
+                            color: on ? 'var(--violet-400)' : 'var(--fg-3)',
                         }}
                     >
                         {o.icon}
@@ -624,8 +627,8 @@ function TagChip({ label }: { label: string }) {
                 padding: '1px 7px',
                 borderRadius: 999,
                 fontSize: 11,
-                background: 'rgba(255,255,255,0.06)',
-                color: '#a1a1aa',
+                background: 'var(--bg-2)',
+                color: 'var(--fg-3)',
                 border: BORDER,
             }}
         >
@@ -653,7 +656,7 @@ function GraphView({
         return (
             <div style={{ ...emptyPaneStyle, flex: 1 }}>
                 <IconGraph size={26} />
-                <Text size="xs" className="text-zinc-500" style={{ marginTop: 8 }}>
+                <Text size="xs" style={{ ...mutedTextStyle, marginTop: 8 }}>
                     No memories to graph yet.
                 </Text>
             </div>
@@ -681,7 +684,7 @@ function GraphView({
                             y1={a.y}
                             x2={b.x}
                             y2={b.y}
-                            stroke={active ? ACCENT : 'rgba(255,255,255,0.14)'}
+                            stroke={active ? ACCENT : 'var(--border-2)'}
                             strokeWidth={active ? 1.6 : 1}
                         />
                     );
@@ -701,8 +704,8 @@ function GraphView({
                         >
                             <circle
                                 r={r}
-                                fill={isSel ? ACCENT : isNb ? ACCENT_DIM : '#3f3f46'}
-                                stroke={isSel ? '#ede9fe' : 'rgba(255,255,255,0.25)'}
+                                fill={isSel ? ACCENT : isNb ? ACCENT_DIM : 'var(--bg-3)'}
+                                stroke={isSel ? 'var(--fg-1)' : 'var(--border-2)'}
                                 strokeWidth={isSel ? 2 : 1}
                             />
                             <text
@@ -710,7 +713,7 @@ function GraphView({
                                 y={r + 12}
                                 textAnchor="middle"
                                 fontSize={11}
-                                fill={isSel ? '#ede9fe' : '#a1a1aa'}
+                                fill={isSel ? 'var(--fg-1)' : 'var(--fg-3)'}
                                 style={{ pointerEvents: 'none', userSelect: 'none' }}
                             >
                                 {truncate(n.title, 18)}
@@ -782,7 +785,7 @@ function MemoryView({
                         <ScopeChip scope={node.scope} workspaces={workspaces} />
                         <ClassChip value={node.class} />
                         {node.ns && <NsChip ns={node.ns} />}
-                        <Text size="xs" className="text-zinc-500">
+                        <Text size="xs" style={mutedTextStyle}>
                             updated {updatedLabel}
                         </Text>
                     </div>
@@ -814,7 +817,7 @@ function MemoryView({
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', minHeight: 0 }}>
                 <UnresolvedNotice unresolved={node.unresolved ?? []} />
 
-                <article className="prose prose-invert max-w-3xl">
+                <article className="prose max-w-3xl dark:prose-invert">
                     <ContentRenderer value={node.body || '_No content._'} format="markdown" />
                 </article>
 
@@ -867,11 +870,11 @@ function LinkAuditNotice({
             style={{
                 padding: '10px 16px',
                 borderBottom: BORDER,
-                background: 'rgba(251,191,36,0.07)',
+                background: 'color-mix(in srgb, var(--amber-400) 7%, transparent)',
             }}
         >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Text size="xs" style={{ color: '#fcd34d' }}>
+                <Text size="xs" style={{ color: 'var(--amber-300)' }}>
                     {entries.length === 1
                         ? '1 link became ambiguous when link resolution was tightened.'
                         : `${entries.length} links became ambiguous when link resolution was tightened.`}{' '}
@@ -885,7 +888,7 @@ function LinkAuditNotice({
             </div>
             <ul style={{ margin: '6px 0 0', padding: '0 0 0 16px' }}>
                 {entries.slice(0, 8).map((e) => (
-                    <li key={`${e.fromId}:${e.toRef}`} style={{ fontSize: 12, color: '#d4d4d8' }}>
+                    <li key={`${e.fromId}:${e.toRef}`} style={{ fontSize: 12, color: 'var(--fg-2)' }}>
                         <button
                             type="button"
                             onClick={() => onOpen(e.fromId)}
@@ -899,7 +902,7 @@ function LinkAuditNotice({
                     </li>
                 ))}
                 {entries.length > 8 && (
-                    <li style={{ fontSize: 12, color: '#a1a1aa' }}>
+                    <li style={{ fontSize: 12, color: 'var(--fg-3)' }}>
                         …and {entries.length - 8} more.
                     </li>
                 )}
@@ -912,7 +915,7 @@ function LinkAuditNotice({
  *  readable from here and from any agent; the chip is orientation, not access. */
 function ScopeChip({ scope, workspaces }: { scope: KnowledgeScope; workspaces: WorkspaceRow[] }) {
     return (
-        <span style={metaChipStyle('rgba(56,189,248,0.35)', '#7dd3fc')}>
+        <span style={metaChipStyle('var(--cyan-400)')}>
             {knowledgeScopeLabel(scope, workspaces)}
         </span>
     );
@@ -920,14 +923,14 @@ function ScopeChip({ scope, workspaces }: { scope: KnowledgeScope; workspaces: W
 
 /** Which memory this is — the four kinds answer four different questions. */
 function ClassChip({ value }: { value: MemoryClass }) {
-    return <span style={metaChipStyle('rgba(163,163,163,0.3)', '#a1a1aa')}>{value}</span>;
+    return <span style={metaChipStyle('var(--fg-3)')}>{value}</span>;
 }
 
 /** The managed namespace a memory came from — Genie's own guides, or a pack.
  *  Two packs may legitimately both ship a "Volume 1", so a title alone does not
  *  say which one you are reading. */
 function NsChip({ ns }: { ns: string }) {
-    return <span style={metaChipStyle('rgba(251,191,36,0.35)', '#fcd34d')}>{ns}</span>;
+    return <span style={metaChipStyle('var(--amber-300)')}>{ns}</span>;
 }
 
 /**
@@ -947,19 +950,19 @@ function UnresolvedNotice({ unresolved }: { unresolved: KnowledgeNode['unresolve
             style={{
                 marginBottom: 16,
                 padding: '10px 12px',
-                border: '1px solid rgba(251,191,36,0.3)',
-                background: 'rgba(251,191,36,0.07)',
+                border: '1px solid color-mix(in srgb, var(--amber-400) 30%, transparent)',
+                background: 'color-mix(in srgb, var(--amber-400) 7%, transparent)',
                 borderRadius: 8,
             }}
         >
-            <Text size="xs" style={{ color: '#fcd34d' }}>
+            <Text size="xs" style={{ color: 'var(--amber-300)' }}>
                 {ambiguous.length === 1
                     ? '1 link on this memory does not resolve.'
                     : `${ambiguous.length} links on this memory do not resolve.`}
             </Text>
             <ul style={{ margin: '6px 0 0', padding: '0 0 0 16px' }}>
                 {ambiguous.map((u) => (
-                    <li key={`${u.reason}:${u.ref}`} style={{ fontSize: 12, color: '#d4d4d8' }}>
+                    <li key={`${u.reason}:${u.ref}`} style={{ fontSize: 12, color: 'var(--fg-2)' }}>
                         <code>[[{u.ref}]]</code>{' '}
                         {u.reason === 'ambiguous'
                             ? `matches ${u.candidates} memories — link by id, or rename one, to say which you meant.`
@@ -983,7 +986,10 @@ function LinkGroup({
 }) {
     return (
         <div style={{ marginBottom: 12 }}>
-            <Text size="xs" className="text-zinc-500" style={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            <Text
+                size="xs"
+                style={{ ...mutedTextStyle, textTransform: 'uppercase', letterSpacing: 0.4 }}
+            >
                 {label}
             </Text>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
@@ -1119,7 +1125,7 @@ function MemoryEditor({
                 />
                 <div style={{ display: 'flex', gap: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text size="xs" className="text-zinc-500">
+                        <Text size="xs" style={mutedTextStyle}>
                             Kind of memory
                         </Text>
                         <Select
@@ -1129,13 +1135,13 @@ function MemoryEditor({
                         />
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text size="xs" className="text-zinc-500">
+                        <Text size="xs" style={mutedTextStyle}>
                             Whose reasoning it belongs in
                         </Text>
                         <Select value={scopeValue} onValueChange={setScopeValue} list={scopeOptions} />
                     </div>
                 </div>
-                <Text size="xs" className="text-zinc-500">
+                <Text size="xs" style={mutedTextStyle}>
                     Link to another memory by its title with {'[[Memory Title]]'} — resolved
                     links become graph edges. A title that matches several memories links to
                     none of them; link by id to say which you meant.
@@ -1156,7 +1162,9 @@ function MemoryEditor({
             >
                 <Suspense
                     fallback={
-                        <div style={{ padding: 16, color: '#71717a', fontSize: 13 }}>Loading editor…</div>
+                        <div style={{ padding: 16, color: 'var(--fg-3)', fontSize: 13 }}>
+                            Loading editor…
+                        </div>
                     }
                 >
                     <DocumentEditorLazy value={body} onChange={setBody} />
@@ -1169,13 +1177,13 @@ function MemoryEditor({
 // --- styles ----------------------------------------------------------------
 
 /** A small outlined chip for a node's scope / class / namespace. */
-function metaChipStyle(border: string, color: string): CSSProperties {
+function metaChipStyle(color: string): CSSProperties {
     return {
         display: 'inline-flex',
         alignItems: 'center',
         padding: '1px 6px',
         borderRadius: 999,
-        border: `1px solid ${border}`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
         color,
         fontSize: 10,
         lineHeight: '15px',
@@ -1190,9 +1198,9 @@ const primaryBtnStyle: CSSProperties = {
     gap: 6,
     padding: '6px 12px',
     borderRadius: 8,
-    border: '1px solid rgba(167,139,250,0.5)',
-    background: 'rgba(167,139,250,0.18)',
-    color: '#ede9fe',
+    border: '1px solid color-mix(in srgb, var(--violet-500) 50%, transparent)',
+    background: 'color-mix(in srgb, var(--violet-500) 18%, transparent)',
+    color: 'var(--violet-400)',
     fontSize: 12,
     cursor: 'pointer',
 };
@@ -1202,7 +1210,7 @@ const secondaryBtnStyle: CSSProperties = {
     borderRadius: 8,
     border: BORDER,
     background: 'transparent',
-    color: '#d4d4d8',
+    color: 'var(--fg-2)',
     fontSize: 12,
     cursor: 'pointer',
 };
@@ -1212,9 +1220,9 @@ const dangerBtnStyle: CSSProperties = {
     alignItems: 'center',
     padding: '6px 10px',
     borderRadius: 8,
-    border: '1px solid rgba(244,63,94,0.35)',
+    border: '1px solid color-mix(in srgb, var(--rose-500) 35%, transparent)',
     background: 'transparent',
-    color: '#fda4af',
+    color: 'var(--rose-400)',
     cursor: 'pointer',
 };
 
@@ -1225,8 +1233,8 @@ const searchWrapStyle: CSSProperties = {
     padding: '6px 10px',
     borderRadius: 8,
     border: BORDER,
-    background: 'rgba(255,255,255,0.03)',
-    color: '#a1a1aa',
+    background: 'var(--bg-1)',
+    color: 'var(--fg-3)',
 };
 
 const searchInputStyle: CSSProperties = {
@@ -1234,14 +1242,14 @@ const searchInputStyle: CSSProperties = {
     border: 'none',
     outline: 'none',
     background: 'transparent',
-    color: '#fafafa',
+    color: 'var(--fg-1)',
     fontSize: 13,
 };
 
 const clearBtnStyle: CSSProperties = {
     border: 'none',
     background: 'transparent',
-    color: '#71717a',
+    color: 'var(--fg-4)',
     cursor: 'pointer',
     display: 'inline-flex',
     padding: 0,
@@ -1257,7 +1265,7 @@ const listItemStyle: CSSProperties = {
     borderRadius: 8,
     border: 'none',
     cursor: 'pointer',
-    color: '#e4e4e7',
+    color: 'var(--fg-2)',
 };
 
 const listTitleStyle: CSSProperties = {
@@ -1270,7 +1278,7 @@ const listTitleStyle: CSSProperties = {
 
 const snippetStyle: CSSProperties = {
     fontSize: 11,
-    color: '#a1a1aa',
+    color: 'var(--fg-3)',
     marginTop: 2,
     display: '-webkit-box',
     WebkitLineClamp: 2,
@@ -1281,7 +1289,7 @@ const snippetStyle: CSSProperties = {
 const mutedRowStyle: CSSProperties = {
     padding: '10px 16px',
     fontSize: 12,
-    color: '#71717a',
+    color: 'var(--fg-3)',
 };
 
 const emptyPaneStyle: CSSProperties = {
@@ -1290,7 +1298,7 @@ const emptyPaneStyle: CSSProperties = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#52525b',
+    color: 'var(--fg-4)',
 };
 
 const fieldStyle: CSSProperties = {
@@ -1298,8 +1306,8 @@ const fieldStyle: CSSProperties = {
     padding: '8px 10px',
     borderRadius: 8,
     border: BORDER,
-    background: 'rgba(255,255,255,0.03)',
-    color: '#fafafa',
+    background: 'var(--bg-1)',
+    color: 'var(--fg-1)',
     fontSize: 13,
     outline: 'none',
 };
@@ -1307,9 +1315,9 @@ const fieldStyle: CSSProperties = {
 const linkChipStyle: CSSProperties = {
     padding: '4px 10px',
     borderRadius: 999,
-    border: '1px solid rgba(167,139,250,0.4)',
-    background: 'rgba(167,139,250,0.10)',
-    color: '#c4b5fd',
+    border: '1px solid color-mix(in srgb, var(--violet-500) 40%, transparent)',
+    background: 'color-mix(in srgb, var(--violet-500) 10%, transparent)',
+    color: 'var(--violet-400)',
     fontSize: 12,
     cursor: 'pointer',
 };
@@ -1321,7 +1329,9 @@ function sourceBadgeStyle(source: KnowledgeNode['source']): CSSProperties {
         borderRadius: 999,
         fontSize: 11,
         border: BORDER,
-        background: agent ? 'rgba(56,189,248,0.12)' : 'rgba(167,139,250,0.14)',
-        color: agent ? '#7dd3fc' : '#c4b5fd',
+        background: agent
+            ? 'color-mix(in srgb, var(--cyan-400) 12%, transparent)'
+            : 'color-mix(in srgb, var(--violet-500) 14%, transparent)',
+        color: agent ? 'var(--cyan-400)' : 'var(--violet-400)',
     };
 }
