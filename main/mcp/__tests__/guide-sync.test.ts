@@ -980,6 +980,15 @@ describe('the protocol is written for the OS Genie is installed on', () => {
         }
     });
 
+    it('tells every agent how to create a real sidecar and what it costs', () => {
+        for (const brief of [win, mac, linux]) {
+            expect(brief).toMatch(/sidecar/i);
+            expect(brief).toContain('-slave');
+            expect(brief).toMatch(/runAgent[^\n]*sidecar|sidecar[^\n]*runAgent/i);
+            expect(brief).toMatch(/context|cost|model session/i);
+        }
+    });
+
     it('hands a connecting agent THIS machine’s protocol', async () => {
         // The wiring, which can be wrong while all three texts are right.
         const ctx = makeCtx();

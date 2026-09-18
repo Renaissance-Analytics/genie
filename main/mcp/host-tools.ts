@@ -85,6 +85,9 @@ import {
 } from '../agents/triage';
 import { firstAgentRole } from '../agents/first-agent-role';
 import { decideTuiSwitch } from '../agents/tui-switch';
+import { getWorkspaceAgentByTerminal } from '../agents/lookup';
+import { sidecarNameFor } from '../agents/sidecar';
+import { sidecarsOf } from '../agents/sidecar-control';
 import { resolveWorkstationTui } from '../agents/tui';
 import { restartProviderForSpec } from '../agents/restart';
 import {
@@ -2195,6 +2198,7 @@ export async function registerAgentForMcp(
 export async function registerAgentInWorkspace(
     ws: WorkspaceRow,
     req: RegisterAgentRequest,
+    opts: { parentAgentId?: string } = {},
 ): Promise<RegisterAgentResult> {
 
     const resolved = resolveAgentRegistration(ws.path, req);
@@ -2306,7 +2310,7 @@ export async function registerAgentInWorkspace(
         // removed -- so it now points at a row that may not exist and trips the
         // foreign key. A workspace with no default simply has un-parented
         // agents, which is the honest shape: nothing is above them yet.
-        parent_agent_id: workspaceDefaultAgent(ws.id)?.id ?? null,
+        parent_agent_id: opts.parentAgentId ?? workspaceDefaultAgent(ws.id)?.id ?? null,
         reachability: 'workspace',
         wake_on_dm: 1,
     });
@@ -2531,6 +2535,78 @@ export async function runAgentForMcp(
                 // reasoning. Re-deriving a summary at the protocol layer would be
                 // a second opinion about the same facts.
                 return { ok: true, diagnoses, note: triageSummary(diagnoses) };
+            }
+            case 'sidecar': {
+                // Ownership comes from the authenticated caller terminal, never
+                // from a driver name supplied over the wire. The `-slave`
+                // convention therefore stays an implementation detail instead
+                // of becoming an address another agent can claim.
+                const driver = getWorkspaceAgentByTerminal(callerTerminalId);
+                if (!driver || driver.workspace_id !== ws.id) {
+                    return {
+                        ok: false,
+                        error: 'Only a registered agent can create its sidecar.',
+                    };
+                }
+                const name = sidecarNameFor(driver.name);
+                if (!name) {
+                    return {
+                        ok: false,
+                        error: 'A sidecar cannot create another sidecar.',
+                    };
+                }
+                if (!req.agent || req.agent === driver.tui) {
+                    return {
+                        ok: false,
+                        error: 'Choose an explicit, different TUI for the sidecar.',
+                    };
+                }
+
+                const existing = sidecarsOf(driver, listWorkspaceAgents(ws.id));
+                if (existing.length > 1) {
+                    return {
+                        ok: false,
+                        error:
+                            `Agent "${driver.name}" owns more than one sidecar. ` +
+                            'Resolve the duplicate from the agent manager before starting one.',
+                    };
+                }
+                const held = existing[0];
+                if (held && held.tui !== req.agent) {
+                    return {
+                        ok: false,
+                        error:
+                            `Sidecar "${held.name}" is registered under ${held.tui ?? 'no TUI'}, ` +
+                            `not ${req.agent}. Start it with its registered TUI or change its driver first.`,
+                    };
+                }
+
+                if (!held) {
+                    const registered = await registerAgentInWorkspace(
+                        ws,
+                        {
+                            name,
+                            purpose: driver.purpose,
+                            agent: req.agent,
+                            ...(driver.boot_cwd
+                                ? { bootFolder: path.relative(ws.path, driver.boot_cwd) || '.' }
+                                : {}),
+                        },
+                        { parentAgentId: driver.id },
+                    );
+                    if (!registered.ok) return { ok: false, error: registered.error };
+                }
+
+                return await startRegisteredAgent(
+                    ws,
+                    {
+                        action: 'start',
+                        name: held?.name ?? name,
+                        agent: req.agent,
+                        instructions: req.instructions,
+                    },
+                    { humanInitiated: false },
+                );
             }
             case 'start':
                 // Delegated so the UI can start an agent by exactly this path.
