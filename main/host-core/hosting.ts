@@ -136,6 +136,8 @@ export interface HostingPorts {
      *  is unavailable with a clear status — never a silent return to the broken
      *  behaviour. */
     prepareUploadTmpDir?: (siteId: string) => string;
+    /** Converge + probe the host-Caddy route for a browser-exposed site. */
+    probeBrowserExposure?: DevSiteManagerDeps['probeBrowserExposure'];
     /** The persisted `toolchain_defaults` blob — which version of each language is
      *  this machine's DEFAULT, the choice a site follows unless it pins one
      *  (genie#207). Read through a port because the store is the shell's (desktop:
@@ -340,6 +342,9 @@ export function buildHostingDeps(ports: HostingPorts): HostingDeps {
         // host that has not wired it yet serves php not at all rather than serving it
         // with uploads silently broken, which is what the absent seam used to mean.
         ...(ports.prepareUploadTmpDir ? { prepareUploadTmpDir: ports.prepareUploadTmpDir } : {}),
+        ...(ports.probeBrowserExposure
+            ? { probeBrowserExposure: ports.probeBrowserExposure }
+            : {}),
         // WHICH runtime a Genie-served site spawns (genie#207): the site's pin, else
         // the machine default, resolved to the absolute executable inside the
         // toolchain install Genie owns. Always wired — the alternative is the bare
