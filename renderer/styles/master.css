@@ -503,6 +503,10 @@
         'head  head'
         'notes agents'
         'foot  foot';
+    /* The middle track must absorb the sheet's height cap. An implicit `auto`
+       row takes the roster's full min-content height instead, which sends the
+       footer below the viewport before `.dr-rows` ever gets a chance to scroll. */
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 0 22px;
     width: min(980px, 100%);
     max-height: min(680px, calc(100vh - 48px));
@@ -524,6 +528,7 @@
             'agents'
             'notes'
             'foot';
+        grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr) auto;
         gap: 16px 0;
     }
 }
