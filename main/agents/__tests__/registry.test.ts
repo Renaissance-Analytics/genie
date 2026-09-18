@@ -151,6 +151,15 @@ describe('every tui list is DERIVED, not restated', () => {
         expect((await advertisedAgentEnum()).sort()).toEqual(REGISTRY_IDS);
     });
 
+    it('advertises sidecar as a first-class runAgent action', async () => {
+        const tools = await advertisedAgentTools();
+        const run = tools.find((tool) => tool.name === 'runAgent');
+        const action = run?.inputSchema.properties.action as { enum?: string[] } | undefined;
+
+        expect(action?.enum).toContain('sidecar');
+        expect(run?.description).toMatch(/sidecar/i);
+    });
+
     /**
      * The DEFAULTS block in `db.ts` listed all six keys by hand. A tui added
      * without its two lines gets `undefined` where a string is expected.

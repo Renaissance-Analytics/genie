@@ -106,6 +106,7 @@ import {
     setSettings,
     setWorkspaceAgentCap,
     updateTerminalSpec,
+    bindWorkspaceAgentTerminal,
 } from '../../db';
 import { registerAgentForMcp, runAgentForMcp } from '../host-tools';
 import { registerAgentInboxSession } from '../../agentinbox/session-registration';
@@ -177,6 +178,16 @@ async function registerAndStart(req: Partial<RunAgentRequest> = {}): Promise<Run
     });
     if (!registered.ok) return registered as RunAgentResult;
     return start({ ...req, create: undefined });
+}
+
+async function registerCaller(name = 'tynn-builder'): Promise<void> {
+    const registered = await registerAgentForMcp(CALLER_ID, {
+        name,
+        purpose: 'Drive the test workspace',
+        agent: 'claude',
+    });
+    expect(registered.ok).toBe(true);
+    bindWorkspaceAgentTerminal(registered.agent!.id, CALLER_ID);
 }
 
 beforeEach(() => {
@@ -391,6 +402,71 @@ describe('runAgent start on a SAVED agent', () => {
         expect(terminalManager().isLive(claude.id!)).toBe(true);
         // And a bare name is no longer ambiguous, because it cannot be.
         expect((await start({ name: 'tynn-builder' })).id).toBe(claude.id);
+    });
+});
+
+describe('runAgent sidecar', () => {
+    it('registers and starts the caller\'s named child under the requested TUI', async () => {
+        await registerCaller();
+
+        const result = await runAgentForMcp(CALLER_ID, {
+            action: 'sidecar',
+            agent: 'codex',
+            instructions: 'Review independently.',
+        });
+
+        expect(result).toMatchObject({
+            ok: true,
+            agent: 'codex',
+            name: 'tynn-builder-slave',
+            reattached: false,
+        });
+        const roster = listWorkspaceAgents(WS_ID);
+        const driver = roster.find((agent) => agent.name === 'tynn-builder')!;
+        const sidecar = roster.find((agent) => agent.name === 'tynn-builder-slave')!;
+        expect(sidecar.parent_agent_id).toBe(driver.id);
+        expect(sidecar.tui).toBe('codex');
+        expect(result.id).toBeTruthy();
+        expect(terminalManager().isLive(result.id!)).toBe(true);
+    });
+
+    it('reattaches the one existing sidecar instead of registering or spawning another', async () => {
+        await registerCaller();
+        const first = await runAgentForMcp(CALLER_ID, { action: 'sidecar', agent: 'codex' });
+        expect(first.ok).toBe(true);
+
+        const second = await runAgentForMcp(CALLER_ID, { action: 'sidecar', agent: 'codex' });
+
+        expect(second).toMatchObject({
+            ok: true,
+            id: first.id,
+            name: 'tynn-builder-slave',
+            reattached: true,
+        });
+        expect(listWorkspaceAgents(WS_ID).map((agent) => agent.name).sort()).toEqual([
+            'tynn-builder',
+            'tynn-builder-slave',
+        ]);
+        expect(spawnedPtys).toHaveLength(1);
+        expect(terminalManager().isLive(first.id!)).toBe(true);
+    });
+
+    it('refuses callers that are not registered agents and sidecars of sidecars', async () => {
+        const unregistered = await runAgentForMcp(CALLER_ID, {
+            action: 'sidecar',
+            agent: 'codex',
+        });
+        expect(unregistered.ok).toBe(false);
+        expect(unregistered.error).toMatch(/registered agent/i);
+
+        await registerCaller('tynn-builder-slave');
+        const nested = await runAgentForMcp(CALLER_ID, {
+            action: 'sidecar',
+            agent: 'codex',
+        });
+        expect(nested.ok).toBe(false);
+        expect(nested.error).toMatch(/sidecar.*sidecar/i);
+        expect(spawnedPtys).toHaveLength(0);
     });
 });
 
