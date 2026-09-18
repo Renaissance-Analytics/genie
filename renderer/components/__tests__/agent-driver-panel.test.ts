@@ -81,7 +81,10 @@ describe('the driver panel', () => {
                 { id: 'r2', tui: 'codex', terminalSpecId: 't-codex', fronted: false },
             ],
         });
-        expect(html).toContain('sidecar');
+        expect(html).toContain('previous');
+        // The run-control text correctly keeps "sidecars" for separate
+        // `<name>-slave` agents; only a parked RUNTIME must not wear that badge.
+        expect(html).not.toMatch(/>sidecar</);
         expect(html).toMatch(/Never run|not added|Not run/i);
     });
 

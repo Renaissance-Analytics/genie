@@ -301,7 +301,7 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // the active workspace contributes one and the inactive peer contributes
     // none. Keeping the surface qualifier also guards the distinct AgentPanel
     // contract instead of folding system agents back into terminal counts.
-    await expect(page.locator('.tpanel.terminal-panel:visible')).toHaveCount(1);
+    await expect(page.locator('.gbody .tpanel:visible')).toHaveCount(1);
 
     // A panel with no terminal in it is a box. The floor's job is to host a live
     // shell, so the assertion goes as far as the xterm the panel mounts.
@@ -314,6 +314,36 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // seeded shell and the always-running Genie OS agent are both live, while
     // only the seeded workspace terminal is laid out above.
     await expect(status).toContainText('2 live');
+});
+
+test('an agent panel flips to its sidecar screen and back without adding a panel (genie#707)', async () => {
+    const visiblePanels = page.locator('.gbody .tpanel:visible');
+    await expect(visiblePanels).toHaveCount(1);
+    await expect(panel(seed.terminalLabel)).toBeVisible();
+    await expect(panel(seed.sidecarTerminalLabel)).toHaveCount(0);
+
+    const showSidecar = page.getByRole('button', {
+        name: `View ${seed.sidecarAgentName} sidecar screen`,
+    });
+    await expect(showSidecar).toBeVisible();
+    await expect(showSidecar).toBeInViewport();
+    await showSidecar.click();
+
+    await expect(visiblePanels).toHaveCount(1);
+    await expect(panel(seed.terminalLabel)).toHaveCount(0);
+    await expect(panel(seed.sidecarTerminalLabel)).toBeVisible();
+    await expect(panel(seed.sidecarTerminalLabel).locator('.xterm')).toBeVisible();
+
+    const showDriver = page.getByRole('button', {
+        name: `Back to ${seed.driverAgentName} driver screen`,
+    });
+    await expect(showDriver).toBeVisible();
+    await expect(showDriver).toBeInViewport();
+    await showDriver.click();
+
+    await expect(visiblePanels).toHaveCount(1);
+    await expect(panel(seed.sidecarTerminalLabel)).toHaveCount(0);
+    await expect(panel(seed.terminalLabel)).toBeVisible();
 });
 
 test('a workspace switch never fits the panel it hid (genie#229)', async () => {

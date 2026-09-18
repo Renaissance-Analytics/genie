@@ -114,8 +114,8 @@ export default function NewAgentModal({
                             list={tuis.map((t) => ({ value: t.agent as string, label: t.label }))}
                         />
                         <Text size="xs" color="muted">
-                            An agent is not its TUI — you can switch it later, and the one it
-                            leaves keeps its conversation as a sidecar.
+                            An agent is not its TUI — you can switch it later, and the previous
+                            driver keeps its conversation.
                         </Text>
                     </label>
 

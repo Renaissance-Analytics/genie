@@ -3550,6 +3550,15 @@ body.gutter-dragging .grid-gutter {
 .agent-panel-shell.agent-provider-codex { --agent-accent: #74a7ff; }
 .agent-panel-shell.agent-provider-kiwi { --agent-accent: #84cc16; }
 .agent-panel-shell.agent-provider-genie { --agent-accent: #2dd4bf; }
+.tpanel-head .agent-screen-switch {
+    width: auto;
+    max-width: 180px;
+    padding: 0 7px;
+    gap: 5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 /* This TINTS `.tpanel-head`, so it mixes into the head's OWN tokens. `--term-*`
    is fixed dark in both themes on purpose (terminals do not flip), and an
    agent's head that flipped while the terminal under it did not would be a

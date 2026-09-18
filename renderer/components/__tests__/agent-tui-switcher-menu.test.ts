@@ -64,7 +64,7 @@ describe('the driver menu', () => {
         expect(html).toContain('tui-switch-codex');
     });
 
-    it('marks a held-but-parked driver as a sidecar', () => {
+    it('marks a held-but-parked runtime as the previous driver, not a sidecar', () => {
         const html = render({
             runtimes: [
                 { id: 'r1', tui: 'claude', terminalSpecId: 't1', fronted: true },
@@ -72,7 +72,8 @@ describe('the driver menu', () => {
             ],
         });
         expect(html).toContain('tui-switch-codex');
-        expect(html).toContain('sidecar');
+        expect(html).toContain('previous');
+        expect(html).not.toContain('sidecar');
     });
 
     it('shows a refusal the host made AFTER the menu was drawn', () => {

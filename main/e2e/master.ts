@@ -3,13 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     addWorkspace,
+    createAgentRuntime,
     createTerminalSpec,
+    createWorkspaceAgent,
     deleteTerminalSpec,
     getAllSettings,
     getWorkspace,
     removeWorkspace,
     setSettings,
     setWorkspaceGappDev,
+    updateTerminalSpec,
 } from '../db';
 import { getTerminalSize, getTerminalSizeHistory } from '../terminal/size-tracker';
 import { killTerminalById, announceInboxIncoming } from '../terminal/ipc';
@@ -53,6 +56,12 @@ const PEER_ID = 'e2e-master-window-peer';
 const PEER_NAME = 'Master Peer E2E';
 const TERMINAL_ID = 'e2e-master-terminal';
 const TERMINAL_LABEL = 'master-floor';
+const DRIVER_AGENT_ID = 'e2e-master-driver-agent';
+const DRIVER_AGENT_NAME = 'burndown';
+const SIDECAR_AGENT_ID = 'e2e-master-sidecar-agent';
+const SIDECAR_AGENT_NAME = 'burndown-slave';
+const SIDECAR_TERMINAL_ID = 'e2e-master-sidecar-terminal';
+const SIDECAR_TERMINAL_LABEL = 'sidecar-floor';
 const PEER_TERMINAL_ID = 'e2e-master-peer-terminal';
 const PEER_TERMINAL_LABEL = 'peer-floor';
 /** The Tynn project the GDW fixture is linked to — see the note in `seedMasterE2E`. */
@@ -63,6 +72,10 @@ export interface MasterSeed {
     workspaceName: string;
     terminalId: string;
     terminalLabel: string;
+    driverAgentName: string;
+    sidecarAgentName: string;
+    sidecarTerminalId: string;
+    sidecarTerminalLabel: string;
     peerId: string;
     peerName: string;
     /**
@@ -162,6 +175,7 @@ export function seedMasterE2E(): MasterSeed {
     // orphan without `meta.system` belongs to no workspace at all, so it would
     // accumulate invisibly in the profile, one per run.
     deleteTerminalSpec(TERMINAL_ID);
+    deleteTerminalSpec(SIDECAR_TERMINAL_ID);
     deleteTerminalSpec(PEER_TERMINAL_ID);
 
     const dir = seedWorkspace(WORKSPACE_ID, WORKSPACE_NAME, 0);
@@ -193,6 +207,62 @@ export function seedMasterE2E(): MasterSeed {
         label: TERMINAL_LABEL,
         cwd: dir,
         type: 'terminal',
+        meta: { agent: 'claude', agent_id: DRIVER_AGENT_ID },
+    });
+    createTerminalSpec({
+        id: SIDECAR_TERMINAL_ID,
+        workspace_id: WORKSPACE_ID,
+        label: SIDECAR_TERMINAL_LABEL,
+        cwd: dir,
+        type: 'terminal',
+        meta: { agent: 'codex', agent_id: SIDECAR_AGENT_ID },
+    });
+    // The sidecar owns a real terminal but is NOT a second floor tile. The
+    // screen-flip control is the only route to it, which proves the feature
+    // switches one agent panel rather than merely selecting another panel.
+    updateTerminalSpec(SIDECAR_TERMINAL_ID, { enabled: false });
+
+    createWorkspaceAgent({
+        id: DRIVER_AGENT_ID,
+        workspace_id: WORKSPACE_ID,
+        tui: 'claude',
+        name: DRIVER_AGENT_NAME,
+        purpose: 'e2e driver',
+        avatar: null,
+        boot_cwd: dir,
+        persona_path: null,
+        role: 'specialized',
+        parent_agent_id: null,
+        terminal_spec_id: TERMINAL_ID,
+        reachability: 'workspace',
+        wake_on_dm: 0,
+    });
+    createAgentRuntime({
+        agentId: DRIVER_AGENT_ID,
+        tui: 'claude',
+        terminalSpecId: TERMINAL_ID,
+        fronted: true,
+    });
+    createWorkspaceAgent({
+        id: SIDECAR_AGENT_ID,
+        workspace_id: WORKSPACE_ID,
+        tui: 'codex',
+        name: SIDECAR_AGENT_NAME,
+        purpose: 'e2e sidecar',
+        avatar: null,
+        boot_cwd: dir,
+        persona_path: null,
+        role: 'specialized',
+        parent_agent_id: DRIVER_AGENT_ID,
+        terminal_spec_id: SIDECAR_TERMINAL_ID,
+        reachability: 'workspace',
+        wake_on_dm: 0,
+    });
+    createAgentRuntime({
+        agentId: SIDECAR_AGENT_ID,
+        tui: 'codex',
+        terminalSpecId: SIDECAR_TERMINAL_ID,
+        fronted: true,
     });
     createTerminalSpec({
         id: PEER_TERMINAL_ID,
@@ -217,6 +287,10 @@ export function seedMasterE2E(): MasterSeed {
         workspaceName: WORKSPACE_NAME,
         terminalId: TERMINAL_ID,
         terminalLabel: TERMINAL_LABEL,
+        driverAgentName: DRIVER_AGENT_NAME,
+        sidecarAgentName: SIDECAR_AGENT_NAME,
+        sidecarTerminalId: SIDECAR_TERMINAL_ID,
+        sidecarTerminalLabel: SIDECAR_TERMINAL_LABEL,
         peerId: PEER_ID,
         peerName: PEER_NAME,
         peerPath: peerDir,
@@ -256,6 +330,7 @@ export function seedMasterE2E(): MasterSeed {
          */
         killTerminals: () => {
             killTerminalById(TERMINAL_ID);
+            killTerminalById(SIDECAR_TERMINAL_ID);
             killTerminalById(PEER_TERMINAL_ID);
         },
         /**
