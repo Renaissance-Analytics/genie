@@ -99,9 +99,9 @@ export default function HostUpgradeOverlay({
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 18,
-                background: 'rgba(10, 10, 12, 0.92)',
+                background: 'color-mix(in srgb, var(--bg-0) 92%, transparent)',
                 backdropFilter: 'blur(6px)',
-                color: '#e4e4e7',
+                color: 'var(--fg-2)',
                 textAlign: 'center',
                 padding: 32,
                 WebkitAppRegion: 'drag',
@@ -114,24 +114,24 @@ export default function HostUpgradeOverlay({
                         width: 36,
                         height: 36,
                         borderRadius: '50%',
-                        border: '3px solid rgba(167,139,250,0.25)',
-                        borderTopColor: '#a78bfa',
+                        border: '3px solid color-mix(in srgb, var(--violet-500) 25%, transparent)',
+                        borderTopColor: 'var(--violet-500)',
                         animation: 'host-overlay-spin 0.9s linear infinite',
                     }}
                 />
             )}
             <div style={{ fontSize: 18, fontWeight: 700 }}>{title}</div>
-            <div style={{ maxWidth: 440, fontSize: 13, lineHeight: 1.5, color: '#a1a1aa' }}>{body}</div>
-            {err && <div style={{ color: '#f87171', fontSize: 12, maxWidth: 440 }}>{err}</div>}
+            <div style={{ maxWidth: 440, fontSize: 13, lineHeight: 1.5, color: 'var(--fg-3)' }}>{body}</div>
+            {err && <div style={{ color: 'var(--rose-400)', fontSize: 12, maxWidth: 440 }}>{err}</div>}
             <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>{action}</div>
             <style>{`
                 @keyframes host-overlay-spin { to { transform: rotate(360deg); } }
                 .ov-btn {
                     font: inherit; font-size: 13px; font-weight: 600;
                     padding: 8px 16px; border-radius: 8px; cursor: pointer;
-                    color: #e4e4e7; background: #27272a; border: 1px solid #3f3f46;
+                    color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--border-2);
                 }
-                .ov-btn:hover { background: #3f3f46; }
+                .ov-btn:hover { background: var(--bg-3); }
                 .ov-btn:disabled { opacity: 0.6; cursor: default; }
                 .ov-btn-primary { background: #7c3aed; border-color: #7c3aed; color: #fff; }
                 .ov-btn-primary:hover { background: #6d28d9; }

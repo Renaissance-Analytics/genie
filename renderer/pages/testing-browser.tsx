@@ -30,7 +30,7 @@ export default function TestingBrowserPage() {
     }, []);
     if (!bridgeReady) {
         return (
-            <div className="surface flex min-h-screen items-center justify-center text-sm text-zinc-400">
+            <div className="surface flex min-h-screen items-center justify-center text-sm text-[var(--fg-3)]">
                 Starting the Testing Browser…
             </div>
         );
@@ -113,14 +113,14 @@ function TestingBrowserInner() {
         /Mac/i.test(navigator.platform ?? navigator.userAgent ?? '');
 
     return (
-        <div className="surface flex h-screen flex-col overflow-hidden bg-[#0a0a0c] text-zinc-200">
+        <div className="surface flex h-screen flex-col overflow-hidden text-[var(--fg-2)]">
             {/* Genie-owned badge — this is a Genie surface, not real Chrome. The
                 native title bar is hidden (titleBarStyle: 'hidden'), so THIS row
                 is the window chrome: it drags the window and pads right for the
                 native min/max/close overlay on Windows (left for macOS traffic
                 lights). Interactive children are marked no-drag. */}
             <div
-                className="flex h-[34px] flex-shrink-0 items-center gap-2 border-b border-zinc-800 bg-[#131318] pl-3 text-[11px]"
+                className="flex h-[34px] flex-shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-3 text-[11px]"
                 style={{
                     WebkitAppRegion: 'drag',
                     // Reserve the Windows overlay controls; collapses to 12px where
@@ -129,14 +129,14 @@ function TestingBrowserInner() {
                 } as CSSProperties}
             >
                 {isMac && <span className="w-[64px] flex-shrink-0" />}
-                <span className="rounded bg-emerald-900/60 px-1.5 py-0.5 font-semibold text-emerald-300">
+                <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-700 dark:text-emerald-300">
                     GENIE TESTING BROWSER
                 </span>
-                <span className="truncate text-zinc-400">
+                <span className="truncate text-[var(--fg-3)]">
                     tunneling {state?.hostname ?? 'host'} · *.gen served only inside this session
                 </span>
                 <button
-                    className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-800"
+                    className="ml-auto flex-shrink-0 rounded px-1.5 py-0.5 text-[var(--fg-3)] hover:bg-[var(--bg-2)]"
                     style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                     onClick={() => void api().testingBrowser.refreshSites()}
                     title="Refresh the enabled .gen sites from the host"
@@ -146,14 +146,14 @@ function TestingBrowserInner() {
             </div>
 
             {/* Tab strip */}
-            <div className="flex items-center gap-1 border-b border-zinc-800 bg-[#0f0f14] px-2 py-1">
+            <div className="flex items-center gap-1 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1">
                 {(state?.tabs ?? []).map((t) => {
                     const active = t.id === state?.activeTabId;
                     return (
                         <div
                             key={t.id}
                             className={`flex max-w-[220px] items-center gap-1 rounded-t px-2 py-1 text-xs ${
-                                active ? 'bg-[#1c1c24] text-zinc-100' : 'bg-transparent text-zinc-400 hover:bg-zinc-800/50'
+                                active ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'bg-transparent text-[var(--fg-3)] hover:bg-[var(--bg-1)]'
                             }`}
                         >
                             <button
@@ -164,7 +164,7 @@ function TestingBrowserInner() {
                                 {t.title || t.url}
                             </button>
                             <button
-                                className="text-zinc-500 hover:text-zinc-200"
+                                className="text-[var(--fg-4)] hover:text-[var(--fg-1)]"
                                 onClick={() => void api().testingBrowser.closeTab(t.id)}
                             >
                                 ×
@@ -173,7 +173,7 @@ function TestingBrowserInner() {
                     );
                 })}
                 <button
-                    className="rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+                    className="rounded px-2 py-1 text-xs text-[var(--fg-3)] hover:bg-[var(--bg-2)]"
                     onClick={() => void api().testingBrowser.newTab()}
                     title="New tab"
                 >
@@ -182,23 +182,23 @@ function TestingBrowserInner() {
             </div>
 
             {/* Toolbar: nav + URL bar + device presets */}
-            <div className="flex items-center gap-2 border-b border-zinc-800 bg-[#131318] px-2 py-1.5">
+            <div className="flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1.5">
                 <button
-                    className="rounded px-2 py-1 text-sm text-zinc-300 disabled:text-zinc-600 hover:bg-zinc-800"
+                    className="rounded px-2 py-1 text-sm text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-40"
                     disabled={!state?.canGoBack}
                     onClick={() => void api().testingBrowser.back()}
                 >
                     ‹
                 </button>
                 <button
-                    className="rounded px-2 py-1 text-sm text-zinc-300 disabled:text-zinc-600 hover:bg-zinc-800"
+                    className="rounded px-2 py-1 text-sm text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-40"
                     disabled={!state?.canGoForward}
                     onClick={() => void api().testingBrowser.forward()}
                 >
                     ›
                 </button>
                 <button
-                    className="rounded px-2 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
+                    className="rounded px-2 py-1 text-sm text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
                     onClick={() => void api().testingBrowser.reload()}
                     title="Reload"
                 >
@@ -213,7 +213,7 @@ function TestingBrowserInner() {
                 >
                     <span className="mr-1 text-xs text-emerald-400">🔒</span>
                     <input
-                        className="w-full rounded bg-[#0a0a0c] px-2 py-1 text-sm text-zinc-100 outline-none ring-1 ring-zinc-800 focus:ring-emerald-700"
+                        className="w-full rounded bg-[var(--bg-0)] px-2 py-1 text-sm text-[var(--fg-1)] outline-none ring-1 ring-[var(--border-2)] focus:ring-emerald-600"
                         value={address}
                         onChange={(e) => setAddress(e.target.value)}
                         placeholder="tynn.gen"
@@ -222,7 +222,7 @@ function TestingBrowserInner() {
                     />
                 </form>
                 <select
-                    className="rounded bg-[#0a0a0c] px-1.5 py-1 text-xs text-zinc-200 ring-1 ring-zinc-800"
+                    className="rounded bg-[var(--bg-0)] px-1.5 py-1 text-xs text-[var(--fg-2)] ring-1 ring-[var(--border-2)]"
                     value={state?.presetId ?? 'fit'}
                     onChange={(e) => void api().testingBrowser.setViewport(e.target.value)}
                     title="Device viewport"
@@ -237,11 +237,11 @@ function TestingBrowserInner() {
 
             {/* Enabled .gen quick-nav */}
             {sites.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1 border-b border-zinc-900 bg-[#0f0f14] px-2 py-1">
+                <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1">
                     {sites.map((s) => (
                         <button
                             key={s.genName}
-                            className="rounded bg-zinc-800/70 px-2 py-0.5 text-[11px] text-zinc-200 hover:bg-zinc-700"
+                            className="rounded bg-[var(--bg-2)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-3)]"
                             onClick={() => void go(`https://${s.genName}`)}
                             title={`${s.genName} → ${s.hostname}`}
                         >
@@ -252,15 +252,15 @@ function TestingBrowserInner() {
             )}
 
             {error && (
-                <div className="border-b border-red-900/50 bg-red-950/40 px-3 py-1 text-xs text-red-300">
+                <div className="border-b border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs text-rose-700 dark:text-rose-300">
                     {error}
                 </div>
             )}
 
             {/* Reserved content region — main composites the WebContentsView here. */}
-            <div ref={contentRef} className="relative flex-1 bg-[#0a0a0c]">
+            <div ref={contentRef} className="relative flex-1 bg-[var(--bg-0)]">
                 {(!state || state.tabs.length === 0) && (
-                    <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-zinc-500">
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-[var(--fg-3)]">
                         <div>No tunnel open.</div>
                         {sites.length === 0 ? (
                             <div className="max-w-sm text-xs">

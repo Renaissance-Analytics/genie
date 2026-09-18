@@ -12,6 +12,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { FilePickerHost } from '../components/FilePickerModal';
 import {
     PREFERS_DARK_QUERY,
+    THEME_CHANGE_EVENT,
     THEME_STORAGE_KEY,
     resolveDarkTheme,
 } from '../lib/theme-boot';
@@ -31,32 +32,46 @@ export default function App({ Component, pageProps }: AppProps) {
     // paints; both sides share `resolveDarkTheme` so they cannot drift.
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const apply = (dark: boolean) => {
-            document.documentElement.classList.toggle('dark', dark);
-        };
-        let mql: MediaQueryList | null = null;
-        let onChange: ((e: MediaQueryListEvent) => void) | null = null;
-        try {
+        const apply = () => {
             let saved: string | null = null;
             try {
                 saved = window.localStorage.getItem(THEME_STORAGE_KEY);
             } catch {
                 /* private mode — fall through to the OS preference */
             }
-            if (saved === 'dark' || saved === 'light') {
-                return apply(resolveDarkTheme(saved, false));
+            let prefersDark = false;
+            try {
+                prefersDark = window.matchMedia(PREFERS_DARK_QUERY).matches;
+            } catch {
+                /* no matchMedia — the head script already made the call */
             }
-            // 'system' or unset → follow the OS, and keep following it live.
+            const dark = resolveDarkTheme(saved, prefersDark);
+            document.documentElement.classList.toggle('dark', dark);
+            // CSS owns the page; Electron owns the background + Windows control
+            // strip. Report the same resolved choice so those two layers cannot
+            // split into light and dark halves (genie#714).
+            window.genie?.app.setWindowTheme(dark);
+        };
+        let mql: MediaQueryList | null = null;
+        const onStorage = (event: StorageEvent) => {
+            if (event.key === THEME_STORAGE_KEY) apply();
+        };
+        try {
             mql = window.matchMedia(PREFERS_DARK_QUERY);
-            apply(resolveDarkTheme(saved, mql.matches));
-            onChange = (e: MediaQueryListEvent) =>
-                apply(resolveDarkTheme(saved, e.matches));
-            mql.addEventListener('change', onChange);
+            // Listening even for an explicit choice is intentional: resolveDarkTheme
+            // ignores the OS then, and changing back to "system" works immediately
+            // without rebuilding this effect.
+            mql.addEventListener('change', apply);
         } catch {
             /* no matchMedia — the head script already made the call */
         }
+        window.addEventListener('storage', onStorage);
+        window.addEventListener(THEME_CHANGE_EVENT, apply);
+        apply();
         return () => {
-            if (mql && onChange) mql.removeEventListener('change', onChange);
+            mql?.removeEventListener('change', apply);
+            window.removeEventListener('storage', onStorage);
+            window.removeEventListener(THEME_CHANGE_EVENT, apply);
         };
     }, []);
 

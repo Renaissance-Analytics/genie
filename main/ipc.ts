@@ -91,6 +91,7 @@ import { requestWorkstationReset } from './workstation/reset';
 import { osAgentBootMode, readWorkstationEvidence } from './agents/os-lifecycle';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
+import { applyWindowTheme } from './window-theme';
 import { agentPulse } from './terminal/agent-pulse';
 import {
     createSpecializedAgentTerminal,
@@ -718,6 +719,11 @@ export function agentRecordSetAvatar(agentId: string, avatar: string | null) {
 }
 
 export function registerIpcHandlers(): void {
+    ipcMain.on('app:set-window-theme', (event, dark: unknown) => {
+        if (typeof dark !== 'boolean') return;
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win) applyWindowTheme(win, dark);
+    });
     // --- Auth -----------------------------------------------------------
     ipcMain.handle('auth:start-sign-in', async () => {
         // Tynn's browser-handoff (genie://) flow.

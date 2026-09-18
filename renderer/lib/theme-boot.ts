@@ -29,6 +29,9 @@
 /** Where Settings → Customization persists the choice. */
 export const THEME_STORAGE_KEY = 'genie.theme';
 
+/** Same-document signal used by Settings after writing localStorage. */
+export const THEME_CHANGE_EVENT = 'genie:theme-change';
+
 /** The stored preference. Anything else (unset, legacy) means 'system'. */
 export type ThemeChoice = 'system' | 'light' | 'dark';
 

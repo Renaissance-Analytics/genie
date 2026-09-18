@@ -14,6 +14,7 @@
 
 import path from 'path';
 import { BrowserWindow, WebContentsView, session, shell } from 'electron';
+import { initialWindowTheme } from '../window-theme';
 import { registerAppWindow, windowIdsForApp } from './bridge';
 import { attachAppTabViews, appViewBounds, type AttachedAppView } from './app-views';
 import { appWindowTabs } from './window-tabs';
@@ -168,7 +169,7 @@ export function openAppWindow(opts: OpenAppWindowOpts): BrowserWindow {
         minHeight: 360,
         show: false,
         autoHideMenuBar: true,
-        backgroundColor: '#0a0a0c',
+        backgroundColor: initialWindowTheme(false).backgroundColor,
         // The prefix alone until a hosted page says otherwise. It never says
         // "Genie App" and never carries an address: the window is technically a
         // browser and none of its chrome may read as one.

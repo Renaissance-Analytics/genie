@@ -17,7 +17,7 @@ import { THEME_BOOT_SCRIPT } from '../lib/theme-boot';
  */
 export default function Document() {
     return (
-        <Html>
+        <Html className="genie-theme-root">
             <Head>
                 <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
             </Head>
