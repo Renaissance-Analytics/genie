@@ -11,7 +11,7 @@ import type { MobileDataDeps } from '../../../mobile/api';
 import { _resetAuditForTest } from '../../../mobile/audit';
 import { _resetAuthForTest, listSessions } from '../../../mobile/auth';
 import { _resetBatonForTest } from '../../../mobile/baton';
-import { activeMobilePeers, mobileServerState, startMobileServer, stopMobileServer } from '../../../mobile/server';
+import { activeMobilePeers, disconnectGuest, mobileServerState, startMobileServer, stopMobileServer } from '../../../mobile/server';
 import { _resetBridgeForTest } from '../../../mobile/terminal-bridge';
 import { RelayMemberClient } from '../../../remote/relay-client';
 import { PopKeypair } from '../../../remote/relay-pop';
@@ -318,6 +318,26 @@ describe('a desktop Genie as a relay host', () => {
             headers: { authorization: `Bearer ${guestSession.token}` },
         });
         expect(res.status).toBe(401);
+    });
+
+    // genie#681: Disconnect on the host's banner ends that guest's relay session too,
+    // rather than leaving it open onto a revoked local session.
+    it("ends the relay session of a guest the host disconnects, and nobody else's", async () => {
+        await startHost();
+        const sam = boundGrant();
+        const alex = boundGrant({ sub: 'user-alex', name: 'Alex' });
+        const samMember = await connect(sam.grant, sam.pop);
+        const alexMember = await connect(alex.grant, alex.pop);
+        samMember.openEvents(() => {});
+        alexMember.openEvents(() => {});
+        await until(() => activeMobilePeers().length === 2);
+        expect(relay.memberSessions()).toBe(2);
+
+        disconnectGuest('user-sam');
+
+        await until(() => relay.memberSessions() === 1);
+        expect(listSessions().filter((s) => s.access).map((s) => s.access?.principalId)).toEqual(['user-alex']);
+        expect((await alexMember.rest({ method: 'GET', path: '/api/state' })).status).toBe(200);
     });
 
     it('puts the guest on the host\'s roster by the name their grant carries', async () => {

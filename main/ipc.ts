@@ -175,6 +175,7 @@ import {
     mobileEmit,
     mobileServerState,
     restartMobileServer,
+    disconnectGuest,
     setMobileEnabled,
     setRemoteEnabled,
     setLocked,
@@ -1697,6 +1698,12 @@ export function registerIpcHandlers(): void {
             to: String(principalId ?? ''),
         });
         return { ok: d.allowed, error: d.reason, ...(await mobileStatus()) };
+    });
+    // The banner's per-guest Disconnect (genie#681): ends that guest's live session
+    // and closes their sockets. Their access itself is revoked where it was granted.
+    ipcMain.handle('mobile:disconnect-guest', async (_e, principalId: string) => {
+        const dropped = disconnectGuest(String(principalId ?? ''));
+        return { ok: dropped > 0, dropped, ...(await mobileStatus()) };
     });
 
     // Work Mode — Tailscale lifecycle management (status / bring online / install).

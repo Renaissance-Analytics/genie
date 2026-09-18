@@ -13,6 +13,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 export interface TestRelay {
     url: string;
     hellos: Array<Record<string, unknown>>;
+    /** The member sessions the relay still carries. */
+    memberSessions(): number;
     /** Close the host link (as a relay restart would). */
     dropHost(): void;
     close(): Promise<void>;
@@ -53,7 +55,10 @@ export async function startTestRelay(): Promise<TestRelay> {
             const member = members.get(frame.sid);
             if (member && member.ws.readyState === 1) member.ws.send(String(raw));
             const parsed = JSON.parse(String(raw)) as { channel?: string; kind?: string };
-            if (parsed.channel === 'control' && parsed.kind === 'error') member?.ws.close();
+            if (parsed.channel === 'control' && parsed.kind === 'error' && member) {
+                member.ws.close();
+                members.delete(frame.sid);
+            }
         });
         ws.on('close', () => {
             if (id && hosts.get(id) === ws) hosts.delete(id);
@@ -100,6 +105,7 @@ export async function startTestRelay(): Promise<TestRelay> {
     return {
         url: `ws://127.0.0.1:${port}`,
         hellos,
+        memberSessions: () => members.size,
         dropHost: () => {
             for (const ws of hosts.values()) ws.close();
         },
