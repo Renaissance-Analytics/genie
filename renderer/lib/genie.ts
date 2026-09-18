@@ -4693,6 +4693,8 @@ export interface GenieApi {
         terminalExit: (
             cb: (payload: { id: string; exitCode: number; signal?: number }) => void,
         ) => () => void;
+        /** The final remote viewer detached; re-fit and re-send this owner's grid. */
+        terminalRefit: (cb: (payload: { id: string }) => void) => () => void;
         /** Main asks every window to serialize its terminals before quit (Tier 1). */
         terminalSnapshotRequest: (cb: () => void) => () => void;
         /** Live pty count broadcast (Tier 2 resource awareness). */

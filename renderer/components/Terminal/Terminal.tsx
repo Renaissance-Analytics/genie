@@ -207,6 +207,22 @@ export default function Terminal({
         };
     }, []);
 
+    // The remote bridge deliberately lets a larger viewer grow the SHARED pty.
+    // On its final detach main asks the local owner to take the grid back. A plain
+    // fit is insufficient when this container did not change size: xterm already
+    // has the right local cols/rows, so FitAddon may emit no resize at all. Fit
+    // first, then explicitly re-send the resulting grid to the pty.
+    useEffect(() => {
+        return api().on.terminalRefit(({ id }) => {
+            if (id !== ptyIdRef.current || createFailedRef.current) return;
+            const el = hostElRef.current;
+            if (!shouldFit(el?.getBoundingClientRect(), onScreenRef.current)) return;
+            handleRef.current?.fit();
+            const grid = sizeRef.current;
+            void api().terminal.resize(id, grid.cols, grid.rows).catch(() => {});
+        });
+    }, []);
+
     // Copy/paste go through Electron's MAIN clipboard via IPC — the renderer's
     // navigator.clipboard (what fancy-term uses) fails SILENTLY in a sandboxed
     // window, so terminal copy never reached the OS clipboard. These are the ONLY

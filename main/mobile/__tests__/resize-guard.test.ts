@@ -1,5 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { nextPtyGrid, _resetBridgeForTest } from '../terminal-bridge';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WebSocket } from 'ws';
+import {
+    attachTerminalSocket,
+    nextPtyGrid,
+    setTerminalRefitHandler,
+    _resetBridgeForTest,
+} from '../terminal-bridge';
 
 /**
  * The shared pty is owned by the desktop window; a phone in a narrow viewport
@@ -57,6 +63,34 @@ describe('nextPtyGrid (grow-only pty guard)', () => {
         nextPtyGrid('t1', 200, 50);
         _resetBridgeForTest();
         // Floor cleared → the next size is accepted as-is.
+        expect(nextPtyGrid('t1', 80, 24)).toEqual({ cols: 80, rows: 24 });
+    });
+
+    it('clears the floor when the last remote socket detaches', () => {
+        const socket = {} as WebSocket;
+        const detach = attachTerminalSocket('t1', socket);
+        nextPtyGrid('t1', 200, 50);
+
+        detach();
+
+        // The desktop can now authoritatively shrink the shared pty again.
+        expect(nextPtyGrid('t1', 80, 24)).toEqual({ cols: 80, rows: 24 });
+    });
+
+    it('asks the desktop to refit only after the last socket detaches', () => {
+        const refit = vi.fn();
+        setTerminalRefitHandler(refit);
+        const detachFirst = attachTerminalSocket('t1', {} as WebSocket);
+        const detachLast = attachTerminalSocket('t1', {} as WebSocket);
+        nextPtyGrid('t1', 200, 50);
+
+        detachFirst();
+        expect(refit).not.toHaveBeenCalled();
+        expect(nextPtyGrid('t1', 80, 24)).toBeNull();
+
+        detachLast();
+        expect(refit).toHaveBeenCalledOnce();
+        expect(refit).toHaveBeenCalledWith('t1');
         expect(nextPtyGrid('t1', 80, 24)).toEqual({ cols: 80, rows: 24 });
     });
 });

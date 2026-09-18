@@ -1864,6 +1864,13 @@ const api = {
             ipcRenderer.on('terminal:exit', handler);
             return () => ipcRenderer.off('terminal:exit', handler);
         },
+        /** The final remote viewer left; the local owner must restore the pty to
+         *  its authoritative viewport even when its DOM size did not change. */
+        terminalRefit: (cb: (payload: { id: string }) => void) => {
+            const handler = (_e: unknown, payload: { id: string }) => cb(payload);
+            ipcRenderer.on('terminal:refit', handler);
+            return () => ipcRenderer.off('terminal:refit', handler);
+        },
         /** Main asks every window to serialize its terminals before quit (Tier 1). */
         terminalSnapshotRequest: (cb: () => void) => {
             const handler = () => cb();
