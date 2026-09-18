@@ -445,23 +445,24 @@ Actions (\`action\`):
     grammar. It DISCARDS the conversation — use it to recover, not to reload.
 
   Either way it returns the NEW terminal \`id\`.
-**Approval:** creating an agent, \`send\`, and \`restart\` are GATED the same way
+**Approval:** creating an agent, a sidecar, \`send\`, and \`restart\` are GATED the same way
 (OFF runs immediately). \`list\`, \`read\`, and reattaching to an already-approved
 saved agent never prompt.
 
-### Sidecars — running an agent under more than one TUI
+### Sidecars — a separate agent under another TUI
 
-An agent is not its TUI. A SIDECAR is a second driver the same agent holds: its
-own pty, its own conversation, running alongside the visible one. Switching
-drivers never stops anything, so the one you leave is simply parked and can be
-flipped back to instantly.
+A SIDECAR is a separate registered agent named \`<driver>-slave\`: its own
+identity, pty, conversation and context, running beside its driver. Create or
+reattach yours with \`runAgent { action: "sidecar", agent: "<other-tui>" }\`.
+Genie owns the suffix and parent link; callers do not manually reproduce the
+naming convention.
 
-Add one with \`runAgent switchTui\`, or -- as the human -- from the **Driver tab**
-of Agent settings, or the driver menu in a live agent panel's header. The agent's
-IDENTITY is unchanged either way -- same name, same AgentInbox, same history,
-same \`AGENT.md\`. Only the driver differs.
+An alternate TUI runtime on ONE agent is a previous driver, not a sidecar. Use
+\`runAgent switchTui\` (or the Driver tab) to change that visible driver while
+keeping the same identity and AgentInbox. Switching never stops the runtime you
+leave, so it stays warm and can be flipped back to instantly.
 
-A switch is REFUSED, for you and for them alike, when the agent's own
+A driver switch is REFUSED, for you and for them alike, when the agent's own
 \`AGENT.md\` lists \`tuis:\` and the one asked for is not among them. An empty
 list places no restriction.
 
@@ -471,16 +472,16 @@ Some shapes it takes:
 
 - **A second opinion.** Ask the same question of a different model and compare.
   Two harnesses disagreeing about a diagnosis is information, and it is cheapest
-  to get from an agent that already holds the context.
-- **Review from another perspective.** Have one driver write and another read --
-  the reviewer has the same repo and the same history, and no handover is needed.
-- **A COLD read.** The opposite case: a fresh driver has none of this
+  to get from an agent already working in the same workspace.
+- **Review from another perspective.** Have one agent write and another read --
+  the reviewer has the same repo without inheriting the writer's conclusions.
+- **A COLD read.** The opposite case: a fresh sidecar has none of this
   conversation's history, so it reads a file, a diff or a spec without being
   shaped by the argument you have been having. Sometimes that is the only way to
   find out that the premise was wrong.
-- **Reaching a tool the other driver does not have.** Harnesses differ in their
-  MCP servers, skills, sandboxing and file access. A sidecar is how one agent
-  uses a capability that only one of its drivers ships.
+- **Reaching a tool the driver does not have.** Harnesses differ in their MCP
+  servers, skills, sandboxing and file access. A sidecar can use capabilities
+  that only its TUI ships.
 - **Shuttling data.** Long, mechanical fetch-and-transform work parked on a
   sidecar leaves the visible driver free for the conversation you are actually
   having.
@@ -491,25 +492,24 @@ Some shapes it takes:
   you are talking to.
 - **Rehearsing something risky.** Run it on the sidecar first and look at what
   happened, rather than finding out in the conversation that matters.
-- **Shaping cost or latency.** Put wide, cheap, mechanical passes on one driver
-  and the reasoning on another. They are the same agent, so nothing is handed
-  over.
-- **Parking a thread.** An unfinished line of work gets its own driver and stops
+- **Shaping cost or latency.** Put wide, cheap, mechanical passes on one agent
+  and the reasoning on another.
+- **Parking a thread.** An unfinished line of work gets its own agent and stops
   weighing on the main conversation -- still there, still warm, not in the way.
 - **Handling traffic from elsewhere.** Inbox mail, questions from other
   workspaces, an Ops parent checking in: a sidecar can carry that while the
-  fronted driver stays on the task.
+  driver stays on the task.
 - **Whatever the work actually needs.** This list is examples, not a menu.
 
 None of those is a separate feature to switch on -- they are things the same
 capability is put to, and the list is deliberately not a taxonomy. Reach for
 whichever fits the work in front of you, or for something nobody has written
 down yet. If you find yourself asking whether a purpose is "supported", it is:
-Genie builds the driver, and what it is for is not Genie's call.
+Genie builds the sidecar, and what it is for is not Genie's call.
 
 **Costs, so they are chosen and not discovered.** Every live sidecar is a real
-process holding a real conversation, and it spends tokens when it works. Genie
-never stops one for you -- not on a switch, not on a restart -- so stopping one
+agent holding a real conversation, and it spends tokens when it works. Genie
+never stops one for you -- not on a driver switch, not on a restart -- so stopping one
 is a deliberate act, and a sidecar you forgot is a sidecar still running.
 
 ### manageWorkspaces
@@ -1162,6 +1162,9 @@ and it is not durable, where AgentInbox queues for an agent that is away.
 **Sub-agents you spawned inside your own session are yours** — they are not in
 \`agentinbox list\`, and your harness's own messaging is the right way to reach
 them.
+
+**Sidecar:** \`runAgent {action:"sidecar",agent:"<tui>"}\` runs \`<you>-slave\`
+for review: real agent, real context
 
 **Genie already owns the surfaces you would otherwise improvise, and an
 improvised one is invisible to the human, unreviewable, and dies with your

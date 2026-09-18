@@ -468,6 +468,23 @@ describe('runAgent sidecar', () => {
         expect(nested.error).toMatch(/sidecar.*sidecar/i);
         expect(spawnedPtys).toHaveLength(0);
     });
+
+    it('requires an explicit, different TUI', async () => {
+        await registerCaller();
+
+        const missing = await runAgentForMcp(CALLER_ID, { action: 'sidecar' });
+        expect(missing.ok).toBe(false);
+        expect(missing.error).toMatch(/different TUI/i);
+
+        const same = await runAgentForMcp(CALLER_ID, {
+            action: 'sidecar',
+            agent: 'claude',
+        });
+        expect(same.ok).toBe(false);
+        expect(same.error).toMatch(/different TUI/i);
+        expect(listWorkspaceAgents(WS_ID)).toHaveLength(1);
+        expect(spawnedPtys).toHaveLength(0);
+    });
 });
 
 describe('listing the workspace roster', () => {

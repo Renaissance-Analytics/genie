@@ -153,7 +153,12 @@ describe('every tui list is DERIVED, not restated', () => {
 
     it('advertises sidecar as a first-class runAgent action', async () => {
         const tools = await advertisedAgentTools();
-        const run = tools.find((tool) => tool.name === 'runAgent');
+        const run = tools.find((tool) => tool.name === 'runAgent') as
+            | {
+                  description: string;
+                  inputSchema: { properties: Record<string, unknown> };
+              }
+            | undefined;
         const action = run?.inputSchema.properties.action as { enum?: string[] } | undefined;
 
         expect(action?.enum).toContain('sidecar');
