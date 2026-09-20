@@ -2,6 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import {
     killMasterTerminals,
     launchGenieE2E,
+    readLiveTerminals,
     readMasterSeed,
     withTeardownBound,
     type MasterSeed,
@@ -161,4 +162,39 @@ test('choosing Delete ONCE reaches the real delete confirmation', async () => {
     if (await cancel.count()) await cancel.click();
     else await page.keyboard.press('Escape');
     await expect(confirm).toHaveCount(0);
+});
+
+test('the panel × DISMISSES the panel and leaves the terminal running (genie#724)', async () => {
+    // The owner: "The x button should not kill the terminal when I click it.
+    // All that should do is remove it from the main panel display."
+    //
+    // It killed it, and by design: main/terminal/ipc.ts says "Explicit close
+    // (the panel X) is a separate `terminal:kill`, unaffected". Meanwhile the
+    // same header already carries a Pause button labelled "Suspend — keep
+    // running, hide panel", which is what the owner expects × to be. So × was
+    // the destructive one of two adjacent controls that look equally harmless.
+    await square(seed.driverAgentName).click();
+    const open = panel(seed.terminalLabel);
+    await expect(open).toBeVisible({ timeout: 15_000 });
+
+    // POSITIVE CONTROL — the pty is genuinely alive first, so "still alive"
+    // below cannot pass against a terminal that was already gone.
+    expect(await readLiveTerminals(app)).toContain(seed.terminalId);
+
+    await open.locator('button.pctl[title="Close panel"]').click();
+
+    // Gone from the floor: that part was always right.
+    await expect(open).toHaveCount(0, { timeout: 10_000 });
+
+    // STILL RUNNING. Read from main's own live-terminal list, not from the DOM —
+    // a panel that stopped being rendered tells you nothing about the pty, which
+    // is exactly how this went unnoticed.
+    await expect
+        .poll(async () => await readLiveTerminals(app), { timeout: 15_000 })
+        .toContain(seed.terminalId);
+
+    // And it can be brought back, because a dismissal you cannot undo is a kill
+    // with extra steps.
+    await square(seed.driverAgentName).click();
+    await expect(panel(seed.terminalLabel)).toBeVisible({ timeout: 15_000 });
 });
