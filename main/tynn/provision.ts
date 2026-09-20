@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { writeFileAtomic } from '../env-store';
 import { TynnBackend } from '../backend/tynn';
 import { getWorkspaceByPath } from '../db';
 import {
@@ -309,7 +310,10 @@ export function ensureMcpGitignored(workspacePath: string): void {
         if (missing.length === 0) return;
         const prefix = content.length === 0 || content.endsWith('\n') ? '' : '\n';
         const block = `${prefix}\n# Genie: MCP config carries a Tynn bearer token — never commit it.\n${missing.join('\n')}\n`;
-        fs.writeFileSync(file, content + block);
+        // Atomic (genie#409). This is the ignore rule that keeps a Tynn BEARER
+        // TOKEN out of git, so a git command catching the truncate window is
+        // not merely untidy here.
+        writeFileAtomic(file, content + block);
     } catch {
         /* best-effort */
     }

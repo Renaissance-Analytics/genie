@@ -3,7 +3,7 @@ import path from 'path';
 import { GENIE_AGENTS_BRIEF, IMDONE_HOOK_COMMAND } from './guide';
 import { getAllSettings } from '../db';
 import { upsertEnvLine } from '../env-file';
-import { ensureEnvGitignored, loadWorkspaceEnvVars } from '../env-store';
+import { ensureEnvGitignored, loadWorkspaceEnvVars, writeFileAtomic } from '../env-store';
 import { pluginAgentSkills, type PluginSkill } from '../plugins/registry';
 import { PROVIDER_IDS, TUI_REGISTRY } from '../agents/registry';
 /* Re-exporting below does NOT bind these locally, and this module uses all
@@ -829,7 +829,9 @@ function ensureGenieAgentsGitignored(workspacePath: string): void {
             GENIE_AGENTS_IGNORE_RULES,
             'Genie: regenerated agent scaffolding (the agents themselves are tracked)',
         );
-        if (next !== existing) fs.writeFileSync(file, next);
+        // Atomic: git reads this file concurrently, and a bare write exposes an
+        // empty .gitignore in the truncate window (genie#409).
+        if (next !== existing) writeFileAtomic(file, next);
     } catch {
         /* best-effort — a missing ignore rule is untidy, not broken */
     }
@@ -847,7 +849,8 @@ function ensureCodexConfigGitignored(workspacePath: string): void {
         }
         if (existing.split(/\r?\n/).map((line) => line.trim()).includes(rule)) return;
         const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
-        fs.writeFileSync(
+        // Atomic for the same reason as the sibling above (genie#409).
+        writeFileAtomic(
             file,
             `${existing}${prefix}\n# Genie: machine-local Codex MCP endpoints\n${rule}\n`,
         );

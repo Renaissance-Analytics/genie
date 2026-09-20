@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { codeOnlyHtml } from '../../__tests__/support/code-only';
 import { scaffoldApp } from '../scaffold';
 import { validateAppManifest, APP_MANIFEST_FILENAME } from '../manifest';
 import { validateAppFolder } from '../validate';
@@ -145,9 +146,9 @@ describe('what it teaches by example', () => {
 
     it('never reaches for window.genie', () => {
         for (const file of files()) {
-            const code = file.contents
-                .replace(/\/\*[\s\S]*?\*\//g, '')
-                .replace(/<!--[\s\S]*?-->/g, '');
+            // A `/*` in a scaffolded string used to open a comment span and
+            // hide the rest of the file from this guard (genie#404).
+            const code = codeOnlyHtml(file.contents);
             expect(code, file.path).not.toMatch(/\bwindow\.genie\b(?!App)/);
         }
     });

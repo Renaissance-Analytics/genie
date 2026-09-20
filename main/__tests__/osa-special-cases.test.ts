@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { codeOnly } from './support/code-only';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -69,7 +70,10 @@ function productionSources(dir: string): string[] {
  * punish the explanation and reward silence.
  */
 export function stripComments(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    // Was a block-comment SPAN, which a `/*` inside a string literal opens —
+    // deleting every line to the next real star-slash from the count, so the
+    // ceiling silently under-counted (genie#404). Shared implementation now.
+    return codeOnly(src);
 }
 
 function countSpecialCases(): { total: number; byFile: Record<string, number> } {
