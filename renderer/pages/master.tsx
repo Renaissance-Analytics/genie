@@ -1638,20 +1638,63 @@ function MasterInner() {
         return !!updated;
     }, []);
 
-    const closeSelected = useCallback((id: string) => {
-        setSelected((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-        });
-        setActiveIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-        });
-        setFocusId((cur) => (cur === id ? null : cur));
-        setMaximizedId((cur) => (cur === id ? null : cur));
-    }, []);
+    /**
+     * The panel ×: DISMISS the panel, keep the terminal running (genie#724).
+     *
+     * The owner: *"The x button should not kill the terminal when I click it.
+     * All that should do is remove it from the main panel display."*
+     *
+     * It used to kill, and not by accident — `main/terminal/ipc.ts` reads
+     * "Explicit close (the panel X) is a separate `terminal:kill`, unaffected",
+     * and dropping the id here without retaining first meant the deliberate
+     * detach that follows killed a non-retained pty anyway. Either route ended
+     * the session. Meanwhile the very same header carries a Pause button
+     * labelled "Suspend — keep running, hide panel": two adjacent controls that
+     * look equally harmless, one of which ends an agent mid-conversation.
+     *
+     * So × now takes the path the RAIL's hide already took — retain, then drop
+     * from view — and the retain is awaited rather than fired and forgotten,
+     * because a failed retain followed by a detach is precisely the silent kill
+     * this is removing. On failure the panel STAYS, which is the same choice
+     * `toggleSpec` makes and for the same reason: never silently kill the
+     * pty/agent.
+     *
+     * Killing is still available, and still says so — Delete on the terminal,
+     * Stop or Delete on the agent.
+     */
+    const closeSelected = useCallback(
+        async (id: string) => {
+            const spec = specs.find((s) => s.id === id);
+            if (spec && spec.type !== 'code') {
+                const res = await api()
+                    .terminal.setRetained(id, true)
+                    .catch(
+                        () =>
+                            ({ ok: false, reason: 'Could not close the panel.' }) as {
+                                ok: boolean;
+                                reason?: string;
+                            },
+                    );
+                if (!res.ok) {
+                    setToast(res.reason ?? 'Could not close the panel.');
+                    return; // keep it visible — NEVER silently kill the pty/agent
+                }
+            }
+            setSelected((prev) => {
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+            });
+            setActiveIds((prev) => {
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+            });
+            setFocusId((cur) => (cur === id ? null : cur));
+            setMaximizedId((cur) => (cur === id ? null : cur));
+        },
+        [specs],
+    );
 
     const destroySpec = useCallback(async (id: string) => {
         // Optimistic: drop from local state first so the panel unmounts, then
