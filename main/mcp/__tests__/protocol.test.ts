@@ -987,6 +987,47 @@ describe('handleMcpMessage', () => {
         expect(text).toContain('a-1');
     });
 
+    it('runAgent routes SIDECAR with its requested TUI and names the sidecar it started', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true,
+            id: 'sidecar-term',
+            agent: 'codex',
+            name: 'tynn-slave',
+            ref: 'codex:tynn-slave',
+            reattached: false,
+        });
+        const res = await handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 431,
+                method: 'tools/call',
+                params: {
+                    name: 'runAgent',
+                    arguments: {
+                        action: 'sidecar',
+                        agent: 'codex',
+                        instructions: 'Review this change independently.',
+                        terminalId: 'term-Z',
+                    },
+                },
+            },
+            ctx({ terminalId: 'term-Z', runAgent }),
+        );
+
+        expect(runAgent).toHaveBeenCalledWith(
+            'term-Z',
+            expect.objectContaining({
+                action: 'sidecar',
+                agent: 'codex',
+                instructions: 'Review this change independently.',
+            }),
+        );
+        const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
+        expect(text).toContain('sidecar');
+        expect(text).toContain('tynn-slave');
+        expect(text).toContain('sidecar-term');
+    });
+
     it('runAgent says REATTACHED when a start resolved a saved agent (Tynn #254)', async () => {
         // Created-vs-reattached is the distinction the whole story turns on, so
         // the summary states it rather than leaving the caller to infer it from a

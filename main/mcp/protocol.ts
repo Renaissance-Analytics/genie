@@ -1589,6 +1589,8 @@ export interface SavedAgentInfo {
 
 export interface RunAgentRequest {
     /**
+     * - `sidecar`: register and start this caller's `<name>-slave` agent under
+     *   another TUI, or reattach the one it already owns.
      * - `start`: bring a SAVED agent up — REATTACHING to it when it already
      *   exists, rather than minting a second one. New configurations are created
      *   by `registerAgent`, never as a side effect of starting.
@@ -1596,7 +1598,7 @@ export interface RunAgentRequest {
      * - `diagnose`: read-only — WHY an agent is wedged, and which repair fits.
      * - the rest act on a running agent terminal by `id`.
      */
-    action: 'start' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui' | 'diagnose';
+    action: 'start' | 'sidecar' | 'send' | 'read' | 'stop' | 'restart' | 'list' | 'switchTui' | 'diagnose';
     /** switchTui: the TUI to make this agent's visible driver. */
     tui?: string;
     /** Target workspace (own, or a governed child). Same rules as manageTerminals. */
@@ -1618,7 +1620,8 @@ export interface RunAgentRequest {
      * it before its first turn.
      */
     instructions?: string;
-    /** start: which agent CLI to launch. On a REATTACH it is the record that
+    /** sidecar: REQUIRED, and must differ from the caller's TUI. start: which
+     *  agent CLI to launch. On a REATTACH it is the record that
      *  decides — this only disambiguates one name saved under two providers. On a
      *  create, omitting it takes the WORKSTATION default. */
     agent?: AgentType;
@@ -2796,7 +2799,7 @@ const THUMBS_UP_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is a separate `registerAgent` call; `runAgent` never creates configuration. Actions: `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart` (resumes the conversation — add `fresh: true` to kill it and start a NEW one, the only restart that reaches a wedged or dead agent). A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is normally a separate `registerAgent` call. Actions: `sidecar` (register and launch YOUR `<name>-slave` agent under the different TUI named by `agent`, or reattach it); `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart` (resumes the conversation — add `fresh: true` to kill it and start a NEW one, the only restart that reaches a wedged or dead agent). A sidecar is a separate live agent with its own context cost; alternate TUI runtimes on one agent are previous drivers, not sidecars. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `sidecar`, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2804,7 +2807,7 @@ const RUN_AGENT_TOOL = {
             ...TARGET_WORKSPACE_PROP,
             action: {
                 type: 'string',
-                enum: ['start', 'send', 'read', 'stop', 'restart', 'list', 'switchTui', 'diagnose'],
+                enum: ['start', 'sidecar', 'send', 'read', 'stop', 'restart', 'list', 'switchTui', 'diagnose'],
                 description: 'What to do.',
             },
             tui: {
@@ -2828,7 +2831,7 @@ const RUN_AGENT_TOOL = {
                 // from this enum cannot be NAMED over MCP, whatever the types say.
                 enum: agentTuis(),
                 description:
-                    "start: only disambiguates registered agents with the same name under different providers. The registered record decides what launches.",
+                    "sidecar: REQUIRED — the different TUI that drives your `<name>-slave` agent. start: only disambiguates registered agents with the same name under different providers. The registered record decides what launches.",
             },
             command: {
                 type: 'string',
@@ -4719,6 +4722,10 @@ ${body}` }],
                     summary = result.reattached
                         ? `Reattached to saved agent ${result.ref ?? ''} (terminal ${result.id ?? '?'}).`
                         : `Started registered agent ${result.ref ?? ''} as terminal ${result.id ?? '?'}.`;
+                } else if (action === 'sidecar') {
+                    summary = result.reattached
+                        ? `Reattached sidecar ${result.ref ?? result.name ?? ''} (terminal ${result.id ?? '?'}).`
+                        : `Started sidecar ${result.ref ?? result.name ?? ''} as terminal ${result.id ?? '?'}.`;
                 } else if (action === 'list') {
                     summary = `${result.agents?.length ?? 0} saved agent(s) in this workspace.`;
                 } else if (action === 'diagnose') {
