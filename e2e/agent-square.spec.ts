@@ -73,6 +73,10 @@ const square = (name: string) =>
 
 const panel = (label: string) => page.locator('.tpanel').filter({ hasText: label });
 
+/** The AGENT menu specifically. The terminal menu is also a `.proj-popover`, so
+ *  a looser locator would pass against the very menu this bug was about. */
+const agentMenu = () => page.locator('.agent-ctx-menu');
+
 test('ONE click on an agent square opens its panel', async () => {
     const driver = square(seed.driverAgentName);
     await expect(driver).toBeVisible();
@@ -102,14 +106,16 @@ test('clicking a square whose panel is ALREADY open still brings it to the floor
     await expect(panel(seed.terminalLabel)).toBeVisible();
 });
 
-test('right-clicking an agent square opens a menu', async () => {
+test('right-clicking a RUNNING agent square opens the AGENT menu', async () => {
     const driver = square(seed.driverAgentName);
     await driver.click({ button: 'right' });
 
-    // Any menu. The point of the report is that NOTHING happens, so this asserts
-    // the floor of the behaviour rather than a particular item set.
-    const menu = page.locator('.proj-popover, .agent-menu, [role="menu"]');
-    await expect(menu.first()).toBeVisible({ timeout: 5_000 });
+    // Scoped to the agent menu's own class, not to "any popover". A running
+    // agent used to get the TERMINAL menu here — which is also a `.proj-popover`
+    // and would satisfy a looser locator while being the wrong menu entirely.
+    await expect(agentMenu()).toBeVisible({ timeout: 5_000 });
+    // It names the agent, so a menu for the wrong object cannot pass.
+    await expect(agentMenu().locator('.ctx-header-label')).toHaveText(seed.driverAgentName);
 
     await page.keyboard.press('Escape');
 });
@@ -122,8 +128,8 @@ test('a DORMANT agent square answers a right-click too', async () => {
     if ((await peer.count()) === 0) test.skip(true, 'fixture has no second agent square');
 
     await peer.click({ button: 'right' });
-    const menu = page.locator('.proj-popover, .agent-menu, [role="menu"]');
-    await expect(menu.first()).toBeVisible({ timeout: 5_000 });
+    await expect(agentMenu()).toBeVisible({ timeout: 5_000 });
+    await expect(agentMenu().locator('.ctx-header-label')).toHaveText(seed.sidecarAgentName);
 
     await page.keyboard.press('Escape');
 });
@@ -132,10 +138,12 @@ test('choosing Delete ONCE reaches the real delete confirmation', async () => {
     const driver = square(seed.driverAgentName);
     await driver.click({ button: 'right' });
 
-    const menu = page.locator('.proj-popover, .agent-menu, [role="menu"]').first();
-    await expect(menu).toBeVisible({ timeout: 5_000 });
+    await expect(agentMenu()).toBeVisible({ timeout: 5_000 });
 
-    const del = menu.getByRole('button', { name: /delete/i }).first();
+    // `menuitem`, which is what these are. Asking for `button` found nothing and
+    // made a green app look red — the locator has to match the real markup or it
+    // tests the test.
+    const del = agentMenu().getByRole('menuitem', { name: /^delete/i }).first();
     await expect(del).toBeVisible();
     await del.click();
 
