@@ -184,6 +184,53 @@ describe('agentGridRows', () => {
         expect(rows.every((r) => r.collisionGroup === 'ws:general')).toBe(true);
     });
 
+    it('does NOT draw a sidecar as its own square — it belongs behind its driver', () => {
+        // genie#728. The owner, looking at `fancy-slave` sitting in the grid as
+        // a peer: "Why the fuck is this stupid button still here... sidecars DO
+        // NOT GET THEIR OWN PANEL." A sidecar is the driver's second screen,
+        // reached by flipping that driver's panel (genie#707/#719) — drawing it
+        // beside the driver says there are two agents where there is one.
+        const rows = agentGridRows({
+            agents: [
+                agent({ id: 'a1', name: 'fancy' }),
+                agent({ id: 'a2', name: 'fancy-slave' }),
+            ],
+            runtimes: [],
+            specs: [],
+            isLive: () => false,
+        });
+        expect(rows.map((r) => r.name)).toEqual(['fancy']);
+    });
+
+    it('DOES draw a sidecar whose driver is gone, or it becomes unreachable', () => {
+        // POSITIVE CONTROL, and the reason the rule is "hide it BEHIND its
+        // driver" rather than "hide anything named -slave": with no driver there
+        // is no panel to flip, so hiding it would strand a running agent with no
+        // way to reach or remove it — the very complaint being fixed.
+        const rows = agentGridRows({
+            agents: [agent({ id: 'a2', name: 'orphan-slave' })],
+            runtimes: [],
+            specs: [],
+            isLive: () => false,
+        });
+        expect(rows.map((r) => r.name)).toEqual(['orphan-slave']);
+    });
+
+    it('matches the driver on the WHOLE name, never a prefix', () => {
+        // `fancybuilder` is its own agent and must not be read as a driver for
+        // `fancy-slave`; `moic-slave` must not vanish because `tynn` exists.
+        const rows = agentGridRows({
+            agents: [
+                agent({ id: 'a1', name: 'fancybuilder' }),
+                agent({ id: 'a2', name: 'fancy-slave' }),
+            ],
+            runtimes: [],
+            specs: [],
+            isLive: () => false,
+        });
+        expect(rows.map((r) => r.name).sort()).toEqual(['fancy-slave', 'fancybuilder']);
+    });
+
     it('puts the workspace agent first', () => {
         // It is the default target for most actions, so it should not sort by
         // whatever its name happens to be.
