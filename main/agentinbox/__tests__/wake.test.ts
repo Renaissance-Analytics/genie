@@ -52,12 +52,46 @@ describe('shouldWakeAgent — fail-closed safety gates (NEVER inject mid-turn)',
         expect(shouldWakeAgent(state({ lastOutputAt: NOW - 1 }))).toBe(false);
     });
 
-    it('refuses on a human keystroke after the turn, with no output at all', () => {
+    it('wakes once the human has been QUIET, even though they typed after the turn ended', () => {
+        // genie#725. The owner: "codex agents are not using the agent inbox like
+        // you are. They don't get the push msg and the fallback user input send
+        // doesn't send if I have the agent panel open."
+        //
+        // The gate was `lastUserInputAt > lastTurnEndAt` with no clock on it, so
+        // ONE keystroke after a turn ended suppressed every wake until the agent
+        // took another turn. A codex agent that is idle takes no further turn on
+        // its own — the nudge is what would start one — so this latched shut and
+        // stayed shut. The agent was least reachable exactly while its human was
+        // there, and permanently after they touched it once.
+        //
+        // The intent is right: do not inject while someone is typing. That is a
+        // question about NOW, and it takes the same quiet window as everything
+        // else here.
+        expect(
+            shouldWakeAgent(
+                state({ lastUserInputAt: NOW - WAKE_QUIET_MS - 1_000 }),
+            ),
+        ).toBe(true);
+    });
+
+    it('still refuses while the human is ACTIVELY typing', () => {
+        // POSITIVE CONTROL for the rule above: the safety it exists for is
+        // untouched. A keystroke inside the quiet window still blocks.
+        expect(shouldWakeAgent(state({ lastUserInputAt: NOW - 1_000 }))).toBe(false);
+    });
+
+    it('refuses on a RECENT human keystroke, with no output at all', () => {
         // The case the old ordering gate caught only by accident, via keystroke
         // ECHO. It is now its own signal, so it holds even for a TUI that echoes
         // nothing — and it no longer depends on the agent having emitted anything.
+        //
+        // Measured against the quiet window rather than against the turn
+        // (genie#725): "someone is at this prompt" is a claim about now. An
+        // hour-old keystroke said nothing about the present and latched the gate
+        // shut forever, because an idle agent never takes the further turn that
+        // would have reopened it.
         expect(
-            shouldWakeAgent(state({ lastOutputAt: null, lastUserInputAt: OLD_TURN + 1 })),
+            shouldWakeAgent(state({ lastOutputAt: null, lastUserInputAt: NOW - 1_000 })),
         ).toBe(false);
     });
 
@@ -151,7 +185,7 @@ describe('shouldWakeAgent — the turn TAIL must not latch the gate shut', () =>
         ).toBe(false);
     });
 
-    it('a HUMAN keystroke since the turn ended fails closed — a new turn may be in flight', () => {
+    it('a RECENT human keystroke fails closed — a new turn may be in flight', () => {
         // Keystroke echo used to be caught only accidentally, via output. Now it is
         // its own signal, separate from "the agent is emitting output".
         const turnEnd = NOW - 10 * 60_000;
@@ -160,7 +194,10 @@ describe('shouldWakeAgent — the turn TAIL must not latch the gate shut', () =>
                 state({
                     lastTurnEndAt: turnEnd,
                     lastOutputAt: turnEnd + 1_500,
-                    lastUserInputAt: turnEnd + 5_000,
+                    // RECENT, not merely "after the turn" — the turn here ended
+                    // ten minutes ago, and a keystroke from back then tells you
+                    // nothing about whether anyone is at the prompt now.
+                    lastUserInputAt: NOW - 2_000,
                 }),
             ),
         ).toBe(false);

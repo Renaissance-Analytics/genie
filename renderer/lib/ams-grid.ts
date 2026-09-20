@@ -160,7 +160,26 @@ export function agentGridRows(input: {
         else byAgent.set(runtime.agentId, [runtime]);
     }
 
-    const rows: AgentGridRow[] = agents.map((agent) => {
+    // A SIDECAR IS NOT A SECOND AGENT (genie#728).
+    //
+    // `<driver>-slave` is the driver's other screen, reached by flipping the
+    // driver's panel (genie#707/#719). Drawing it beside the driver says there
+    // are two agents where there is one — the owner, looking at `fancy-slave`
+    // sitting in the grid: "Why the fuck is this stupid button still here...
+    // sidecars DO NOT GET THEIR OWN PANEL."
+    //
+    // Hidden only when its DRIVER is actually present. With no driver there is
+    // no panel to flip, so hiding it would strand a running agent with no way to
+    // reach or remove it — which is the complaint, not the fix. Matched on the
+    // WHOLE name so `fancybuilder` is not read as a driver for `fancy-slave`.
+    const SLAVE = '-slave';
+    const present = new Set(agents.map((a) => a.name));
+    const drawn = agents.filter((a) => {
+        if (a.name.length <= SLAVE.length || !a.name.endsWith(SLAVE)) return true;
+        return !present.has(a.name.slice(0, -SLAVE.length));
+    });
+
+    const rows: AgentGridRow[] = drawn.map((agent) => {
         const mine = byAgent.get(agent.id) ?? [];
         const tuis = mine.map((runtime) => ({
             runtimeId: runtime.id,

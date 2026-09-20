@@ -39,6 +39,7 @@ import { agentStack } from '../../lib/agent-stack';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
 import AgentContextMenu from './AgentContextMenu';
+import { ownedByHiddenWorkspace } from '../../lib/hibernated-panels';
 import {
     restartOptionsFor,
     type RestartMode,
@@ -84,6 +85,10 @@ import {
 
 interface Props {
     workspaces: WorkspaceRow[];
+    /** EVERY workspace that exists, not just the displayed ones. Used only to
+     *  tell "no workspace owns this" apart from "its workspace is hidden right
+     *  now" — see `ownedByHiddenWorkspace` (genie#723). */
+    knownWorkspaceIds?: ReadonlySet<string>;
     specs: TerminalSpec[];
     selected: Set<string>;
     activeIds: Set<string>;
@@ -162,6 +167,7 @@ interface Props {
  */
 export default function Chooser({
     workspaces,
+    knownWorkspaceIds,
     specs,
     selected,
     activeIds,
@@ -652,6 +658,16 @@ export default function Chooser({
         }
         if (s.workspace_id && byWorkspace.has(s.workspace_id)) {
             byWorkspace.get(s.workspace_id)!.push(s);
+        } else if (
+            knownWorkspaceIds &&
+            ownedByHiddenWorkspace(s, knownWorkspaceIds, new Set(byWorkspace.keys()))
+        ) {
+            // ORPHANED means "no workspace owns this", NEVER "its workspace is
+            // hidden right now" (genie#723). Hiding a row -- hibernation (#705),
+            // the System Workspace, or whatever hides one next -- must not
+            // reclassify its terminals as leftovers and list them under
+            // Unattached. It belongs to a workspace; that workspace is simply
+            // not on screen, so neither is it.
         } else {
             orphaned.push(s);
         }
@@ -1240,29 +1256,43 @@ export default function Chooser({
                                                                 }
                                                             }}
                                                             onContextMenu={(p) => {
-                                                                // A PAUSED agent has no spec, and
-                                                                // this used to be `if (specId)` --
-                                                                // so right-clicking one did nothing
-                                                                // and said nothing. The agent menu
-                                                                // is keyed on the RECORD, which a
-                                                                // stopped agent still has; a
-                                                                // running one also gets the
-                                                                // terminal menu, whose items act
-                                                                // on a terminal that exists.
-                                                                // Routed by KIND, not by "has a
-                                                                // spec". An orphan has one, so it
-                                                                // used to open the terminal menu --
-                                                                // Rename, Duplicate, Move to
-                                                                // workspace -- every item of which
-                                                                // is wrong for a leftover nothing
-                                                                // owns.
-                                                                if (row.kind === 'orphan') {
-                                                                    setAgentMenu({ ws: ws.id, row, at: p });
-                                                                } else if (specId) {
-                                                                    onOpenContextMenu(specId, p);
-                                                                } else if (row.kind === 'agent') {
-                                                                    setAgentMenu({ ws: ws.id, row, at: p });
-                                                                }
+                                                                // THE SQUARE IS THE AGENT, so it
+                                                                // opens the AGENT menu -- whether
+                                                                // or not the agent happens to be
+                                                                // running right now (genie#727).
+                                                                //
+                                                                // This used to route a RUNNING
+                                                                // agent to the terminal menu,
+                                                                // because a running one has a spec.
+                                                                // That is what the owner hit:
+                                                                // "I should be able to delete the
+                                                                // agents by selecting delete 1
+                                                                // time. Not two times and then only
+                                                                // on the second time does it give
+                                                                // me the proper delete agent UX."
+                                                                // Delete on a running agent raised
+                                                                // `Delete "master-floor"? ... any
+                                                                // running shell is killed` -- the
+                                                                // TERMINAL's confirm, naming the
+                                                                // terminal. Accepting it killed the
+                                                                // terminal, which left the agent
+                                                                // dormant and specless, so the
+                                                                // SECOND right-click finally fell
+                                                                // through to the agent menu. Two
+                                                                // deletes, the first destroying
+                                                                // something nobody asked to
+                                                                // destroy.
+                                                                //
+                                                                // Whether an agent has a live pty
+                                                                // is a fact ABOUT the agent, never
+                                                                // a reason to act on the pty
+                                                                // instead. An orphan is the one row
+                                                                // here that is not an agent, and it
+                                                                // keeps the agent menu too: its
+                                                                // items suit a leftover nothing
+                                                                // owns, while Rename / Duplicate /
+                                                                // Move to workspace do not.
+                                                                setAgentMenu({ ws: ws.id, row, at: p });
                                                             }}
                                                         />
                                                     );
