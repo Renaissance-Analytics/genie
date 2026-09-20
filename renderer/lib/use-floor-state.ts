@@ -71,6 +71,7 @@ export function useFloorState(
 
     return {
         specs,
+        allSpecs: specs,
         workspacesById,
         activeWorkspaceId: workspaceId,
         focusId,

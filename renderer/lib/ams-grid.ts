@@ -69,6 +69,10 @@ export interface AgentRecordSpec {
     /** Set when this workspace holds more than one agent under this name and a
      *  human has not yet said which survives. */
     collisionGroup: string | null;
+    /** Separate `<name>-slave` agent paired with this driver, if one exists. */
+    sidecarAgentId?: string | null;
+    /** Driver that owns this row when this row IS the separate sidecar agent. */
+    driverAgentId?: string | null;
     /**
      * The TUIs this agent's own `AGENT.md` permits — `agentAllowedTuis`, read
      * from the FILE. EMPTY means "no opinion", not "none".

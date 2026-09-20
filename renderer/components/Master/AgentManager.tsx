@@ -55,7 +55,7 @@ import type { RestartMode } from '../../../main/agents/restart-options';
  * controls that were there are kept, and four tabs are added beside them.
  *
  *   Identity      — workspace default, purpose, reachability, IssueWatch
- *   Driver        — what it runs under, its sidecars, its mark, and its RUN
+ *   Driver        — what it runs under, its previous drivers, its mark, and its RUN
  *   Prompt & rules — the agent's `AGENT.md`, front matter AND body
  *   MCP           — the servers this agent actually gets, and what may change
  *   Sidecar       — the `<name>-slave` AGENT: start / stop / restart
@@ -224,7 +224,7 @@ export function AgentDriverPanel({
                                     <>
                                         {' '}
                                         <Badge size="sm" variant="soft">
-                                            sidecar
+                                            previous
                                         </Badge>
                                     </>
                                 )}
@@ -260,8 +260,8 @@ export function AgentDriverPanel({
                 ))}
                 <Text size="xs" color="muted">
                     An agent is not its TUI. Switching keeps this agent — its identity, inbox,
-                    history and <code>AGENT.md</code> — and the driver it leaves keeps its own
-                    pty and conversation as a sidecar you can flip straight back to.{' '}
+                    history and <code>AGENT.md</code> — and the previous driver keeps its own
+                    pty and conversation so you can flip straight back to it.{' '}
                     <strong>Nothing is stopped by a switch.</strong>
                 </Text>
             </div>
@@ -459,7 +459,7 @@ export default function AgentManager({
                                         `${state.agent!.name} now runs under ${
                                             drivers.find((d) => String(d.agent) === tui)?.label ??
                                             tui
-                                        }. The driver it left keeps its conversation as a sidecar — nothing was stopped.`,
+                                        }. The previous driver keeps its conversation — nothing was stopped.`,
                                     )
                                 }
                                 onRun={(action) =>

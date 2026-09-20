@@ -27,6 +27,9 @@ import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../..
 export interface FloorState {
     /** Active-workspace specs — these lay out the visible grid. */
     specs: TerminalSpec[];
+    /** Every known spec, including a disabled `<name>-slave` screen that is not
+     *  itself a floor tile. Defaults to the rendered specs for simple callers. */
+    allSpecs?: TerminalSpec[];
     /** Off-workspace selected specs, rendered mounted-hidden to keep ptys alive. */
     backgroundSpecs?: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;

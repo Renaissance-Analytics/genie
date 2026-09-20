@@ -27,6 +27,14 @@ type Props = ComponentProps<typeof TerminalPanel> & {
     agentCurrentTui?: string;
     runtimes?: AgentRuntimeSpec[];
     onRuntimesChanged?: () => void;
+    /** Flip this one tile to the paired, separate `<name>-slave` agent screen. */
+    screenSwitch?: {
+        label: string;
+        name: string;
+        target: 'sidecar' | 'driver';
+        busy: boolean;
+        onClick: () => void;
+    };
 };
 
 /**
@@ -42,7 +50,7 @@ export default function AgentPanel(props: Props) {
     const overlayRoot = useOverlayRoot();
     const provider = String(props.spec.meta.agent ?? 'custom');
     const { style, onAgentSettings, onRestartAgent, agentId, agentAvatar, agentAllowedTuis,
-        agentCurrentTui, runtimes, onRuntimesChanged, ...terminalProps } = props;
+        agentCurrentTui, runtimes, onRuntimesChanged, screenSwitch, ...terminalProps } = props;
     // WHICH restarts this agent can be offered, from the same resolver the host
     // reasons with. The header button takes the one that preserves the most:
     // resume when there is a conversation to keep, fresh otherwise — so the
@@ -100,7 +108,22 @@ export default function AgentPanel(props: Props) {
                 surface="agent"
                 headerActions={
                     <>
-                        {/* Driver + sidecars, where the agent actually is. */}
+                        {screenSwitch && (
+                            <button
+                                type="button"
+                                className="pctl agent-screen-switch"
+                                aria-label={screenSwitch.label}
+                                title={screenSwitch.label}
+                                disabled={screenSwitch.busy}
+                                onClick={screenSwitch.onClick}
+                            >
+                                <span aria-hidden="true">
+                                    {screenSwitch.target === 'sidecar' ? '↔' : '←'}
+                                </span>
+                                {screenSwitch.name}
+                            </button>
+                        )}
+                        {/* This agent's runtime drivers (not its -slave sidecar). */}
                         {agentId && (
                             <AgentTuiSwitcher
                                 agentId={agentId}

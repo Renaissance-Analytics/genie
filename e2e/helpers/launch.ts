@@ -681,6 +681,10 @@ export interface MasterSeed {
     workspaceName: string;
     terminalId: string;
     terminalLabel: string;
+    driverAgentName: string;
+    sidecarAgentName: string;
+    sidecarTerminalId: string;
+    sidecarTerminalLabel: string;
     peerId: string;
     peerName: string;
     /** The GDW's folder — the GApp Store's dev-launcher entry names it. */

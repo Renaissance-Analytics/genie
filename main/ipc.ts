@@ -118,7 +118,7 @@ import {
 import { agentAllowedTuis } from './agents/agent-file';
 import { decideTuiSwitch } from './agents/tui-switch';
 import type { PersonaEdit } from './agents/persona';
-import type { SidecarAction } from './agents/sidecar-control';
+import { sidecarsOf, type SidecarAction } from './agents/sidecar-control';
 import { agentInboxBroker } from './agentinbox/broker';
 import { broadcastListsChanged } from './lists/announce';
 import { onListsChanged } from './lists/changed';
@@ -495,6 +495,18 @@ export function addWorkspaceFromFolder(folder: string): { ok: boolean; error?: s
  */
 export function agentRecordsList(workspaceId: string) {
     const agents = listWorkspaceAgents(String(workspaceId ?? ''));
+    // A `-slave` sidecar is a separate AGENT, not one of this agent's parked
+    // TUI runtimes. Resolve the existing ownership rule once, on the main side,
+    // and put both directions on the wire so every renderer surface reads the
+    // same pairing without importing main's database-facing module.
+    const sidecarByDriver = new Map<string, string>();
+    const driverBySidecar = new Map<string, string>();
+    for (const driver of agents) {
+        const sidecar = sidecarsOf(driver, agents)[0];
+        if (!sidecar) continue;
+        sidecarByDriver.set(driver.id, sidecar.id);
+        driverBySidecar.set(sidecar.id, driver.id);
+    }
     return {
         agents: agents.map((a) => ({
             id: a.id,
@@ -503,6 +515,8 @@ export function agentRecordsList(workspaceId: string) {
             avatar: a.avatar,
             role: a.role,
             collisionGroup: a.collision_group ?? null,
+            sidecarAgentId: sidecarByDriver.get(a.id) ?? null,
+            driverAgentId: driverBySidecar.get(a.id) ?? null,
             // The TUIs this agent's own file permits (genie#463). Sent with the
             // record because the driver control is drawn wherever an agent is —
             // the panel header as well as the manager — and a switcher that did
