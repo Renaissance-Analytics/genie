@@ -1002,6 +1002,13 @@ function MasterInner() {
     // Workspaces shown in the sidebar: the persisted list, with the System
     // Workspace pinned to the TOP when revealed. It's fixed (never draggable /
     // reorderable) so it always sits first and doesn't shuffle the user's order.
+    /** Every workspace id that exists, displayed or not — the set that lets the
+     *  rail tell an ORPHAN from a terminal whose workspace is merely hidden. */
+    const knownWorkspaceIds = useMemo(
+        () => new Set(workspaces.map((w) => w.id)),
+        [workspaces],
+    );
+
     const displayWorkspaces = useMemo(
         () =>
             sidebarWorkspaceRows(
@@ -2462,6 +2469,9 @@ function MasterInner() {
                     </div>
                     <Chooser
                         workspaces={displayWorkspaces}
+                        // Every workspace that EXISTS, so a hidden one's
+                        // terminals are not mistaken for orphans (genie#723).
+                        knownWorkspaceIds={knownWorkspaceIds}
                         specs={specs}
                         selected={selected}
                         activeIds={activeIds}

@@ -39,6 +39,7 @@ import { agentStack } from '../../lib/agent-stack';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import AgentAvatarStack from './AgentAvatarStack';
 import AgentContextMenu from './AgentContextMenu';
+import { ownedByHiddenWorkspace } from '../../lib/hibernated-panels';
 import {
     restartOptionsFor,
     type RestartMode,
@@ -84,6 +85,10 @@ import {
 
 interface Props {
     workspaces: WorkspaceRow[];
+    /** EVERY workspace that exists, not just the displayed ones. Used only to
+     *  tell "no workspace owns this" apart from "its workspace is hidden right
+     *  now" — see `ownedByHiddenWorkspace` (genie#723). */
+    knownWorkspaceIds?: ReadonlySet<string>;
     specs: TerminalSpec[];
     selected: Set<string>;
     activeIds: Set<string>;
@@ -162,6 +167,7 @@ interface Props {
  */
 export default function Chooser({
     workspaces,
+    knownWorkspaceIds,
     specs,
     selected,
     activeIds,
@@ -652,6 +658,16 @@ export default function Chooser({
         }
         if (s.workspace_id && byWorkspace.has(s.workspace_id)) {
             byWorkspace.get(s.workspace_id)!.push(s);
+        } else if (
+            knownWorkspaceIds &&
+            ownedByHiddenWorkspace(s, knownWorkspaceIds, new Set(byWorkspace.keys()))
+        ) {
+            // ORPHANED means "no workspace owns this", NEVER "its workspace is
+            // hidden right now" (genie#723). Hiding a row -- hibernation (#705),
+            // the System Workspace, or whatever hides one next -- must not
+            // reclassify its terminals as leftovers and list them under
+            // Unattached. It belongs to a workspace; that workspace is simply
+            // not on screen, so neither is it.
         } else {
             orphaned.push(s);
         }
