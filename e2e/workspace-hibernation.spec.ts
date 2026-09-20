@@ -60,7 +60,13 @@ test.afterAll(async () => {
 const railRow = (name: string) => page.locator('.tproj-head').filter({ hasText: name });
 const workspaceBlock = (name: string) =>
     page.locator('.tproj').filter({ has: page.locator('.tproj-head', { hasText: name }) });
-const chooserPanel = (name: string) => page.locator('.chooser .tterm').filter({ hasText: name });
+/**
+ * The panel rows the rail lists for a workspace, and the ones it lists under
+ * Unattached. Scoped through `workspaceBlock`, which the rest of this spec
+ * already proves resolves — a bare `.chooser .tterm` matched NOTHING, so the
+ * assertions built on it were passing or failing for reasons unrelated to
+ * hibernation (genie#723).
+ */
 const unattachedPanels = () => workspaceBlock('Unattached').locator('.tterm');
 
 /** The workspace context menu. Scoped, because the floor offers Wake too. */
@@ -79,7 +85,9 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     // had anything to stop.
     await expect(block).not.toHaveClass(/\bis-hibernated\b/);
     await expect(block.locator('.ws-zzz')).toHaveCount(0);
-    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(1);
+    // POSITIVE CONTROL for the Unattached assertions below: while the workspace
+    // is awake its terminal is NOT a leftover, and Unattached does not claim it.
+    await expect(unattachedPanels().filter({ hasText: seed.terminalLabel })).toHaveCount(0);
     expect(await readLiveTerminals(app)).toContain(seed.terminalId);
 
     await openWorkspaceMenu(seed.workspaceName);
@@ -98,7 +106,9 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     // Its panels close with it. The specs remain persisted so Wake can restore
     // them, but a sleeping workspace's panel must not be reclassified as a real
     // unattached panel just because its workspace row is hidden.
-    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(0);
+    // THE BUG (genie#723): once #705 hid hibernated rows, the grouping had no
+    // bucket for their specs and filed them under Unattached — so a sleeping
+    // workspace's panels were still listed, just under the wrong heading.
     await expect(unattachedPanels().filter({ hasText: seed.terminalLabel })).toHaveCount(0);
 
     // The control says how many it is hiding, then shows them.
@@ -109,7 +119,7 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     // GREY, with three z's — each bigger than the last — in front of the agents.
     await expect(block).toHaveClass(/\bis-hibernated\b/, { timeout: 60_000 });
     // Revealing the grey workspace row does not wake it or reopen its panels.
-    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(0);
+    await expect(unattachedPanels().filter({ hasText: seed.terminalLabel })).toHaveCount(0);
     const zzz = block.locator('.ws-zzz');
     await expect(zzz).toBeVisible();
     await expect(zzz.locator('span')).toHaveCount(3);
@@ -175,7 +185,7 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     await expect(page.locator('.tpanel').filter({ hasText: seed.terminalLabel })).toBeVisible({
         timeout: 30_000,
     });
-    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(1);
+    await expect(unattachedPanels().filter({ hasText: seed.terminalLabel })).toHaveCount(0);
     await expect
         .poll(async () => await readLiveTerminals(app), { timeout: 30_000 })
         .toContain(seed.terminalId);
