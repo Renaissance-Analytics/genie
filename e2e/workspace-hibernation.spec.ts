@@ -60,6 +60,8 @@ test.afterAll(async () => {
 const railRow = (name: string) => page.locator('.tproj-head').filter({ hasText: name });
 const workspaceBlock = (name: string) =>
     page.locator('.tproj').filter({ has: page.locator('.tproj-head', { hasText: name }) });
+const chooserPanel = (name: string) => page.locator('.chooser .tterm').filter({ hasText: name });
+const unattachedPanels = () => workspaceBlock('Unattached').locator('.tterm');
 
 /** The workspace context menu. Scoped, because the floor offers Wake too. */
 const menu = () => page.locator('.proj-popover');
@@ -77,6 +79,7 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     // had anything to stop.
     await expect(block).not.toHaveClass(/\bis-hibernated\b/);
     await expect(block.locator('.ws-zzz')).toHaveCount(0);
+    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(1);
     expect(await readLiveTerminals(app)).toContain(seed.terminalId);
 
     await openWorkspaceMenu(seed.workspaceName);
@@ -92,6 +95,12 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
     // it is why the grey row has to be REVEALED before anything can assert on it.
     await expect(block).toHaveCount(0, { timeout: 60_000 });
 
+    // Its panels close with it. The specs remain persisted so Wake can restore
+    // them, but a sleeping workspace's panel must not be reclassified as a real
+    // unattached panel just because its workspace row is hidden.
+    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(0);
+    await expect(unattachedPanels().filter({ hasText: seed.terminalLabel })).toHaveCount(0);
+
     // The control says how many it is hiding, then shows them.
     const reveal = page.locator('.rail-hibernated-toggle');
     await expect(reveal).toHaveAttribute('aria-label', /Show 1 hibernated workspace\b/);
@@ -99,6 +108,8 @@ test('hibernating a workspace greys it, marks it with three z\'s, and really sto
 
     // GREY, with three z's — each bigger than the last — in front of the agents.
     await expect(block).toHaveClass(/\bis-hibernated\b/, { timeout: 60_000 });
+    // Revealing the grey workspace row does not wake it or reopen its panels.
+    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(0);
     const zzz = block.locator('.ws-zzz');
     await expect(zzz).toBeVisible();
     await expect(zzz.locator('span')).toHaveCount(3);
@@ -164,6 +175,7 @@ test('the floor of a sleeping workspace says so, and is the way to wake it', asy
     await expect(page.locator('.tpanel').filter({ hasText: seed.terminalLabel })).toBeVisible({
         timeout: 30_000,
     });
+    await expect(chooserPanel(seed.terminalLabel)).toHaveCount(1);
     await expect
         .poll(async () => await readLiveTerminals(app), { timeout: 30_000 })
         .toContain(seed.terminalId);
