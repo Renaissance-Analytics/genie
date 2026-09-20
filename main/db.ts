@@ -3839,6 +3839,36 @@ export function frontAgentRuntime(agentId: string, runtimeId: string): boolean {
     return true;
 }
 
+/**
+ * Put `tui` in the chair for this agent, adding it if the agent has never run
+ * it. The ONE way to do that — see genie#726 for what having two cost.
+ *
+ * The order is the whole content of this function. A new runtime is inserted
+ * UN-fronted and only then fronted, because `idx_agent_runtimes_fronted` —
+ * `UNIQUE (agent_id) WHERE fronted = 1` — is checked on the INSERT itself. An
+ * insert that arrives already fronted collides with the runtime still sitting
+ * in the chair and throws `UNIQUE constraint failed: agent_runtimes.agent_id`,
+ * however correct the swap on the following line is. That is what made the MCP
+ * `switchTui` verb impossible to call, while the renderer's own path — which
+ * happened to create un-fronted — worked. Two call sites, one invariant, and
+ * only one of them holding it.
+ *
+ * The swap into the chair stays inside {@link frontAgentRuntime}, which does it
+ * as a single transaction: fronting first trips the index, un-fronting first
+ * leaves a window with no visible TUI that every surface above reads as
+ * "stopped".
+ *
+ * An existing runtime for that TUI is RE-FRONTED, never duplicated: a sidecar
+ * whose pty has exited is still this agent's conversation on that driver, and a
+ * second row for the same TUI would strand it.
+ */
+export function addRuntimeAndFront(agentId: string, tui: string): AgentRuntimeRow {
+    const existing = listAgentRuntimes(agentId).find((r) => r.tui === tui);
+    const id = existing ? existing.id : createAgentRuntime({ agentId, tui }).id;
+    frontAgentRuntime(agentId, id);
+    return listAgentRuntimes(agentId).find((r) => r.id === id)!;
+}
+
 /** Point a runtime at the terminal now backing it (or at nothing). */
 export function bindAgentRuntimeTerminal(
     runtimeId: string,

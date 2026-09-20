@@ -16,7 +16,7 @@ import {
     workspaceDefaultAgent,
     type WorkspaceRow,
     listAgentRuntimes,
-    createAgentRuntime,
+    addRuntimeAndFront,
     frontAgentRuntime,
     frontedAgentRuntime,
     createWorkspaceAgent,
@@ -2737,16 +2737,18 @@ export async function runAgentForMcp(
                     broadcastTerminalSpecsChanged();
                     return { ok: true, name: target.name, agent: wanted as AgentType, reattached: true };
                 }
-                // A TUI this agent has never run: record it, fronted. The
-                // terminal is started by `start`, which already owns the
-                // approval gate and the cap -- a switch must not become a
+                // A TUI this agent has never run: record it and put it in the
+                // chair. The terminal is started by `start`, which already owns
+                // the approval gate and the cap -- a switch must not become a
                 // second way to spawn past either.
-                const created = createAgentRuntime({
-                    agentId: target.id,
-                    tui: decision.tui,
-                    fronted: true,
-                });
-                frontAgentRuntime(target.id, created.id);
+                //
+                // Through `addRuntimeAndFront` because the ORDER is load-bearing
+                // (genie#726): inserting the row already fronted, beside the one
+                // still fronted, trips `UNIQUE (agent_id) WHERE fronted = 1` and
+                // threw before ever reaching the swap below it. That made this
+                // verb -- the only way an agent can give itself a sidecar --
+                // impossible to call.
+                addRuntimeAndFront(target.id, decision.tui);
                 broadcastTerminalSpecsChanged();
                 return { ok: true, name: target.name, agent: wanted as AgentType };
             }
