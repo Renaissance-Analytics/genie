@@ -48,4 +48,25 @@ describe('codeOnly', () => {
         expect(codeOnlyHtml('<!-- gone -->\n<div>keep</div>')).toContain('keep');
         expect(codeOnlyHtml('<!-- window.genie -->\n<div>keep</div>')).not.toContain('window.genie');
     });
+
+    it('codeOnlyHtml leaves NO comment marker behind, even nested', () => {
+        // One `.replace` pass is incomplete here: the inner pair goes and the
+        // outer `<!--` survives. CodeQL flags exactly this as
+        // js/incomplete-multi-character-sanitization, and it found it in this
+        // file on the day the idiom was consolidated into it.
+        const out = codeOnlyHtml('<!--<!-- -->\n<div>keep</div>');
+        expect(out).not.toContain('<!--');
+        expect(out).not.toContain('-->');
+        expect(out).toContain('keep');
+    });
+
+    it('codeOnlyHtml keeps TEXT when a marker has no partner', () => {
+        // The safe direction for a guard: an unpartnered marker drops the token
+        // and keeps the words. Deleting to end-of-file would hide real code
+        // from a guard that asserts absence — silent, and believed.
+        const out = codeOnlyHtml('<div>keep</div>\n<!-- dangling');
+        expect(out).not.toContain('<!--');
+        expect(out).toContain('keep');
+        expect(out).toContain('dangling');
+    });
 });

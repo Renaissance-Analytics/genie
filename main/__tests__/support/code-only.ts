@@ -40,9 +40,37 @@ export function codeOnly(src: string): string {
 
 /**
  * The same, for sources that also carry HTML comments — scaffolded `.html`
- * templates, where `<!-- … -->` is the comment form and a lone `<!--` cannot
- * appear inside a JS string on the same line.
+ * templates, where `<!-- … -->` is the comment form.
+ *
+ * ## Why this is a loop and not one `.replace`
+ *
+ * A single pass is INCOMPLETE on nested input: `<!--<!-- -->` has its inner
+ * pair removed and the outer `<!--` survives (CodeQL
+ * `js/incomplete-multi-character-sanitization`, flagged on this very file when
+ * the idiom was consolidated here — it came along for the ride from the copy it
+ * replaced). So pairs are removed until the string stops changing.
+ *
+ * ## What happens to a marker with no partner
+ *
+ * Whatever is left cannot be a complete comment, so the remaining `<!--` and
+ * `-->` TOKENS are dropped without taking any text with them. That direction is
+ * deliberate: this feeds guards that assert something is ABSENT, and the two
+ * possible mistakes are not equal.
+ *
+ *   - Leaving commented prose in the scan can only make a guard fire when it
+ *     should not — loud, visible, fixed in a minute.
+ *   - Deleting a span to the end of the file hides real code from the guard,
+ *     which is the silent blind spot this whole module exists to remove.
+ *
+ * So when in doubt it keeps text and drops markers, never the reverse.
  */
 export function codeOnlyHtml(src: string): string {
-    return codeOnly(src.replace(/<!--[\s\S]*?-->/g, ''));
+    let out = src;
+    let prev: string;
+    do {
+        prev = out;
+        out = out.replace(/<!--[\s\S]*?-->/g, '');
+    } while (out !== prev);
+    // Partnerless markers: remove the token, keep the text. See above.
+    return codeOnly(out.replace(/<!--/g, '').replace(/-->/g, ''));
 }
