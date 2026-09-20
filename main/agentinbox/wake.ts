@@ -85,10 +85,23 @@ export function shouldWakeAgent(s: WakeState): boolean {
     // is never allowed is output that has not yet settled.
     const quietSince = s.lastOutputAt ?? s.lastTurnEndAt;
     if (s.now - quietSince < WAKE_QUIET_MS) return false;
-    // A human keystroke since the turn ended may have started a NEW turn that has
-    // not painted anything yet, and in any case means someone is at this prompt.
-    // Fail closed — the sender still sees the DM unseen in read-receipts.
-    if (s.lastUserInputAt != null && s.lastUserInputAt > s.lastTurnEndAt) return false;
+    // A human keystroke may have started a NEW turn that has not painted
+    // anything yet, and in any case means someone is at this prompt. Fail closed
+    // — the sender still sees the DM unseen in read-receipts.
+    //
+    // Measured against the QUIET WINDOW, not against the turn (genie#725). The
+    // gate used to be `lastUserInputAt > lastTurnEndAt` with no clock on it, so
+    // a single keystroke after a turn ended suppressed every wake until the
+    // agent took another turn — and an idle agent takes no further turn on its
+    // own, because the nudge is the thing that would start one. It latched shut
+    // and stayed shut. The owner hit exactly that: "the fallback user input send
+    // doesn't send if I have the agent panel open", the agent being least
+    // reachable precisely while its human was present, and unreachable for good
+    // once they had touched it.
+    //
+    // "Is someone at this prompt" is a question about NOW, so it takes the same
+    // window as the rest of this decision.
+    if (s.lastUserInputAt != null && s.now - s.lastUserInputAt < WAKE_QUIET_MS) return false;
     // One wake per idle period — don't re-nudge an agent we already woke since its
     // last turn ended (it's now processing our nudge, or chose not to).
     if (s.lastWokenAt != null && s.lastWokenAt >= s.lastTurnEndAt) return false;
