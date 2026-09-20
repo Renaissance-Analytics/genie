@@ -18,7 +18,7 @@ import {
     setWorkspaceIcon,
     setAgentAvatar,
     getDb,
-    createAgentRuntime,
+    addRuntimeAndFront,
     listWorkspaces,
     removeWorkspace,
     reorderWorkspaces,
@@ -707,11 +707,14 @@ export function agentRecordAddRuntime(agentId: string, tui: string) {
     // `already` is not a relaunch and not an error — the driver asked for is the
     // one in the chair. Fronting it again is a harmless no-op that still answers
     // with the runtime the caller named.
+    // Shares `addRuntimeAndFront` with the MCP verb. This path was always
+    // correct — it created un-fronted and then fronted — but it held that
+    // ordering by coincidence rather than by contract, and the MCP copy of the
+    // same three lines did not (genie#726). One step, one place.
     const runtimeId =
         decision.kind === 'create'
-            ? createAgentRuntime({ agentId: id, tui: decision.tui }).id
-            : decision.runtimeId;
-    frontAgentRuntime(id, runtimeId);
+            ? addRuntimeAndFront(id, decision.tui).id
+            : (frontAgentRuntime(id, decision.runtimeId), decision.runtimeId);
     broadcastAgentsChanged();
     return { ok: true, runtimeId };
 }
