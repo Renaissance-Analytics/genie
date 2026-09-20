@@ -1363,6 +1363,8 @@ export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     collapsed_workspaces?: string;
     /** 'on' while hibernated workspaces are revealed in the rail (genie#705). */
     reveal_hibernated?: string;
+    /** The ForceTheQuestion modal's remembered size, JSON {width,height} (genie#703). */
+    ask_modal_size?: string;
     default_env_file?: string;
     global_hotkey?: string;
     /** Terminal-scoped hotkeys (Tynn #246/#247) — NOT OS-wide: they bind only

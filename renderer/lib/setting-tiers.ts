@@ -139,6 +139,9 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     // Which rail rows you want to SEE is a per-person view preference, like
     // the collapse state above — not a property of the machine (genie#705).
     reveal_hibernated: 'user',
+    // The question modal's size belongs to the MACHINE showing it — a client
+    // setting, so it stays off HOST_SOURCED_SETTINGS_KEYS (genie#703).
+    ask_modal_size: 'workstation',
     active_workspace: 'user',
     last_terminal_type: 'user',
     max_views: 'user',
