@@ -1257,6 +1257,66 @@ describe('service env injection (#234 P3)', () => {
         ]);
     });
 
+    it('settles a browser-exposed start and restart only after the host route answers on the NEW port (genie#612)', async () => {
+        const runtime = fakeRuntime({ detection: { kind: 'none', probes: [] } });
+        const running = new Set<string>();
+        const hostSpawn = {
+            start: async ({ siteId }: { siteId: string }) => {
+                running.add(siteId);
+                return { ok: true as const, pid: 4242 };
+            },
+            stop: async (siteId: string) => {
+                running.delete(siteId);
+            },
+            alive: async (siteId: string) => running.has(siteId),
+            readLog: async () => '',
+        };
+        const sites: DevSites = {
+            [SITE_ID]: {
+                name: 'web',
+                genName: 'web.acme.gen',
+                repo: 'app',
+                runMode: 'host',
+                command: ['npm', 'run', 'dev'],
+                port: 5173,
+                kind: 'http',
+                enabled: true,
+                browserExposed: true,
+            },
+        };
+        const allocated = [5_321, 5_322];
+        const browserProbes: Array<{ genName: string; port: number }> = [];
+        let m!: ReturnType<typeof manager>;
+        m = manager(runtime, sites, {
+            hostSpawn,
+            probeReady: async () => true,
+            allocateFreePort: async () => allocated.shift()!,
+            probeBrowserExposure: async ({ genName }: { genName: string }) => {
+                const route = m.hostBrowserRoutes().find((candidate) => candidate.genName === genName);
+                if (!route) return false;
+                browserProbes.push({ genName, port: route.port });
+                // First route answers. The restarted route deliberately does not,
+                // proving `ready` describes the public origin rather than the
+                // independently healthy loopback process.
+                return route.port === 5_321;
+            },
+        });
+
+        const started = await m.start('acme', SITE_ID);
+        const restarted = await m.restart('acme', SITE_ID);
+
+        expect(started.ready).toBe(true);
+        expect(started.hostPort).toBe(5_321);
+        expect(restarted.ready).toBe(false);
+        expect(restarted.hostPort).toBe(5_322);
+        expect(restarted.error).toContain('answers locally');
+        expect(restarted.error).toContain('host Caddy');
+        expect(browserProbes).toEqual([
+            { genName: 'web.acme.gen', port: 5_321 },
+            { genName: 'web.acme.gen', port: 5_322 },
+        ]);
+    });
+
     it('a host-native site whose services resolve to EMPTY host-env logs a diagnostic instead of serving DB-less (moic beta.245)', async () => {
         // The reported blocker: a workspace with services ENABLED but no host env
         // reaching the dev server. It fell back to its repo `.env`, pointed at a

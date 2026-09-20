@@ -539,6 +539,18 @@ export interface DevSiteManagerDeps {
      * the bug, so there is none.
      */
     prepareUploadTmpDir?: (siteId: string) => string;
+    /**
+     * Converge and probe the REAL browser-facing `.gen` origin for a site that
+     * opted into {@link DevSiteConfig.browserExposed}.
+     *
+     * The ordinary readiness probe reaches the site's loopback port (or its
+     * sandbox Caddy). That proves the app is up, but not that the host Caddy has
+     * reloaded the route after a managed host start allocated a new port. Awaiting
+     * this seam makes a settled lifecycle result evidence about the `origin` it
+     * reports, rather than evidence about a different local URL (genie#612).
+     * Absent means this host has no external-browser surface to verify.
+     */
+    probeBrowserExposure?: (req: { genName: string; timeoutMs: number }) => Promise<boolean>;
     /** Fired whenever the live set changes, so the UX and other agents follow. */
     onChanged?: () => void;
     /**
@@ -763,6 +775,9 @@ interface Live {
         attempts: number;
     };
     ready: boolean;
+    /** Why a browser-exposed site can answer locally but not at its public
+     *  `.gen` origin. Cleared by the next successful public-origin probe. */
+    browserExposureError?: string;
     /** See {@link DevSiteStatus.workerDown}. */
     workerDown?: boolean;
     /** The `.gen` rows this site contributes (its own). Resolved at start so
@@ -1389,7 +1404,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             if (!applied.ok) caddyError = `The site started but its proxy could not be configured: ${applied.error}`;
         }
 
-        const ready =
+        const locallyReady =
             config.kind === 'http'
                 ? caddyError
                     ? false
@@ -1405,7 +1420,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         // Stopped while it was waiting to answer: Stop has already taken it down.
         const entry = live.get(siteId);
         if (!entry) return stoppedStatus(workspaceId, siteId, config);
-        entry.ready = ready;
+        entry.ready = await probeBrowserExposure(entry, locallyReady, probeTimeoutMs);
         changed();
         return {
             ...statusOf(workspaceId, siteId, config, entry),
@@ -1465,14 +1480,51 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             return stoppedStatus(workspaceId, siteId, config);
         }
 
-        const ready = await probeHostNativeReady(live.get(siteId)!, probeTimeoutMs);
+        const locallyReady = await probeHostNativeReady(live.get(siteId)!, probeTimeoutMs);
         // Stopped while it was waiting to answer: Stop has already taken it down.
         // Reading the entry back here without checking is what threw.
         const entry = live.get(siteId);
         if (!entry) return stoppedStatus(workspaceId, siteId, config);
-        entry.ready = ready;
+        entry.ready = await probeBrowserExposure(entry, locallyReady, probeTimeoutMs);
         changed();
         return statusOf(workspaceId, siteId, config, entry);
+    }
+
+    /**
+     * A browser-exposed site's readiness is the conjunction of two independently
+     * useful facts: its local serving path answers, and the host Caddy route to
+     * that path answers. The latter is deliberately asked only after the entry is
+     * in `live`, because the desktop reconcile builds its route plan from that
+     * live set. That ordering is the root of genie#612: the old code returned
+     * after the first fact and scheduled the second for later.
+     */
+    async function probeBrowserExposure(
+        entry: Live,
+        locallyReady: boolean,
+        timeoutMs: number,
+    ): Promise<boolean> {
+        if (!locallyReady || entry.config.kind !== 'http' || !entry.config.browserExposed) {
+            entry.browserExposureError = undefined;
+            return locallyReady;
+        }
+        if (!deps.probeBrowserExposure) return locallyReady;
+        let ready = false;
+        try {
+            ready = await deps.probeBrowserExposure({
+                genName: entry.config.genName,
+                timeoutMs,
+            });
+        } catch {
+            ready = false;
+        }
+        entry.browserExposureError = ready
+            ? undefined
+            : `The site answers locally at ${siteLocalReach({
+                  genName: entry.config.genName,
+                  port: entry.caddyHostPort,
+                  sniTls: entry.internalPort !== undefined,
+              })?.localOrigin ?? `port ${entry.caddyHostPort}`}, but its browser origin https://${entry.config.genName} did not answer through the host Caddy.`;
+        return ready;
     }
 
     /**
@@ -1598,15 +1650,25 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
      *    it ready the moment it runs and there is nothing here to re-ask.
      */
     async function probeLiveReady(entry: Live): Promise<boolean> {
-        if (entry.internalPort === undefined) return probeHostNativeReady(entry, STATUS_PROBE_MS);
+        if (entry.internalPort === undefined) {
+            return probeBrowserExposure(
+                entry,
+                await probeHostNativeReady(entry, STATUS_PROBE_MS),
+                STATUS_PROBE_MS,
+            );
+        }
         if (entry.config.kind !== 'http') return entry.ready;
-        return probe({
-            port: entry.caddyHostPort,
-            kind: 'http',
-            servername: entry.config.genName,
-            hostHeader: entry.config.upstreamHost ?? entry.config.genName,
-            timeoutMs: STATUS_PROBE_MS,
-        });
+        return probeBrowserExposure(
+            entry,
+            await probe({
+                port: entry.caddyHostPort,
+                kind: 'http',
+                servername: entry.config.genName,
+                hostHeader: entry.config.upstreamHost ?? entry.config.genName,
+                timeoutMs: STATUS_PROBE_MS,
+            }),
+            STATUS_PROBE_MS,
+        );
     }
 
     /**
@@ -2240,6 +2302,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                       ...(local.localCurl ? { localCurl: local.localCurl } : {}),
                   }
                 : {}),
+            ...(entry.browserExposureError ? { error: entry.browserExposureError } : {}),
         };
     }
 

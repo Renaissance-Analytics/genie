@@ -3513,6 +3513,13 @@ export function manageSiteSummary(result: ManageSiteResult): string {
         const isHost = target.runMode === 'host';
         const noun = isHost ? 'process' : 'container';
         const watching = target.hostPort ?? target.port;
+        // The site manager can distinguish "the app did not answer locally" from
+        // "the app DID answer, but the browser-facing host-Caddy route did not"
+        // (genie#612). Preserve that diagnosis instead of replacing it with the
+        // generic wrong-port advice below, which blames a healthy process.
+        if (target.error) {
+            return `${target.name} is not serving at ${where}: ${target.error}${locally}`;
+        }
         // THE WORKER, NOT THE APP (genie#626). A `hostServe: php` site is Genie's
         // own proxy plus a `php-cgi` worker, and when the worker dies the proxy
         // stays bound and answers 502 — so the sentence below, which proposes that

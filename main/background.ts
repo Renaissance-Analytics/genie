@@ -99,7 +99,8 @@ import {
 import { resolveContainerRuntime } from './dev-server';
 import { devServerHostBrowserNames, devServerHostBrowserRoutes } from './dev-server/site-manager';
 import { createDesktopHostBrowserReconciler } from './dev-server/host-browser-desktop';
-import { waitForHttp } from './dev-server/port-probe';
+import { HOST_CADDY_HTTPS_PORT } from './dev-server/host-caddyfile';
+import { waitForHttp, waitForHttpsSni } from './dev-server/port-probe';
 import { preferredServicePort } from './dev-server/services/service-ports';
 import { createBundledHostWebSocketService } from './dev-server/services/host-websocket';
 import type { HostBrowserReconciler } from './dev-server/host-browser-reconcile';
@@ -1790,6 +1791,20 @@ app.whenReady().then(async () => {
         onChanged: () => {
             broadcastDevServerChanged();
             hostBrowserReconciler?.schedule();
+        },
+        // A settled browser-exposed lifecycle call must prove the origin it
+        // reports, not only the newly allocated loopback port (genie#612).
+        // `runNow` reads the manager's current live set, reloads host Caddy with
+        // that exact port, and only then do we ask the real :443/SNI route.
+        probeBrowserExposure: async ({ genName, timeoutMs }) => {
+            if (!hostBrowserReconciler) return false;
+            await hostBrowserReconciler.runNow();
+            return waitForHttpsSni(
+                HOST_CADDY_HTTPS_PORT,
+                genName,
+                timeoutMs,
+                genName,
+            );
         },
         // A repo `.env` Genie could not keep current (read-only, open, not checked
         // out), or one it kept current inside a git-TRACKED file. Both used to be

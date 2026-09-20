@@ -36,6 +36,23 @@ const result = (s: DevSiteInfo): ManageSiteResult =>
     ({ ok: true, sites: [s], affectedId: s.id }) as ManageSiteResult;
 
 describe('a host-native site that is not answering', () => {
+    it('reports a failed browser-origin probe instead of blaming the healthy loopback process (genie#612)', () => {
+        const text = manageSiteSummary(
+            result(
+                site({
+                    origin: 'https://karma.gen',
+                    localOrigin: 'http://127.0.0.1:64630',
+                    error:
+                        'The site answers locally at http://127.0.0.1:64630, but its browser origin https://karma.gen did not answer through the host Caddy.',
+                }),
+            ),
+        );
+
+        expect(text).toContain('answers locally');
+        expect(text).toContain('host Caddy');
+        expect(text).not.toMatch(/nothing is answering on port/i);
+    });
+
     it('does not call it a container', () => {
         // `runMode: host` is documented as "no container, no build". Naming one
         // sends people looking for something that does not exist.
