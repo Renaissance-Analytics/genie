@@ -99,3 +99,45 @@ describe('send reports whether a live transport took the message', () => {
         expect(res.note).toBeUndefined();
     });
 });
+
+/**
+ * A SEND TO AN ID THAT NO LONGER EXISTS.
+ *
+ * `claude:fancy` observed a sidecar's `agentId` CHANGE across an upgrade
+ * (dd1a2bbc… → 8fbaf0d9…) and reasoned that a peer still holding the old
+ * address would be sending into nothing. It was careful to label that an
+ * inference — it switched to the new id rather than testing the dead one — and
+ * to say why the difference matters:
+ *
+ *   > a rejected unknown id is survivable, a silently accepted one is not.
+ *
+ * Exactly right, so it is worth an assertion rather than a reading. This pins
+ * the survivable behaviour so it cannot quietly become the other one.
+ */
+describe('a send addressed to an agent id that no longer exists', () => {
+    it('is REJECTED, not accepted into nothing', () => {
+        const b = new AgentInboxBroker();
+        b.join(input({ agentId: 'sender' }));
+        // 'ghost-gone' never joined — the shape of an id that was replaced by an
+        // upgrade while a peer kept the old one.
+        const res = b.send({ fromAgentId: 'sender', toAgentId: 'ghost-gone', text: 'briefing' });
+
+        expect(res.ok).toBe(false);
+        if (res.ok) return;
+        expect(res.error).toContain('ghost-gone');
+        // And it must not claim a delivery on the way out.
+        expect(res.delivered ?? 0).toBe(0);
+    });
+
+    it('POSITIVE CONTROL: the same send to a live id succeeds', () => {
+        // Without this, the rejection above would also pass if `send` were
+        // broken for every target.
+        const b = new AgentInboxBroker();
+        b.join(input({ agentId: 'sender' }));
+        b.join(input({ agentId: 'real' }));
+
+        const res = b.send({ fromAgentId: 'sender', toAgentId: 'real', text: 'hello' });
+
+        expect(res.ok).toBe(true);
+    });
+});
