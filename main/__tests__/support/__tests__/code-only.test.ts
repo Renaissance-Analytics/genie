@@ -60,6 +60,15 @@ describe('codeOnly', () => {
         expect(out).toContain('keep');
     });
 
+    it('codeOnlyHtml closes a comment on --!> as well as -->', () => {
+        // The HTML spec allows BOTH end forms. A filter that knows only `-->`
+        // walks straight past a comment ending the other way and scans its
+        // contents as if they were code (CodeQL js/bad-tag-filter).
+        const out = codeOnlyHtml('<!-- window.genie --!>\n<div>keep</div>');
+        expect(out).not.toContain('window.genie');
+        expect(out).toContain('keep');
+    });
+
     it('codeOnlyHtml keeps TEXT when a marker has no partner', () => {
         // The safe direction for a guard: an unpartnered marker drops the token
         // and keeps the words. Deleting to end-of-file would hide real code

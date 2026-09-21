@@ -65,12 +65,47 @@ export function codeOnly(src: string): string {
  * So when in doubt it keeps text and drops markers, never the reverse.
  */
 export function codeOnlyHtml(src: string): string {
-    let out = src;
-    let prev: string;
-    do {
-        prev = out;
-        out = out.replace(/<!--[\s\S]*?-->/g, '');
-    } while (out !== prev);
-    // Partnerless markers: remove the token, keep the text. See above.
-    return codeOnly(out.replace(/<!--/g, '').replace(/-->/g, ''));
+    // A SCAN, not a regex replace.
+    //
+    // Two CodeQL findings landed on the replace-based version of this function,
+    // and both were fair:
+    //   - `js/incomplete-multi-character-sanitization` — one pass leaves the
+    //     outer `<!--` of `<!--<!-- -->` behind, so it had to loop.
+    //   - `js/bad-tag-filter` — the HTML spec also closes a comment on `--!>`,
+    //     and a filter that knows only `-->` walks straight past one that ends
+    //     the other way and scans its contents as code.
+    //
+    // Both are the SAME mistake this module exists to remove: a scanner that is
+    // confident about a grammar it only partly implements. Patching the regex
+    // twice would have left a third case waiting. Walking the string once
+    // cannot half-match — it is either inside a comment or it is not — so the
+    // class is gone rather than the two known instances.
+    let out = '';
+    let i = 0;
+    while (i < src.length) {
+        if (src.startsWith('<!--', i)) {
+            const end = nextCommentEnd(src, i + 4);
+            if (end === -1) {
+                // Unterminated: keep the TEXT, drop the marker. A guard that
+                // asserts ABSENCE would rather fire wrongly (loud, fixed in a
+                // minute) than go blind to everything below (silent, believed).
+                out += src.slice(i + 4);
+                break;
+            }
+            i = end;
+            continue;
+        }
+        out += src[i];
+        i += 1;
+    }
+    return codeOnly(out);
+}
+
+/** Index just past the next `-->` or `--!>`, or -1 when the comment never ends. */
+function nextCommentEnd(src: string, from: number): number {
+    for (let i = from; i < src.length; i += 1) {
+        if (src.startsWith('-->', i)) return i + 3;
+        if (src.startsWith('--!>', i)) return i + 4;
+    }
+    return -1;
 }
