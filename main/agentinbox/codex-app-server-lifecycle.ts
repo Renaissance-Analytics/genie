@@ -150,6 +150,31 @@ export interface PreparedCodexAppServer {
     tokenFile: string;
 }
 
+/**
+ * The token a terminal's TUI must present — REUSING the running server's, if one
+ * is still up.
+ *
+ * A codex app-server authenticates against the token it loaded. Minting a fresh
+ * one for a terminal whose server is still running strands that server: the file
+ * and the new pty's env both hold the new token, the server still expects the
+ * old one, and the TUI connects to the correct, current, live server and is
+ * refused with a 401 that looks like nothing is wrong anywhere.
+ *
+ * That took a process watcher and three separate measurements to find, because
+ * every value a person would check — the shell's env, the token file, the
+ * server's own `--ws-token-file` argument — agreed with each other. They agreed
+ * because they were all the NEW token.
+ *
+ * So the rule is: while a server is up for this terminal, its token IS the
+ * terminal's token. Mint only when there is nothing to contradict.
+ */
+export function tokenForTerminal(
+    running: PreparedCodexAppServer | undefined,
+    mint: () => PreparedCodexAppServer,
+): PreparedCodexAppServer {
+    return running ?? mint();
+}
+
 /** Synchronous because the terminal shell must inherit the token at spawn time. */
 export function prepareCodexAppServer(
     terminalId: string,
@@ -218,6 +243,18 @@ async function connect(
 /** Genie owns one authenticated App Server per visible Codex agent terminal. */
 export class CodexAppServerManager {
     private readonly servers = new Map<string, OwnedServer>();
+
+    /**
+     * The token pair of the server already running for this terminal, if any.
+     *
+     * The caller needs this BEFORE it builds the pty's environment, because
+     * that env is what the TUI presents. Asking afterwards is too late — the
+     * shell has already inherited whatever it was given.
+     */
+    preparedFor(terminalId: string): PreparedCodexAppServer | undefined {
+        const existing = this.servers.get(terminalId);
+        return existing ? { token: existing.token, tokenFile: existing.tokenFile } : undefined;
+    }
 
     async start(input: {
         terminalId: string;
