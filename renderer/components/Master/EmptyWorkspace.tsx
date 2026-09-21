@@ -1,12 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import { FauxClient } from '@particle-academy/react-fancy';
-import Terminal from '../Terminal/Terminal';
 import { agentGridRows, type AgentGridRow } from '../../lib/ams-grid';
-import {
-    PREVIEW_LOGICAL_WIDTH,
-    emptyWorkspaceView,
-    showsPreview,
-} from '../../lib/empty-workspace';
+import { emptyWorkspaceView } from '../../lib/empty-workspace';
 import { api } from '../../lib/genie';
 import type { TerminalSpec } from '../../lib/genie';
 
@@ -18,29 +12,23 @@ import type { TerminalSpec } from '../../lib/genie';
  * who has not set the workspace up, and an offer to make a fourth thing to
  * someone whose three agents are already running out of sight.
  *
- * ## The live preview, and why it cannot damage a terminal
+ * ## There is deliberately NO live terminal preview here
  *
- * A running agent gets a real, live xterm inside a {@link FauxClient} frame.
- * That is deliberate and it is the risky part, so the safety is stated here
- * rather than left to be rediscovered:
+ * The first version rendered a real xterm per running agent inside a FauxClient
+ * frame, with `onScreen={false}` so no fit could reach the pty (genie#229). That
+ * guard worked and was not the hazard.
  *
- * A terminal measured inside a small container is genie#229. A TUI told it has
- * almost no columns **reflows its scrollback** to that width, and the damage is
- * written before the panel ever comes back — first characters clipped off the
- * left, tails spilling into a sliver down the right. A grid of small preview
- * frames is exactly the shape that caused it.
+ * The hazard is ATTACHMENT. Mounting a `Terminal` attaches to the pty, and
+ * unmounting calls `api().terminal.detach()` — and main's rule is that a
+ * deliberate detach KILLS a non-retained pty when the last owner goes
+ * (`shouldKillOnDetach`). On an empty floor no panel is mounted for that agent,
+ * so the preview is ALWAYS the only owner: navigating away would have killed
+ * the very agents this panel exists to show.
  *
- * Two independent things stop it, and the preview only ships because BOTH hold:
- *
- *   1. **`onScreen={false}`.** `shouldFit` refuses a fit outright on that,
- *      whatever the element measures (`terminal-fit.ts`, written for #229/#491).
- *      No geometry from a preview ever reaches the pty. This is the guarantee.
- *   2. **The content lays out at {@link PREVIEW_LOGICAL_WIDTH}** and FauxClient
- *      scales it down visually. So even if a fit did somehow run, it would
- *      measure a full-size terminal, not a card.
- *
- * Rule 1 is the promise; rule 2 means a later change that forgets rule 1 still
- * cannot produce the reflow. Neither is decoration.
+ * That shipped in beta.334 and is the reason this reads as a card instead. A
+ * real preview needs a mechanism that never attaches — a snapshot of the
+ * buffer, which needs an IPC that does not exist yet — not a live terminal with
+ * a safety flag on it.
  *
  * A DORMANT agent gets a card and no frame: a preview around a dead pty implies
  * something is happening in there.
@@ -128,11 +116,6 @@ export default function EmptyWorkspace(props: {
             </p>
             <div className="empty-ws-grid">
                 {view.rows.map((row) => {
-                    const preview = showsPreview(row);
-                    // The spec carries the cwd the pty already runs in. A preview
-                    // must never invent one — it is attaching to a live terminal,
-                    // not opening a new shell somewhere.
-                    const spec = specs.find((s) => s.id === row.specId);
                     return (
                         <button
                             type="button"
@@ -163,24 +146,15 @@ export default function EmptyWorkspace(props: {
                                     {row.running ? row.provider ?? 'running' : 'not running'}
                                 </span>
                             </span>
-                            {preview ? (
-                                <FauxClient
-                                    variant="device"
-                                    width={PREVIEW_LOGICAL_WIDTH}
-                                    scale="fit"
-                                    className="empty-ws-preview"
-                                >
-                                    <Terminal
-                                        id={row.specId!}
-                                        cwd={spec?.cwd ?? ''}
-                                        workspaceId={workspaceId}
-                                        // THE GUARANTEE — see the module docblock.
-                                        // `shouldFit` refuses outright on this, so a
-                                        // preview can never push geometry to the pty.
-                                        onScreen={false}
-                                        className="empty-ws-term"
-                                    />
-                                </FauxClient>
+                            {row.running ? (
+                                // NO LIVE TERMINAL HERE. See the module docblock:
+                                // mounting one attaches to the pty, and unmounting
+                                // DETACHES — which kills a non-retained pty when it
+                                // is the last owner, which a preview always is on an
+                                // empty floor.
+                                <span className="empty-ws-card-dormant">
+                                    Running. Open it to see its terminal.
+                                </span>
                             ) : (
                                 <span className="empty-ws-card-dormant">
                                     {row.purpose || 'Start it to pick up where it left off.'}
