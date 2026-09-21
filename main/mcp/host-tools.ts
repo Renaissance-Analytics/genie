@@ -1585,6 +1585,14 @@ export async function manageTerminalsForMcp(
                     // Whether an empty read means "quiet", "restored from the pty
                     // host after a Genie restart", or "no pty at all" (genie#217).
                     state: r.state,
+                    // The dead pty's LAST WORDS (genie#733). Retained separately
+                    // from the live buffer so a relaunch cannot overwrite them --
+                    // and forwarded HERE, or the retention is invisible to every
+                    // caller and the fix might as well not exist. That is exactly
+                    // what shipped: the bytes were kept and nothing could read
+                    // them, which is the same passthrough gap the `live` field on
+                    // agentinbox send had to be rescued from.
+                    ...(r.exitTail ? { exitTail: r.exitTail } : {}),
                 };
             }
             case 'kill': {
@@ -2677,6 +2685,9 @@ export async function runAgentForMcp(
                     cursor: r.cursor,
                     dropped: r.dropped,
                     state: r.state,
+                    // The AGENT read needs this most: `diagnose` sends people
+                    // here for the exit tail (genie#733).
+                    ...(r.exitTail ? { exitTail: r.exitTail } : {}),
                 };
             }
             case 'stop': {
