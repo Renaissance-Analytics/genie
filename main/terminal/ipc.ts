@@ -45,6 +45,7 @@ import {
     codexAppServerManager,
     codexRemoteTuiLaunch,
     prepareCodexAppServer,
+    tokenForTerminal,
     type PreparedCodexAppServer,
 } from '../agentinbox/codex-app-server-lifecycle';
 import { agentInboxJoinInputFor } from '../agentinbox/join-input';
@@ -683,9 +684,19 @@ export function createAgentTerminal(opts: {
         }
     }
     if (opts.agentMeta?.agent === 'codex' && launchCommand) {
-        preparedCodex = prepareCodexAppServer(
-            id,
-            path.join(os.tmpdir(), 'genie-agentinbox-app-server'),
+        // REUSE the running server's token if one is still up for this terminal.
+        //
+        // Minting unconditionally stranded it: the file and this new pty's env
+        // both got the new token while the server went on expecting the old
+        // one, so the TUI connected to the correct, current, live app-server and
+        // was refused with a 401 in which nothing looked wrong — the shell env,
+        // the token file and the server's own `--ws-token-file` argument all
+        // agreed, because they were all the NEW token.
+        //
+        // It has to be asked HERE, before the env is built, because that env is
+        // what the TUI presents; after the shell has inherited it is too late.
+        preparedCodex = tokenForTerminal(codexAppServerManager.preparedFor(id), () =>
+            prepareCodexAppServer(id, path.join(os.tmpdir(), 'genie-agentinbox-app-server')),
         );
         env = { ...env, [CODEX_APP_TOKEN_ENV]: preparedCodex.token };
     }

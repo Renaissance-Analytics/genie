@@ -59,6 +59,10 @@ vi.mock('../../agentinbox/codex-app-server-lifecycle', async (importOriginal) =>
     return {
         ...actual,
         codexAppServerManager: {
+            // No server is running in these tests, so the terminal mints a
+            // fresh token — the first-launch path. Present because the caller
+            // must ask before building the pty env (token reuse).
+            preparedFor: vi.fn(() => undefined),
             start: vi.fn(async () => ({
                 address: 'ws://127.0.0.1:47891',
                 session: { deliver: vi.fn(async () => undefined) },
