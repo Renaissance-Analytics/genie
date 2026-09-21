@@ -155,6 +155,14 @@ html,
 body {
     height: 100%;
     margin: 0;
+    /* THE WINDOW ITSELF NEVER SCROLLS.
+       Without this, anything a pixel taller than the viewport scrolls the whole
+       document and Chromium paints a full-height bar down the side of the app —
+       which is what the owner reported. A desktop shell has no document scroll:
+       every scrollable region here (the Chooser flyout, the code tree, panels,
+       modals, settings) owns its own overflow, so a bar at the document level is
+       always a layout overflow rather than something anyone meant. */
+    overflow: hidden;
     background: var(--bg-0);
     color: var(--fg-1);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;

@@ -1758,3 +1758,26 @@ test('the Genie OS shimmer does not run just because the panel is open', async (
     await button.click();
     await expect(layer).not.toHaveClass(/\bis-open\b/);
 });
+
+test('the window itself does not scroll — no document scrollbar (owner report)', async () => {
+    // The owner, on beta.333: "why does the Genie window have scroll bars? It's
+    // annoying." — a full-height Chromium bar down the side of the app.
+    //
+    // `html, body` carried `height: 100%` with no `overflow` rule, so anything a
+    // pixel taller than the viewport scrolled the whole document. A desktop shell
+    // has no document scroll: every scrollable region here owns its own overflow,
+    // so a bar at this level is always a layout overflow rather than intent.
+    //
+    // Asserted on the DOCUMENT, not on the stylesheet: a rule can be present and
+    // still be beaten by something taller, and it is the scrollbar the owner sees.
+    const overflow = await page.evaluate(() => {
+        const d = document.documentElement;
+        const b = document.body;
+        return {
+            docScrolls: d.scrollHeight > d.clientHeight || d.scrollWidth > d.clientWidth,
+            bodyScrolls: b.scrollHeight > b.clientHeight || b.scrollWidth > b.clientWidth,
+        };
+    });
+    expect(overflow.docScrolls, 'the document must not overflow its viewport').toBe(false);
+    expect(overflow.bodyScrolls, 'the body must not overflow its viewport').toBe(false);
+});
