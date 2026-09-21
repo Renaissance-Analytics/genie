@@ -116,6 +116,7 @@ import { logPtyOsc } from './osc-debug';
 import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
 import { devChannelConsentReply } from './dev-channel-consent';
+import { forgetExitTail, rememberExitTail, takeExitTail } from './exit-tail';
 import crypto from 'node:crypto';
 import type { AgentTuiId } from '../agents/registry';
 
@@ -286,6 +287,17 @@ export const EXIT_TAIL_BYTES = 16 * 1024;
 /** A read plus what its emptiness actually means (see TerminalReadState). */
 export interface TerminalReadResult extends ReadResult {
     state: TerminalReadState;
+    /**
+     * The dead pty's LAST WORDS, present only when `state: 'exited'` and this
+     * terminal actually died here (genie#733).
+     *
+     * Served beside `data` rather than inside it, because they are different
+     * facts: `data` is what the buffer holds NOW — which after a relaunch is the
+     * new process — while this is why the previous one stopped. `diagnose` calls
+     * the exit tail the only evidence of why an agent went, so it has to survive
+     * the restart that diagnose itself recommends.
+     */
+    exitTail?: { tail: string; exitCode: number; at: number };
 }
 
 export type { TerminalReadState };
@@ -335,7 +347,11 @@ export function readTerminalOutput(
         : restored
           ? 'restored'
           : 'live';
-    return { ...r, state };
+    // Only when it is dead: a live terminal's previous death is history, and
+    // attaching it to every read would invite reporting an old failure as the
+    // current state.
+    const exitTail = state === 'exited' ? takeExitTail(id) : undefined;
+    return { ...r, state, ...(exitTail ? { exitTail } : {}) };
 }
 
 /**
@@ -1165,6 +1181,11 @@ function feedTerminalExit(id: string, payload: { exitCode: number; signal?: numb
     // an idle session. The buffer is released for real when the terminal is
     // killed (killTerminalById), which is also when its spec goes.
     agentReadBuffer.trimToTail(id, EXIT_TAIL_BYTES);
+    // ...and keep a COPY somewhere the next pty cannot reach (genie#733). The
+    // trim above protects the tail only until this terminal is relaunched, and
+    // `diagnose` tells people to relaunch — so following its advice destroyed
+    // the evidence it had just called the only evidence there is.
+    rememberExitTail(id, agentReadBuffer.readTail(id, EXIT_TAIL_BYTES).data, payload.exitCode);
     endDevChannelLife(id);
     // AgentInbox: the pty exited but the spec is retained (revivable) — mark the
     // agent `away` (no-op for a non-agent terminal).
@@ -1639,6 +1660,9 @@ export function killTerminalById(id: string): boolean {
     ownersByTerminal.delete(id);
     // Drop the agent read buffer for this terminal.
     agentReadBuffer.forget(id);
+    // The spec goes with a kill, so there is nothing left to diagnose and the
+    // retained last-words would just be a leak (genie#733).
+    forgetExitTail(id);
     endDevChannelLife(id);
     // Drop the per-terminal MCP endpoint so its token stops resolving.
     unregisterTerminalEndpoint(id);
