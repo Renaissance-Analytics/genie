@@ -1705,6 +1705,16 @@ export interface RunAgentResult {
     /** start: TRUE when this reattached to an existing TUI, FALSE on the
      *  registered agent's first launch. */
     reattached?: boolean;
+    /** start: TRUE when the reattach had to SPAWN A NEW PTY because the old one
+     *  had exited — a revive, not a warm reattach.
+     *
+     *  Reported separately because the two are not the same operation and were
+     *  being announced with one sentence: a warm reattach creates nothing, a
+     *  revive re-creates the terminal (which, for codex, mints a fresh app-server
+     *  token). A caller told "Reattached" reasonably concludes nothing was
+     *  created, and eliminates `start` as a suspect — which is exactly what
+     *  happened while tracking down a 401. */
+    revived?: boolean;
     /** start: whether the harness chat id is already attached to the durable saved agent. */
     sessionBinding?: 'bound' | 'pending';
     /** list (and any start refusal that needs to show the alternatives): the
@@ -4726,9 +4736,14 @@ ${body}` }],
                     // REATTACHED vs CREATED is the distinction this tool exists to
                     // make, so it leads the sentence rather than being left for the
                     // caller to infer from a terminal id it may not have seen before.
-                    summary = result.reattached
-                        ? `Reattached to saved agent ${result.ref ?? ''} (terminal ${result.id ?? '?'}).`
-                        : `Started registered agent ${result.ref ?? ''} as terminal ${result.id ?? '?'}.`;
+                    summary = result.revived
+                        ? // Say that a pty was created. "Reattached" here read as
+                          // "nothing was created" and sent one investigation down
+                          // a wrong path for hours.
+                          `Revived saved agent ${result.ref ?? ''} — its terminal had exited, so a NEW pty was started (terminal ${result.id ?? '?'}).`
+                        : result.reattached
+                          ? `Reattached to saved agent ${result.ref ?? ''} (terminal ${result.id ?? '?'}).`
+                          : `Started registered agent ${result.ref ?? ''} as terminal ${result.id ?? '?'}.`;
                 } else if (action === 'sidecar') {
                     summary = result.reattached
                         ? `Reattached sidecar ${result.ref ?? result.name ?? ''} (terminal ${result.id ?? '?'}).`

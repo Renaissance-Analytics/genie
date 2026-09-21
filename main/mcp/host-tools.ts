@@ -2147,6 +2147,19 @@ async function reattachSavedAgent(
     });
     return {
         ...result,
+        // REVIVED, not merely reattached. Both paths through this function
+        // returned the same `reattached: true` and the same sentence, and they
+        // are not the same operation: a warm reattach creates nothing, while a
+        // revive SPAWNS A NEW PTY -- which mints a fresh codex token and
+        // overwrites the token file.
+        //
+        // That cost real investigation time. claude:fancy read "Reattached to
+        // saved agent ... sessionBinding: bound" as "did not create anything",
+        // ruled `start` out, and built a double-launch theory instead; `start`
+        // was in fact the second create the whole time. A message that describes
+        // reattachment while the behaviour includes re-creation is how a caller
+        // eliminates the right suspect.
+        revived: true,
         ref: agentRef({
             tui: agent.tui,
             name: agent.name,
