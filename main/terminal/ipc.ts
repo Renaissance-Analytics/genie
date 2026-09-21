@@ -55,6 +55,7 @@ import {
     agentRelaunchDecision,
     isResumingCommand,
     transcriptDirFor,
+    cwdHasAnyTranscript,
 } from '../agentinbox/session-capture';
 import type { AgentInboxAgentType } from '../agentinbox/types';
 import { withProviderStartupInstructions } from '../agents/startup';
@@ -222,6 +223,81 @@ interface OwnerEntry {
  * attached window. registerTerminalIpc is called exactly once at app-ready.
  */
 const ownersByTerminal = new Map<string, OwnerEntry>();
+
+/**
+ * HOW LONG to wait for a killed pty to let go of its id before giving up and
+ * reusing it anyway. Generous relative to a process exit (milliseconds), short
+ * enough that a pty which will never report is not a visible stall.
+ */
+export const ID_RELEASE_GRACE_MS = 3_000;
+
+/** One-shot callbacks waiting for a terminal id to come free. */
+const awaitingRelease = new Map<string, { run: () => void; timer: NodeJS.Timeout }>();
+
+/**
+ * Run `run` once the pty that held `id` has finished letting go of it.
+ *
+ * ## Why reusing an id needs a handshake at all
+ *
+ * A restart reuses `spec.id` deliberately: that is what carries the agent's
+ * AgentInbox identity, its queued mail and its registry binding across the
+ * relaunch (see `restartAgentTerminal`). But in fancy-term-host each pty's exit
+ * handler is a CLOSURE OVER THE ID that deletes whoever currently holds it:
+ *
+ *     pty.onExit(() => { this.ptys.delete(opts.id); this.emit('exit', opts.id, …) })
+ *
+ * …and node-pty delivers an exit on a LATER tick, because the OS reports a
+ * process's death after the call that requested it returns. So creating the
+ * replacement in the same turn produces this order:
+ *
+ *   1. kill the old pty
+ *   2. the replacement takes the id
+ *   3. the DEAD pty's exit arrives and evicts the REPLACEMENT
+ *
+ * The new pty keeps running with nobody holding a reference: the manager has
+ * forgotten it, its owners were dropped, and the renderer is told
+ * `[process exited]` about a terminal that is very much alive. That is the
+ * frozen panel — input goes to a pty nothing can route to, and only a full
+ * unmount/remount (which mints a clean id) recovers it.
+ *
+ * Waiting for the release closes the window rather than racing it. The caller
+ * only waits when there was a live pty to kill: an already-dead terminal will
+ * never report an exit, and blocking on one would put this whole grace period in
+ * front of the recovery path that needs it most.
+ *
+ * The timeout is a floor, not a promise — a backend that never reports still
+ * gets its restart, just later.
+ */
+export function whenTerminalIdReleased(
+    id: string,
+    run: () => void,
+    timeoutMs: number = ID_RELEASE_GRACE_MS,
+): void {
+    // A second restart of the same id supersedes the first: let the earlier one
+    // proceed now rather than stranding it behind a release that already passed.
+    const prior = awaitingRelease.get(id);
+    if (prior) {
+        clearTimeout(prior.timer);
+        awaitingRelease.delete(id);
+        prior.run();
+    }
+    const timer = setTimeout(() => releaseTerminalId(id), timeoutMs);
+    timer.unref?.();
+    awaitingRelease.set(id, { run, timer });
+}
+
+/** Fire whatever is waiting on `id`. Safe to call when nothing is. */
+function releaseTerminalId(id: string): void {
+    const entry = awaitingRelease.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    awaitingRelease.delete(id);
+    try {
+        entry.run();
+    } catch {
+        /* a failed relaunch must not take down the exit fan-out */
+    }
+}
 
 /**
  * workspaceId → the terminal id most recently created/written in it. The
@@ -903,6 +979,19 @@ export function agentSessionTranscriptExists(spec: TerminalSpecRow | null, sid: 
 }
 
 /**
+ * True when the spec's cwd holds ANY Claude conversation — the question that
+ * makes `--continue` a fact rather than a guess.
+ *
+ * Same cwd rule as {@link agentSessionTranscriptExists}: the last reported cwd
+ * (OSC-7) if we have one, else the launch cwd, because that is the directory
+ * Claude scopes both its transcripts and `--continue` by.
+ */
+export function agentCwdHasConversation(spec: TerminalSpecRow | null): boolean {
+    const cwd = spec?.live_cwd || spec?.cwd;
+    return cwd ? cwdHasAnyTranscript(cwd) : false;
+}
+
+/**
  * How long to let a FRESHLY SPAWNED shell settle (profile load) before submitting
  * an agent's boot command into it. Typing into a shell that hasn't started reading
  * its stdin yet can drop the keystrokes and leave the terminal sitting at a plain
@@ -960,8 +1049,11 @@ function deliverAgentLaunch(id: string, command: string): void {
 function maybeRelaunchAgent(id: string, existing: boolean): void {
     if (existing) return;
     const spec = withSavedLaunchCommand(getTerminalSpec(id));
-    const decision = agentRelaunchDecision(spec, existing, (sid) =>
-        agentSessionTranscriptExists(spec, sid),
+    const decision = agentRelaunchDecision(
+        spec,
+        existing,
+        (sid) => agentSessionTranscriptExists(spec, sid),
+        () => agentCwdHasConversation(spec),
     );
     if (!decision) return;
     if (decision.newSessionId && spec) {
@@ -1577,11 +1669,17 @@ export function registerTerminalIpc(): void {
             // DESKTOP fan-out: notify + drop the owning window(s).
             const entry = ownersByTerminal.get(id);
             ownersByTerminal.delete(id);
-            if (!entry) return;
-            for (const target of entry.owners) {
+            for (const target of entry?.owners ?? []) {
                 if (target.isDestroyed()) continue;
                 target.send('terminal:exit', { id, ...payload });
             }
+            // LAST, and unconditionally: the id is only free once this exit has
+            // been fully accounted for. Anything waiting to reuse it runs now —
+            // after the owners are dropped and the renderer has been told, so a
+            // replacement created here cannot be swept up by the teardown of the
+            // terminal it replaces. A terminal with no owners still has to
+            // release its id, which is why this sits past the old early return.
+            releaseTerminalId(id);
         },
     });
     catchUpAgentReadBuffers();
@@ -1635,6 +1733,26 @@ export function stopAllTerminals(): void {
 export function terminalHasWindow(id: string): boolean {
     const entry = ownersByTerminal.get(id);
     return !!entry && entry.owners.size > 0;
+}
+
+/**
+ * Tell every window that the pty behind `id` has been REPLACED, so a panel
+ * already showing that id re-attaches instead of sitting on a dead screen.
+ *
+ * Broadcast rather than sent to owners, because by this point there are none:
+ * the old pty's exit dropped them (that is what the fan-out does), and the
+ * renderer is re-registered as an owner precisely BY the `terminal:create`
+ * rejoin this event provokes. A window with no panel for the id ignores it.
+ */
+export function broadcastTerminalRestarted(id: string): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        try {
+            w.webContents.send('terminal:restarted', { id });
+        } catch {
+            /* window tearing down — the others still get it */
+        }
+    }
 }
 
 /**

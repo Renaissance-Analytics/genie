@@ -100,6 +100,12 @@ interface Props {
     onTogglePin: () => void;
     onActivateWorkspace: (workspaceId: string) => void;
     onToggleSpec: (id: string) => void;
+    /**
+     * Show this spec's panel AND put the keyboard in it — the whole of "open the
+     * agent", in one call. Separate from {@link onToggleSpec} because a toggle
+     * can also CLOSE, and opening an agent must never be the thing that closes it.
+     */
+    onOpenSpec: (id: string) => void;
     onAddSpec: (workspaceId: string, type: ViewType) => void;
     onDestroySpec: (id: string) => void;
     /** Restart an agent by its terminal spec — the same two operations the
@@ -178,6 +184,7 @@ export default function Chooser({
     onTogglePin,
     onActivateWorkspace,
     onToggleSpec,
+    onOpenSpec,
     onAddSpec,
     onDestroySpec,
     onRestartAgentSpec,
@@ -1234,26 +1241,42 @@ export default function Chooser({
                                                             }
                                                             onOpen={() => {
                                                                 onActivateWorkspace(ws.id);
-                                                                // A DORMANT agent has no panel yet,
-                                                                // so clicking it STARTS it. It used
-                                                                // to do nothing at all, which reads
-                                                                // as a broken square. Goes through
-                                                                // the same path `runAgent start`
-                                                                // uses, so the terminal cap still
-                                                                // applies -- a click must not be a
-                                                                // way past a limit the owner set.
+                                                                // ONE CLICK REACHES THE AGENT.
+                                                                //
+                                                                // It used to take three: the first
+                                                                // started a dormant agent and
+                                                                // stopped there, the second (now
+                                                                // that a spec existed) opened the
+                                                                // panel, and the third clicked into
+                                                                // the terminal to get a caret. The
+                                                                // owner counted them. Nothing about
+                                                                // "open my agent" justifies asking
+                                                                // three times -- each click was a
+                                                                // step in GENIE's sequence, not a
+                                                                // decision anyone was making.
+                                                                //
+                                                                // Start still goes through the same
+                                                                // path `runAgent start` uses, so the
+                                                                // workspace's terminal cap still
+                                                                // applies: a click must not be a way
+                                                                // past a limit the owner set.
                                                                 if (specId) {
-                                                                    if (!selected.has(specId)) onToggleSpec(specId);
-                                                                } else if (row.kind === 'agent') {
-                                                                    void api()
-                                                                        .agents.start(ws.id, row.name)
-                                                                        // No refresh call needed:
-                                                                        // starting creates a terminal
-                                                                        // spec, main broadcasts it, and
-                                                                        // the effect above reloads the
-                                                                        // records when the spec list moves.
-                                                                        .catch(() => {});
+                                                                    onOpenSpec(specId);
+                                                                    return;
                                                                 }
+                                                                if (row.kind !== 'agent') return;
+                                                                void (async () => {
+                                                                    // The START reports the spec it
+                                                                    // created, so the panel opens
+                                                                    // from the answer rather than
+                                                                    // waiting for the broadcast to
+                                                                    // come back round and hoping the
+                                                                    // user clicks again.
+                                                                    const started = await api()
+                                                                        .agents.start(ws.id, row.name)
+                                                                        .catch(() => null);
+                                                                    if (started?.ok && started.id) onOpenSpec(started.id);
+                                                                })();
                                                             }}
                                                             onContextMenu={(p) => {
                                                                 // THE SQUARE IS THE AGENT, so it

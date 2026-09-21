@@ -494,7 +494,7 @@ export interface MobileDataDeps {
     restartAgentTerminal?: (
         id: string,
         mode?: 'resume' | 'fresh',
-    ) =>
+    ) => Promise<
         | {
               ok: true;
               oldId: string;
@@ -506,7 +506,8 @@ export interface MobileDataDeps {
               state: 'relaunching';
               note: string;
           }
-        | { ok: false; error: string };
+        | { ok: false; error: string }
+    >;
     /**
      * Edit a specialized (agent) terminal's AgentInbox settings — purpose / scope /
      * wake-on-DM — on the HOST (live broker + persisted spec meta). Lets a REMOTE
@@ -2718,7 +2719,7 @@ export async function handleApi(
                 sendJson(
                     res,
                     200,
-                    deps.restartAgentTerminal(
+                    await deps.restartAgentTerminal(
                         String(d.id ?? ''),
                         d.mode === 'fresh' ? 'fresh' : 'resume',
                     ),

@@ -210,14 +210,14 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         // THE BUG, stated as the owner meets it. The graceful restart refuses —
         // correctly, it has no conversation to carry — and refuses BEFORE any
         // teardown, so the wedged terminal is still sitting there afterwards.
-        const refused = restartAgentTerminal(id);
+        const refused = await restartAgentTerminal(id);
         expect(refused.ok).toBe(false);
         expect(original.killed).toBe(false);
         expect(terminalManager().isLive(id)).toBe(true);
 
         // THE SECOND OPERATION. No resume grammar and no captured id are needed
         // to kill a process and start it again.
-        const r = restartAgentTerminal(id, 'fresh');
+        const r = await restartAgentTerminal(id, 'fresh');
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -242,7 +242,7 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         const agentId = getTerminalSpec(id)?.meta?.agent_id;
         expect(agentId).toBeTruthy();
 
-        const r = restartAgentTerminal(id, 'fresh');
+        const r = await restartAgentTerminal(id, 'fresh');
 
         // The SAME spec, and the same AgentInbox identity. A fresh CONVERSATION
         // is not a fresh AGENT: minting a new `agent_id` strands its queued mail,
@@ -261,7 +261,7 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         expect(sid).toBeTruthy();
         plantTranscript(wsDir, sid);
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -274,7 +274,7 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
         plantTranscript(wsDir, sid);
 
-        const r = restartAgentTerminal(id, 'fresh');
+        const r = await restartAgentTerminal(id, 'fresh');
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -307,7 +307,7 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         });
         plantTranscript(wsDir, sid);
 
-        const r = restartAgentTerminal('spec-embedded-fresh', 'fresh');
+        const r = await restartAgentTerminal('spec-embedded-fresh', 'fresh');
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -338,7 +338,7 @@ describe('genie#443 / genie#438 — the workstation operator uses the SAME fresh
         });
     }
 
-    it('joins the AgentInbox under its OWN id, not a minted one', () => {
+    it('joins the AgentInbox under its OWN id, not a minted one', async () => {
         // genie#438. The OSA branch DELETED the spec and re-created it, so
         // `createAgentTerminal` minted a random `agent_id`, joined the broker
         // under it, and only then was the spec re-stamped `genie:workstation` —
@@ -347,7 +347,7 @@ describe('genie#443 / genie#438 — the workstation operator uses the SAME fresh
         // kept, so the identity is inherited rather than re-minted.
         seedOperator();
 
-        const r = restartAgentTerminal(GENIE_OS_TERMINAL_ID);
+        const r = await restartAgentTerminal(GENIE_OS_TERMINAL_ID);
 
         expect(r.ok).toBe(true);
         expect(getTerminalSpec(GENIE_OS_TERMINAL_ID)?.meta?.agent_id).toBe('genie:workstation');

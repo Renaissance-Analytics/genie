@@ -538,7 +538,7 @@ export async function agentSidecarAction(
     if (action === 'restart' || action === 'restart-fresh') {
         const live = liveTerminalOf(sidecar);
         if (!live) return { ok: false, error: `${sidecar.name} is not running.` };
-        const result = restartAgentTerminal(
+        const result = await restartAgentTerminal(
             live,
             action === 'restart-fresh' ? 'fresh' : 'resume',
         );

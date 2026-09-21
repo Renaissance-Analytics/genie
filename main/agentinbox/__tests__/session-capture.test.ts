@@ -333,6 +333,30 @@ describe('resolveRestartCommand — graceful restart, never a phantom --resume',
         });
     });
 
+    it('REFUSES rather than emitting a phantom --continue when the cwd has NO chat', () => {
+        // THE BUG the owner hit: `renderAgentLaunch` MINTS a `--session-id` at
+        // create time, so an agent that NEVER STARTED still has a captured id.
+        // That id has no transcript, which is the same `verified === false` a
+        // genuinely DRIFTED id produces — and the drift fallback then rendered
+        // `claude --continue` into a directory that has never held a chat. The
+        // CLI answers "No conversation found to continue" and exits, leaving a
+        // bare shell where an agent should be.
+        //
+        // The two cases are only indistinguishable if nobody asks the one
+        // question that separates them: does this cwd hold ANY conversation?
+        const r = resolveRestartCommand(claude({ chat_session_id: 'never-ran' }), missing, () => false);
+        expect('error' in r).toBe(true);
+    });
+
+    it('still falls back to --continue when the cwd DOES hold a chat', () => {
+        // POSITIVE CONTROL. The drift fallback is right whenever there is
+        // something to continue — without this, the test above would also pass
+        // against a version that simply deleted `--continue` altogether.
+        expect(
+            resolveRestartCommand(claude({ chat_session_id: 'drifted' }), missing, () => true),
+        ).toEqual({ command: 'claude --continue' });
+    });
+
     it('REFUSES a claude agent with no captured session (would lose the chat)', () => {
         const r = resolveRestartCommand(claude(), exists);
         expect('error' in r).toBe(true);
@@ -349,6 +373,44 @@ describe('resolveRestartCommand — graceful restart, never a phantom --resume',
     it('REFUSES a non-agent terminal', () => {
         expect('error' in resolveRestartCommand({ meta: {} }, exists)).toBe(true);
         expect('error' in resolveRestartCommand(null, exists)).toBe(true);
+    });
+});
+
+describe('agentRelaunchDecision — a minted id is not a conversation', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+
+    it('launches FRESH when the captured id has no transcript and the cwd has no chat', () => {
+        // An agent that never started: a minted `--session-id` and an empty
+        // project dir. `--continue` here is a guess that dead-ends, so the only
+        // honest relaunch is a new conversation.
+        const d = agentRelaunchDecision(
+            claude({ chat_session_id: 'never-ran' }),
+            false,
+            () => false,
+            () => false,
+        );
+        expect(d?.command).toMatch(/^claude --session-id [0-9a-fA-F-]{8,}$/);
+        expect(d?.command).not.toContain('--continue');
+    });
+
+    it('CONTINUES when the id drifted but the cwd still holds a chat', () => {
+        // POSITIVE CONTROL for the case above.
+        expect(
+            agentRelaunchDecision(
+                claude({ chat_session_id: 'drifted' }),
+                false,
+                () => false,
+                () => true,
+            ),
+        ).toEqual({ command: 'claude --continue' });
+    });
+
+    it('keeps --continue when no cwd probe is supplied (callers that cannot check)', () => {
+        expect(
+            agentRelaunchDecision(claude({ chat_session_id: 'drifted' }), false, () => false),
+        ).toEqual({ command: 'claude --continue' });
     });
 });
 

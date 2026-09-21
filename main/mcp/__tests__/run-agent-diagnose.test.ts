@@ -89,6 +89,7 @@ vi.mock('../../tray', () => ({
 }));
 
 import { app } from 'electron';
+import { useTempClaudeHome, writeTranscript } from '../../__tests__/support/claude-transcripts';
 import {
     addWorkspace,
     createTerminalSpec,
@@ -118,6 +119,8 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(wsDir, { recursive: true });
 
 (app as unknown as { getPath: (name: string) => string }).getPath = () => dataDir;
+
+useTempClaudeHome();
 
 initDatabase(dataDir);
 
@@ -187,6 +190,13 @@ async function bootedAgent(): Promise<{ specId: string; inboxId: string; agentId
     markWorkspaceAgentTransportState(getDb(), agentId, 'claude-channel', { ok: true });
     markWorkspaceAgentReadyByTerminal(getDb(), specId);
     harnessTransportRegistry.bindPull(inboxId, 'claude-channel');
+    // A booted agent HAS SPOKEN: write the transcript Claude writes when its
+    // session begins. A restart is resolved against what is on disk, so without
+    // this the agent looks like one that never started — and every diagnosis
+    // about a restart that WOULD work would be reasoning about a restart that
+    // correctly refuses.
+    const sid = getTerminalSpec(specId)?.meta?.chat_session_id;
+    if (sid) writeTranscript(wsDir, sid);
     return { specId, inboxId, agentId };
 }
 

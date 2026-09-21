@@ -46,6 +46,12 @@ interface TerminalProps {
     onScreen?: boolean;
     /** Fires when the underlying pty exits, with the captured exit code. */
     onExit?: (info: { exitCode: number; signal?: number }) => void;
+    /**
+     * This panel is the focused one. The panel already draws a focus ring from
+     * the same fact; this is what puts the KEYBOARD there, which is the
+     * difference between a terminal that looks selected and one you can type in.
+     */
+    focused?: boolean;
     /** Optional className applied to the host element (height/width should be set here). */
     className?: string;
     /** Shell profiles offered by the host (renders fancy-term's ShellSwitcher when set). */
@@ -89,6 +95,7 @@ export default function Terminal({
     workspaceId,
     onScreen,
     onExit,
+    focused,
     className,
     shells,
     activeShell,
@@ -302,6 +309,18 @@ export default function Terminal({
             handle.focus();
         })();
     }, [tryPasteImage]);
+
+    // Take the KEYBOARD when this panel becomes the focused one.
+    //
+    // Selecting a panel used to move the focus ring and nothing else, so opening
+    // an agent and typing to it were two separate clicks — the owner counted
+    // three to reach a new agent, and this was the last of them. Only on the
+    // transition into focus: re-focusing on every render would steal the caret
+    // back from a find bar or a dialog opened over a focused terminal.
+    useEffect(() => {
+        if (!focused) return;
+        handleRef.current?.focus();
+    }, [focused]);
 
     // A raw Ctrl+V on a REMOTE host in contextmenu/linux mode: normally Ctrl+V is a
     // raw ^V byte to the pty (not a paste), but a copied image can't reach the HOST
@@ -739,6 +758,48 @@ export default function Terminal({
                     `\r\n\x1b[31mFailed to start terminal: ${msg}\x1b[0m`,
                 );
             });
+
+        // RE-ATTACH after the pty behind this id was replaced (an agent restart).
+        //
+        // The old pty's exit already ran: this window was dropped as an owner
+        // and the screen ends in `[process exited]`. The replacement streams to
+        // the owner list, which no longer contains us — so without this the
+        // panel shows a dead terminal that is in fact alive, and only closing
+        // and reopening it recovers. That is the freeze.
+        //
+        // Deliberately NOT a remount. Unmounting runs the cleanup below, which
+        // calls `terminal.detach()` — and a detach by the last owner of a
+        // non-retained pty KILLS it, so 'refresh the panel' would destroy the
+        // agent that was just started. Re-running the create is the same rejoin
+        // a freshly opened panel performs: it re-registers ownership and replays
+        // the live scrollback.
+        const offRestarted = api().on.terminalRestarted(({ id: hitId }) => {
+            if (hitId !== id || !alive) return;
+            // Full reset first: the dead pty's last screen (and any TUI
+            // alt-screen/mouse-mode it left behind) must not frame the new one.
+            handle.write('c');
+            void api()
+                .terminal.create({
+                    id,
+                    cwd,
+                    shell,
+                    args,
+                    env,
+                    workspaceId,
+                    cols: sizeRef.current.cols,
+                    rows: sizeRef.current.rows,
+                })
+                .then((res) => {
+                    if (res.scrollback) handle.write(sanitizeReplay(res.scrollback));
+                    void api()
+                        .terminal.resize(id, sizeRef.current.cols, sizeRef.current.rows)
+                        .catch(() => {});
+                })
+                .catch(() => {
+                    /* the replacement never came up — the host reports that */
+                });
+        });
+        cleanups.push(offRestarted);
 
         // Reliability floor: snapshot every 30s while the terminal is live, so
         // a crash (not a clean quit) still leaves recent history on disk.

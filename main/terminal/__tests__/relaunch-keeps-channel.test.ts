@@ -63,6 +63,14 @@ const WS_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-relaunch-channel-')
 fs.mkdirSync(path.join(WS_PATH, '.agents', '_genie'), { recursive: true });
 fs.writeFileSync(path.join(WS_PATH, '.agents', '_genie', 'agentinbox-claude-channel.cjs'), '// bridge');
 
+// The agent this suite revives HAS a conversation — that is the premise of
+// every assertion below ("it is still the SAME conversation, not a fresh one").
+// Genie now reads that off disk rather than taking the spec's word for it, so
+// the fixture has to put it there. See support/claude-transcripts.ts.
+const SESSION_ID = 'c451ee41-b285-46e3-8633-751b9760b060';
+useTempClaudeHome();
+writeTranscript(WS_PATH, SESSION_ID);
+
 let settings: Record<string, string> = {};
 const specs = new Map<string, Record<string, unknown>>();
 
@@ -98,6 +106,7 @@ vi.mock('../genie-adapter', () => ({
 }));
 
 import { createAgentTerminal } from '../ipc';
+import { useTempClaudeHome, writeTranscript } from '../../__tests__/support/claude-transcripts';
 import { terminalManager, configureInProcessBackend } from '@particle-academy/fancy-term-host';
 
 configureInProcessBackend({
@@ -134,7 +143,7 @@ async function revive(meta: Record<string, unknown>): Promise<string> {
         label: 'claude · tynn',
         cwd: WS_PATH,
         type: 'terminal',
-        meta: { agent: 'claude', agent_id: 'agent-1', chat_session_id: 'c451ee41-b285-46e3-8633-751b9760b060', ...meta },
+        meta: { agent: 'claude', agent_id: 'agent-1', chat_session_id: SESSION_ID, ...meta },
     });
     createAgentTerminal({
         id: 'term-1',
