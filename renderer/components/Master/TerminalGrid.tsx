@@ -1,6 +1,7 @@
 import {
     useCallback,
     useEffect,
+    useMemo,
     useRef,
     useState,
     type CSSProperties,
@@ -11,6 +12,7 @@ import AgentPanel from './AgentPanel';
 import type { ReactNode } from 'react';
 import { agentForSpec } from '../../lib/agent-for-spec';
 import { agentSidecarScreen } from '../../lib/agent-sidecar-screen';
+import EmptyWorkspace from './EmptyWorkspace';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import CodePanel from '../Code/CodePanel';
@@ -357,6 +359,10 @@ const ResizableGrid = ({
     addDisabledReason,
     panelDrag,
 }: ResizableGridProps) => {
+    // Which terminals are LIVE, for the empty-floor agent grid. Memoised because
+    // it is a dependency of the roster effect inside EmptyWorkspace — a fresh Set
+    // every render would re-run that effect forever.
+    const liveSpecIds = useMemo(() => new Set(allSpecs.map((sp) => sp.id)), [allSpecs]);
     const count = ordered.length;
     const { cols, rows } = dims(mode, count);
     const sig = signature(mode, count);
@@ -623,40 +629,22 @@ const ResizableGrid = ({
                 off-workspace background panels don't remount when switching
                 to/from an empty workspace. */}
             {empty && emptyState}
-            {empty && !emptyState && (
+            {empty && !emptyState && activeWorkspaceId && (
+                // Replaces the Add Terminal / Add Files tiles (owner request).
+                // Those offered a verb with no reason to someone who has not set
+                // the workspace up, and an offer to make a fourth thing to
+                // someone whose agents are already running out of sight.
                 <div className="addtile-overlay">
-                    <div className="addtile-group">
-                        <button
-                            type="button"
-                            className="addtile"
-                            onClick={onAddTerminal}
-                            disabled={addDisabled}
-                            title={addDisabled ? addDisabledReason : undefined}
-                        >
-                            <span className="ai">
-                                <IconPlus size={18} />
-                            </span>
-                            <span className="at">Add Terminal</span>
-                            <span className="as">a live shell in this workspace</span>
-                        </button>
-                        {onAddCode && (
-                            <button
-                                type="button"
-                                className="addtile"
-                                onClick={onAddCode}
-                                disabled={addDisabled}
-                                title={addDisabled ? addDisabledReason : undefined}
-                            >
-                                <span className="ai">
-                                    <IconCode size={18} />
-                                </span>
-                                <span className="at">Add Files</span>
-                                <span className="as">
-                                    browse + edit files in this workspace
-                                </span>
-                            </button>
-                        )}
-                    </div>
+                    <EmptyWorkspace
+                        workspaceId={activeWorkspaceId}
+                        workspaceName={
+                            workspacesById.get(activeWorkspaceId)?.project_name ?? 'This workspace'
+                        }
+                        specs={allSpecs}
+                        activeIds={liveSpecIds}
+                        onOpenAgent={onMarkActive}
+                        onAddTerminal={onAddTerminal}
+                    />
                 </div>
             )}
         </div>
