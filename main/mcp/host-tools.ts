@@ -2945,6 +2945,11 @@ export async function agentInboxForMcp(
                     ? {
                           ok: true,
                           delivered: r.delivered,
+                          // Forwarded, or the whole point is lost at this layer:
+                          // the broker knows nothing is holding the other end and
+                          // the caller never hears it.
+                          ...(r.live === undefined ? {} : { live: r.live }),
+                          ...(r.note ? { note: r.note } : {}),
                           ...(attachments.length ? { attachments } : {}),
                       }
                     : { ok: false, error: r.error };

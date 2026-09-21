@@ -158,6 +158,17 @@ export type AgentInboxSendResult =
           ok: true;
           delivered: number;
           message: AgentInboxMessage;
+          /**
+           * Was a native transport BOUND when this was sent? Absent means
+           * unknown (no resolver wired), which is NOT the same as `false`.
+           *
+           * `delivered` says the message reached the durable inbox. This says
+           * whether anyone is currently holding the other end — the distinction
+           * that let a send into a dead sidecar transport report success.
+           */
+          live?: boolean;
+          /** Present only when `live === false`: what that means for the caller. */
+          note?: string;
       }
     | {
           ok: false;
@@ -329,6 +340,24 @@ export class AgentInboxBroker {
         fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => boolean | Promise<boolean> | void,
     ): void {
         this.transportSink = fn;
+    }
+
+    /**
+     * Is a native transport BOUND for this agent right now? (genie#725 follow-on.)
+     *
+     * Separate from {@link setTransportSink} because they answer different
+     * questions. The sink is "take this message"; this is "is anyone holding the
+     * other end" — the same thing `diagnose` reports, and the thing `send` had
+     * no way to ask.
+     *
+     * `null` means UNKNOWN, not "no". The broker runs in tests and in contexts
+     * with no harness registry, and an unwired resolver reported as "nothing is
+     * listening" would cry wolf on every send.
+     */
+    private transportBoundResolver: ((agent: AgentInboxAgent) => boolean) | null = null;
+
+    setTransportBoundResolver(fn: (agent: AgentInboxAgent) => boolean): void {
+        this.transportBoundResolver = fn;
     }
 
     setNotifySink(fn: (target: AgentInboxNotifyTarget, msg: AgentInboxMessage) => void): void {
@@ -1611,7 +1640,33 @@ export class AgentInboxBroker {
                 this.registerEscalation(msg, target);
             }
             this.emitLagIfChanged();
-            return { ok: true, delivered: 1, message: msg };
+            // WHETHER ANYONE IS HOLDING THE OTHER END.
+            //
+            // `delivered: 1` means the message reached the durable inbox, and
+            // that stays true: mail waiting for an agent that will poll again is
+            // delivered in every sense that matters. What it never distinguished
+            // is a transport the DATABASE calls bound while nothing holds it —
+            // reported by claude:fancy after a sidecar's transport died across an
+            // upgrade: "I sent a full briefing ... and reported to my owner that
+            // it had landed. It had not. Nothing was listening."
+            //
+            // `diagnose` could already see it. `send` could not, so the only
+            // tool that knew was the one nobody runs unless already suspicious.
+            const bound = this.transportBoundResolver?.(target);
+            return {
+                ok: true,
+                delivered: 1,
+                message: msg,
+                ...(bound === undefined ? {} : { live: bound }),
+                ...(bound === false
+                    ? {
+                          note:
+                              `${target.label} has no live transport bound right now, so nothing is listening — ` +
+                              'the message is queued durably and will be read if it reconnects, but do not ' +
+                              'report it as received. `runAgent diagnose` names the cause and the repair.',
+                      }
+                    : {}),
+            };
         }
 
         return { ok: false, error: 'Send needs `to` (an agent).' };

@@ -1879,6 +1879,15 @@ export interface AgentInboxResult {
      *  rides an `ok: false` result — a broadcast nobody received is a failure, not
      *  a quiet success (genie #65), and the caller still needs the count. */
     delivered?: number;
+    /** send (DM): was a native transport BOUND when this was sent? Absent means
+     *  unknown, which is NOT the same as `false`. `delivered` says the message
+     *  reached the durable inbox; this says whether anyone is holding the other
+     *  end — the distinction that let a send into a dead sidecar transport
+     *  report success and a briefing go nowhere. */
+    live?: boolean;
+    /** send (DM): present only when `live === false` — what that means for the
+     *  caller, and where to look. */
+    note?: string;
     /** send (channel): the channel key the message resolved to. */
     channel?: string;
     /** send (channel): the sender was NOT a member and `send` re-added it — its
@@ -4844,8 +4853,15 @@ ${body}` }],
                     // a while, so anything it "reported" in between went nowhere.
                     const files = result.attachments?.length ?? 0;
                     summary =
-                        `Sent — delivered to ${result.delivered ?? 0} recipient(s).` +
+                        // QUEUED, not "received", when nothing holds the other
+                        // end. The old wording was the same either way, so an
+                        // agent briefing a peer whose transport had died across
+                        // an upgrade was told it landed and said so to its human.
+                        (result.live === false
+                            ? `Queued — ${result.delivered ?? 0} recipient(s), but NOT received.`
+                            : `Sent — delivered to ${result.delivered ?? 0} recipient(s).`) +
                         (files > 0 ? ` ${files} file(s) attached.` : '') +
+                        (result.note ? ` ${result.note}` : '') +
                         (result.rejoined
                             ? ` (You were no longer in ${result.channel} — rejoined.)`
                             : '');
