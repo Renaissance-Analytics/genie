@@ -408,3 +408,50 @@ describe('refreshProviderAvailability — after a deliberate install', () => {
         expect(launchBlockReason('genie')).toBeDefined();
     });
 });
+
+/**
+ * AN UNATTENDED NETWORK INSTALL NEEDS A GATE, and the E2E suite is the case
+ * that proved it.
+ *
+ * Wiring the boot pass to the catalog gave it, for the first time, a real
+ * installer to run — so a boot that finds `genie` missing now fires
+ * `npm install --global <tarball>` by itself. That is what genie#313 asked for
+ * on a person's machine, and it is wrong in a clean VM: the E2E suite launches
+ * the app many times per run, and each launch would start a 255-package network
+ * install that nothing in the suite is testing, holding handles into teardown.
+ *
+ * This is NOT "turn it off to make CI green". A test VM installing the product's
+ * own TUI from the network on every app launch is a hermeticity bug in its own
+ * right — the suite would depend on GitHub being up to test a window opening.
+ * The gate lives in `providerWanted`, with the other reasons not to install, so
+ * it is one pure decision rather than a condition sprinkled at the call site.
+ */
+describe('providerWanted — unattended installs need consent from the context', () => {
+    it('does not want an install when the host has opted out of unattended ones', () => {
+        expect(
+            providerWanted('genie', {
+                hasWorkspace: true,
+                osaProvider: 'genie',
+                unattendedInstalls: false,
+            }),
+        ).toBe(false);
+    });
+
+    it('POSITIVE CONTROL: the same provider IS wanted when they are allowed', () => {
+        // Otherwise the assertion above would pass against a `providerWanted`
+        // that had simply stopped wanting anything.
+        expect(
+            providerWanted('genie', {
+                hasWorkspace: true,
+                osaProvider: 'genie',
+                unattendedInstalls: true,
+            }),
+        ).toBe(true);
+    });
+
+    it('defaults to ALLOWED when the caller says nothing', () => {
+        // The desktop boot is the caller that matters and it wants them; an
+        // omitted flag must not silently disable the feature genie#313 asked for.
+        expect(providerWanted('genie', { hasWorkspace: true, osaProvider: 'genie' })).toBe(true);
+    });
+});

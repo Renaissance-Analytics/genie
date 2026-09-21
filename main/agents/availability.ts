@@ -59,6 +59,19 @@ export interface AvailabilityContext {
      * whenever nothing is overridden.
      */
     commandFor?(def: TuiDef): string | undefined;
+    /**
+     * May this host run an UNATTENDED install? Default `true` — the desktop boot
+     * is the caller genie#313 was written for, and an omitted flag must not
+     * silently disable it.
+     *
+     * `false` for the E2E suite, which launches the app many times per run in a
+     * clean VM: each launch would start a real 255-package network install of
+     * the Genie TUI that nothing in the suite is testing, and a test that needs
+     * GitHub to be up in order to prove a window opens is not a test of the
+     * window. The gate lives HERE, beside the other reasons not to install,
+     * rather than as a condition at the call site.
+     */
+    unattendedInstalls?: boolean;
 }
 
 /**
@@ -71,6 +84,7 @@ export interface AvailabilityContext {
  */
 export function providerWanted(id: AgentTuiId, ctx: AvailabilityContext): boolean {
     if (!TUI_REGISTRY[id].ownedBinary) return false;
+    if (ctx.unattendedInstalls === false) return false;
     return ctx.hasWorkspace || ctx.osaProvider === id;
 }
 

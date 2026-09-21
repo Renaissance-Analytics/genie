@@ -1639,6 +1639,12 @@ app.whenReady().then(async () => {
             // `agent_command_genie` at a full path was marked unavailable and
             // then blocked from a launch that would have worked.
             commandFor: (def) => osSettings[def.commandSettingKey],
+            // Not in a test VM. The E2E suite launches this app many times per
+            // run, and the boot pass now has a REAL installer to run — so each
+            // launch would start a 255-package network install of the Genie TUI
+            // that nothing in the suite is testing, and would still be holding
+            // handles when the spec asks the app to close.
+            unattendedInstalls: process.env.GENIE_E2E !== '1',
         },
         liveAvailabilityDeps,
     ).catch((e) => {
