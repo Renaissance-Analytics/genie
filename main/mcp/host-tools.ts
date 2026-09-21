@@ -1585,6 +1585,13 @@ export async function manageTerminalsForMcp(
                     // Whether an empty read means "quiet", "restored from the pty
                     // host after a Genie restart", or "no pty at all" (genie#217).
                     state: r.state,
+                    // Genie holds NO buffer for this terminal, so empty `data`
+                    // means "cannot see it", not "it was quiet" — the producer
+                    // documents that distinction and this layer was dropping it.
+                    // Third instance of the same shape in one session, found by
+                    // diffing produced fields against forwarded ones rather than
+                    // by reading harder.
+                    ...(r.buffered ? {} : { buffered: false }),
                     // The dead pty's LAST WORDS (genie#733). Retained separately
                     // from the live buffer so a relaunch cannot overwrite them --
                     // and forwarded HERE, or the retention is invisible to every
@@ -2685,6 +2692,13 @@ export async function runAgentForMcp(
                     cursor: r.cursor,
                     dropped: r.dropped,
                     state: r.state,
+                    // Genie holds NO buffer for this terminal, so empty `data`
+                    // means "cannot see it", not "it was quiet" — the producer
+                    // documents that distinction and this layer was dropping it.
+                    // Third instance of the same shape in one session, found by
+                    // diffing produced fields against forwarded ones rather than
+                    // by reading harder.
+                    ...(r.buffered ? {} : { buffered: false }),
                     // The AGENT read needs this most: `diagnose` sends people
                     // here for the exit tail (genie#733).
                     ...(r.exitTail ? { exitTail: r.exitTail } : {}),

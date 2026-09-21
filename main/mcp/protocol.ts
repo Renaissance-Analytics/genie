@@ -1554,6 +1554,11 @@ export interface ManageTerminalsResult {
      *  evidence of why an agent went, and then recommends a restart, so it has to
      *  survive the restart its own advice causes. */
     exitTail?: { tail: string; exitCode: number; at: number };
+    /** read: present and FALSE when Genie holds no buffer for this terminal at
+     *  all. Empty `data` then means "cannot see it", not "it was quiet" — a
+     *  distinction `state` does not carry, because a bufferless terminal whose
+     *  pty is alive still reports `state: 'live'`. */
+    buffered?: boolean;
     /** write: the input BODY reached the pty. False (with `ok: false`) means
      *  NOTHING was sent — the terminal has no running pty. */
     delivered?: boolean;
@@ -1755,6 +1760,11 @@ export interface RunAgentResult {
      *  evidence of why an agent went, and then recommends a restart, so it has to
      *  survive the restart its own advice causes. */
     exitTail?: { tail: string; exitCode: number; at: number };
+    /** read: present and FALSE when Genie holds no buffer for this terminal at
+     *  all. Empty `data` then means "cannot see it", not "it was quiet" — a
+     *  distinction `state` does not carry, because a bufferless terminal whose
+     *  pty is alive still reports `state: 'live'`. */
+    buffered?: boolean;
     /** send: the prompt BODY reached the pty. False (with `ok: false`) means
      *  NOTHING was sent — that agent terminal has no running pty. */
     delivered?: boolean;
