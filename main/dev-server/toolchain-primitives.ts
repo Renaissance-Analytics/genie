@@ -33,10 +33,17 @@ const INSTALL_TIMEOUT_MS = INSTALL_BUDGET_MS;
 const FETCH_TIMEOUT_MS = 30_000;
 
 /** Run a command with OS elevation. Already-privileged (root/CI) spawns direct;
- *  otherwise through the OS launcher (UAC / osascript / pkexec), which `-Wait`s
- *  so the exit code reflects the installer. The real success signal is still the
- *  post-install `verify` re-probe — an elevated launch can obscure the child's
- *  own code. */
+ *  otherwise through the OS launcher (UAC / osascript / pkexec).
+ *
+ *  This used to claim the launcher "`-Wait`s so the exit code reflects the
+ *  installer". It did not: `-Wait` without `-PassThru` reports POWERSHELL's
+ *  code, which is 0 either way, so a failed elevated install looked like a
+ *  successful one (genie#609). The Windows branch now captures the process and
+ *  exits with the CHILD's code.
+ *
+ *  The post-install `verify` re-probe remains the real success signal — an
+ *  elevated launch can still obscure a child that reports zero and did nothing
+ *  — but the exit code is no longer actively lying. */
 async function runElevated(command: string, args: string[]): Promise<CommandResult> {
     const platform = process.platform;
     if (isProcessElevated(platform)) {

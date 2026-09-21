@@ -244,6 +244,41 @@ function decodeWindowsBatchScript(argv: string[]): string {
     return Buffer.from(m![1], 'base64').toString('utf16le');
 }
 
+describe("elevationLauncherArgv — the elevated child's exit code (genie#609)", () => {
+    // `Start-Process -Wait` waits for the child and then reports POWERSHELL's
+    // exit code, which is 0 whether the installer succeeded or failed. Without
+    // -PassThru there is no process object to read a code from, so every
+    // elevated install on Windows reported success. The docblock over
+    // `runElevated` asserted the opposite — "which -Waits so the exit code
+    // reflects the installer" — so the code and its documentation were both
+    // wrong in the same direction, which is why nobody caught it.
+    it('asks for the process object, so there is an exit code to read at all', () => {
+        const argv = elevationLauncherArgv('certutil', ['-addstore', 'Root'], 'win32');
+        expect(argv.join(' ')).toContain('-PassThru');
+    });
+
+    it("exits with the CHILD's code, not PowerShell's", () => {
+        const inner = elevationLauncherArgv('certutil', ['-addstore', 'Root'], 'win32').at(-1)!;
+        // The waited-on process is captured and its code becomes the launcher's.
+        expect(inner).toMatch(/\$p\s*=\s*Start-Process/);
+        expect(inner).toContain('exit $p.ExitCode');
+    });
+
+    it('does the same when the command takes NO arguments', () => {
+        // The no-args branch is a separate string and was the one most likely to
+        // be fixed only in the branch someone happened to be looking at.
+        const inner = elevationLauncherArgv('certutil', [], 'win32').at(-1)!;
+        expect(inner).toContain('-PassThru');
+        expect(inner).toContain('exit $p.ExitCode');
+    });
+
+    it('POSITIVE CONTROL: still elevates and still waits', () => {
+        const inner = elevationLauncherArgv('certutil', ['-addstore'], 'win32').at(-1)!;
+        expect(inner).toContain('-Verb RunAs');
+        expect(inner).toContain('-Wait');
+    });
+});
+
 describe('elevationLauncherArgv', () => {
     it('uses pkexec on Linux (clean argv, no shell)', () => {
         expect(elevationLauncherArgv('certutil', ['a', 'b'], 'linux')).toEqual(['pkexec', 'certutil', 'a', 'b']);

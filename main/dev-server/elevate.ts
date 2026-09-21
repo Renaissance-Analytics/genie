@@ -237,10 +237,20 @@ export function elevationLauncherArgv(cmd: string, args: string[], platform: Nod
         const ps = [cmd, ...args].map(psQuote);
         const fileArg = ps[0];
         const argList = ps.slice(1).join(',');
-        const inner = argList
-            ? `Start-Process -FilePath ${fileArg} -ArgumentList ${argList} -Verb RunAs -Wait`
-            : `Start-Process -FilePath ${fileArg} -Verb RunAs -Wait`;
-        return ['powershell', '-NoProfile', '-Command', inner];
+        // `-PassThru` and `exit $p.ExitCode` are the whole point here (genie#609).
+        //
+        // `-Wait` waits for the elevated child and then PowerShell exits with
+        // ITS OWN code, which is 0 whether the installer worked or failed —
+        // and without `-PassThru` there is no process object to read a code
+        // from at all. So every elevated install reported success, and the
+        // docblock over `runElevated` asserted the opposite ("which -Waits so
+        // the exit code reflects the installer"): the code and its
+        // documentation were wrong in the same direction, which is how it
+        // survived. Capture the process, then exit with the child's code.
+        const start = argList
+            ? `Start-Process -FilePath ${fileArg} -ArgumentList ${argList} -Verb RunAs -Wait -PassThru`
+            : `Start-Process -FilePath ${fileArg} -Verb RunAs -Wait -PassThru`;
+        return ['powershell', '-NoProfile', '-Command', `$p = ${start}; exit $p.ExitCode`];
     }
     if (platform === 'darwin') {
         const shell = [cmd, ...args].map(shQuote).join(' ');

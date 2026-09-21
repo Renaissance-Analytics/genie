@@ -91,8 +91,15 @@ function readFileOrEmpty(file: string): string {
  *    have started overwriting files the user had deliberately locked — a
  *    regression dressed as a fix. Writability is therefore checked explicitly, and
  *    the answer is the same on every platform.
+ *
+ * EXPORTED (genie#409) because three `.gitignore` writers were each doing a
+ * bare `writeFileSync` on a file git reads concurrently — a git command landing
+ * in the truncate-then-write window sees an EMPTY ignore file and does not
+ * ignore the folder. One of them guards a Tynn bearer token. The safe write
+ * already existed here; it was just unreachable, so every caller outside this
+ * file reinvented the unsafe one.
  */
-function writeFileAtomic(file: string, content: string): void {
+export function writeFileAtomic(file: string, content: string): void {
     // A symlink is followed; a path that does not exist yet resolves to itself.
     let target = file;
     try {
