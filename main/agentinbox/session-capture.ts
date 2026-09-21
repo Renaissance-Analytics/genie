@@ -65,9 +65,30 @@ const WIRED_LAUNCH_PROFILES: Partial<Record<AgentInboxAgentType, LaunchProfile>>
     genie: { strategy: 'hook' },
 };
 
-/** The profile for every provider, wired or not. Never `undefined`. */
+/**
+ * The profile for every provider, wired or not. Never `undefined`.
+ *
+ * THE UNWIRED DEFAULT IS `none`, NOT `detect`. `detect` polls a directory for a
+ * new `*.jsonl` whose filename stem is the session id, and the directory it
+ * polls is `~/.claude/projects/<encoded cwd>` — Claude Code's layout and
+ * nobody else's. As a default it made Genie launch a Goose (or Gemini, or
+ * Aider) agent and then watch CLAUDE's transcripts for 30 seconds, stamping
+ * whatever appeared onto that agent's `chat_session_id`.
+ *
+ * Latent for most of them, because they cannot resume and the bogus id was
+ * never spent. NOT latent for the ones that can: a Claude session opened in the
+ * same folder inside that window got captured, and a later graceful restart
+ * rendered `<provider> --resume <a Claude uuid>` — a command that looks like a
+ * resume and cannot be one, which is precisely the failure `registry.ts` warns
+ * about (a wrong resume flag does not error, it silently starts a FRESH
+ * conversation while the UI says it resumed).
+ *
+ * `none` is what that default was always trying to express: capture nothing, so
+ * nothing claims a session id it does not have. A provider that genuinely has a
+ * capture mechanism gets a row above, where the evidence for it can be cited.
+ */
 export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = Object.fromEntries(
-    PROVIDER_IDS.map((id) => [id, WIRED_LAUNCH_PROFILES[id] ?? { strategy: 'detect' as const }]),
+    PROVIDER_IDS.map((id) => [id, WIRED_LAUNCH_PROFILES[id] ?? { strategy: 'none' as const }]),
 ) as Record<AgentInboxAgentType, LaunchProfile>;
 
 /** A launch already carries a session id / is resuming — don't inject a flag. */

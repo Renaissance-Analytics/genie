@@ -8,10 +8,12 @@ import {
     launchBlockReason,
     providerWanted,
     recordProviderAvailability,
+    refreshProviderAvailability,
     resetProviderAvailabilityCache,
     type AvailabilityDeps,
 } from '../availability';
-import { agentTuis, type TuiDef } from '../registry';
+import { agentTuis, providerDef, type TuiDef } from '../registry';
+import { agentCliForProvider } from '../agent-cli-catalog';
 
 /** A synthetic OWNED provider definition WITH a working `install` spec — the
  *  real registry deliberately configures none today (see `registry.ts`'s
@@ -26,7 +28,6 @@ function ownedProviderWithInstaller(): TuiDef {
         commandSettingKey: 'agent_command_genie',
         flagsSettingKey: 'agent_flags_genie',
         ownedBinary: true,
-        install: { manager: 'npm', package: 'some-future-genie-tui-package' },
         // Availability is about the BINARY existing; resume grammar plays no
         // part in it. Mirrors the real `genie` entry rather than inventing one.
         resume: null,
@@ -121,46 +122,56 @@ describe('ensureProviderInstalled', () => {
         expect(deps.runInstall).not.toHaveBeenCalled();
     });
 
-    it('surfaces a clear reason — and does not attempt an install — when the provider has no installer', async () => {
-        // This is `genie`'s REAL state today (registry.ts): owned,
-        // wanted, missing, but with no working install source yet.
-        const deps = fakeDeps();
+    it('INSTALLS the Genie TUI when it is wanted and missing', async () => {
+        // This test used to assert the opposite, on the premise that `genie` was
+        // "owned, wanted, missing, but with no working install source yet".
+        // That premise expired: the release-tarball installer landed in the
+        // agent-CLI catalog and is measured end to end in
+        // `genie-tui-install-gap.test.ts`. What kept the old behaviour alive was
+        // that this module read a SECOND table (`TuiDef.install`) which no row
+        // ever set — so the fix is one table, and the new contract is that a
+        // wanted, missing provider the catalog CAN install is installed.
+        const runInstall = vi.fn(async () => ({ ok: true, detail: 'added 255 packages' }));
+        let probes = 0;
+        const deps = fakeDeps({
+            runInstall,
+            resolveOnPath: vi.fn(async () => (probes++ === 0 ? undefined : '/usr/local/bin/genie')),
+        });
         const result = await ensureProviderInstalled(
             'genie',
             { hasWorkspace: true, osaProvider: 'claude' },
             deps,
         );
-        expect(result.status).toBe('unavailable');
-        expect(result).toMatchObject({
-            id: 'genie',
-            reason: expect.stringContaining('does not have an automatic installer'),
-        });
-        expect(deps.runInstall).not.toHaveBeenCalled();
+        expect(runInstall).toHaveBeenCalledWith(agentCliForProvider('genie')!.install);
+        expect(result).toMatchObject({ id: 'genie', status: 'installed' });
     });
 
-    it('never attempts an install for ANY provider in the real registry — none has one configured', async () => {
-        // Documents, at the orchestrator level, exactly what `registry.ts`'s
-        // comments say: no entry carries a `TuiDef.install`, so a boot pass
-        // against the real registry can only detect, never install. That is not
-        // an oversight — the unattended pass must never `npm i -g` over another
-        // vendor's CLI, and Genie's own TUI is not published yet. How a person
-        // installs one ON PURPOSE is the agent-CLI catalog's job, which is a
-        // consented action and a different question entirely. The
-        // install-attempt branches below are proven correct against a SYNTHETIC
-        // def instead (`ownedProviderWithInstaller`).
+    it('never installs a CLI Genie does not OWN, whatever the catalog says about it', async () => {
+        // THE SAFETY PROPERTY, which did not change and is the reason this test
+        // exists: an unattended boot pass must never `npm i -g` over another
+        // vendor's CLI. The catalog carries working installers for several of
+        // them (claude-code, codex, iflow…), so "it did not install anything"
+        // can no longer be asserted by the absence of install specs — the gate
+        // is `providerWanted`, and this proves the gate rather than the gap.
+        //
+        // It used to assert that NOTHING is ever installed, justified by "no
+        // entry carries a TuiDef.install". That was describing the bug: the
+        // field was unset everywhere, which is why Genie could not install its
+        // own TUI at boot either.
         const runInstall = vi.fn(async () => ({ ok: false, detail: 'should never run' }));
+        const installed: string[] = [];
         for (const id of agentTuis()) {
             const result = await ensureProviderInstalled(
                 id,
                 { hasWorkspace: true, osaProvider: 'claude' },
                 fakeDeps({ runInstall }),
             );
-            // Either it was never wanted (every third-party CLI, and `custom`)
-            // or it is wanted, missing and uninstallable (`genie`). Never a
-            // third thing, and never an attempt.
-            expect(['not-wanted', 'unavailable'], id).toContain(result.status);
+            if (result.status !== 'not-wanted') installed.push(id);
         }
-        expect(runInstall).not.toHaveBeenCalled();
+        // `genie` is the only provider Genie owns, so it is the only one the
+        // unattended pass may ever touch.
+        expect(installed).toEqual(['genie']);
+        expect(runInstall).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -259,5 +270,141 @@ describe('launchBlockReason — consulted synchronously at launch time', () => {
         expect(launchBlockReason('genie')).toBe('nope');
         // Unrelated providers are unaffected.
         expect(launchBlockReason('kilo')).toBeUndefined();
+    });
+});
+
+/**
+ * THE DEFECT the owner reported as "our TUI install workflows still don't work
+ * properly, at least not for genie tui".
+ *
+ * Genie kept TWO install tables. `AgentCliDef.install`
+ * (`agent-cli-catalog.ts`) is the maintained one — it carries a release-tarball
+ * installer for the Genie TUI that `genie-tui-install-gap.test.ts` measured end
+ * to end. `TuiDef.install` (`registry.ts`) is the one this module read, and NO
+ * ROW HAS EVER SET IT. So the boot pass took the `!def.install` branch every
+ * time a binary was missing, `runInstall` was dead code in production, and the
+ * owner was told "Genie does not have an automatic installer for it yet" —
+ * moments after the Toolchain page had installed it.
+ *
+ * Worse, it is not a degraded experience but a hard block: `launchBlockReason`
+ * reads this result, and `createAgentTerminal` THROWS on it before a pty is
+ * opened. There was no path out of it from that surface.
+ *
+ * Every test above this line runs against a SYNTHETIC provider carrying an
+ * install spec, which is exactly why none of them could catch it — the fixture
+ * supplied the field the real table was missing. These run against the real
+ * registry and the real catalog.
+ */
+describe('the install spec comes from the ONE maintained table', () => {
+    beforeEach(() => {
+        resetProviderAvailabilityCache();
+    });
+
+    it('ATTEMPTS the catalog installer for the Genie TUI when its binary is missing', async () => {
+        const runInstall = vi.fn(async () => ({ ok: true, detail: 'added 255 packages' }));
+        // Missing on the first probe, present after the install — the sequence a
+        // real install produces.
+        let probes = 0;
+        const resolveOnPath = vi.fn(async () => (probes++ === 0 ? undefined : '/usr/local/bin/genie'));
+        const result = await evaluateProviderInstall(providerDef('genie'), fakeDeps({ runInstall, resolveOnPath }));
+
+        // It ran the installer the CATALOG carries — the release tarball proven
+        // in genie-tui-install-gap.test.ts, not a package name invented here.
+        expect(runInstall).toHaveBeenCalledWith(agentCliForProvider('genie')!.install);
+        expect(result).toEqual({ id: 'genie', status: 'installed', command: '/usr/local/bin/genie' });
+    });
+
+    it('never claims Genie has no installer for a provider the catalog CAN install', async () => {
+        // Asserting on the REASON, not only the status. With the bug, the status
+        // was 'unavailable' — and it is STILL 'unavailable' when a working
+        // installer runs and the re-probe finds nothing. A status-only assertion
+        // passes either way and cannot distinguish the failure it names.
+        const result = await evaluateProviderInstall(providerDef('genie'), fakeDeps());
+
+        expect(result).toMatchObject({ status: 'unavailable' });
+        expect('reason' in result && result.reason).not.toMatch(/does not have an automatic installer/i);
+    });
+
+    it('POSITIVE CONTROL: still refuses for a provider the catalog genuinely cannot install', async () => {
+        // Otherwise "it does not say there is no installer" would pass against a
+        // version that simply deleted the message. Goose ships as a GitHub
+        // release binary, and the catalog says so in the user's words — that
+        // sentence is the one worth showing, not a generic line.
+        const runInstall = vi.fn(async () => ({ ok: true, detail: 'should never run' }));
+        const result = await evaluateProviderInstall(providerDef('goose'), fakeDeps({ runInstall }));
+
+        expect(runInstall).not.toHaveBeenCalled();
+        expect('reason' in result && result.reason).toContain('GitHub release binary');
+    });
+
+    it('probes the command the OWNER configured, not the default', async () => {
+        // `background.ts` launches `osSettings[commandSettingKey] || defaultCommand`
+        // but the probe read `defaultCommand` alone, so an owner who pointed
+        // `agent_command_genie` at a full path was marked unavailable — and then
+        // blocked from a launch that would have worked.
+        const resolveOnPath = vi.fn(async (bin: string) =>
+            bin === '/opt/genie/bin/genie' ? bin : undefined,
+        );
+        const result = await evaluateProviderInstall(
+            providerDef('genie'),
+            fakeDeps({ resolveOnPath }),
+            '/opt/genie/bin/genie',
+        );
+
+        expect(result).toEqual({
+            id: 'genie',
+            status: 'available',
+            command: '/opt/genie/bin/genie',
+        });
+    });
+});
+
+/**
+ * The block has to LIFT when the gap closes.
+ *
+ * `lastKnown` is written once, by the boot sweep, and nothing else ever touched
+ * it outside tests. So installing the Genie TUI from the Toolchain page left
+ * `launchBlockReason` still refusing every launch — with a message saying Genie
+ * had no installer — until the app was restarted, moments after Genie had
+ * installed it. A cache that outlives the fact it caches is worse than no cache:
+ * it turns a fixed problem into an unfixable-looking one.
+ */
+describe('refreshProviderAvailability — after a deliberate install', () => {
+    beforeEach(() => {
+        resetProviderAvailabilityCache();
+    });
+
+    it('lifts the launch block once the binary really is on PATH', async () => {
+        recordProviderAvailability({
+            id: 'genie',
+            status: 'unavailable',
+            reason: 'Genie TUI is not installed, and Genie does not have an automatic installer for it yet.',
+        });
+        expect(launchBlockReason('genie')).toBeDefined();
+
+        await refreshProviderAvailability(
+            'genie',
+            fakeDeps({ resolveOnPath: vi.fn(async () => '/usr/local/bin/genie') }),
+        );
+
+        expect(launchBlockReason('genie')).toBeUndefined();
+    });
+
+    it('does NOT install — the person already did, this only re-probes', async () => {
+        // A refresh that could install would turn "I just installed it" into a
+        // second unattended `npm i -g` behind the user's back.
+        const runInstall = vi.fn(async () => ({ ok: true, detail: 'should never run' }));
+        await refreshProviderAvailability('genie', fakeDeps({ runInstall }));
+        expect(runInstall).not.toHaveBeenCalled();
+    });
+
+    it('POSITIVE CONTROL: keeps the block when the binary is still missing', async () => {
+        // Otherwise "the block lifted" would pass against a refresh that simply
+        // cleared the cache without checking anything.
+        await refreshProviderAvailability(
+            'genie',
+            fakeDeps({ resolveOnPath: vi.fn(async () => undefined) }),
+        );
+        expect(launchBlockReason('genie')).toBeDefined();
     });
 });

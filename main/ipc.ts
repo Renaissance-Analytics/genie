@@ -373,6 +373,8 @@ import { openWorkstationById } from './workstation-open';
 import { visibleConnectableWorkstations } from './tynn/connectable-workstations';
 import { readWorkstationIdentity } from './tynn/workstation-identity';
 import { relayHostStatus, syncRelayHost, type RelayHostPublicStatus } from './tynn/relay-host-controller';
+import { refreshProviderAvailability } from './agents/availability';
+import { liveAvailabilityDeps } from './agents/availability-effects';
 import {
     getAutostart,
     isAutostartSupported,
@@ -398,6 +400,29 @@ import {
  * Never throws. A scan failure must not stop Genie from starting; the worst case
  * is the machine behaves exactly as it did before this existed.
  */
+/**
+ * A tool the person just installed may be an AGENT CLI, and the boot pass's
+ * verdict on it is now stale.
+ *
+ * `launchBlockReason` reads a cache written once at boot and by nothing else,
+ * so installing the Genie TUI from the Toolchain page left every launch refused
+ * — with a message saying Genie had no installer — until the app restarted,
+ * moments after Genie had installed it. Re-probe instead, so the block lifts on
+ * the evidence rather than on a restart.
+ *
+ * A no-op for every tool that is not a provider's CLI, and it never installs:
+ * the person already did that on purpose.
+ */
+async function liftLaunchBlockFor(tool: string): Promise<void> {
+    const provider = agentCliDef(tool)?.provider;
+    if (!provider) return;
+    try {
+        await refreshProviderAvailability(provider, liveAvailabilityDeps);
+    } catch {
+        /* a stale block is bad; a failed install handler is worse */
+    }
+}
+
 export async function applyStartupToolchainPrecedence(): Promise<void> {
     try {
         applyToolchainPrecedence(await currentManagedDirs(toolchainManagerDeps()));
@@ -1328,7 +1353,7 @@ export function registerIpcHandlers(): void {
             ...(selected ? { wanted: selected } : {}),
         });
         const perform = createToolchainInstallEffect(ctx, toolchainManagerDeps());
-        return runInstallPlan({
+        const planResult = await runInstallPlan({
             steps: insp.plan,
             ctx,
             perform,
@@ -1338,6 +1363,11 @@ export function registerIpcHandlers(): void {
                 if (!e.sender.isDestroyed()) e.sender.send('toolchain:progress', p);
             },
         });
+        // This handler installs a SET, so every one of them gets its verdict
+        // re-checked — an agent CLI anywhere in the selection is the one whose
+        // stale block would keep refusing launches.
+        for (const installed of selected ?? []) await liftLaunchBlockFor(installed);
+        return planResult;
     });
 
     // Update ONE already-installed tool to latest (Toolchain Manager, #242 P2).
@@ -1426,6 +1456,7 @@ export function registerIpcHandlers(): void {
         // The machine just changed, so the cached scan is now a lie — drop it so
         // the next read reports the version we actually installed.
         toolchainUpdateCache = { at: null, rows: [] };
+        await liftLaunchBlockFor(tool);
         return result;
     });
 

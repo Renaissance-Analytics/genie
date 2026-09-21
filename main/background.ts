@@ -1630,7 +1630,16 @@ app.whenReady().then(async () => {
     // for every real failure mode, so this catch is only for a defect in the
     // pass itself.
     ensureOwnedProvidersInstalled(
-        { hasWorkspace: listWorkspaces().length > 0, osaProvider: osProvider },
+        {
+            hasWorkspace: listWorkspaces().length > 0,
+            osaProvider: osProvider,
+            // Probe what the owner actually LAUNCHES. `osCommand` above is
+            // `osSettings[commandSettingKey] || defaultCommand`; the probe used
+            // to read the default alone, so an owner who pointed
+            // `agent_command_genie` at a full path was marked unavailable and
+            // then blocked from a launch that would have worked.
+            commandFor: (def) => osSettings[def.commandSettingKey],
+        },
         liveAvailabilityDeps,
     ).catch((e) => {
         // eslint-disable-next-line no-console

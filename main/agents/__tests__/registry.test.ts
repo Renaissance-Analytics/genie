@@ -1,3 +1,4 @@
+import { agentCliForProvider } from '../agent-cli-catalog';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -345,26 +346,39 @@ describe('tui ownership — genie#313', () => {
     });
 
     /**
-     * Neither owned tui has a WORKING installer today: `genie`'s upstream
-     * package (`@genie/tui`) is private and unpublished, and its shipped `bin`
-     * name is still `genie-tui` — installing it as-is would silently reproduce
-     * the exact naming bug this ticket's sibling already fixed, just one layer
-     * later (npm would put `genie-tui` on PATH, not `genie`). It is now the
-     * ONLY owned provider — `kiwi` claimed ownership of a product that does not
-     * exist, and Kilo Code is Kilo's binary, not Genie's. Leaving `install` unset
-     * is deliberate, so a future edit has to choose consciously.
+     * INSTALLABILITY IS NOT DECIDED HERE. It is decided once, in the agent-CLI
+     * catalog, and `availability.ts` reads it from there.
+     *
+     * These two tests used to assert `TuiDef.install` was unset — on `genie`,
+     * and on every provider Genie does not own. They passed, permanently and
+     * vacuously: NO row ever set that field, so the boot pass took its "no
+     * installer" branch every time a binary was missing. Genie could install its
+     * own TUI from the Toolchain page and never at boot, and the owner was
+     * hard-blocked by a message saying there was no installer. A field nothing
+     * writes cannot be asserted into meaning something.
+     *
+     * The field is gone. What replaces these is the property that actually keeps
+     * the two tables from drifting: an OWNED provider — the only kind the
+     * unattended boot pass will ever touch — must be answerable from the
+     * catalog. The "never install somebody else's CLI" half is asserted where
+     * the gate lives, in `availability.test.ts`.
      */
-    it('leaves `install` unset until a real source exists', () => {
-        expect(TUI_REGISTRY.genie.install).toBeUndefined();
-        expect(TUI_REGISTRY.kilo.install).toBeUndefined();
+    it('every OWNED provider has a catalog entry to answer the install question', () => {
+        const owned = agentTuis().filter((id) => TUI_REGISTRY[id].ownedBinary);
+        // Fails loudly if a future provider claims ownership with no catalog row
+        // — which would put it straight back into the permanent "no installer"
+        // state this replaced.
+        expect(owned.length).toBeGreaterThan(0);
+        for (const id of owned) {
+            expect(agentCliForProvider(id), id).toBeDefined();
+        }
     });
 
-    it('never sets `install` on a tui Genie does not own', () => {
-        for (const id of agentTuis()) {
-            if (!TUI_REGISTRY[id].ownedBinary) {
-                expect(TUI_REGISTRY[id].install, id).toBeUndefined();
-            }
-        }
+    it('the Genie TUI is installable, and from the catalog', () => {
+        // POSITIVE CONTROL for the test above: "has an entry" passes just as
+        // well against an entry carrying `install: null`, which is the state
+        // that was indistinguishable from the bug.
+        expect(agentCliForProvider('genie')?.install).toMatchObject({ manager: 'npm' });
     });
 });
 

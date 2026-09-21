@@ -128,6 +128,38 @@ jobs:
       - name: Prepare native modules for Electron (node-pty ConPTY)
         run: npm run pretest:e2e
 
+      # INSTALL GOOSE FOR REAL, on the one runner where it is cheap to do so.
+      #
+      # `registry.ts` claims the binary is `goose`; `agent-cli-catalog.ts` claims
+      # it ships as a GitHub release rather than on npm. Both are read from the
+      # vendor's docs, and a stale claim there is not a cosmetic error — it is a
+      # probe that never resolves and a launch that never happens. This makes the
+      # claim checkable instead of recalled.
+      #
+      # Linux only: the same script serves macOS, and Windows needs a different
+      # one, so running it three times would triple the cost to re-answer one
+      # question. `goose-launch.spec.ts` checks the binary only when it is really
+      # there and says so on the other runners rather than passing quietly.
+      #
+      # CONFIGURE_PROVIDER/CANCEL keep the installer non-interactive: the script
+      # otherwise offers to run `goose configure`, which would block the job.
+      - name: Install Goose (Linux only — proves the documented install path)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh             | CONFIGURE=false bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Report whether Goose really installed
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          # Reported, never asserted: a vendor install script going down must not
+          # turn a Genie regression suite red. The spec skips-with-a-reason when
+          # the binary is absent, so the signal is not lost either way.
+          command -v goose && goose --version || echo "goose not installed on this runner"
+
       - name: Run E2E (Linux, under xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" npm run test:e2e

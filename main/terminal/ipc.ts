@@ -70,6 +70,7 @@ import {
     type AgentInboxScope,
 } from '../agentinbox/types';
 import { launchLoadsClaudeAgentInboxChannel, withCodexGenieMcpLaunch } from '../mcp/agent-config';
+import { withGooseGenieMcpLaunch } from '../agents/goose-launch';
 import { buildTerminalEnv } from './terminal-env';
 import { computeOrphans } from './orphans';
 import { buildProcessArgs } from './process-spawn';
@@ -510,7 +511,7 @@ export function seedAgentReadBuffers(): string[] {
  * restart relaunch (maybeRelaunchAgent) run the base `agent_command` — which no
  * longer carries a genie override — through here, so both get the per-terminal URL.
  */
-function withTerminalGenieUrlForCodex(
+export function withTerminalGenieUrl(
     terminalId: string,
     workspaceId: string | null | undefined,
     agent: string | undefined,
@@ -520,9 +521,23 @@ function withTerminalGenieUrlForCodex(
     // `workspaceMcpEnabled` could never say yes for it and Codex launched without
     // the Genie MCP. Its row has `mcp_enabled` set like any opted-in workspace,
     // so the ordinary check answers for it.
-    if (agent !== 'codex' || !workspaceId || !workspaceMcpEnabled(workspaceId)) return command;
+    //
+    // TWO PROVIDERS now, which is why this no longer says "ForCodex". Both need
+    // the PER-TERMINAL url rather than the workspace one — its token
+    // self-identifies the terminal (genie #35), and a workspace-scoped genie URL
+    // makes the server refuse every multi-terminal call lacking `terminalId`.
+    // The terminal id does not exist until here, which is why neither can be
+    // baked in `resolveAgentLaunch`.
+    if (agent !== 'codex' && agent !== 'goose') return command;
+    if (!workspaceId || !workspaceMcpEnabled(workspaceId)) return command;
     const mcpUrl = registerTerminalEndpoint(terminalId);
     if (!mcpUrl) return command;
+    if (agent === 'goose') {
+        // Goose has no `mcp_sync_*` opt-out of its own: the flag IS the whole
+        // integration, so switching it off would just be "launch a Goose agent
+        // that cannot answer", which is the state this wiring exists to end.
+        return withGooseGenieMcpLaunch(command, { agent, genieUrl: mcpUrl });
+    }
     return withCodexGenieMcpLaunch(command, {
         agent: 'codex',
         mcpSyncCodexOff: getAllSettings().mcp_sync_codex === 'off',
@@ -745,7 +760,7 @@ export function createAgentTerminal(opts: {
     // the terminal and the agent never has to pass `terminalId` (genie #35). A
     // no-op for non-codex agents; the base command is stored unchanged in the spec.
     if (opts.agentMeta && launchCommand) {
-        launchCommand = withTerminalGenieUrlForCodex(
+        launchCommand = withTerminalGenieUrl(
             id,
             opts.workspaceId,
             opts.agentMeta.agent,
@@ -1062,7 +1077,7 @@ function maybeRelaunchAgent(id: string, existing: boolean): void {
     // A restart re-runs the stored base `agent_command`, which carries no genie
     // override — re-point Codex at THIS terminal's endpoint so the relaunched
     // agent keeps its terminal-scoped genie URL (genie #35). No-op for non-codex.
-    let command = withTerminalGenieUrlForCodex(
+    let command = withTerminalGenieUrl(
         id,
         spec?.workspace_id,
         spec?.meta?.agent,
