@@ -1,12 +1,14 @@
 import {
     app,
     BrowserWindow,
+    crashReporter,
     dialog,
     ipcMain,
     nativeImage,
     Notification,
     session,
 } from 'electron';
+import { BOOT_DONE, beginBootTrace, bootPhase } from './boot-trace';
 import { initialWindowTheme, rememberTitleBarOverlay } from './window-theme';
 import fs from 'fs';
 import path from 'path';
@@ -1440,6 +1442,18 @@ function announceUpgradeToAgents(opts: { endpointKept: boolean }): void {
 }
 
 app.whenReady().then(async () => {
+    // FIRST, so a boot that dies in the next few lines still leaves a trace.
+    // Always on, unlike `--genie-debug`: a crash and a 30-second hang that
+    // resolves on its own are exactly the failures nobody reproduces on demand,
+    // and both left no evidence whatsoever when the owner hit them.
+    beginBootTrace(path.join(app.getPath('userData'), 'logs'));
+    // And ask Chromium to actually write dumps. There was no Crashpad directory
+    // on the owner's machine at all, so a full crash produced nothing to read.
+    try {
+        crashReporter.start({ submitURL: '', uploadToServer: false, compress: false });
+    } catch {
+        /* a crash reporter that cannot start must not stop the app starting */
+    }
     debugLog.note('app ready');
     // HEADLESS (genie-cloud host): the electron stub still resolves whenReady, so
     // this DESKTOP boot would otherwise run on a headless host — calling
@@ -1522,12 +1536,14 @@ app.whenReady().then(async () => {
     // window, forever — the marker was only cleared after the deletions, so
     // every subsequent boot repeated it (genie#349).
     applyWorkstationResetAtBoot(app.getPath('userData'), reportWorkstationResetFailures);
+    bootPhase('database');
     initDatabase(app.getPath('userData'));
     // The operator's envelope moved from `<userData>/genie-os.agi` to `~/.gosa`,
     // outside the directory a reset empties. An existing install is MIGRATED
     // here — copied, verified, then swapped, and the old folder is never deleted.
     // The outcome is reported rather than swallowed: a migration that quietly did
     // nothing is the one worth seeing in a log.
+    bootPhase('genie-os workspace');
     const genieOs = await ensureGenieOsWorkspace(
         app.getPath('home'),
         app.getPath('userData'),
@@ -1891,6 +1907,7 @@ app.whenReady().then(async () => {
     // in the same tick as the scan would otherwise race it and inherit the
     // machine's ordering, which is the exact fault being fixed (genie: Herd
     // uninstalled, its binaries and PATH entry left behind, `php` still Herd's).
+    bootPhase('toolchain');
     await applyStartupToolchainPrecedence();
     registerIpcHandlers();
     // Wire the terminal core to its Electron/SQLite adapters (snapshot store +
@@ -1925,6 +1942,7 @@ app.whenReady().then(async () => {
     //
     // selectTerminalBackend records which one won via setHostBackendKind, so
     // hostBackendKind() drives the update-teardown branch + willRestartPtyHost.
+    bootPhase('backend selection');
     const selection = await runBackendSelection();
     const backendInit: { host: boolean; reattachIds: string[] } = {
         host: selection.host,
@@ -2400,6 +2418,7 @@ app.whenReady().then(async () => {
     // cannot run does this process serve instead, and that is reported as the
     // failure it is. `startMcpEndpoint` never resolves with the port unserved.
     const mcpGeneration = Date.now();
+    bootPhase('mcp endpoint');
     const mcpEndpoint = await startMcpEndpoint({
         shuttleEnabled: shuttleEnabledFor({ e2e: isE2E(), env: process.env }),
         server: {
@@ -3225,6 +3244,11 @@ app.whenReady().then(async () => {
     app.on('activate', () => {
         showMainWindow();
     });
+
+    // THE COMPLETION MARKER. A trace that ends anywhere else is a boot that
+    // stopped there, and the elapsed column says how long it had been waiting —
+    // which is the whole point of the file.
+    bootPhase(BOOT_DONE);
 });
 
 /**
