@@ -2034,6 +2034,13 @@ app.whenReady().then(async () => {
             announceInboxIncoming(terminalId, false, pending);
         });
         agentInboxBroker.setTransportSink(createHarnessTransportSink(harnessTransportRegistry));
+        // So `send` can say whether anyone is holding the other end, instead of
+        // reporting a durable queue as a delivery. The registry is in memory and
+        // does not survive a Genie restart, which is exactly the state this
+        // exists to make visible: the row says connected, nothing is listening.
+        agentInboxBroker.setTransportBoundResolver((agent) =>
+            harnessTransportRegistry.isVerified(agent.agentId),
+        );
         // The PTY notice and the unread backstop are for an agent with NO
         // channel of its own. This is how the broker knows which agents those
         // are — the backstop is armed on imDone, where no message is in hand and
