@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { revokeAppBackendCredentials } from './apps/backend-runtime';
 import { tuiSettingDefaults } from './agents/registry';
 import type { AgentTuiId, ProviderSettingKeys } from './agents/registry';
 import { soundSettingDefaults } from './notify-sound-kinds';
@@ -5111,6 +5112,7 @@ export function listAppGrants(): AppGrantRow[] {
 export function upsertAppGrant(
     grant: Omit<AppGrantRow, 'installedAt' | 'updatedAt'> & { installedAt?: string },
 ): void {
+    revokeAppBackendCredentials(grant.appId);
     const now = new Date().toISOString();
     getDb()
         .prepare(
@@ -5178,6 +5180,7 @@ export function setAppBackupJson(appId: string, json: string | null): void {
 }
 
 export function setAppGrantRevoked(appId: string, revoked: boolean): void {
+    revokeAppBackendCredentials(appId);
     getDb()
         .prepare('UPDATE app_grants SET revoked = ?, updated_at = ? WHERE app_id = ?')
         .run(revoked ? 1 : 0, new Date().toISOString(), appId);
@@ -5185,12 +5188,14 @@ export function setAppGrantRevoked(appId: string, revoked: boolean): void {
 
 /** Change what an installed app is allowed to do, from its permissions screen. */
 export function setAppGrantCapabilities(appId: string, capabilities: string[]): void {
+    revokeAppBackendCredentials(appId);
     getDb()
         .prepare('UPDATE app_grants SET capabilities_json = ?, updated_at = ? WHERE app_id = ?')
         .run(JSON.stringify(capabilities), new Date().toISOString(), appId);
 }
 
 export function deleteAppGrant(appId: string): void {
+    revokeAppBackendCredentials(appId);
     getDb().prepare('DELETE FROM app_grants WHERE app_id = ?').run(appId);
 }
 

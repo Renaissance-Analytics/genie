@@ -1383,6 +1383,7 @@ describe('handleMcpMessage', () => {
         );
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('agentinbox failed: not reachable');
+        expect(res?.result).toMatchObject({ isError: true, structuredContent: { ok: false, error: 'not reachable' } });
     });
 
     it('agentinbox rejects a bad/missing action', async () => {

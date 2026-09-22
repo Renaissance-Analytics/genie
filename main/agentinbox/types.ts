@@ -100,7 +100,7 @@ export const AGENTINBOX_SYSTEM_LABEL = 'Genie (no reply)';
  * back would need a mailbox and something reading it: a capability to build, not
  * a word to change here.
  */
-export type AgentInboxMachineKind = 'system' | 'cron' | 'process';
+export type AgentInboxMachineKind = 'system' | 'cron' | 'process' | 'app';
 
 /**
  * A machine sender a caller can CONSTRUCT: a scheduled job or a watched process,
@@ -117,6 +117,8 @@ export interface AgentInboxMachineSource {
     id: string;
     /** The job's display name. Falls back to {@link AgentInboxMachineSource.id}. */
     label?: string;
+    /** App origins must carry their grant's real workspace for mailbox ACLs. */
+    workspaceId?: string;
 }
 
 /** Display prefixes, per kind. The map is also the set of kinds
@@ -124,6 +126,7 @@ export interface AgentInboxMachineSource {
 const MACHINE_KIND_LABELS: Record<AgentInboxMachineSource['kind'], string> = {
     cron: 'Cron',
     process: 'Process',
+    app: 'App',
 };
 
 /** The `from` a machine notice is delivered under — `genie:<kind>:<job id>`. */

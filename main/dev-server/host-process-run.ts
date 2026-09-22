@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { appBackendEnv } from '../apps/backend-runtime';
 import {
     appendFileSync,
     closeSync,
@@ -252,7 +253,8 @@ export function createHostProcessRun(deps: HostProcessRunDeps): HostProcessRun {
     };
 
     return {
-        async start({ siteId, command, cwd, env, note, port }) {
+        async start({ siteId, workspaceId, command, cwd, env, note, port }) {
+            env = { ...env, ...appBackendEnv(workspaceId) };
             if (!SITE_ID_RE.test(siteId)) return { ok: false, error: `unsafe site id ${JSON.stringify(siteId)}` };
             try {
                 ensureDir(deps.logDir);

@@ -9,6 +9,83 @@ This document is written to be enough on its own. If you are an agent being aske
 to "fill a gap" — build a GApp for something a user needs — read it top to bottom
 and you will have everything.
 
+`@genie/app-sdk` is source in this repository, not a published npm package.
+The backend API below uses standard HTTP and needs no SDK installation.
+
+## Reporting from your backend to an agent
+
+Use **browser page → your app's backend → Genie**. A page opened in Chrome can
+submit an answer to your backend; that backend can notify an agent even when
+no Genie app window is open. Never send a Genie credential to a browser, put it
+in HTML, or expose it through a public build-time environment variable.
+
+For an installed app or a live preview with an active permission grant, Genie injects two variables
+when it starts a managed process or a host-native hosted-site process in the
+app's own workspace:
+
+- `GENIE_APP_URL`: the loopback base URL, such as `http://127.0.0.1:42345/app`.
+- `GENIE_APP_TOKEN`: a secret bearer credential tied to that app's current grant.
+
+A preview's credential belongs to its preview workspace and expires when the
+preview closes. A development folder without an active grant receives none;
+having a `gapp.json` file alone is not consent.
+
+These are process environment variables, not values to save in `project.json`,
+site configuration or a frontend `.env` file. Existing processes need a restart
+after this feature is installed to receive them. Container-only backends cannot
+reach a host loopback listener; run the reporting backend as a Genie-managed
+host process or host-native site. Do not expose Genie's listener to the network.
+
+The two HTTP operations mirror `window.genieApp.me()` and `.call()`:
+
+| Operation | Request | Response |
+|---|---|---|
+| Identity | `GET ${GENIE_APP_URL}/me` | App identity and granted capabilities; never the credential |
+| Tool call | `POST ${GENIE_APP_URL}/call` with JSON `{ "tool": "agentinbox", "args": { ... } }` | `{ "ok": true, "result": ... }` or `{ "ok": false, "error": "reason" }` |
+
+Both require `Authorization: Bearer ${GENIE_APP_TOKEN}`. Calls use
+`Content-Type: application/json` and are limited to 64 KiB. Browser-origin
+requests are refused; there is no CORS access.
+
+For example, in a Node backend handler **after** your app authenticates the
+person and saves their answer:
+
+```js
+const response = await fetch(`${process.env.GENIE_APP_URL}/call`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.GENIE_APP_TOKEN}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    tool: 'agentinbox',
+    args: { action: 'send', to: agentRef, text: 'The owner answered the pending question.' },
+  }),
+});
+const delivered = await response.json();
+if (!response.ok || !delivered.ok) throw new Error(delivered.error || 'Agent notification failed');
+// Accepted mail can still be queued while the agent is offline:
+const receipt = delivered.result.structuredContent;
+// receipt.live === false means queued, not read. Do not claim a read receipt.
+```
+
+Request the `notify` capability in your manifest; it must be granted by the user.
+Apps may use inbox `list` and `send`. They have no agent mailbox to `receive`
+from and cannot register an agent transport. File attachments are not supported
+on app-origin inbox messages. Messages have a distinct `genie:app:<appId>`
+sender and still respect recipient mailbox and workspace access rules.
+Genie applies the exact same permission decision, workspace scope and trusted
+app-name prefix as the window bridge. It strips a supplied `terminalId` and
+overwrites the tool arguments' workspace with the authorized target. A top-level
+`workspaceId` may select another workspace only when the existing grant permits
+it. The app cannot choose its identity or remove the attribution prefix.
+
+Credentials and the listener's port survive Genie restarts. Editing, revoking or
+replacing the grant invalidates existing credentials immediately; the next call
+is refused with a reason. Restart the app backend after an approved permission
+change to receive a new credential. Removing and restoring a capability does
+not reactivate the old credential. Never retry by borrowing an agent's token.
+
 ---
 
 ## What a GApp actually is

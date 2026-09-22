@@ -17,14 +17,21 @@
  * sources.
  */
 
-import { getAppGrant } from '../db';
+import { getAppGrant, getAppGrantForWorkspace } from '../db';
 import {
     appIdentity,
     livePreview,
     resolveAppGrant,
+    previewForWorkspace,
     type AppIdentityView,
 } from './preview-registry';
 import type { AppGrant } from './bridge-decision';
+export function appIdForBackendWorkspace(workspaceId: string): string | null {
+    const preview = previewForWorkspace(workspaceId);
+    if (preview && !preview.grant.revoked) return preview.identity.appId;
+    const grant = getAppGrantForWorkspace(workspaceId);
+    return grant && !grant.revoked ? grant.appId : null;
+}
 
 /** The installed app's grant row, as the decision layer wants to see it. */
 function installedGrant(appId: string): AppGrant | null {
@@ -38,6 +45,7 @@ function installedGrant(appId: string): AppGrant | null {
         workspaces: row.workspaces,
         capabilities: row.capabilities,
         revoked: row.revoked,
+        revision: row.updatedAt,
     };
 }
 

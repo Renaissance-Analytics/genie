@@ -1806,6 +1806,8 @@ export interface ManageWorkspacesResult {
 // --- agentinbox -----------------------------------------------------------------
 
 export interface AgentInboxRequest {
+    /** App bridge's authorized target; ordinary agent callers retain their own identity. */
+    workspaceId?: string;
     /** Public actions plus the Codex SessionStart hook's late identity bind. */
     action:
         | 'list'
@@ -4817,6 +4819,7 @@ ${body}` }],
                 const action = checked.action;
                 const result = await ctx.agentInbox(ctx.terminalId, {
                     action,
+                    ...(typeof a.workspaceId === 'string' ? { workspaceId: a.workspaceId } : {}),
                     to: a.to,
                     text: a.text,
                     interrupt: a.interrupt,
@@ -4889,6 +4892,8 @@ ${body}` }],
                     summary = `agentinbox ${action} ok.`;
                 }
                 return ok(msg.id, {
+                    isError: !result.ok,
+                    structuredContent: result,
                     content: [
                         {
                             type: 'text',

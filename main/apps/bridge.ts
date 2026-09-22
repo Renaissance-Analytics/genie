@@ -112,7 +112,16 @@ export async function dispatchAppCall(
         if (response && 'error' in response && response.error) {
             return { ok: false, error: response.error.message };
         }
-        return { ok: true, result: response && 'result' in response ? response.result : undefined };
+        const result = response && 'result' in response ? response.result : undefined;
+        if (result && typeof result === 'object' && 'isError' in result && result.isError === true) {
+            const detail = 'structuredContent' in result ? result.structuredContent : undefined;
+            return {
+                ok: false,
+                error: detail && typeof detail === 'object' && 'error' in detail && typeof detail.error === 'string'
+                    ? detail.error : 'The tool refused this app call.',
+            };
+        }
+        return { ok: true, result };
     } catch (e) {
         // A throwing tool must not take the main process down with it, and the app
         // must not learn anything from a stack trace it did not already know.

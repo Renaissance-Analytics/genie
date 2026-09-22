@@ -107,7 +107,9 @@ rather than failing in a way that reads like a bug.
 
 ## Building one
 
-The full developer guide ships with Genie as **`@genie/app-sdk`** — the manifest
+The full developer guide is in this repository at
+[`packages/app-sdk/README.md`](../packages/app-sdk/README.md). **`@genie/app-sdk`
+is unpublished; do not try to install it from npm.** The guide covers the manifest
 reference, the permission model, what an app can and cannot do, how to offer
 tools to other agents, and how to check and share the result. It is written to be
 read start to finish by a person *or* an agent asked to build an app.

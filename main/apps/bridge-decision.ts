@@ -40,6 +40,8 @@ export interface AppGrant {
     capabilities: string[];
     /** Revocation is immediate and total. */
     revoked: boolean;
+    /** Installed grant revision; credentials cannot outlive an edited grant. */
+    revision?: string;
 }
 
 export interface AppCallRequest {

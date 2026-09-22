@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHostProcessRun } from '../host-process-run';
 import type { HostSpawnPrimitives } from '../host-site-process';
+import { configureAppBackendEnv } from '../../apps/backend-runtime';
+import { AppCredentials } from '../../apps/backend-credentials';
 
 /**
  * The real HostProcessRun binding (story #238): runs a host-native site's dev
@@ -20,6 +22,16 @@ function fakePrims(over: Partial<HostSpawnPrimitives> = {}): HostSpawnPrimitives
 }
 
 describe('createHostProcessRun', () => {
+    it('injects the app credential into its hosted backend without trusting pinned credentials', async () => {
+        const credentials = new AppCredentials(() => ({ appId: 'app', appName: 'App', workspaceId: 'app-ws', scope: 'self', capabilities: ['notify'], revoked: false }));
+        configureAppBackendEnv(ws => ws === 'app-ws' ? 'app' : null, credentials, 'http://127.0.0.1:12345/app');
+        const prims = fakePrims();
+        const run = createHostProcessRun({ logDir: '/logs', primitives: prims, ensureDir: vi.fn() });
+        await run.start({ siteId: 'app-server', workspaceId: 'app-ws', command: ['php'], cwd: '/repo', env: { GENIE_APP_TOKEN: 'forged' } });
+        const env = (prims.spawnDetached as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
+        expect(env.GENIE_APP_URL).toBe('http://127.0.0.1:12345/app');
+        expect(credentials.resolve(env.GENIE_APP_TOKEN).grant?.appId).toBe('app');
+    });
     it('start spawns the dev server (in the repo cwd, with env) and tracks its pid', async () => {
         const prims = fakePrims();
         const run = createHostProcessRun({ logDir: '/logs', primitives: prims, ensureDir: vi.fn() });

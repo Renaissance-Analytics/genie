@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { appBackendEnv } from '../apps/backend-runtime';
 import {
     terminalManager,
     resolveDefaultShell,
@@ -346,7 +347,7 @@ export function startProcess(specId: string): void {
     );
 
     try {
-        terminalManager().create({ id: specId, cwd, shell, args });
+        terminalManager().create({ id: specId, cwd, shell, args, env: appBackendEnv(spec.workspace_id) });
         // `create()` returning is NOT evidence the command runs — a `command not
         // found` shell exits milliseconds later. The check that IS decidable
         // here is whether a pty registered at all; the rest is the caller's

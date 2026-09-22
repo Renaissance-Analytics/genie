@@ -22,6 +22,7 @@
  */
 
 import { grantableCapabilities } from './manage-core';
+import { revokeAppBackendCredentials } from './backend-runtime';
 import { APP_CAPABILITIES } from './capabilities';
 import { gappHomeUrl } from './hostname';
 import type { InstalledAppView } from './manage';
@@ -77,6 +78,7 @@ export function rememberPreview(live: LivePreview): void {
 }
 
 export function forgetPreview(appId: string): void {
+    revokeAppBackendCredentials(appId);
     const live = previews.get(appId);
     if (!live) return;
     previews.delete(appId);

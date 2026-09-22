@@ -1,0 +1,50 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { afterAll, expect, it, vi } from 'vitest';
+vi.mock('../../tray', () => ({ rebuildMenu: vi.fn(), createTray: vi.fn(), setInboxBadge: vi.fn(), setUpdateAvailable: vi.fn() }));
+import { initDatabase, upsertAppGrant, setAppGrantCapabilities } from '../../db';
+import { agentInboxForMcp } from '../../mcp/host-tools';
+import { agentInboxBroker } from '../../agentinbox/broker';
+import { AppCredentials } from '../backend-credentials';
+import { appGrantFor, appIdentityFor } from '../grant-lookup';
+import { configureAppBackendEnv, clearAppBackendEnv } from '../backend-runtime';
+import { createAppHttpHandler } from '../backend-http';
+import { dispatchAppCall } from '../bridge';
+import type { ServerDeps } from '../../mcp/server';
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-backend-delivery-'));
+const db = initDatabase(dir);
+afterAll(() => { clearAppBackendEnv(); db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+it('HTTP reaches the real protocol, app caller resolver and broker, and DB revocation cannot be undone by restoring capabilities', async () => {
+    db.prepare("INSERT INTO workspaces (id,backend,project_id,project_name,tynn_project_id,tynn_project_name,shape,path) VALUES ('home','none','p','Home','p','Home','agi',?)").run(dir);
+    upsertAppGrant({ appId: 'hb', workspaceId: 'home', name: 'Homeward Bound', version: '1', slug: 'hb', scope: 'self', workspaces: [], capabilities: ['notify'], manifestJson: '{}', installPath: dir, source: null, revoked: false, devMode: false });
+    agentInboxBroker.join({ agentId: 'receiver', terminalId: 'receiver-terminal', workspaceId: 'home', workspaceName: 'Home', slug: 'home', agentType: 'codex', label: 'Receiver', purpose: 'receiver', scope: 'self', scopeWorkspaces: [], chatSessionId: null });
+    const credentials = new AppCredentials(appGrantFor);
+    configureAppBackendEnv(() => 'hb', credentials, 'http://127.0.0.1:12345/app');
+    const token = credentials.mint('hb');
+    const handle = createAppHttpHandler({ credentials, me: appIdentityFor, call: (id, input) => dispatchAppCall(id, { tool: input.tool, args: input.args, workspaceId: input.workspaceId }, { agentInbox: agentInboxForMcp } as ServerDeps) });
+    async function send() {
+        const req = Readable.from([JSON.stringify({ tool: 'agentinbox', args: { action: 'send', to: 'receiver', text: 'Answer saved', terminalId: 'victim', workspaceId: 'foreign', human: true } })]) as IncomingMessage;
+        req.method = 'POST'; req.url = '/app/call';
+        req.headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+        Object.defineProperty(req, 'socket', { value: { remoteAddress: '127.0.0.1' } });
+        let status = 0, raw = '';
+        await handle(req, { writeHead: (code: number) => { status = code; }, end: (body: string) => { raw = body; } } as ServerResponse);
+        return { status, body: JSON.parse(raw) };
+    }
+    const sent = await send();
+    expect(sent.status).toBe(200);
+    expect(sent.body.result.structuredContent).toMatchObject({ ok: true, delivered: 1 });
+    const inbox = await agentInboxBroker.receive('receiver');
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0]).toMatchObject({ from: 'genie:app:hb', fromLabel: 'App: Homeward Bound', text: '[Homeward Bound (a Genie App)] Answer saved' });
+    setAppGrantCapabilities('hb', []);
+    setAppGrantCapabilities('hb', ['notify']);
+    const refused = await send();
+    expect(refused.status).toBe(401);
+    expect(refused.body.error).toMatch(/revoked/);
+    expect((await agentInboxBroker.receive('receiver')).messages).toEqual([]);
+});

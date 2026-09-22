@@ -321,6 +321,7 @@ import { setSecretEncryptor } from './secrets/store';
 import { setPairingJournalDir } from './pairing-journal';
 import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
+import { startAppBackendServer, stopAppBackendServer } from './apps/backend-server';
 import { registerAppsIpc, sweepPreviewsAtBoot } from './apps/ipc';
 import { registerFlowsIpc } from './flows/ipc';
 import { registerAppsE2E } from './e2e/apps';
@@ -2322,19 +2323,19 @@ app.whenReady().then(async () => {
     // apart. So the restore goes first (from the dev-server boot block below,
     // which is where the ordering seam is) and calls this afterwards as the
     // catch-all for anything configured that the roster did not carry.
-    if (!drainRestorePending) startAutostartProcesses();
+    // Started below, after the app backend endpoint can supply credentials.
     // Keep the supervisor's idea of what is running HONEST (genie#655). Status
     // is written at spawn and at a pty's exit event, so anything that takes a
     // process's pty without one — a pty-host loss most of all — leaves it
     // remembered as running for as long as Genie stays up, with nothing
     // claiming its queue. The sweep asks the backend instead of remembering.
-    startProcessReconcile();
+    // Reconciliation starts once app backend credentials are ready below.
     // Re-arm every approved SCHEDULED task (a process spec with meta.schedule).
     // This is what makes a schedule survive quit/crash/auto-update: the timers
     // died with the process, the specs did not, so each is armed forward from
     // now — deliberately WITHOUT catching up the fires that were missed while
     // the Host was down.
-    startSchedules();
+    // Schedules also wait for the endpoint before they can spawn an app process.
     // ForceTheQuestion modal IPC (the agent-integration MCP raises it).
     registerForceQuestionIpc(forceQuestionIpcConfig());
     // The yellow `?` on the workspace row — an agent here is waiting on a person.
@@ -2425,6 +2426,11 @@ app.whenReady().then(async () => {
     // use. Registered before the server starts so an app window that opens early
     // never finds a dead channel.
     registerAppBridge(mcpDeps);
+    await startAppBackendServer(mcpDeps).catch(error => console.error('[gapp] backend endpoint unavailable', error));
+    app.once('will-quit', () => { void stopAppBackendServer(); });
+    if (!drainRestorePending) startAutostartProcesses();
+    startProcessReconcile();
+    startSchedules();
     registerAppsIpc();
     // Flows ride the SAME bridge, so a workflow is bounded by exactly the grant
     // its app already holds. This also wires the scheduler's flow-fire handler and

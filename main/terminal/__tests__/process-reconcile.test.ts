@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
  */
 
 const created: string[] = [];
+const createdEnv: Array<Record<string, string> | undefined> = [];
 const livePtys = new Set<string>();
 
 type Spec = {
@@ -52,7 +53,8 @@ function seed(id: string, meta: Record<string, unknown> = {}): void {
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 vi.mock('@particle-academy/fancy-term-host', () => ({
     terminalManager: () => ({
-        create: (opts: { id: string }) => {
+        create: (opts: { id: string; env?: Record<string, string> }) => {
+            createdEnv.push(opts.env);
             created.push(opts.id);
             livePtys.add(opts.id);
             return { id: opts.id, pid: 1, shell: 'bash' };
@@ -89,6 +91,18 @@ import {
     stopProcess,
     stopProcessReconcile,
 } from '../process-supervisor';
+import { configureAppBackendEnv } from '../../apps/backend-runtime';
+import { AppCredentials } from '../../apps/backend-credentials';
+
+it('injects the app backend credential at the actual supervised process spawn', () => {
+    const credentials = new AppCredentials(() => ({ appId: 'app', appName: 'App', workspaceId: 'ws-1', scope: 'self', capabilities: ['notify'], revoked: false }));
+    configureAppBackendEnv(ws => ws === 'ws-1' ? 'app' : null, credentials, 'http://127.0.0.1:12345/app');
+    seed('app-env-worker');
+    startProcess('app-env-worker');
+    const env = createdEnv.at(-1);
+    expect(env?.GENIE_APP_URL).toBe('http://127.0.0.1:12345/app');
+    expect(credentials.resolve(env!.GENIE_APP_TOKEN).grant?.appId).toBe('app');
+});
 
 /** What a pty-host loss does to every pty at once, with no exit events. */
 const hostDies = (): void => livePtys.clear();

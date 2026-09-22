@@ -1287,7 +1287,7 @@ export class AgentInboxBroker {
     }
 
     /** INNER TIER — does `target`'s own scope admit a DM from `caller`? */
-    private scopeAllows(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
+    private scopeAllows(caller: Pick<AgentInboxAgent, 'workspaceId'>, target: AgentInboxAgent): boolean {
         switch (target.scope) {
             case 'all':
                 return true;
@@ -1306,7 +1306,7 @@ export class AgentInboxBroker {
     }
 
     /** Whether `target` appears in `caller`'s directory at all. */
-    private visible(caller: AgentInboxAgent, target: AgentInboxAgent): boolean {
+    private visible(caller: Pick<AgentInboxAgent, 'workspaceId' | 'agentId'>, target: AgentInboxAgent): boolean {
         if (caller.agentId === target.agentId) return true; // always sees itself
         // "Only active agents are in the inbox" (genie#672).
         if (this.asleep(target)) return false;
@@ -1403,6 +1403,13 @@ export class AgentInboxBroker {
     directory(): AgentInboxAgentInfo[] {
         // A hibernating workspace's agents are asleep and not listed (genie#672).
         return [...this.agents.values()].filter((a) => !this.asleep(a)).map((a) => this.toInfo(a));
+    }
+
+    /** App discovery follows the same workspace and recipient mailbox ACLs. */
+    discoverableForApp(appId: string, workspaceId: string): AgentInboxAgentInfo[] {
+        const caller = { agentId: machineSenderId({ kind: 'app', id: appId }), workspaceId };
+        return [...this.agents.values()].filter(target => this.visible(caller, target))
+            .map(target => this.toInfo(target, this.scopeAllows(caller, target)));
     }
 
     /**
@@ -1588,6 +1595,12 @@ export class AgentInboxBroker {
         if (input.toAgentId) {
             const target = this.agents.get(input.toAgentId);
             if (!target) return { ok: false, error: `No agent "${input.toAgentId}".` };
+            if (input.source?.kind === 'app') {
+                const caller = { agentId: from, workspaceId: input.source.workspaceId ?? '' };
+                if (!caller.workspaceId || !this.visible(caller, target) || !this.scopeAllows(caller, target)) {
+                    return { ok: false, error: 'That agent is not reachable from this app workspace.' };
+                }
+            }
             // Asleep (genie#672): refused from every sender — nothing is queued for
             // a wake, which starts the workspace fresh.
             if (this.asleep(target)) {

@@ -1,5 +1,8 @@
 import { decideWorkspaceAdd } from './workspace-add';
 import { resolveAgentAddress } from '../agentinbox/address';
+import { appIdFromCallerId } from './caller-identity';
+import { appGrantFor } from '../apps/grant-lookup';
+import { appInboxCall } from '../apps/inbox';
 import { requestIssueWatchRefresh } from '../issue-watch/force-refresh';
 import fs from 'fs';
 import path from 'path';
@@ -2824,6 +2827,8 @@ export async function agentInboxForMcp(
     callerTerminalId: string,
     req: AgentInboxRequest,
 ): Promise<AgentInboxResult> {
+    const appId = appIdFromCallerId(callerTerminalId);
+    if (appId) return appInboxCall(appGrantFor(appId), req, agentInboxBroker);
     const spec = callerTerminalId ? getTerminalSpec(callerTerminalId) : null;
     // Resolved through `callerWorkspaceDescriptor` because a caller is a terminal
     // OR a GApp and both have to get one answer — not because the System
