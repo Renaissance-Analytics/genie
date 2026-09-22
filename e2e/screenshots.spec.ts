@@ -143,19 +143,22 @@ test('the empty floor', async () => {
     // and a floor that would not clear is itself worth looking at. The failure
     // is reported rather than swallowed — Playwright keeps its own screenshot
     // and trace, which the workflow now publishes.
+    //
+    // ASSERT THE OUTCOME, NOT THE CLICKS. This used to track whether each close
+    // click threw, and reported "a panel could not be closed" — while its own
+    // screenshot showed "0 panels" and the empty-floor card, in every OS. The
+    // last close detaches its element mid-click, so the click "fails" while the
+    // panel closes. The picture contradicted the assertion; the picture was
+    // right. What matters is whether the floor ended up empty.
     const panels = page.locator('.tpanel');
-    let cleared = true;
     for (let i = await panels.count(); i > 0; i--) {
         const close = panels.first().locator('[title="Close panel"]').first();
         if ((await close.count()) === 0) break;
-        try {
-            await close.scrollIntoViewIfNeeded({ timeout: 2_000 });
-            await close.click({ timeout: 5_000 });
-        } catch {
-            cleared = false;
-            break;
-        }
+        await close.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+        await close.click({ timeout: 5_000 }).catch(() => {});
     }
+    await expect(panels, 'the floor did not clear — see 05-empty-floor.png').toHaveCount(0, {
+        timeout: 10_000,
+    });
     await shoot('05-empty-floor');
-    expect(cleared, 'a panel could not be closed — see 05-empty-floor.png').toBe(true);
 });
