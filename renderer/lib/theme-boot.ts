@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 /**
  * Theme resolution that has to happen BEFORE the first paint (genie#229).
  *
@@ -74,3 +76,41 @@ else if(saved==='light'){dark=false;}
 else{dark=!!(window.matchMedia&&window.matchMedia(${JSON.stringify(PREFERS_DARK_QUERY)}).matches);}
 document.documentElement.classList.toggle('dark',dark);
 }catch(e){}})();`;
+
+/**
+ * Track the RESOLVED theme from a component, for a surface whose own library
+ * needs to be told which one it is (fancy-code's `<CodeEditor theme>`).
+ *
+ * Reads the class the boot script already put on `<html>` rather than
+ * re-deriving it, so there is one answer and it cannot disagree with what the
+ * page is painted in. `"auto"` would have been simpler and is WRONG here:
+ * fancy-code resolves that from `prefers-color-scheme`, which ignores a theme
+ * the owner has PINNED in Settings — so a pinned-light Genie on a dark OS would
+ * get a dark editor inside a light app, which is the bug being fixed, arrived
+ * at by a different route.
+ *
+ * Re-reads on Settings' own `genie:theme-change` and on an OS flip, which are
+ * the only two things that move it.
+ */
+export function useResolvedTheme(): 'light' | 'dark' {
+    const read = (): 'light' | 'dark' =>
+        typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+            ? 'dark'
+            : 'light';
+    const [theme, setTheme] = useState<'light' | 'dark'>(read);
+    useEffect(() => {
+        const sync = () => setTheme(read());
+        // The class is set by `_app.tsx` AFTER the event fires, so defer a tick
+        // — reading it in the same turn returns the value being replaced.
+        const onChange = () => setTimeout(sync, 0);
+        window.addEventListener(THEME_CHANGE_EVENT, onChange);
+        const mq = window.matchMedia?.(PREFERS_DARK_QUERY);
+        mq?.addEventListener?.('change', onChange);
+        sync();
+        return () => {
+            window.removeEventListener(THEME_CHANGE_EVENT, onChange);
+            mq?.removeEventListener?.('change', onChange);
+        };
+    }, []);
+    return theme;
+}

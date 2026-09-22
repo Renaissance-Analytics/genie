@@ -1,6 +1,7 @@
 import { CodeEditor, resolveFileKind } from '@particle-academy/fancy-code';
 import { ContentRenderer } from '@particle-academy/react-fancy';
 import WordWrapSync from '../Code/WordWrapSync';
+import { useResolvedTheme } from '../../lib/theme-boot';
 
 /**
  * The BODY of the ForceTheQuestion file drawer — the file a question names,
@@ -80,6 +81,8 @@ interface Props {
 }
 
 export default function AskFilePreview({ filename, content, source }: Props) {
+    // Before the early return — a hook cannot sit after one.
+    const editorTheme = useResolvedTheme();
     if (isMarkdownPath(filename) && !source) {
         return (
             <div className="ask-file-md">
@@ -102,17 +105,21 @@ export default function AskFilePreview({ filename, content, source }: Props) {
             readOnly
             lineNumbers
             wordWrap
-            // PINNED, exactly as the file editor pins it (`CodePanel.tsx`).
-            // Editors and terminals stay dark in both of Genie's themes — the
-            // same convention that has `--term-bg` / `--term-fg` declared once,
-            // dark, and never flipping. This carried `<FileViewer>`'s "auto" at
-            // first, which is not "the app's theme": fancy-code resolves it from
-            // the OS `prefers-color-scheme`, while Genie's theme is a `.dark`
-            // class a pinned preference can set AGAINST the OS. So the drawer
-            // could disagree with the window it sits in and with every other
-            // editor in the app at once, and in LIGHT mode it rendered white
-            // beside a Code panel that was still dark.
-            theme="dark"
+            // RESOLVED the same way the file editor resolves it
+            // (`CodePanel.tsx`), which is what keeps the two from drifting.
+            //
+            // Both used to PIN "dark", on the convention that editors and
+            // terminals stay dark in both themes. That convention is right for a
+            // TERMINAL, whose colours are the shell's — and wrong for an editor,
+            // which is a Genie surface. The owner: "the file editor panel is not
+            // light mode friendly."
+            //
+            // Still not "auto": fancy-code resolves that from the OS
+            // `prefers-color-scheme`, while Genie's theme is a `.dark` class a
+            // pinned preference can set AGAINST the OS — so `auto` would make
+            // the drawer disagree with the window it sits in, which is the bug
+            // this replaced, reached from the other side.
+            theme={editorTheme}
         >
             <CodeEditor.Panel />
             {/* Wrap is fixed ON and nothing in this drawer can toggle it, so the
