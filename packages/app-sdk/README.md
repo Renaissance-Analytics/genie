@@ -69,6 +69,11 @@ const receipt = delivered.result.structuredContent;
 // receipt.live === false means queued, not read. Do not claim a read receipt.
 ```
 
+The HTTP result is identical to the window bridge's result, including the inbox
+receipt's `live` and `note` fields in `result.structuredContent`. Preserve and
+show the note when delivery is queued. If `live` is absent, liveness is unknown;
+do not turn an absent value or `ok: true, delivered: 1` into "the agent was told."
+
 Request the `notify` capability in your manifest; it must be granted by the user.
 Apps may use inbox `list` and `send`. They have no agent mailbox to `receive`
 from and cannot register an agent transport. File attachments are not supported

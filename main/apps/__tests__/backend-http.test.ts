@@ -7,7 +7,7 @@ import { createAppHttpHandler } from '../backend-http';
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Function>(), grant: null as AppGrant | null, messages: [] as any[], result: 'delivered' as unknown }));
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, handler: Function) => mocks.handlers.set(name, handler) } }));
 vi.mock('../grant-lookup', () => ({ appGrantFor: () => mocks.grant, appIdentityFor: () => ({ id: mocks.grant?.appId }) }));
-vi.mock('../../mcp/protocol', () => ({ handleMcpMessage: async (message: any) => { mocks.messages.push(message); return { result: mocks.result }; } }));
+vi.mock('../../mcp/protocol', () => ({ handleMcpMessage: async (message: any) => { mocks.messages.push(message); return { result: structuredClone(mocks.result) }; } }));
 import { dispatchAppCall, registerAppBridge, registerAppWindow } from '../bridge';
 import type { ServerDeps } from '../../mcp/server';
 import { APP_CALL_CHANNEL } from '../channels';
@@ -29,14 +29,23 @@ async function request(credentials: AppCredentials, token: string, body: unknown
     return { status, body: JSON.parse(output) };
 }
 
-it('HTTP and window dispatch the identical authorized, attributed prepared call', async () => {
+it.each([
+    { ok: true, delivered: 1, live: false, note: 'Queued; no live transport is holding the other end.' },
+    { ok: true, delivered: 1, live: true },
+    { ok: true, delivered: 1 },
+])('HTTP and window preserve identical prepared calls and receipts: %j', async (receipt) => {
+    mocks.result = { isError: false, structuredContent: receipt, content: [] };
     const credentials = new AppCredentials(() => mocks.grant);
     const token = credentials.mint('hb');
     registerAppBridge({} as ServerDeps);
     registerAppWindow({ id: 7, once: vi.fn() } as any, 'hb');
     const input = { tool: 'agentinbox', args: { action: 'send', text: 'Owner answered', workspaceId: 'foreign', terminalId: 'victim', appId: 'Genie' } };
-    await mocks.handlers.get(APP_CALL_CHANNEL)!({ sender: { id: 7 } }, input);
-    expect((await request(credentials, token, input)).status).toBe(200);
+    const windowResult = await mocks.handlers.get(APP_CALL_CHANNEL)!({ sender: { id: 7 } }, input);
+    const http = await request(credentials, token, input);
+    expect(http.status).toBe(200);
+    expect(http.body).toEqual(windowResult);
+    expect(http.body.result.structuredContent).toEqual(receipt);
+    if (!('live' in receipt)) expect(http.body.result.structuredContent).not.toHaveProperty('live');
     expect(mocks.messages).toHaveLength(2);
     expect(mocks.messages[1].params).toEqual(mocks.messages[0].params);
     expect(mocks.messages[1].params.arguments).toMatchObject({ workspaceId: 'home', text: '[Homeward Bound (a Genie App)] Owner answered' });
