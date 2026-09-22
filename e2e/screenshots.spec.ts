@@ -133,11 +133,11 @@ test('the empty floor', async () => {
     // buttons; then a live-preview grid that killed the agent it previewed.
     // Worth a picture on every build.
     //
-    // The close control is reached through the PANEL MENU rather than clicked
-    // directly. The direct click failed in the VM — "element is outside of the
-    // viewport" after scrolling, because a wide grid puts the last panel's
-    // controls past the window edge. That is a real thing to know about the
-    // layout, and it is also not what this test is for.
+    // Each panel's own close control, scrolled into view first. The first VM
+    // run clicked it without scrolling and failed — "element is outside of the
+    // viewport", because a wide grid puts the last panel's controls past the
+    // window edge. That is a real thing to know about the layout, and it is not
+    // what this test is for.
     //
     // Whatever happens, the SHOT IS TAKEN: the deliverable here is the picture,
     // and a floor that would not clear is itself worth looking at. The failure
