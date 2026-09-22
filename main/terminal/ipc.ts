@@ -812,6 +812,11 @@ export function createAgentTerminal(opts: {
     // Idempotent on the id: if a live pty already owns it, this reattaches
     // (existing:true, scrollback replayed) instead of spawning a duplicate.
     const result = terminalManager().create(createOpts);
+    if (!opts.restore) {
+        const queued = queuedAgentRevivals.get(id);
+        queuedAgentRevivals.delete(id);
+        queued?.finish(true);
+    }
     if (opts.agentMeta) {
         const current = getTerminalSpec(id);
         if (current) updateTerminalSpec(id, { meta: { ...current.meta, was_running: true,
@@ -1094,11 +1099,13 @@ export function reviveRunningAgents(
         const timer = setTimeout(run, delay);
         timer.unref?.();
     },
+    liveOnLostHost?: readonly string[],
 ): void {
+    const lost = liveOnLostHost ? new Set(liveOnLostHost) : undefined;
     // A surviving host supplies live evidence for specs written before this
     // field existed. Never backfill dormant specs from their mere existence.
-    const specs = listTerminalSpecs().map(spec => {
-        if (spec.meta?.agent && !spec.meta.user_stopped && terminalManager().isLive(spec.id)) {
+    const specs = listTerminalSpecs().filter(spec => !lost || lost.has(spec.id)).map(spec => {
+        if (spec.meta?.agent && !spec.meta.user_stopped && (lost?.has(spec.id) || terminalManager().isLive(spec.id))) {
             return updateTerminalSpec(spec.id, { meta: { ...spec.meta, was_running: true } }) ?? spec;
         }
         return spec;
@@ -1116,7 +1123,13 @@ export function reviveRunningAgents(
             queuedAgentRevivals.delete(candidate.id);
             let live = false;
             try {
-                const spec = getTerminalSpec(candidate.id);
+                let spec = getTerminalSpec(candidate.id);
+                // A teardown exit can arrive after scheduling. The captured live
+                // set identifies this host generation; an explicit start/stop
+                // cancels its reservation, so it cannot override a newer run.
+                if (spec && lost?.has(spec.id) && !spec.meta?.user_stopped) {
+                    spec = { ...spec, meta: { ...spec.meta, was_running: true } };
+                }
                 if (!spec || agentsToRevive([spec]).length === 0) return;
                 if (!spec.workspace_id || !isTuiId(spec.meta?.agent)) return;
                 // A surviving detached-host pty spends no new slot and needs no launch.
@@ -1912,6 +1925,9 @@ export function requestFinalSnapshots(): void {
  * id matches no live pty (and isn't a known process spec).
  */
 export function killTerminalById(id: string, options: { preserveRunningIntent?: boolean } = {}): boolean {
+    const queued = queuedAgentRevivals.get(id);
+    queuedAgentRevivals.delete(id);
+    queued?.finish(false);
     const spec = getTerminalSpec(id);
     if (spec?.meta?.agent) {
         if (options.preserveRunningIntent) {

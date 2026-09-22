@@ -123,6 +123,7 @@ import { terminalManager } from '@particle-academy/fancy-term-host';
 import type { RunAgentRequest, RunAgentResult } from '../protocol';
 import { useTempClaudeHome, writeTranscript } from '../../__tests__/support/claude-transcripts';
 import * as terminalIpc from '../../terminal/ipc';
+import { recoverFromHostLoss } from '../../terminal/host-service';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-saved-agents-'));
 const dataDir = path.join(tmpRoot, 'userData');
@@ -235,6 +236,35 @@ afterAll(() => {
 });
 
 describe('host-side saved-agent revival', () => {
+    it('host loss revives its captured live agents after unmarked exits without reviving unrelated exited agents', async () => {
+        terminalIpc.subscribeHeadlessBackendEvents();
+        saved('lost'); saved('already-exited'); saved('explicitly-stopped');
+        revive();
+        spawnedPtys[1].exit();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        // The host's authoritative live set, captured before teardown events.
+        const liveOnLostHost = terminalManager().list().map(t => t.id);
+        expect(liveOnLostHost).toContain('lost');
+        expect(liveOnLostHost).not.toContain('already-exited');
+        spawnedPtys[0].exit(); // unmarked: exercise exit delivery before recovery
+        terminalIpc.killTerminalById('explicitly-stopped');
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(getTerminalSpec('lost')?.meta?.was_running).toBe(false);
+        await recoverFromHostLoss({
+            affectedIds: () => liveOnLostHost,
+            snapshotAffected: () => {},
+            respawn: async () => ({ host: true }),
+            reattach: () => {},
+            reattachProcesses: () => {},
+            reattachAgents: ids => terminalIpc.reviveRunningAgents(run => run(), ids),
+            emitStatus: () => {},
+        });
+        expect(terminalManager().isLive('lost')).toBe(true);
+        expect(terminalIpc.terminalHasWindow('lost')).toBe(false);
+        expect(getTerminalSpec('lost')?.meta?.was_running).toBe(true);
+        expect(terminalManager().isLive('already-exited')).toBe(false);
+        expect(terminalManager().isLive('explicitly-stopped')).toBe(false);
+    });
     function rendererCreate() {
         let create: any;
         const spy = vi.spyOn(ipcMain, 'handle').mockImplementation((channel: string, handler: any) => {

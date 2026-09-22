@@ -2016,14 +2016,14 @@ app.whenReady().then(async () => {
         wireHostLossRecovery({
             getActiveClient: () => {
                 const c = getHostClient();
-                return c ? { once: (e, cb) => c.once(e, cb) } : null;
+                return c ? { once: (e, cb) => c.once(e, cb), liveIds: () => c.liveIds() } : null;
             },
-            recover: () =>
+            recover: (affectedIds) =>
                 recoverFromHostLoss(
                     buildHostRecoveryDeps(async () => {
                         const s = await runBackendSelection();
                         return { host: s.host };
-                    }, reviveRunningAgents),
+                    }, (ids) => reviveRunningAgents(undefined, ids), affectedIds),
                 ),
         });
     }

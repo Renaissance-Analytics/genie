@@ -276,16 +276,13 @@ export function broadcastToWindows(channel: string, payload: unknown): void {
  */
 export function buildHostRecoveryDeps(
     respawn: () => Promise<{ host: boolean }>,
-    reattachAgents: () => void,
+    reattachAgents: (ids: string[]) => void,
+    affectedIds: readonly string[],
 ): HostRecoveryDeps {
     return {
-        // The pty-backed terminals (shells + agents) — the panes to re-attach.
-        // Read from the spec DB, not the client: on a loss the client is already
-        // gone, but the specs persist.
-        affectedIds: () =>
-            listTerminalSpecs()
-                .filter((s) => s.type === 'terminal')
-                .map((s) => s.id),
+        // Captured from the dead host's client, not every saved terminal:
+        // dormant specs are not evidence that something died with this host.
+        affectedIds: () => [...affectedIds],
         // Best-effort scrollback capture: only possible while a client is still
         // readable (a graceful loss). On a hard crash the client is already null
         // → nothing to capture, and the re-created pane gets a fresh shell.
