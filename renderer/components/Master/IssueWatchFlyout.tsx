@@ -438,6 +438,21 @@ export default function IssueWatchFlyout({
                     </button>
                 </div>
 
+                {/* A REFUSED OR FAILED REFRESH SAYS SO, IN TEXT.
+                    The owner reported this button "doesn't do anything at
+                    all" — it had run and failed, and the entire report was a
+                    rose border plus a `title` tooltip. A control whose failure
+                    is only legible on hover has not reported it. Rendered
+                    OUTSIDE the gates below so it shows whatever state the rest
+                    of the panel is in: the refresh can fail while the panel
+                    itself is perfectly healthy, which is exactly this case. */}
+                {forceState.announce && forceState.detail && (
+                    <div className="iw-refresh-failed" role="status">
+                        <IconAlert size={12} />
+                        <span>{forceState.detail}</span>
+                    </div>
+                )}
+
                 <div className="iw-body">
                     {!hasGenieBridge() ? (
                         <div className="iw-muted">Issue Watch runs inside Genie.</div>

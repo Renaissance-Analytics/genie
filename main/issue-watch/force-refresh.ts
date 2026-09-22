@@ -122,7 +122,18 @@ export async function forceRefreshWorkspace(
     if (!row) {
         // Asking Tynn to refresh a workspace Genie does not have would either
         // refresh someone else's project or spend a window for nothing.
-        return { refreshed: false, reason: 'unavailable', cooldown: { ...NO_WAIT } };
+        //
+        // WITH a sentence. This branch returned none, so the UI fell back to a
+        // cause it had invented ("Could not reach Tynn"), which is a different
+        // and wrong claim — and the test above could not tell, because it only
+        // asserted the `reason`. This file's own docblock already said the
+        // `unavailable` branch carries a fixed sentence; now it does.
+        return {
+            refreshed: false,
+            reason: 'unavailable',
+            error: 'Genie has no workspace with that id, so there is nothing to refresh.',
+            cooldown: { ...NO_WAIT },
+        };
     }
 
     // Tynn keys IssueWatch by PROJECT. A locally scaffolded envelope mints its
@@ -176,11 +187,30 @@ export async function forceRefreshWorkspace(
  * channel already does. Unregistered means "not signed in yet", which is an
  * `unavailable` answer rather than a crash.
  */
-let transport: { fetchImpl: typeof fetch; apiBaseUrl: () => string } | null = null;
+let transport: IssueWatchRefreshTransport | null = null;
 
-export function setIssueWatchRefreshTransport(
-    t: { fetchImpl: typeof fetch; apiBaseUrl: () => string } | null,
-): void {
+export interface IssueWatchRefreshTransport {
+    fetchImpl: typeof fetch;
+    apiBaseUrl: () => string;
+    /**
+     * The `XSRF-TOKEN` cookie's value, or null.
+     *
+     * REQUIRED for this POST to run at all. The endpoint lives on Tynn's
+     * SESSION surface (`routes/web.php`), where the desktop authenticates with
+     * a `laravel_session` cookie — and that group carries Laravel's CSRF
+     * middleware, so a POST without `X-XSRF-TOKEN` is rejected at 419 UPSTREAM
+     * of the controller. Measured: an unauthenticated probe of the live
+     * endpoint answers 419, which is CSRF, not auth.
+     *
+     * Every other POST Genie makes to that surface goes through
+     * `TynnBackend.fetch`, which reads this cookie and sets the header. This
+     * call was built on a second, hand-rolled fetch that did not — which is why
+     * submitting feedback worked and the refresh button did nothing.
+     */
+    csrfToken?: () => Promise<string | null>;
+}
+
+export function setIssueWatchRefreshTransport(t: IssueWatchRefreshTransport | null): void {
     transport = t;
 }
 
@@ -201,9 +231,20 @@ export async function requestIssueWatchRefresh(workspaceId: string): Promise<For
     return forceRefreshWorkspace(workspaceId, {
         requestRefresh: async (projectId) => {
             const base = apiBaseUrl().replace(/\/+$/, '');
+            // A missing token is TYNN'S call to make, not a reason to refuse
+            // locally — Genie sends what it has and reports what comes back.
+            const csrf = (await transport?.csrfToken?.()) ?? null;
             const res = await fetchImpl(`${base}/api/v1/user/issue-watch/refresh`, {
                 method: 'POST',
-                headers: { 'content-type': 'application/json', accept: 'application/json' },
+                headers: {
+                    'content-type': 'application/json',
+                    accept: 'application/json',
+                    // Laravel keys "is this XHR" off this, which is what makes
+                    // the session surface answer JSON rather than redirect to a
+                    // login page — the same header `TynnBackend.fetch` sends.
+                    'x-requested-with': 'XMLHttpRequest',
+                    ...(csrf ? { 'x-xsrf-token': csrf } : {}),
+                },
                 body: JSON.stringify({ project_id: projectId }),
             });
             // A refusal is a 200 carrying `refreshed: false` — Tynn only uses a

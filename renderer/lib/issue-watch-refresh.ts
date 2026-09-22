@@ -24,6 +24,18 @@ export interface RefreshControlState {
     tone: 'idle' | 'ok' | 'wait' | 'error';
     /** The failure text, when there is one, shown rather than summarised. */
     detail?: string;
+    /**
+     * This outcome must be SHOWN, not merely tinted.
+     *
+     * The owner reported the button "doesn't do anything at all". It had run
+     * and failed: the whole report was a rose border and a `title` tooltip,
+     * which is indistinguishable from an untouched button unless you hover it.
+     * A control that reports a failure only on hover has not reported it.
+     *
+     * False for a cooldown on purpose — the limit doing its job is information,
+     * and announcing it like a fault trains people to ignore the real ones.
+     */
+    announce?: boolean;
 }
 
 export function refreshControlState({
@@ -43,7 +55,14 @@ export function refreshControlState({
             disabled: false,
             label: 'Refresh now',
             tone: 'error',
-            detail: last.error ?? 'Could not reach Tynn.',
+            announce: true,
+            // NEVER INVENT A CAUSE. This used to fall back to "Could not reach
+            // Tynn", which is a specific claim and often the wrong one — a
+            // refusal because Genie is not SIGNED IN, or because the workspace
+            // is unknown, has nothing to do with reachability, and sends
+            // someone to check their network over a sign-in problem. When the
+            // outcome did not say why, say exactly that.
+            detail: last.error ?? 'The refresh did not happen, and Genie was not told why.',
         };
     }
 

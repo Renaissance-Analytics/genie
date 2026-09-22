@@ -18,7 +18,20 @@ import { describe, expect, it, vi } from 'vitest';
  *   - unreachable: reported as a failure, never as a refresh that happened.
  */
 
-import { forceRefreshWorkspace, TynnRefreshHttpError, type TynnRefreshResponse } from '../force-refresh';
+// The WIRED entry point resolves the workspace from the real db; every other
+// test here injects `workspaceRow` and never touches it. Stubbed so the CSRF
+// tests below can exercise the real request path without a database.
+vi.mock('../../db', () => ({
+    getWorkspace: (id: string) => ({ id, path: 'C:/ws', tynn_project_id: 'tynn-project-9' }),
+}));
+
+import {
+    forceRefreshWorkspace,
+    requestIssueWatchRefresh,
+    setIssueWatchRefreshTransport,
+    TynnRefreshHttpError,
+    type TynnRefreshResponse,
+} from '../force-refresh';
 
 const LINKED = {
     id: 'ws-local',
@@ -158,5 +171,116 @@ describe('forceRefreshWorkspace', () => {
         expect(requestRefresh).not.toHaveBeenCalled();
         expect(result).toMatchObject({ refreshed: false, reason: 'unavailable' });
         expect(result.cooldown.seconds).toBe(0);
+    });
+
+    it('SAYS WHY it refused — an outcome with no reason reads as a button that did nothing', () => {
+        // The owner: "the issue watch refresh button doesn't do anything at
+        // all." It had in fact run and failed; the only feedback was a rose
+        // border and a hover tooltip. This branch made that worse by returning
+        // no `error` at all, so the UI fell back to a sentence it had invented.
+        //
+        // This module's own docblock already claims otherwise — "the
+        // `unavailable` branch's `error` is a fixed sentence, not exception
+        // text" — so the code and its documentation disagreed, and the test
+        // above could not tell, because it only ever asserted the `reason`.
+        return forceRefreshWorkspace('ws-nope', {
+            workspaceRow: () => null,
+            requestRefresh: vi.fn(),
+            applyDelta: () => {},
+        }).then((result) => {
+            expect(result.error, 'an unavailable refresh must say why').toBeTruthy();
+            expect(result.error).toMatch(/workspace/i);
+        });
+    });
+
+    it('POSITIVE CONTROL: a SUCCESSFUL refresh carries no error to explain away', async () => {
+        const result = await forceRefreshWorkspace('ws-local', {
+            workspaceRow: () => LINKED,
+            requestRefresh: async () => tynnAnswer(),
+            applyDelta: () => {},
+        });
+        expect(result.error).toBeUndefined();
+    });
+});
+
+/**
+ * THE POST HAS TO CARRY A CSRF TOKEN, or Laravel never runs the controller.
+ *
+ * The owner: "the issue watch refresh button doesn't do anything at all."
+ *
+ * `/api/v1/user/issue-watch/refresh` lives in `routes/web.php` — Tynn's SESSION
+ * surface, where the desktop authenticates with a `laravel_session` cookie
+ * rather than a bearer token. That group carries Laravel's CSRF middleware, so
+ * a POST without `X-XSRF-TOKEN` is rejected at 419 UPSTREAM of the controller.
+ * Measured, not assumed: an unauthenticated probe of the live endpoint answers
+ * `419`, which is CSRF, not auth.
+ *
+ * Every other POST Genie makes to that surface goes through
+ * `TynnBackend.fetch`, which reads the `XSRF-TOKEN` cookie and sets the header
+ * (`main/backend/tynn.ts`) — which is why submitting feedback works and this
+ * did not. This one call was built on a second, hand-rolled fetch that sent
+ * `content-type` and `accept` and nothing else.
+ *
+ * The GET reconcile on the same surface is unaffected, because CSRF does not
+ * apply to GET — so the feed and the counts kept working while the button
+ * silently failed. That asymmetry is exactly what made it look like a dead
+ * control rather than a broken request.
+ */
+describe('the force-refresh POST is accepted by Tynn’s session surface', () => {
+    it('sends the CSRF token Laravel requires', async () => {
+        const seen: { headers?: Record<string, string> } = {};
+        setIssueWatchRefreshTransport({
+            fetchImpl: (async (_url: string, init: { headers?: Record<string, string> }) => {
+                seen.headers = init?.headers;
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        refreshed: true,
+                        reason: 'refreshed',
+                        cooldown: { seconds: 0, nextAllowedAt: null, label: 'now' },
+                    }),
+                };
+            }) as unknown as typeof fetch,
+            apiBaseUrl: () => 'https://tynn.example',
+            csrfToken: async () => 'the-xsrf-token',
+        });
+
+        await requestIssueWatchRefresh('ws-local');
+
+        const headers = Object.fromEntries(
+            Object.entries(seen.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+        );
+        expect(headers['x-xsrf-token']).toBe('the-xsrf-token');
+        // Laravel's session surface also keys "is this XHR" off this header,
+        // which is what makes it answer JSON instead of a redirect to a login page.
+        expect(headers['x-requested-with']).toBe('XMLHttpRequest');
+    });
+
+    it('still posts when no token can be read, rather than refusing locally', async () => {
+        // POSITIVE CONTROL for the shape: a missing cookie is Tynn's call to
+        // make, not a reason for Genie to invent a local failure — and asserting
+        // only "the header is present" would pass against a version that refused
+        // to send anything at all.
+        let called = false;
+        setIssueWatchRefreshTransport({
+            fetchImpl: (async () => {
+                called = true;
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        refreshed: true,
+                        reason: 'refreshed',
+                        cooldown: { seconds: 0, nextAllowedAt: null, label: 'now' },
+                    }),
+                };
+            }) as unknown as typeof fetch,
+            apiBaseUrl: () => 'https://tynn.example',
+            csrfToken: async () => null,
+        });
+
+        await requestIssueWatchRefresh('ws-local');
+        expect(called).toBe(true);
     });
 });

@@ -2662,6 +2662,23 @@ app.whenReady().then(async () => {
             setIssueWatchRefreshTransport({
                 fetchImpl: sessionFetch,
                 apiBaseUrl: () => new TynnBackend().host(),
+                // The endpoint is on Tynn's SESSION surface, so the POST needs
+                // Laravel's CSRF token or it is refused at 419 before the
+                // controller runs — which is what made the flyout's "Refresh
+                // now" button do nothing at all.
+                csrfToken: async () => {
+                    try {
+                        const host = new TynnBackend().host();
+                        const cookies = await session.defaultSession.cookies.get({
+                            url: host,
+                            name: 'XSRF-TOKEN',
+                        });
+                        const v = cookies[0]?.value;
+                        return v ? decodeURIComponent(v) : null;
+                    } catch {
+                        return null;
+                    }
+                },
             });
             userChannelHandle?.stop();
             userChannelHandle = await startUserChannelIssueWatch({

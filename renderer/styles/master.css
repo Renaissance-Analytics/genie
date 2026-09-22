@@ -7019,6 +7019,26 @@ body.gutter-dragging .grid-gutter {
     color: var(--rose-400);
 }
 
+/* A refresh that failed, stated where it cannot be missed. The rose TONE on the
+   button alone was the whole report before, and a colour is not a sentence. */
+.iw-refresh-failed {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 8px 12px 0;
+    padding: 6px 9px;
+    font-size: 11px;
+    line-height: 1.45;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(244, 135, 113, 0.4);
+    background: rgba(244, 135, 113, 0.08);
+    color: var(--rose-400);
+}
+.iw-refresh-failed svg {
+    flex: none;
+    margin-top: 2px;
+}
+
 /* The "not tracking" repair. A warning that only describes a problem is a dead
    end; this one carries the control for whichever cause actually applies. */
 .iw-warn-actionable {
