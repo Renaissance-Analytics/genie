@@ -21,11 +21,14 @@ import {
  * They are right, and the suite proved it. Genie's E2E is thorough about
  * BEHAVIOUR and blind to APPEARANCE: nothing it produced was ever looked at.
  * There was no artifact upload in `e2e.yml` at all, so even a failing run's
- * `test-results/` died on the runner. And the agent-manager suite passes on
- * three operating systems against `renderer/pages/e2e-agent-manager.tsx` — a
- * harness page whose identity panel is the literal sentence "The identity
- * controls live here in the product", for a component the product does not
- * render anywhere.
+ * `test-results/` died on the runner — a path in a log pointing at a VM that
+ * had already been destroyed, which is a failure diagnosed by guessing.
+ *
+ * Behaviour coverage is not the gap. Four controls shipped this week that were
+ * OFFERED, ran, and reported nothing: a restart that killed the agent it
+ * started, an installer reading a table nobody wrote to, a refresh button
+ * refused at 419, and an "Edit agent…" that silently declined for an agent
+ * that was not running. Every one of them would be obvious in a picture.
  *
  * ## What this file is, and is not
  *

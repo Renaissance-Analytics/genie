@@ -294,17 +294,104 @@ export function AgentDriverPanel({
     );
 }
 
+/**
+ * IDENTITY, BUILT FROM THE AGENT RECORD — so the manager opens for an agent
+ * that is not running.
+ *
+ * States only what the record can actually answer, and says plainly which
+ * controls need a live terminal rather than offering one that would do nothing.
+ * That is the whole lesson of the bug this fixes: a control that is offered and
+ * silently declines is worse than one that explains itself.
+ */
+function AgentRecordIdentity({
+    agent,
+    avatar,
+    avatarError,
+    onAvatar,
+    onSaveAvatar,
+    onDefaultChange,
+}: {
+    agent: AgentManagerState['agent'];
+    avatar: string;
+    avatarError: string | null;
+    onAvatar: (v: string) => void;
+    onSaveAvatar: () => void | Promise<void>;
+    onDefaultChange: (makeDefault: boolean) => void | Promise<void>;
+}) {
+    if (!agent) return <Text size="sm">This agent could not be read.</Text>;
+    const isDefault = agent.role === 'workspace';
+    return (
+        <>
+            <Field label="Name">
+                <Text size="sm">{agent.name}</Text>
+            </Field>
+            <Field
+                label="Purpose"
+                hint={
+                    agent.terminalSpecId
+                        ? undefined
+                        : 'Editing the purpose writes to the agent’s live AgentInbox channel, so it needs the agent running. Start it to change this.'
+                }
+            >
+                <Text size="sm">{agent.purpose || '—'}</Text>
+            </Field>
+            <Field label="Driver" hint="Change it on the Driver tab.">
+                <Text size="sm">
+                    {agent.tui ?? 'none'} · {agent.running ? 'running' : 'stopped'}
+                </Text>
+            </Field>
+            <Field label="Avatar" hint="One or two characters, or an emoji.">
+                <Input
+                    value={avatar}
+                    onChange={(e) => onAvatar((e.target as HTMLInputElement).value)}
+                    placeholder={agent.name.slice(0, 2).toUpperCase()}
+                />
+                <Button size="sm" variant="default" onClick={() => void onSaveAvatar()}>
+                    Save avatar
+                </Button>
+                {avatarError && (
+                    <Callout color="red" data-testid="identity-avatar-error">
+                        <Text size="sm">{avatarError}</Text>
+                    </Callout>
+                )}
+            </Field>
+            <Field
+                label="Workspace default"
+                hint="The agent this workspace boots from, and the one an action that names no agent gets."
+            >
+                <Button
+                    size="sm"
+                    variant={isDefault ? 'ghost' : 'default'}
+                    onClick={() => void onDefaultChange(!isDefault)}
+                >
+                    {isDefault ? 'Clear default' : 'Make default agent'}
+                </Button>
+            </Field>
+        </>
+    );
+}
+
 export default function AgentManager({
     agentId,
     identity,
     onChanged,
 }: {
     agentId: string;
-    /** The identity controls that already existed — workspace default, purpose,
-     *  reachability, IssueWatch. Passed in rather than moved, so this replaces
-     *  the surface without shrinking it. The driver switcher that used to sit
-     *  here is now the Driver tab, which is a control and not a popover. */
-    identity: ReactNode;
+    /**
+     * The identity controls the caller supplies — `AgentSettingsModal` passes
+     * its full panel, whose reachability and IssueWatch controls are SPEC-scoped
+     * and therefore need a live terminal.
+     *
+     * OPTIONAL, and that is what lets this manager open for a DORMANT agent.
+     * It used to be required, so the only way in was through a modal that takes
+     * a `TerminalSpec` — and a dormant agent has none. That is the bug the owner
+     * hit: "Edit agent…" did nothing at all, and said nothing about why.
+     *
+     * Omitted ⇒ identity is rendered from the agent RECORD already loaded here,
+     * which answers everything except the spec-scoped controls, and says so
+     * rather than offering one that would decline.
+     */
+    identity?: ReactNode;
     /** The roster changed underneath — rebuild the grid. */
     onChanged?: () => void;
 }) {
@@ -414,8 +501,37 @@ export default function AgentManager({
                 </Tabs.List>
 
                 <Tabs.Panels className="agent-manager-panels">
-                    {/* ── Identity — everything the old form did, unchanged ── */}
-                    <Tabs.Panel value="identity">{identity}</Tabs.Panel>
+                    {/* ── Identity — the caller's controls, or the record's ── */}
+                    <Tabs.Panel value="identity">
+                        {identity ?? (
+                            <AgentRecordIdentity
+                                agent={state.agent}
+                                avatar={avatar}
+                                avatarError={avatarError}
+                                onAvatar={setAvatar}
+                                onSaveAvatar={async () => {
+                                    setAvatarError(null);
+                                    const r = await api().agents.setAvatar(agentId, avatar.trim() || null);
+                                    if (!r?.ok) {
+                                        setAvatarError(r?.error ?? 'Could not save the avatar.');
+                                        return;
+                                    }
+                                    setSaved('Avatar saved.');
+                                    await load();
+                                    onChanged?.();
+                                }}
+                                onDefaultChange={async (makeDefault) => {
+                                    if (!state.agent) return;
+                                    await api().agents.setDefault(
+                                        state.agent.workspaceId,
+                                        makeDefault ? state.agent.id : null,
+                                    );
+                                    await load();
+                                    onChanged?.();
+                                }}
+                            />
+                        )}
+                    </Tabs.Panel>
 
                     {/* ── Driver — what it runs under, and whether it is up ── */}
                     <Tabs.Panel value="driver">

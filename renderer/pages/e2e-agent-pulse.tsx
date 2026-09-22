@@ -110,6 +110,7 @@ export default function E2EAgentPulse() {
                 onOpenSpec={NOOP}
                 onRestartAgentSpec={NOOP}
                 onEditAgentSpec={NOOP}
+                onManageAgent={NOOP}
             />
         </div>
     );
