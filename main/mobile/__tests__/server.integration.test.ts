@@ -129,7 +129,7 @@ const deps = (): MobileDataDeps => ({
         : {}),
     ...(specializedWired
         ? {
-              restartAgentTerminal: (id: string) => {
+              restartAgentTerminal: async (id: string) => {
                   restartedIds.push(id);
                   return {
                       ok: true as const,

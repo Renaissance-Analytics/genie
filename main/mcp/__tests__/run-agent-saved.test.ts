@@ -62,7 +62,14 @@ vi.mock('node-pty', () => ({
             resize: () => {},
             kill() {
                 this.killed = true;
-                onExit?.({ exitCode: 0 });
+                // ASYNCHRONOUS, because node-pty is. The OS reports a process's
+                // exit on a later turn of the loop — it cannot be delivered
+                // inside the kill() call that requested it. A fake that fires
+                // onExit synchronously is not a simplification, it is a
+                // different machine: it makes kill-then-recreate-under-the-
+                // same-id look atomic, and that is precisely the window the
+                // restart bug lives in.
+                setTimeout(() => onExit?.({ exitCode: 0 }), 0);
             },
             exit() {
                 this.killed = true;
@@ -112,6 +119,7 @@ import { registerAgentForMcp, runAgentForMcp } from '../host-tools';
 import { registerAgentInboxSession } from '../../agentinbox/session-registration';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 import type { RunAgentRequest, RunAgentResult } from '../protocol';
+import { useTempClaudeHome, writeTranscript } from '../../__tests__/support/claude-transcripts';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-saved-agents-'));
 const dataDir = path.join(tmpRoot, 'userData');
@@ -120,6 +128,8 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(wsDir, { recursive: true });
 
 (app as unknown as { getPath: (name: string) => string }).getPath = () => dataDir;
+
+useTempClaudeHome();
 
 initDatabase(dataDir);
 
@@ -530,6 +540,24 @@ describe('listing the workspace roster', () => {
  * failed, which would be a worse bug than the duplicate.
  */
 describe('runAgent restart', () => {
+    /**
+     * The agent HAS SPOKEN — write the transcript Claude writes the moment a
+     * session begins, for the id Genie minted at launch.
+     *
+     * A resume is resolved against what is on disk, not against the spec's word
+     * for it, so an agent with a minted id and no transcript has nothing to
+     * resume and the restart correctly refuses. Every test below is about what a
+     * SUCCESSFUL restart leaves behind, so each one needs a conversation that is
+     * really there — otherwise "no second agent" passes because no restart
+     * happened at all, which is the vacuous pass the positive controls exist to
+     * catch.
+     */
+    const haveSpoken = (specId: string): void => {
+        const spec = getTerminalSpec(specId);
+        const sid = spec?.meta?.chat_session_id;
+        if (spec && sid) writeTranscript(spec.cwd, sid);
+    };
+
     const restart = (id: string) =>
         runAgentForMcp(CALLER_ID, { action: 'restart', id } as RunAgentRequest);
     const restartFresh = (id: string) =>
@@ -564,6 +592,7 @@ describe('runAgent restart', () => {
         const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         expect(created.ok).toBe(true);
         expect(agentSpecs()).toHaveLength(1);
+        haveSpoken(created.id!);
 
         const again = await restart(created.id!);
 
@@ -573,10 +602,38 @@ describe('runAgent restart', () => {
         expect(terminalManager().isLive(agentSpecs()[0]!.id)).toBe(true);
     });
 
+    it('SURVIVES the old pty exiting after the replacement took its id', async () => {
+        // THE FREEZE the owner reported: "the terminal dies but the UI never
+        // changes, it just freezes until you close the panel and open it again".
+        //
+        // A restart reuses `spec.id` deliberately — that is what preserves the
+        // AgentInbox identity (see this block's docblock). But each pty's exit
+        // handler in fancy-term-host is a closure over that id and deletes
+        // WHOEVER HOLDS IT, not itself. node-pty delivers an exit on a LATER
+        // tick, so the order is: kill → replacement takes the id → the dead
+        // pty's exit arrives and evicts the replacement. The new pty keeps
+        // running, the manager has forgotten it, ownership is dropped, and the
+        // renderer is told `[process exited]` about a terminal that is alive.
+        //
+        // Every other assertion in this block checks liveness in the instant
+        // BEFORE that exit lands, which is why they all passed through it.
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+        haveSpoken(created.id!);
+
+        const again = await restart(created.id!);
+        expect(again.ok).toBe(true);
+
+        await new Promise((resolve) => setTimeout(resolve, 25));
+
+        expect(agentSpecs()).toHaveLength(1);
+        expect(terminalManager().isLive(agentSpecs()[0]!.id)).toBe(true);
+    });
+
     it('keeps the durable AgentInbox identity across the restart', async () => {
         const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
         const identityBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
         expect(identityBefore).toBeTruthy();
+        haveSpoken(created.id!);
 
         await restart(created.id!);
 
@@ -588,6 +645,7 @@ describe('runAgent restart', () => {
 
     it('leaves the registry pointing at a spec that still exists', async () => {
         const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+        haveSpoken(created.id!);
 
         await restart(created.id!);
 

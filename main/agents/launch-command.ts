@@ -1,4 +1,5 @@
 import { getAllSettings } from '../db';
+import { gooseSessionCommand } from './goose-launch';
 import { appendLaunchFlags } from '../agentinbox/session-capture';
 import {
     readTynnMcpUrl,
@@ -50,8 +51,15 @@ export function resolveAgentLaunch(
     override?: string,
     workspace?: { id: string; path: string },
 ): string | null {
-    const base = resolveAgentCommand(agent, override);
-    if (!base) return null;
+    const raw = resolveAgentCommand(agent, override);
+    if (!raw) return null;
+    // Goose needs its `session` subcommand before anything else is appended:
+    // the flags Genie adds (`--with-streamable-http-extension`, and a `--name`
+    // if one is ever minted) live on that subcommand, and the top-level CLI
+    // takes no global args at all. Done HERE rather than in the MCP step so a
+    // workspace with MCP off still gets a valid command — a no-op for every
+    // other provider, and for a goose command that already names a subcommand.
+    const base = agent === 'goose' ? gooseSessionCommand(raw) : raw;
     const s = getAllSettings();
     const withFlags = appendLaunchFlags(base, resolveProviderFlags(agent, s));
     // Without a workspace there are no URLs to resolve; the gate (Codex + sync-on)

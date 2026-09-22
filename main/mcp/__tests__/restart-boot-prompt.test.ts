@@ -189,7 +189,7 @@ describe('genie#434 — a RESUMING restart is told to reconnect and confirm', ()
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
         plantTranscript(wsDir, sid);
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -209,7 +209,7 @@ describe('genie#434 — a RESUMING restart is told to reconnect and confirm', ()
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
         plantTranscript(wsDir, sid);
 
-        restartAgentTerminal(id);
+        await restartAgentTerminal(id);
         await afterLaunchSettles();
 
         const relaunch = submitted(spawnedPtys.at(-1));
@@ -250,7 +250,7 @@ describe('genie#434 — the workstation operator restarts warm, not blank', () =
     it('relaunches with its role brief AND the reconnect-and-confirm line', async () => {
         seedOperator();
 
-        const r = restartAgentTerminal(GENIE_OS_TERMINAL_ID);
+        const r = await restartAgentTerminal(GENIE_OS_TERMINAL_ID);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -269,7 +269,7 @@ describe('genie#434 — the workstation operator restarts warm, not blank', () =
         // asks it for, and an orphan spec the next boot garbage-collects.
         seedOperator();
 
-        const r = restartAgentTerminal(GENIE_OS_TERMINAL_ID);
+        const r = await restartAgentTerminal(GENIE_OS_TERMINAL_ID);
 
         expect(r.ok && r.newId).toBe(GENIE_OS_TERMINAL_ID);
         expect(getTerminalSpec(GENIE_OS_TERMINAL_ID)?.meta?.agent_id).toBe('genie:workstation');
@@ -284,7 +284,7 @@ describe('genie#434 — the workstation operator restarts warm, not blank', () =
         // describes.
         seedOperator();
 
-        restartAgentTerminal(GENIE_OS_TERMINAL_ID);
+        await restartAgentTerminal(GENIE_OS_TERMINAL_ID);
         await afterLaunchSettles();
 
         expect(getTerminalSpec(GENIE_OS_TERMINAL_ID)?.meta?.agent_instructions).toBe(ROLE_BRIEF);

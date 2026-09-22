@@ -295,6 +295,7 @@ export default function TerminalPanel({
                         // falls back to requiring host:all.
                         workspaceId={spec.workspace_id ?? undefined}
                         onExit={onMarkInactive}
+                        focused={focused}
                         shells={surface === 'agent' ? [] : shellOptions}
                         activeShell={shell.id ?? undefined}
                         onShellChange={onShellChange}

@@ -117,23 +117,34 @@ describe('renderAgentLaunch — post-launch agents', () => {
         expect(r.chatSessionId).toBeNull();
     });
 
-    it('custom uses detect (no launch flag, resolved post-launch)', () => {
+    it('custom captures NOTHING — it names no binary, so there is nothing to watch', () => {
+        // Was `detect`. `custom` is an arbitrary wrapper command, so Genie
+        // cannot know where (or whether) it writes a transcript — and `detect`
+        // would have it watch Claude Code's directory, which is not an
+        // approximation of the answer but a different provider's.
         const r = renderAgentLaunch('custom', 'my-agent --go');
-        expect(r.strategy).toBe('detect');
+        expect(r.strategy).toBe('none');
         expect(r.command).toBe('my-agent --go');
         expect(r.chatSessionId).toBeNull();
     });
 
     it('the profile registry is exhaustive over the agent types', () => {
         // Only the providers with a WIRED capture path are named; every other
-        // one derives to `detect`, which captures nothing and claims nothing.
+        // one derives to `none`.
+        //
+        // This comment used to say they derive to `detect`, "which captures
+        // nothing and claims nothing". That was the misconception, not a
+        // shorthand: `detect` polls Claude Code's transcript directory and
+        // stamps whatever `.jsonl` appears onto the agent's chat_session_id, so
+        // it captures something and claims it — just from the wrong provider.
+        // `none` is the strategy that actually does what this sentence promised.
         expect(Object.keys(LAUNCH_PROFILES)).toEqual([...PROVIDER_IDS]);
         expect(LAUNCH_PROFILES.claude.strategy).toBe('flag');
         expect(LAUNCH_PROFILES.codex.strategy).toBe('hook');
         expect(LAUNCH_PROFILES.genie.strategy).toBe('hook');
         for (const id of PROVIDER_IDS) {
             if (['claude', 'codex', 'genie'].includes(id)) continue;
-            expect(LAUNCH_PROFILES[id].strategy, id).toBe('detect');
+            expect(LAUNCH_PROFILES[id].strategy, id).toBe('none');
         }
     });
 });
@@ -333,6 +344,30 @@ describe('resolveRestartCommand — graceful restart, never a phantom --resume',
         });
     });
 
+    it('REFUSES rather than emitting a phantom --continue when the cwd has NO chat', () => {
+        // THE BUG the owner hit: `renderAgentLaunch` MINTS a `--session-id` at
+        // create time, so an agent that NEVER STARTED still has a captured id.
+        // That id has no transcript, which is the same `verified === false` a
+        // genuinely DRIFTED id produces — and the drift fallback then rendered
+        // `claude --continue` into a directory that has never held a chat. The
+        // CLI answers "No conversation found to continue" and exits, leaving a
+        // bare shell where an agent should be.
+        //
+        // The two cases are only indistinguishable if nobody asks the one
+        // question that separates them: does this cwd hold ANY conversation?
+        const r = resolveRestartCommand(claude({ chat_session_id: 'never-ran' }), missing, () => false);
+        expect('error' in r).toBe(true);
+    });
+
+    it('still falls back to --continue when the cwd DOES hold a chat', () => {
+        // POSITIVE CONTROL. The drift fallback is right whenever there is
+        // something to continue — without this, the test above would also pass
+        // against a version that simply deleted `--continue` altogether.
+        expect(
+            resolveRestartCommand(claude({ chat_session_id: 'drifted' }), missing, () => true),
+        ).toEqual({ command: 'claude --continue' });
+    });
+
     it('REFUSES a claude agent with no captured session (would lose the chat)', () => {
         const r = resolveRestartCommand(claude(), exists);
         expect('error' in r).toBe(true);
@@ -349,6 +384,44 @@ describe('resolveRestartCommand — graceful restart, never a phantom --resume',
     it('REFUSES a non-agent terminal', () => {
         expect('error' in resolveRestartCommand({ meta: {} }, exists)).toBe(true);
         expect('error' in resolveRestartCommand(null, exists)).toBe(true);
+    });
+});
+
+describe('agentRelaunchDecision — a minted id is not a conversation', () => {
+    const claude = (extra: Record<string, string> = {}) => ({
+        meta: { agent: 'claude', agent_command: 'claude', ...extra },
+    });
+
+    it('launches FRESH when the captured id has no transcript and the cwd has no chat', () => {
+        // An agent that never started: a minted `--session-id` and an empty
+        // project dir. `--continue` here is a guess that dead-ends, so the only
+        // honest relaunch is a new conversation.
+        const d = agentRelaunchDecision(
+            claude({ chat_session_id: 'never-ran' }),
+            false,
+            () => false,
+            () => false,
+        );
+        expect(d?.command).toMatch(/^claude --session-id [0-9a-fA-F-]{8,}$/);
+        expect(d?.command).not.toContain('--continue');
+    });
+
+    it('CONTINUES when the id drifted but the cwd still holds a chat', () => {
+        // POSITIVE CONTROL for the case above.
+        expect(
+            agentRelaunchDecision(
+                claude({ chat_session_id: 'drifted' }),
+                false,
+                () => false,
+                () => true,
+            ),
+        ).toEqual({ command: 'claude --continue' });
+    });
+
+    it('keeps --continue when no cwd probe is supplied (callers that cannot check)', () => {
+        expect(
+            agentRelaunchDecision(claude({ chat_session_id: 'drifted' }), false, () => false),
+        ).toEqual({ command: 'claude --continue' });
     });
 });
 
@@ -483,5 +556,53 @@ describe('bindsSessionAfterLaunch', () => {
     it('refuses a provider this build does not know', () => {
         expect(bindsSessionAfterLaunch('some-future-tui')).toBe(false);
         expect(bindsSessionAfterLaunch(undefined)).toBe(false);
+    });
+});
+
+/**
+ * `detect` WATCHES CLAUDE CODE'S TRANSCRIPTS. It cannot be a default.
+ *
+ * The strategy polls a directory for a new `*.jsonl` whose filename stem is the
+ * session id — and the directory it polls is `~/.claude/projects/<encoded cwd>`
+ * (`captureSessionByDetect` defaults `transcriptDir` to `transcriptDirFor`).
+ * That layout is Claude Code's and nothing else's.
+ *
+ * It was the default for every provider Genie had not explicitly wired: 18 of
+ * 21. So launching a Goose (or Gemini, or Aider) agent made Genie spend 30
+ * seconds watching CLAUDE's directory for the current cwd and stamp whatever
+ * `.jsonl` appeared onto that agent's `chat_session_id`.
+ *
+ * Mostly latent — most of those providers cannot resume, so the bogus id was
+ * never spent. NOT latent for the ones that CAN: a Claude session started in the
+ * same folder inside that 30-second window gets captured, and a later graceful
+ * restart renders `<provider> --resume <a Claude uuid>`. That is the exact
+ * failure `registry.ts` warns about in its own words — a wrong resume flag does
+ * not error, it starts a FRESH conversation while the UI says it resumed.
+ *
+ * `none` is what the default was always TRYING to be: capture nothing, so
+ * nothing claims a session id it does not have.
+ */
+describe('the unwired default never watches another provider’s transcripts', () => {
+    it('gives an unwired provider `none`, not `detect`', () => {
+        expect(LAUNCH_PROFILES.goose.strategy).toBe('none');
+        expect(LAUNCH_PROFILES.gemini.strategy).toBe('none');
+        expect(LAUNCH_PROFILES.aider.strategy).toBe('none');
+    });
+
+    it('leaves `detect` to the ONLY provider whose layout it describes', () => {
+        // POSITIVE CONTROL in the strict sense: "nothing uses detect" would pass
+        // against deleting the strategy outright. Claude is the one provider
+        // that writes one file per session named after its id — and it is on
+        // `flag`, because Genie mints that id rather than watching for it. So
+        // the honest assertion is that NOTHING is left on detect by default,
+        // and the wired profiles are the only source of a strategy.
+        const detecting = PROVIDER_IDS.filter((id) => LAUNCH_PROFILES[id].strategy === 'detect');
+        expect(detecting).toEqual([]);
+    });
+
+    it('does not disturb the providers that ARE wired', () => {
+        expect(LAUNCH_PROFILES.claude).toEqual({ strategy: 'flag', flagTemplate: '--session-id {id}' });
+        expect(LAUNCH_PROFILES.codex.strategy).toBe('hook');
+        expect(LAUNCH_PROFILES.genie.strategy).toBe('hook');
     });
 });

@@ -107,6 +107,7 @@ export default function E2EAgentPulse() {
                 lastTerminalType={'regular'}
                 onLastTerminalType={NOOP}
                 onAgentCreated={NOOP}
+                onOpenSpec={NOOP}
                 onRestartAgentSpec={NOOP}
                 onEditAgentSpec={NOOP}
             />

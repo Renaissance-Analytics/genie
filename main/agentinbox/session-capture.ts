@@ -65,9 +65,30 @@ const WIRED_LAUNCH_PROFILES: Partial<Record<AgentInboxAgentType, LaunchProfile>>
     genie: { strategy: 'hook' },
 };
 
-/** The profile for every provider, wired or not. Never `undefined`. */
+/**
+ * The profile for every provider, wired or not. Never `undefined`.
+ *
+ * THE UNWIRED DEFAULT IS `none`, NOT `detect`. `detect` polls a directory for a
+ * new `*.jsonl` whose filename stem is the session id, and the directory it
+ * polls is `~/.claude/projects/<encoded cwd>` — Claude Code's layout and
+ * nobody else's. As a default it made Genie launch a Goose (or Gemini, or
+ * Aider) agent and then watch CLAUDE's transcripts for 30 seconds, stamping
+ * whatever appeared onto that agent's `chat_session_id`.
+ *
+ * Latent for most of them, because they cannot resume and the bogus id was
+ * never spent. NOT latent for the ones that can: a Claude session opened in the
+ * same folder inside that window got captured, and a later graceful restart
+ * rendered `<provider> --resume <a Claude uuid>` — a command that looks like a
+ * resume and cannot be one, which is precisely the failure `registry.ts` warns
+ * about (a wrong resume flag does not error, it silently starts a FRESH
+ * conversation while the UI says it resumed).
+ *
+ * `none` is what that default was always trying to express: capture nothing, so
+ * nothing claims a session id it does not have. A provider that genuinely has a
+ * capture mechanism gets a row above, where the evidence for it can be cited.
+ */
 export const LAUNCH_PROFILES: Record<AgentInboxAgentType, LaunchProfile> = Object.fromEntries(
-    PROVIDER_IDS.map((id) => [id, WIRED_LAUNCH_PROFILES[id] ?? { strategy: 'detect' as const }]),
+    PROVIDER_IDS.map((id) => [id, WIRED_LAUNCH_PROFILES[id] ?? { strategy: 'none' as const }]),
 ) as Record<AgentInboxAgentType, LaunchProfile>;
 
 /** A launch already carries a session id / is resuming — don't inject a flag. */
@@ -270,6 +291,7 @@ export function agentRelaunchDecision(
     spec: AgentSpecLike | null,
     existing: boolean,
     sessionExists?: (sessionId: string) => boolean,
+    cwdHasConversation?: () => boolean,
 ): { command: string; newSessionId?: string } | null {
     if (existing || !spec) return null;
     const agent = spec.meta?.agent as AgentInboxAgentType | undefined;
@@ -297,11 +319,13 @@ export function agentRelaunchDecision(
         if (verified) {
             const resume = renderAgentResume(agent, baseCmd, sid);
             if (resume) return { command: resume };
-        } else {
+        } else if (cwdHasConversation ? cwdHasConversation() : true) {
             const cont = renderAgentContinue(agent, baseCmd);
             if (cont) return { command: cont };
             // Non-claude with a stale id can't continue — fall through to fresh.
         }
+        // No transcript for the id AND no chat in this cwd at all → there is
+        // nothing to continue, so fall through to a FRESH launch below.
     }
 
     // GENUINELY FRESH — nothing captured, or a provider Genie cannot resume.
@@ -370,6 +394,7 @@ export function resolveFreshRestartCommand(
 export function resolveRestartCommand(
     spec: AgentSpecLike | null,
     sessionExists: (sessionId: string) => boolean,
+    cwdHasConversation?: () => boolean,
 ): { command: string } | { error: string } {
     const agent = spec?.meta?.agent as AgentInboxAgentType | undefined;
     if (!spec || !agent) return { error: 'Not an agent terminal.' };
@@ -387,9 +412,24 @@ export function resolveRestartCommand(
     }
     // Verified id → --resume; drifted id → --continue. Never a fresh mint here
     // (the guard above guarantees claude+sid, so the decision preserves the chat).
-    const decision = agentRelaunchDecision(spec, false, sessionExists);
+    const decision = agentRelaunchDecision(spec, false, sessionExists, cwdHasConversation);
     if (!decision?.command) {
         return { error: `Cannot resolve a resume command for "${agent}".` };
+    }
+    // ASK THE COMMAND, not a side field. The decision falls through to a fresh
+    // launch when the captured id has no transcript and the cwd holds no chat —
+    // and `newSessionId` is NOT set on that path (it is suppressed whenever a
+    // `sid` was captured), so reading it would have missed exactly this case.
+    // A command carrying no resume grammar cannot carry the conversation, which
+    // is the one thing this operation promises, so it refuses and points at the
+    // restart that does start over.
+    if (!isResumingCommand(agent, decision.command)) {
+        return {
+            error:
+                `Cannot RESUME "${agent}": the captured session has no conversation on disk, ` +
+                'and this folder holds no chat to continue. Restart it fresh instead — ' +
+                'that relaunches the agent and starts a new conversation.',
+        };
     }
     return { command: decision.command };
 }
@@ -463,6 +503,26 @@ function listTranscripts(dir: string): Array<{ name: string; mtimeMs: number }> 
     } catch {
         return [];
     }
+}
+
+/**
+ * Does this cwd hold ANY conversation at all?
+ *
+ * The question that separates the two cases a missing transcript used to
+ * collapse into one. `renderAgentLaunch` MINTS a `--session-id` when an agent is
+ * created, so an agent that NEVER STARTED still carries a captured id whose
+ * transcript does not exist — indistinguishable, on that check alone, from an id
+ * that DRIFTED away from a live chat. The drift case wants `--continue`; the
+ * never-started case must not get it, because `--continue` into an empty project
+ * dir answers "No conversation found to continue" and exits, leaving a bare
+ * shell where the agent should be.
+ *
+ * Directories only, never the id: `--continue` resumes the most-recent chat in
+ * the cwd, so "is there one" is precisely what has to be true for it to work.
+ */
+export function cwdHasAnyTranscript(cwd: string, home?: string): boolean {
+    if (!cwd) return false;
+    return listTranscripts(home ? transcriptDirFor(cwd, home) : transcriptDirFor(cwd)).length > 0;
 }
 
 /**

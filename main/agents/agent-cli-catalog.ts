@@ -300,7 +300,9 @@ const CATALOG = [
         install: null,
         installGap:
             'Goose ships as a GitHub release binary rather than an npm package, and Genie can only install agent CLIs through npm today.',
-        docsUrl: 'https://github.com/block/goose',
+        // `block/goose` redirects here — same repo (id 846698999), not archived.
+        // Naming the current org rather than relying on a redirect.
+        docsUrl: 'https://github.com/aaif-goose/goose',
     },
     {
         id: 'iflow-cli',
