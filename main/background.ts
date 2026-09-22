@@ -400,6 +400,7 @@ import { raiseAskE2E, seedAskE2E } from './e2e/ask';
 import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
 import { seedMasterE2E } from './e2e/master';
+import { registerAgentRevivalE2E } from './e2e/agent-revival';
 import { requestFeedback } from './feedback-open';
 import { seedFlowsE2E } from './e2e/flows';
 
@@ -2534,6 +2535,7 @@ app.whenReady().then(async () => {
     // the endpoint URL exists. Inert in a normal run.
     if (isE2E()) {
         const wsId = 'e2e-push-ws';
+        registerAgentRevivalE2E();
         (globalThis as Record<string, unknown>).__GENIE_E2E_MCP__ = {
             endpointUrl: workspaceEndpointUrl(wsId),
             diagnostics: () => serverPushDiagnostics(),
