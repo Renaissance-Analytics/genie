@@ -150,14 +150,24 @@ test('the empty floor', async () => {
     // last close detaches its element mid-click, so the click "fails" while the
     // panel closes. The picture contradicted the assertion; the picture was
     // right. What matters is whether the floor ended up empty.
-    const panels = page.locator('.tpanel');
-    for (let i = await panels.count(); i > 0; i--) {
-        const close = panels.first().locator('[title="Close panel"]').first();
+    // COUNT WHAT A PERSON SEES. `.tpanel` matches HIDDEN panels too — Genie keeps
+    // a background workspace's terminals mounted and off screen — so the DOM holds
+    // panels the floor does not show. The first version of this assertion counted
+    // those and reported "the floor did not clear" while its own screenshot showed
+    // "0 panels" and the empty-floor card. The picture was right.
+    const visible = page.locator('.tpanel:visible');
+    for (let i = await visible.count(); i > 0; i--) {
+        const close = visible.first().locator('[title="Close panel"]').first();
         if ((await close.count()) === 0) break;
         await close.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
         await close.click({ timeout: 5_000 }).catch(() => {});
     }
-    await expect(panels, 'the floor did not clear — see 05-empty-floor.png').toHaveCount(0, {
+    await expect(visible, 'the floor did not clear — see 05-empty-floor.png').toHaveCount(0, {
+        timeout: 10_000,
+    });
+    // POSITIVE CONTROL: an empty floor must actually RENDER its empty state. Zero
+    // visible panels alone would also pass against a floor that failed to draw.
+    await expect(page.getByText('Nothing is on the floor right now')).toBeVisible({
         timeout: 10_000,
     });
     await shoot('05-empty-floor');
