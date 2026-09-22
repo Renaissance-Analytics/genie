@@ -23,6 +23,9 @@ test('a running agent returns after Genie restarts without opening its workspace
         expect(after.attached).toBe(false);
         expect(after.wasRunning).toBe(true);
         await testInfo.attach('host-side-agent-evidence', { body: JSON.stringify({ before, after }, null, 2), contentType: 'application/json' });
+        // Host liveness can settle before React mounts this unrelated harness.
+        // Wait for visible content so the artifact records more than a blank window.
+        await expect(relaunched.page.getByText('Issue Watch', { exact: true })).toBeVisible();
         await relaunched.page.screenshot({ path: testInfo.outputPath('revived-without-agent-panel.png') });
     } finally {
         if (app) await app.evaluate(() => (globalThis as any).__GENIE_E2E_AGENT_REVIVAL__.cleanup()).catch(() => {});
