@@ -37,8 +37,8 @@ export function recoveryBannerMessage(state: RecoveryState): string {
         case 'recovering':
             return 'Terminal host lost — reconnecting terminals…';
         case 'recovered':
-            return 'Terminals reconnected (host recovered). Running agents were restarted.';
+            return 'Terminal host recovered. Agent restoration queued.';
         case 'degraded':
-            return 'Terminals reconnected in-process. Running agents were restarted.';
+            return 'Terminal backend restored in-process. Agent restoration queued.';
     }
 }

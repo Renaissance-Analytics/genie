@@ -142,6 +142,8 @@ import type {
 import { registerProtocolHandler, handleGenieUrl, isSignedIn, onAuthChanged } from './auth';
 import {
     registerTerminalIpc,
+    reviveRunningAgents,
+    prepareAgentShutdown,
     stopAllTerminals,
     requestFinalSnapshots,
     snapshotRetainedWindowless,
@@ -2021,7 +2023,7 @@ app.whenReady().then(async () => {
                     buildHostRecoveryDeps(async () => {
                         const s = await runBackendSelection();
                         return { host: s.host };
-                    }),
+                    }, reviveRunningAgents),
                 ),
         });
     }
@@ -2510,6 +2512,9 @@ app.whenReady().then(async () => {
     // re-register itself against a port nobody is on.
     // Fire-and-forget: it schedules its own work and never blocks boot.
     announceUpgradeToAgents({ endpointKept: mcpEndpoint?.keptAgentConnections() ?? false });
+    // The MCP endpoint and backend are ready. Saved agents must start even if
+    // their workspace has no window or visible panel.
+    reviveRunningAgents();
 
     // Wire the operator's OWN workspace the way every other workspace is wired.
     // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
@@ -3113,6 +3118,7 @@ app.whenReady().then(async () => {
         /** Terminals still running once this teardown is done — what decides whether
          *  the MCP shuttle goes too (genie#346, §3.3). */
         let survivingTerminals = 0;
+        prepareAgentShutdown();
         if (isHostBacked()) {
             // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
             // only ONE kind pins Genie's binary:

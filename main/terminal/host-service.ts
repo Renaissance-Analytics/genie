@@ -1336,6 +1336,8 @@ export interface HostRecoveryDeps {
      *  have no pane to remount, so the supervisor re-derives their status from
      *  the fresh backend and brings back the ones that should be running. */
     reattachProcesses(): void;
+    /** Schedule restoration of saved running agents without any renderer. */
+    reattachAgents(): void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
 }
@@ -1384,6 +1386,11 @@ export async function recoverFromHostLoss(
             ({ host } = await deps.respawn());
         } catch {
             host = false; // no backend came back → degrade, don't abort
+        }
+        try {
+            deps.reattachAgents();
+        } catch {
+            /* a failed agent restore must not strand unrelated terminals */
         }
         try {
             deps.reattach(ids);

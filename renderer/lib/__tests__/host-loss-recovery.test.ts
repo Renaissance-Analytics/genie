@@ -48,13 +48,13 @@ describe('recoveryBannerMessage', () => {
 
     it('names the recovered-host outcome and the agent restart', () => {
         expect(recoveryBannerMessage('recovered')).toBe(
-            'Terminals reconnected (host recovered). Running agents were restarted.',
+            'Terminal host recovered. Agent restoration queued.',
         );
     });
 
     it('names the in-process fallback outcome', () => {
         expect(recoveryBannerMessage('degraded')).toBe(
-            'Terminals reconnected in-process. Running agents were restarted.',
+            'Terminal backend restored in-process. Agent restoration queued.',
         );
     });
 });

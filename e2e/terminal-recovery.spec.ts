@@ -48,12 +48,12 @@ test('the recovery banner reflects each status from the real emit path', async (
 
     await emitStatus('recovered');
     await expect(page.getByTestId('recovery-banner')).toHaveText(
-        'Terminals reconnected (host recovered). Running agents were restarted.',
+        'Terminal host recovered. Agent restoration queued.',
     );
 
     await emitStatus('degraded');
     await expect(page.getByTestId('recovery-banner')).toHaveText(
-        'Terminals reconnected in-process. Running agents were restarted.',
+        'Terminal backend restored in-process. Agent restoration queued.',
     );
 });
 

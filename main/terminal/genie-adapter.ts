@@ -276,6 +276,7 @@ export function broadcastToWindows(channel: string, payload: unknown): void {
  */
 export function buildHostRecoveryDeps(
     respawn: () => Promise<{ host: boolean }>,
+    reattachAgents: () => void,
 ): HostRecoveryDeps {
     return {
         // The pty-backed terminals (shells + agents) — the panes to re-attach.
@@ -302,6 +303,7 @@ export function buildHostRecoveryDeps(
             }
         },
         respawn,
+        reattachAgents,
         // Tell the renderer to remount these panes; the remount's terminal:create
         // rejoins the fresh backend and replays scrollback (master.tsx enableSpec).
         reattach: (ids) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
