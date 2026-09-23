@@ -32,6 +32,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { backendInboxDelivery } from './app-inbox';
 import { deleteTerminalSpec, getWorkspace, listTerminalSpecs, upsertAppGrant } from '../db';
 import { killTerminalById } from '../terminal/ipc';
 import { openAppWindow, appViewWebContents } from '../apps/window';
@@ -99,6 +100,7 @@ function exampleWebRoot(): string {
 
 export function registerAppsE2E(): void {
     (globalThis as Record<string, unknown>).__GENIE_E2E_APPS__ = {
+        backendInboxDelivery,
         /**
          * Install a partial grant for the shipped example app and open its window.
          * Returns the URL so the spec can assert same-origin behaviour against it.
