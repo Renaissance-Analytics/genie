@@ -312,6 +312,7 @@ import {
     detachedTerminalsEnabled,
     electronEncryptor,
     buildHostRecoveryDeps,
+    retainHostExitTerminalView,
     broadcastToWindows,
 } from './terminal/genie-adapter';
 import {
@@ -2016,6 +2017,7 @@ app.whenReady().then(async () => {
         wireHostLossRecovery({
             getActiveClient: () => {
                 const c = getHostClient();
+                if (c) retainHostExitTerminalView(c);
                 return c ? { once: (e, cb) => c.once(e, cb), liveIds: () => c.liveIds() } : null;
             },
             recover: (affectedIds) =>

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, safeStorage } from 'electron';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { getAllSettings, updateTerminalSpec, listTerminalSpecs } from '../db';
 import {
@@ -33,6 +33,38 @@ import {
     TERMINAL_RECOVERY_STATUS_CHANNEL,
 } from './recovery-channels';
 import { reconcileProcesses } from './process-supervisor';
+import { describeHostExit } from './host-diagnostics';
+
+type HostTerminalView = { list(): unknown[] };
+let pendingHostView: ((view: HostTerminalView) => void) | null = null;
+
+/** Called when recovery arms on the connected host. Retain its mirror so a
+ * socket-error fallback cannot replace the dying host's count with zero. */
+export function retainHostExitTerminalView(view: HostTerminalView): void {
+    pendingHostView?.(view);
+    pendingHostView = null;
+}
+
+/** unref releases the event-loop hold, not the exit listener. Evidence is
+ * available while this parent lives; a host surviving Genie has no parent
+ * observer on the next boot. Counts are the host client's last-known mirror,
+ * including pending creates, not a post-mortem query of the dead process. */
+function observeHostExit(child: ChildProcess, mode: string, script: string): void {
+    const started = performance.now();
+    let view: HostTerminalView | null = null;
+    const retain = (connected: HostTerminalView) => { view = connected; };
+    pendingHostView = retain;
+    const identity = `pid=${child.pid ?? 'unknown'} mode=${mode} script=${JSON.stringify(script)}`;
+    child.once('exit', (code, signal) => {
+        let terminals: number | string = 'unknown';
+        try { if (view) terminals = view.list().length; } catch { /* backend unavailable */ }
+        if (pendingHostView === retain) pendingHostView = null;
+        logHostService(`detached host exited ${identity} code=${code} signal=${signal} uptimeMs=${Math.round(performance.now() - started)} terminals=${terminals} (last-known host mirror, includes pending creates) diagnosis=${describeHostExit(code, signal)}`);
+    });
+    child.once('error', (error) => {
+        logHostService(`detached host error ${identity} error=${JSON.stringify(error.message)}`);
+    });
+}
 
 /**
  * Genie adapter — the COMPOSITION ROOT for the terminal subsystem.
@@ -188,6 +220,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                     stdio: hostLog.stdio,
                     env: standaloneEnv,
                 });
+                observeHostExit(child, 'standalone', script);
                 child.unref();
                 // The child dup'd the log fds; release Genie's own copies.
                 hostLog.close();
@@ -215,6 +248,7 @@ export function electronHostSpawner(_dirname: string): HostSpawner {
                     ...env,
                 },
             });
+            observeHostExit(child, 'electron', script);
             child.unref();
             hostLog.close();
             writeDetachedMode('electron', child.pid, script);
