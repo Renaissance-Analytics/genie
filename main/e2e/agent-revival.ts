@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { deferEvaluation } from './defer-evaluation';
 import { addWorkspace, deleteTerminalSpec, removeWorkspace, getTerminalSpec } from '../db';
 import { createAgentTerminal, isTerminalLive, killTerminalById, terminalHasWindow } from '../terminal/ipc';
 
@@ -10,7 +11,7 @@ const root = path.join(os.tmpdir(), 'genie-e2e-agent-revival');
 
 /** Test-only observation/fixture seam. Never mounts an agent panel or calls revival. */
 export function registerAgentRevivalE2E(): void {
-    (globalThis as Record<string, unknown>).__GENIE_E2E_AGENT_REVIVAL__ = {
+    const fixture = {
         start() {
             fs.mkdirSync(root, { recursive: true });
             const heartbeat = path.join(root, 'heartbeat.json');
@@ -39,5 +40,10 @@ beat(); setInterval(beat, 100);
             deleteTerminalSpec(terminalId);
             removeWorkspace(workspaceId);
         },
+    };
+    (globalThis as Record<string, unknown>).__GENIE_E2E_AGENT_REVIVAL__ = {
+        start: () => deferEvaluation(() => fixture.start()),
+        state: () => deferEvaluation(() => fixture.state()),
+        cleanup: () => deferEvaluation(() => fixture.cleanup()),
     };
 }
