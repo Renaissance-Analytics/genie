@@ -349,6 +349,7 @@ import {
     registerHostTools,
     createSpecializedAgentTerminal,
     restartAgentTerminal,
+    restartRefusalFor,
     updateAgentInboxChannel,
 } from './mcp/host-tools';
 import { isQuittingForUpdate } from './updater/quit-state';
@@ -1407,7 +1408,30 @@ function announceUpgradeToAgents(opts: { endpointKept: boolean }): void {
                         // managed restart resumes the session against refreshed
                         // config, OUT OF BAND, with nothing typed at a prompt
                         // that may be a modal.
-                        return { strategy, applied: restartAgentTerminal(terminalId).ok };
+                        // NOT awaited, and the notice path stays SYNCHRONOUS.
+                        // A restart now waits for the old pty to release its id
+                        // before reusing it (see whenTerminalIdReleased), so
+                        // awaiting here would put a microtask inside every
+                        // nudge — and a drained/dense schedule would then run
+                        // all three reconnects before any send, interleaving
+                        // the reconnect→send pairing genie#353 exists to keep.
+                        // A notice read with dead tools is the bug that pairing
+                        // prevents, so the ordering wins over the sharper
+                        // answer.
+                        //
+                        // `applied` therefore means the restart was ACCEPTED
+                        // and is under way: the refusal question — the one that
+                        // reports "no resumable conversation", which is the
+                        // case this branch actually has to distinguish — is
+                        // answered synchronously first. What it no longer
+                        // waits to see is whether the replacement pty came up,
+                        // and `restartAgentTerminal` never claimed to know what
+                        // happened inside it anyway (`state: 'relaunching'`).
+                        if (restartRefusalFor(getTerminalSpec(terminalId))) {
+                            return { strategy, applied: false };
+                        }
+                        void restartAgentTerminal(terminalId);
+                        return { strategy, applied: true };
                     }
                     // A provider Genie cannot repair (genie#346). It used to get
                     // NOTHING and stay disconnected until a human noticed; now
@@ -1606,7 +1630,22 @@ app.whenReady().then(async () => {
     // for every real failure mode, so this catch is only for a defect in the
     // pass itself.
     ensureOwnedProvidersInstalled(
-        { hasWorkspace: listWorkspaces().length > 0, osaProvider: osProvider },
+        {
+            hasWorkspace: listWorkspaces().length > 0,
+            osaProvider: osProvider,
+            // Probe what the owner actually LAUNCHES. `osCommand` above is
+            // `osSettings[commandSettingKey] || defaultCommand`; the probe used
+            // to read the default alone, so an owner who pointed
+            // `agent_command_genie` at a full path was marked unavailable and
+            // then blocked from a launch that would have worked.
+            commandFor: (def) => osSettings[def.commandSettingKey],
+            // Not in a test VM. The E2E suite launches this app many times per
+            // run, and the boot pass now has a REAL installer to run — so each
+            // launch would start a 255-package network install of the Genie TUI
+            // that nothing in the suite is testing, and would still be holding
+            // handles when the spec asks the app to close.
+            unattendedInstalls: process.env.GENIE_E2E !== '1',
+        },
         liveAvailabilityDeps,
     ).catch((e) => {
         // eslint-disable-next-line no-console

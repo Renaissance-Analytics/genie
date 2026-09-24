@@ -4538,7 +4538,14 @@ export interface GenieApi {
         /** Add a TUI this agent may run under, and front it. Starts no terminal. */
         /** Start a registered agent. Same path as `runAgent start` — cap and
          *  reattach still apply; only the approval modal is skipped. */
-        start: (workspaceId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+        start: (
+            workspaceId: string,
+            name: string,
+            // `id` is the TERMINAL SPEC the start produced (or reattached to).
+            // Reported so a caller can open the panel from the ANSWER rather
+            // than waiting for the spec broadcast to come back round — which is
+            // what made opening an agent take a second click.
+        ) => Promise<{ ok: boolean; error?: string; id?: string }>;
         /** STOP a registered agent — end its run, KEEP the agent (genie#474).
          *  Its identity, AGENT.md, inbox and history are untouched, and `start`
          *  brings the SAME agent back. Deliberately not `delete`: that tears
@@ -4698,6 +4705,7 @@ export interface GenieApi {
             cb: (payload: { id: string; exitCode: number; signal?: number }) => void,
         ) => () => void;
         /** The final remote viewer detached; re-fit and re-send this owner's grid. */
+        terminalRestarted: (cb: (payload: { id: string }) => void) => () => void;
         terminalRefit: (cb: (payload: { id: string }) => void) => () => void;
         /** Main asks every window to serialize its terminals before quit (Tier 1). */
         terminalSnapshotRequest: (cb: () => void) => () => void;

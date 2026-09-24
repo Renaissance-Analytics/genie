@@ -1866,6 +1866,19 @@ const api = {
             ipcRenderer.on('terminal:exit', handler);
             return () => ipcRenderer.off('terminal:exit', handler);
         },
+        /**
+         * A pty was REPLACED under an id a panel is already showing (an agent
+         * restart). The old pty's exit has been reported, so this window has
+         * been dropped as an owner and its screen ends in
+         * `[process exited]` — it must re-attach or it shows a dead terminal
+         * that is actually alive. Broadcast to every window: by this point
+         * nobody is registered as an owner, so there is no owner list to send to.
+         */
+        terminalRestarted: (cb: (payload: { id: string }) => void) => {
+            const handler = (_e: unknown, payload: { id: string }) => cb(payload);
+            ipcRenderer.on('terminal:restarted', handler);
+            return () => ipcRenderer.off('terminal:restarted', handler);
+        },
         /** The final remote viewer left; the local owner must restore the pty to
          *  its authoritative viewport even when its DOM size did not change. */
         terminalRefit: (cb: (payload: { id: string }) => void) => {

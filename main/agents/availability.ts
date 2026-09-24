@@ -41,6 +41,7 @@
  */
 
 import type { AgentTuiId, TuiDef, ProviderInstallSpec } from './registry';
+import { agentCliForProvider } from './agent-cli-catalog';
 import { agentTuis, TUI_REGISTRY } from './registry';
 
 /** What the boot pass needs to know to decide whether a provider is wanted. */
@@ -51,6 +52,26 @@ export interface AvailabilityContext {
     /** The provider the Genie OS Agent is currently configured to launch as
      *  (`resolveWorkstationTui`'s answer — `agent_default`, or `claude`). */
     osaProvider: AgentTuiId;
+    /**
+     * The command the owner has configured for a provider, if any — the same
+     * `settings[def.commandSettingKey]` the launch path reads. Omitted ⇒ probe
+     * the registry default, which is what every caller did before and is right
+     * whenever nothing is overridden.
+     */
+    commandFor?(def: TuiDef): string | undefined;
+    /**
+     * May this host run an UNATTENDED install? Default `true` — the desktop boot
+     * is the caller genie#313 was written for, and an omitted flag must not
+     * silently disable it.
+     *
+     * `false` for the E2E suite, which launches the app many times per run in a
+     * clean VM: each launch would start a real 255-package network install of
+     * the Genie TUI that nothing in the suite is testing, and a test that needs
+     * GitHub to be up in order to prove a window opens is not a test of the
+     * window. The gate lives HERE, beside the other reasons not to install,
+     * rather than as a condition at the call site.
+     */
+    unattendedInstalls?: boolean;
 }
 
 /**
@@ -63,6 +84,7 @@ export interface AvailabilityContext {
  */
 export function providerWanted(id: AgentTuiId, ctx: AvailabilityContext): boolean {
     if (!TUI_REGISTRY[id].ownedBinary) return false;
+    if (ctx.unattendedInstalls === false) return false;
     return ctx.hasWorkspace || ctx.osaProvider === id;
 }
 
@@ -106,7 +128,8 @@ export async function ensureProviderInstalled(
     deps: AvailabilityDeps,
 ): Promise<ProviderAvailability> {
     if (!providerWanted(id, ctx)) return { id, status: 'not-wanted' };
-    return evaluateProviderInstall(TUI_REGISTRY[id], deps);
+    const def = TUI_REGISTRY[id];
+    return evaluateProviderInstall(def, deps, ctx.commandFor?.(def) || def.defaultCommand);
 }
 
 /**
@@ -122,22 +145,45 @@ export async function ensureProviderInstalled(
 export async function evaluateProviderInstall(
     def: TuiDef,
     deps: AvailabilityDeps,
+    command: string = def.defaultCommand,
 ): Promise<ProviderAvailability> {
     const id = def.id;
-    const bin = def.defaultCommand;
+    // The command the owner ACTUALLY launches, not the registry default.
+    // `background.ts` starts the OSA as `settings[commandSettingKey] ||
+    // defaultCommand`; this probe read the default alone, so an owner who
+    // pointed `agent_command_genie` at a full path was marked unavailable — and
+    // `launchBlockReason` then refused a launch that would have worked.
+    const bin = command;
 
     const found = await deps.resolveOnPath(bin);
     if (found) return { id, status: 'available', command: found };
 
-    if (!def.install) {
+    // ONE TABLE. The install spec comes from the CATALOG, which is the one that
+    // is maintained and whose installers are measured end to end
+    // (`genie-tui-install-gap.test.ts`). This used to read `TuiDef.install` —
+    // a second field that NO registry row has ever set, so this branch was taken
+    // every time a binary was missing and `runInstall` was dead code in
+    // production. Genie could install its own TUI from the Toolchain page and
+    // not at boot, because the two paths read two different tables; and since
+    // `launchBlockReason` reads this result and `createAgentTerminal` throws on
+    // it, the owner was hard-blocked with "Genie does not have an automatic
+    // installer for it yet" moments after Genie had installed it.
+    const cli = agentCliForProvider(id);
+    const spec = cli?.install ?? null;
+    if (!spec) {
         return {
             id,
             status: 'unavailable',
-            reason: `${def.label} is not installed, and Genie does not have an automatic installer for it yet.`,
+            // The catalog's own sentence when it has one: it says WHY in words
+            // the user can act on ("Goose ships as a GitHub release binary…"),
+            // which a generic line cannot.
+            reason: cli?.installGap
+                ? `${def.label} is not installed. ${cli.installGap}`
+                : `${def.label} is not installed, and Genie does not have an automatic installer for it yet.`,
         };
     }
 
-    const outcome = await deps.runInstall(def.install);
+    const outcome = await deps.runInstall(spec);
     if (!outcome.ok) {
         return {
             id,
@@ -190,6 +236,45 @@ export function recordProviderAvailability(result: ProviderAvailability): void {
 /** What the boot pass last recorded for `id`, if anything. */
 export function getKnownProviderAvailability(id: AgentTuiId): ProviderAvailability | undefined {
     return lastKnown.get(id);
+}
+
+/**
+ * RE-PROBE one provider after a deliberate install, and record the answer.
+ *
+ * `lastKnown` was written once by the boot sweep and by nothing else, so
+ * installing the Genie TUI from the Toolchain page left `launchBlockReason`
+ * refusing every launch — with the boot pass's "Genie has no installer for it"
+ * message — until the app restarted, moments after Genie had installed it. A
+ * cache that outlives the fact it caches turns a fixed problem into one that
+ * looks unfixable.
+ *
+ * Probe ONLY: no install branch, deliberately. The person has just installed it
+ * on purpose; a refresh that could install would be a second unattended
+ * `npm i -g` behind their back, which is the thing `providerWanted` exists to
+ * prevent. If the binary is still missing the block correctly stays.
+ */
+export async function refreshProviderAvailability(
+    id: AgentTuiId,
+    deps: AvailabilityDeps,
+    command?: string,
+): Promise<ProviderAvailability> {
+    const def = TUI_REGISTRY[id];
+    const bin = command || def.defaultCommand;
+    let found: string | undefined;
+    try {
+        found = await deps.resolveOnPath(bin);
+    } catch {
+        found = undefined;
+    }
+    const result: ProviderAvailability = found
+        ? { id, status: 'available', command: found }
+        : {
+              id,
+              status: 'unavailable',
+              reason: `${def.label} is not installed — "${bin}" does not resolve on PATH.`,
+          };
+    recordProviderAvailability(result);
+    return result;
 }
 
 /** Test-only: clear the cache between cases. */

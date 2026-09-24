@@ -207,7 +207,7 @@ describe('genie#364 — the restart types a RESUME, never a second create', () =
         expect(firstCommand).toContain(sid!);
         plantTranscript(wsDir, sid!);
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
@@ -241,7 +241,7 @@ describe('genie#364 — the restart types a RESUME, never a second create', () =
             },
         });
 
-        const r = restartAgentTerminal('spec-embedded-id');
+        const r = await restartAgentTerminal('spec-embedded-id');
 
         expect(r.ok).toBe(true);
         expect(r.ok && r.command).not.toContain('--session-id');
@@ -264,7 +264,7 @@ describe('genie#364 — the restart types a RESUME, never a second create', () =
         delete (swept as { agent_command?: string }).agent_command;
         updateTerminalSpec(id, { meta: swept });
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
 
         expect(r.ok).toBe(true);
         expect(r.ok && r.command).toBe(`claude --dangerously-skip-permissions --resume ${sid}`);
@@ -280,7 +280,7 @@ describe('genie#364 — a restart does not claim more than it checked', () => {
     it('reports a relaunch IN FLIGHT, not an agent it has never seen come up', async () => {
         const { id } = await launchAgent();
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
 
         expect(r.ok).toBe(true);
         // `ok` means the old agent was stopped and the resume command was handed
@@ -307,7 +307,7 @@ describe('genie#364 — a restart does not claim more than it checked', () => {
             reason: 'claude is not installed on this workstation.',
         });
 
-        const r = restartAgentTerminal(id);
+        const r = await restartAgentTerminal(id);
 
         expect(r.ok).toBe(false);
         expect(!r.ok && r.error).toMatch(/not installed/i);
@@ -326,7 +326,7 @@ describe('genie#364 — a restart does not claim more than it checked', () => {
             .mockImplementation((termId: string) => termId !== id);
 
         try {
-            const r = restartAgentTerminal(id);
+            const r = await restartAgentTerminal(id);
             expect(r.ok).toBe(false);
             expect(!r.ok && r.error).toMatch(/terminal/i);
         } finally {

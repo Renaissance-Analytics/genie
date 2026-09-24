@@ -1903,6 +1903,20 @@ function MasterInner() {
      * also broadcast `terminalSpecsChanged`, so dedupe by id), select it, and jump
      * to its workspace so the agent booting is visible right away.
      */
+    /**
+     * OPEN a spec's panel and put the keyboard in it.
+     *
+     * The single action behind "click the agent square once and work". Not
+     * `toggleSpec`: that also closes, and a click meaning "open" must never be
+     * the click that closes. Focus is set unconditionally — an already-visible
+     * panel the user clicked is one they want to type in, whether or not it was
+     * on screen a moment ago.
+     */
+    const openSpec = useCallback((id: string) => {
+        setSelected((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+        setFocusId(id);
+    }, []);
+
     const selectAgentSpec = useCallback(
         (spec: TerminalSpec) => {
             setSpecs((prev) => (prev.some((s) => s.id === spec.id) ? prev : [...prev, spec]));
@@ -2527,6 +2541,7 @@ function MasterInner() {
                         }}
                         onActivateWorkspace={activateWorkspace}
                         onToggleSpec={toggleSpec}
+                        onOpenSpec={openSpec}
                         onAddSpec={(wsId, type) => void addSpec(wsId, type)}
                         onDestroySpec={(id) => void destroySpec(id)}
                         onRestartAgentSpec={(id, mode) => {

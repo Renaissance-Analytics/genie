@@ -15,7 +15,9 @@ import {
     updateTerminalSpec,
 } from '../db';
 import { getTerminalSize, getTerminalSizeHistory } from '../terminal/size-tracker';
-import { killTerminalById, announceInboxIncoming } from '../terminal/ipc';
+import { killTerminalById, announceInboxIncoming, withTerminalGenieUrl } from '../terminal/ipc';
+import { resolveAgentLaunch } from '../agents/launch-command';
+import { resolveOnPath } from '../dev-server/toolchain-manager';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 
 /**
@@ -321,6 +323,31 @@ export function seedMasterE2E(): MasterSeed {
          * happened (or died); a live pty with no grid means the resize did.
          */
         liveTerminals: (): string[] => liveHostTerminals().map((t) => t.id),
+        /**
+         * The launch line the REAL production path builds for a Goose agent in
+         * the fixture's workspace, through the same two functions a real
+         * terminal-create runs: `resolveAgentLaunch` (which weaves in the
+         * `session` subcommand) and `withTerminalGenieUrl` (which mints this
+         * terminal's own MCP endpoint and attaches it).
+         *
+         * Exposed for the VM suite because this is the half that cannot be
+         * proven on a developer's machine: the endpoint is minted by a live MCP
+         * server in a real main process, and the whole point of the wiring is
+         * that a Goose agent can reach `imDone`. A unit test can assert the
+         * string shape; only the running app can show that the URL in it is a
+         * real endpoint this app would answer.
+         */
+        gooseLaunchLine: (terminalId: string): string | null => {
+            const base = resolveAgentLaunch('goose', undefined, {
+                id: WORKSPACE_ID,
+                path: workspaceDir(WORKSPACE_ID),
+            });
+            if (!base) return null;
+            return withTerminalGenieUrl(terminalId, WORKSPACE_ID, 'goose', base);
+        },
+        /** Does a bare command resolve on this machine's PATH? Used to say
+         *  whether the VM really has Goose installed, rather than assuming. */
+        resolvesOnPath: (bin: string): Promise<string | undefined> => resolveOnPath(bin),
         /**
          * Kill the fixture's ptys. The spec calls this BEFORE closing the app: a
          * manual quit with a live terminal and a window open raises the

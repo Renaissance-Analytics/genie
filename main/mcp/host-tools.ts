@@ -66,6 +66,9 @@ import {
     writeToTerminal,
     readTerminalOutput,
     agentSessionTranscriptExists,
+    agentCwdHasConversation,
+    whenTerminalIdReleased,
+    broadcastTerminalRestarted,
     agentLaunchLoadedChannel,
     isTerminalLive,
 } from '../terminal/ipc';
@@ -1909,10 +1912,10 @@ export type RestartAgentResult =
  * command resolves, the fresh pty is live); the one thing it cannot see is
  * inside the pty, and it says so instead of implying otherwise.
  */
-export function restartAgentTerminal(
+export async function restartAgentTerminal(
     id: string,
     mode: RestartMode = 'resume',
-): RestartAgentResult {
+): Promise<RestartAgentResult> {
     const spec = getTerminalSpec(id);
     const agent = spec?.meta?.agent;
     if (!spec || !agent) {
@@ -1987,8 +1990,10 @@ export function restartAgentTerminal(
     const decision =
         effectiveMode === 'fresh'
             ? resolveFreshRestartCommand(current)
-            : resolveRestartCommand(current, (sid) =>
-                  agentSessionTranscriptExists(current, sid),
+            : resolveRestartCommand(
+                  current,
+                  (sid) => agentSessionTranscriptExists(current, sid),
+                  () => agentCwdHasConversation(current),
               );
     if ('error' in decision) {
         return { ok: false, error: decision.error };
@@ -2038,7 +2043,19 @@ export function restartAgentTerminal(
     // binding never went stale. It is exactly what `reattachSavedAgent`'s revive
     // already does — and a FRESH conversation is not a fresh AGENT, so it takes
     // the same route rather than deleting its way to one.
+    // WAIT for the old pty to let go of the id before reusing it. node-pty
+    // reports an exit on a later tick, and fancy-term-host's exit handler
+    // deletes whoever holds the id at that moment — so a replacement created in
+    // this same turn is evicted by the corpse of the one it replaced, leaving a
+    // live pty the manager has forgotten and a panel that is frozen rather than
+    // restarted. Only when there WAS a live pty: a dead terminal never reports,
+    // and making the recovery path that needs this most wait out the full grace
+    // period would be the worst place to spend it. See whenTerminalIdReleased.
+    const hadLivePty = isTerminalLive(id);
     killTerminalById(id);
+    if (hadLivePty) {
+        await new Promise<void>((resolve) => whenTerminalIdReleased(id, resolve));
+    }
     const restarted = createAgentTerminal({
         id: spec.id,
         workspaceId: spec.workspace_id ?? '',
@@ -2051,6 +2068,11 @@ export function restartAgentTerminal(
             scopeWorkspaces: spec.meta?.whisper_workspaces,
         },
     });
+    // A panel already open on this id is showing the OLD pty's `[process exited]`
+    // and is no longer an owner, so nothing from the replacement would reach it.
+    // Tell it to re-attach — otherwise a restart looks exactly like a freeze,
+    // which is what the owner reported.
+    broadcastTerminalRestarted(spec.id);
     // createAgentTerminal launches it host-side from the spec's own relaunch
     // decision, which is the same one resolved above.
     return relaunchInFlight(id, restarted.id, provider, restarted.command ?? command);
@@ -2385,14 +2407,16 @@ function fileExists(file: string): boolean {
 }
 
 /** Why a graceful restart of this terminal would be refused, or null. */
-function restartRefusalFor(spec: TerminalSpecRow | null | undefined): string | null {
+export function restartRefusalFor(spec: TerminalSpecRow | null | undefined): string | null {
     if (!spec) return null;
     try {
         // The SAME on-disk transcript check `restartAgentTerminal` uses, so this
         // answers the question the restart would actually ask rather than a
         // simplified version of it.
-        const decision = resolveRestartCommand(spec, (sid) =>
-            agentSessionTranscriptExists(spec, sid),
+        const decision = resolveRestartCommand(
+            spec,
+            (sid) => agentSessionTranscriptExists(spec, sid),
+            () => agentCwdHasConversation(spec),
         );
         return 'error' in decision ? decision.error : null;
     } catch {
@@ -2730,7 +2754,7 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — the agent was not restarted.' };
                 }
-                const r = restartAgentTerminal(req.id!, fresh ? 'fresh' : 'resume');
+                const r = await restartAgentTerminal(req.id!, fresh ? 'fresh' : 'resume');
                 if (!r.ok) return { ok: false, error: r.error };
                 // `note` travels with the result: the caller is another agent,
                 // and "restarted" would have it report a recovery Genie has not

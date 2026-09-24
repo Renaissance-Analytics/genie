@@ -176,16 +176,18 @@ export interface TuiDef {
      * detect-and-install pass in `agents/availability.ts`.
      */
     ownedBinary: boolean;
-    /**
-     * How to install this provider automatically when `ownedBinary` is true and
-     * the binary is missing. Left `undefined` — even for an owned provider —
-     * when Genie has no WORKING installer for it yet: that still runs the
-     * detect pass and surfaces the gap (grey the provider out with a reason)
-     * rather than opening a terminal that fails, it just cannot close the gap
-     * automatically. See the per-provider comments below for why `genie` and
-     * `kiwi` are in exactly that state today.
-     */
-    install?: ProviderInstallSpec;
+    // NO `install` FIELD. How a provider is installed lives in ONE table —
+    // `AgentCliDef.install` in `agent-cli-catalog.ts` — and `availability.ts`
+    // reads it from there.
+    //
+    // There used to be a second `install?: ProviderInstallSpec` here, and no row
+    // ever set it. The boot pass read this one, so it took the "no installer"
+    // branch every single time a binary was missing: Genie could install its own
+    // TUI from the Toolchain page and never at boot, and because
+    // `launchBlockReason` reads that result and `createAgentTerminal` throws on
+    // it, the owner was hard-blocked by a message saying Genie had no installer
+    // moments after Genie had installed it. A field nothing writes is not a
+    // conservative default, it is a branch that is always taken.
     /**
      * How this provider re-enters a captured chat session, or `null` when it has
      * no known resume grammar. Required (not optional) on purpose: adding a
@@ -238,15 +240,14 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
         defaultCommand: 'genie',
         commandSettingKey: 'agent_command_genie',
         flagsSettingKey: 'agent_flags_genie',
-        // Genie ships this one (genie#313) — it is the SAME "command not found"
-        // gap as above, just moved from a wrong name to a missing binary. No
-        // `install`, deliberately: the upstream package (`@genie/tui`, at
-        // github.com/Renaissance-Analytics/genie-tui) is `private: true` and has
-        // never been published, and its shipped `bin` is still named
-        // `genie-tui` — an `npm install -g` today would put `genie-tui` on
-        // PATH, not `genie`, silently reproducing the exact naming bug this
-        // ticket's sibling already fixed, one layer later. Wire `install` up
-        // once that package is public AND its bin matches `defaultCommand`.
+        // Genie ships this one (genie#313). It IS installable now: the catalog
+        // carries a release-tarball installer, measured end to end in
+        // `genie-tui-install-gap.test.ts` (`npm install -g … -> added 255
+        // packages`, then `genie --version -> 0.1.0`), and the boot pass reads
+        // the catalog. The old comment here said the opposite — that `@genie/tui`
+        // was unpublished with a bin named `genie-tui` — and went stale when the
+        // tarball landed. Nothing in THIS file decides installability any more,
+        // which is why there is nothing left here to keep in sync.
         ownedBinary: true,
         // Same as kiwi: no resume grammar yet. Genie's own TUI is the one that
         // could most easily grow one, and this is the line to fill in when it
@@ -404,17 +405,52 @@ export const TUI_REGISTRY: Record<AgentTuiId, TuiDef> = {
     goose: {
         id: 'goose',
         label: 'Goose',
+        // "Block" is kept deliberately even though the GitHub org is now
+        // `aaif-goose`: the Homebrew formula is still `block-goose-cli` and the
+        // Windows config path is still `%APPDATA%\Block\goose\`. Renaming a
+        // user-facing label on the strength of an org redirect is how a product
+        // acquires a name nobody chose.
         hint: 'Launch the Block Goose CLI',
+        // MUST STAY THE BARE BINARY: `agent-cli-catalog.ts` probes PATH with
+        // this exact string, and `where "goose session"` finds nothing.
+        //
+        // Bare `goose` IS a real interactive TUI, not a help screen — read from
+        // the dispatcher because no docs page says so: `cli.rs:2957` routes
+        // `None` to `handle_default_session`, which builds `interactive: true`
+        // (`cli.rs:2742-2772`). It also passes NO extensions of any kind, so the
+        // `session` subcommand is woven in at launch time by
+        // `agents/goose-launch.ts` — without it a Goose agent has no genie MCP
+        // server and cannot call `imDone`, i.e. it looks alive and is
+        // unreachable.
         defaultCommand: 'goose',
         commandSettingKey: 'agent_command_goose',
         flagsSettingKey: 'agent_flags_goose',
+        // Block's binary, not Genie's: Goose ships as a GitHub release binary
+        // (install script, or `brew install block-goose-cli`) with no npm
+        // package at all, so the boot-time installer could not help even if
+        // this were owned. `agent-cli-catalog.ts` carries that gap in words.
         ownedBinary: false,
-        // Goose DOES document a resume: `goose session --resume --session-id
-        // <id>`. It is null anyway, because {@link ResumeGrammar} cannot express
-        // it — that shape is a subcommand AND a flag, while `kind: 'subcommand'`
-        // puts the id positionally last (`goose session <id>`, which Goose does
-        // not accept). Wiring a third kind is the fix; guessing with the two
-        // that exist would build a command the CLI never documented.
+        // Goose DOES resume, and {@link ResumeGrammar} still cannot express it.
+        //
+        // The shape is `goose session --resume (--name <name> | --session-id <id>)`
+        // — a subcommand plus a PAIR of flags, with the identifier as the second
+        // flag's VALUE. This comment used to say "a subcommand AND a flag",
+        // which reads as `goose session resume <id>`; that is a command Goose
+        // rejects, so the imprecision was the kind someone would act on.
+        //
+        // The harder half it omitted: Genie cannot MINT the id. `cli.rs:452-453`
+        // returns `Err("Cannot use --session-id without --resume")`, and the
+        // flag's own help says it requires `--resume`. What Genie CAN mint is a
+        // NAME — `goose session --name <name>` creates and stores it
+        // (`cli.rs:456-472`) and `--resume --name <name>` finds it again by
+        // `s.name == name || s.id == name` (`cli.rs:422-428`).
+        //
+        // So a third kind is reachable and worth having (bare `--resume` even
+        // has true `--continue` semantics, `cli.rs:408-418` — though it is
+        // most-recent GLOBALLY, not cwd-scoped like Claude's). Null until it
+        // exists: `resolveRestartCommand` then refuses the resume and says why,
+        // which beats silently opening a fresh conversation the user believes
+        // is their old one.
         resume: null,
     },
     iflow: {

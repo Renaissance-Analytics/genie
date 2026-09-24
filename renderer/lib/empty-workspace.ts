@@ -42,11 +42,18 @@ export function emptyWorkspaceView(rows: readonly AgentGridRow[]): EmptyWorkspac
 }
 
 /**
- * Should this row show a live terminal preview?
+ * Should this row show a terminal preview?
  *
  * Only a RUNNING agent with a terminal to show. A dormant agent gets its card
  * and nothing else: a preview frame around a dead pty is worse than no frame,
  * because it implies something is happening in there.
+ *
+ * NOT CURRENTLY USED BY THE COMPONENT. The live preview was removed because
+ * mounting a `Terminal` attaches to the pty and unmounting DETACHES, which kills
+ * a non-retained pty when the last owner goes — and on an empty floor the
+ * preview is always the last owner. Kept because the eligibility rule is right
+ * and is what a snapshot-based preview will ask; deleted rather than kept would
+ * mean rederiving it.
  */
 export function showsPreview(row: AgentGridRow): boolean {
     return row.kind === 'agent' && row.running && typeof row.specId === 'string' && row.specId.length > 0;
