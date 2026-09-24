@@ -42,4 +42,20 @@ export default defineConfig({
     timeout: 60_000,
     expect: { timeout: 15_000 },
     reporter: [['list']],
+    /**
+     * KEEP THE EVIDENCE. There was none: no artifact upload in `e2e.yml` and no
+     * capture here, so a failing run's only trace was a path in the log
+     * (`test-results\...\error-context.md`) pointing at a file on a VM that
+     * had already been destroyed. A failure nobody can look at gets diagnosed by
+     * guessing.
+     *
+     * `only-on-failure` on purpose — a screenshot per passing test would bury
+     * the ones that matter. The deliberate capture pass is `screenshots.spec.ts`,
+     * which writes named images whatever the result.
+     */
+    use: {
+        screenshot: 'only-on-failure',
+        trace: 'retain-on-failure',
+        video: 'off',
+    },
 });

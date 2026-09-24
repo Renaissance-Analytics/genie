@@ -168,6 +168,14 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run test:e2e
 
+      # EYEBALL ON THE BUILD. Without this the suite produced nothing anyone
+      # ever looked at: `screenshots.spec.ts` photographs the real master window
+      # and Playwright captures a screenshot + trace for any failure, and all of
+      # it died on the runner. The owner's complaint was precisely that the
+      # tests were green while the UX was not.
+      #
+      # `always()` because a FAILED run is when the evidence matters most --
+      # that is the run whose error-context nobody could read.
       - name: Publish what the run actually saw
         if: always()
         uses: actions/upload-artifact@v4

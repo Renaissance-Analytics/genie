@@ -156,29 +156,28 @@ describe('long lines wrap (regression pin — see the note above)', () => {
 });
 
 /**
- * The drawer's editor is DARK, because every editor in Genie is (genie#603
- * follow-up).
+ * The drawer's editor RESOLVES the app's theme — and resolves it the SAME WAY
+ * the file editor does, which is the property that stops the two drifting.
  *
- * `<FileViewer>` defaulted to `theme="auto"` and the rewrite carried that value
- * over unexamined — deliberately, as a colour nobody could look at, but wrongly.
- * The file editor does not guess: `CodePanel.tsx` PINS `theme="dark"`, and that
- * is a repo-wide convention rather than one component's taste. `--term-bg` /
- * `--term-fg` are declared once with dark values and never flip, and
- * `.tpanel-head`'s light ink on a permanently dark ground is correct for the
- * same reason. Terminals and editors stay dark in both themes here.
+ * Both used to pin `theme="dark"`, on the convention that editors and terminals
+ * stay dark in both of Genie's themes. That convention is right for a TERMINAL,
+ * whose colours are the shell's and not Genie's — and wrong for an editor,
+ * which is a Genie surface. The owner: "the file editor panel is not light mode
+ * friendly", with a black tree and a black editor inside a white app.
  *
- * `auto` is not "the app's theme" either, which is what made the divergence
- * invisible: fancy-code resolves it from the OS `prefers-color-scheme`, while
- * Genie's theme is a `.dark` class that `_app.tsx` owns and a pinned preference
- * can set AGAINST the OS. So the drawer could disagree with the window it sits
- * in and with every other editor in the app at the same time.
+ * `auto` is still ruled out, and for the reason it always was: fancy-code
+ * resolves it from the OS `prefers-color-scheme`, while Genie's theme is a
+ * `.dark` class a pinned preference can set AGAINST the OS. A pinned-light
+ * Genie on a dark OS would get a dark editor in a light window — the same bug,
+ * reached from the other side. `useResolvedTheme` reads the class the app is
+ * actually painted with, so there is one answer rather than two that agree by
+ * luck.
  *
- * Two assertions, because they fail for different reasons. The first is about
- * this component and reads the colour actually rendered; the second is about the
- * two surfaces staying in step, and is the property that stops them drifting
- * apart the way the scroll chain already had.
+ * The anti-drift assertion is unchanged in INTENT and stronger in form: it used
+ * to compare two pinned literals, and now requires that neither surface pins one
+ * at all and that both reach the answer through the same resolver.
  */
-describe('the drawer editor matches the file editor, and both are dark', () => {
+describe('the drawer editor follows the app theme, in step with the file editor', () => {
     /** The background colour fancy-code paints the Panel with. */
     function panelBackground(html: string): string | null {
         const m = /background-color:\s*([^;"]+)/.exec(html);
@@ -197,39 +196,48 @@ describe('the drawer editor matches the file editor, and both are dark', () => {
         );
     }
 
-    it('renders on the dark ground, not the light one', () => {
+    it('renders at the theme this environment resolves to, not a pinned one', () => {
+        // No `.dark` on <html> here, so `useResolvedTheme` answers 'light' and
+        // that is what must come out. Asserting DARK would re-assert the bug:
+        // pinning is the thing being removed.
         const drawer = panelBackground(render('main/db.ts', 'const a = 1;\n'));
-        expect(drawer).toBe(panelBackground(referenceAt('dark')));
+        expect(drawer).toBe(panelBackground(referenceAt('light')));
+        expect(drawer).not.toBe(panelBackground(referenceAt('dark')));
     });
 
-    it('POSITIVE CONTROL: the light theme is a different colour', () => {
-        // Without this, "it matches dark" would pass against a build where every
-        // theme resolved to the same grey — and `theme="auto"` renders LIGHT in
-        // this environment (fancy-code's server snapshot is `prefers-dark:
-        // false`), which is exactly the value being ruled out.
+    it('POSITIVE CONTROL: the two themes really are different colours', () => {
+        // Without this, "it matches light" would pass against a build where
+        // every theme resolved to the same grey.
         expect(panelBackground(referenceAt('light'))).not.toBe(
             panelBackground(referenceAt('dark')),
         );
-        expect(panelBackground(referenceAt('auto'))).toBe(panelBackground(referenceAt('light')));
     });
 
-    it('passes the SAME theme the file editor pins, so the two cannot drift', () => {
+    it('resolves the theme the SAME WAY the file editor does, so the two cannot drift', () => {
         // Source-level, because the editor cannot be rendered here — CodePanel is
         // a whole panel with an IPC bridge behind it. What can be compared is the
         // decision each surface makes, which is the thing that drifted.
-        const themeOf = (file: string): string => {
-            const src = fs
+        const sourceOf = (file: string): string =>
+            fs
                 .readFileSync(path.resolve(__dirname, '..', file), 'utf8')
                 // Prose about a theme must not be mistaken for passing one.
                 .replace(/\/\*[\s\S]*?\*\//g, '')
                 .replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
-            const hits = [...src.matchAll(/\btheme="([a-z]+)"/g)].map((m) => m[1]!);
-            expect(hits, `expected exactly one theme= in ${file}`).toHaveLength(1);
-            return hits[0]!;
-        };
-        expect(themeOf('Ask/AskFilePreview.tsx')).toBe(themeOf('Code/CodePanel.tsx'));
-        // Named too: matching each other on "auto" would satisfy the line above
-        // while both diverged from every other editor surface in Genie.
-        expect(themeOf('Ask/AskFilePreview.tsx')).toBe('dark');
+
+        for (const file of ['Ask/AskFilePreview.tsx', 'Code/CodePanel.tsx']) {
+            const src = sourceOf(file);
+            // NEITHER may pin a literal. That is what drifted, and what left an
+            // editor dark inside a light app — including `"auto"`, which is the
+            // OS's answer rather than Genie's.
+            expect([...src.matchAll(/\btheme="([a-z]+)"/g)], `${file} pins a theme`).toHaveLength(
+                0,
+            );
+            // And both reach the answer through ONE definition of "the app's
+            // theme", rather than two that happen to agree today.
+            expect(src, `${file} does not resolve the app theme`).toMatch(/useResolvedTheme\(\)/);
+            expect(src, `${file} does not pass the resolved theme`).toMatch(
+                /theme=\{editorTheme\}/,
+            );
+        }
     });
 });

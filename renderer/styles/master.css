@@ -3685,14 +3685,37 @@ body.gutter-dragging .grid-gutter {
     min-height: 0;
 }
 
+/* A CODE tile's chrome follows the app theme. The base `.tpanel` /
+   `.tpanel-head` rules paint from `--term-*`, which is fixed dark in both
+   themes on purpose — a terminal shows the shell's colours, not Genie's. An
+   editor is a Genie surface, so its tile is themed like the rest of the app
+   rather than like the terminal it happens to sit beside. */
+.tpanel.code-panel {
+    background: var(--bg-0);
+}
+.tpanel.code-panel > .tpanel-head {
+    background: var(--bg-1);
+    border-bottom-color: var(--border-1);
+}
+
 /* ===== Code view (CodePanel) ========================================== */
-/* Mirrors .term-host but splits into a tree column + an editor column. */
+/* Lays out like .term-host — tree column + editor column — but does NOT share
+   its palette.
+
+   `--term-*` is FIXED DARK in both themes, deliberately: a terminal's colours
+   are the shell's, not Genie's, so it stays dark whatever the app is. This
+   panel borrowed them because it sits where a terminal sits, and the result was
+   a black file tree and a black editor inside a white app (the owner: "the file
+   editor panel is not light mode friendly").
+
+   An editor is a Genie surface. It follows the app, so these are theme tokens,
+   and `<CodeEditor>` is handed the resolved theme rather than a pinned "dark". */
 .code-host {
     flex: 1;
     min-height: 0;
     min-width: 0;
     display: flex;
-    background: var(--term-bg);
+    background: var(--bg-0);
     overflow: hidden;
 }
 .code-host .code-tree {
@@ -3701,9 +3724,9 @@ body.gutter-dragging .grid-gutter {
     min-width: 0;
     overflow: auto;
     padding: 6px 4px 6px 6px;
-    border-right: 1px solid var(--term-border);
-    background: var(--term-head);
-    color: var(--term-fg);
+    border-right: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-1);
     font-size: 12.5px;
 }
 .code-host .code-editor-col {
@@ -3754,11 +3777,11 @@ body.gutter-dragging .grid-gutter {
     justify-content: center;
     padding: 24px;
     text-align: center;
-    color: var(--term-dim);
+    color: var(--fg-3);
     font-size: 12.5px;
 }
 .code-host .code-empty-err {
-    color: var(--term-err);
+    color: var(--rose-400);
 }
 /* Tree-toggle icon in the head reuses .pctl; lit when the tree is open. */
 .tpanel-head .pctl.is-on {
@@ -3781,7 +3804,9 @@ body.gutter-dragging .grid-gutter {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--term-warn);
+    /* `--amber-400` is the same warning colour with a light half; `--term-warn`
+       is a pale yellow picked for a dark head and near-invisible on a light one. */
+    color: var(--amber-400);
     flex: 0 0 auto;
 }
 
@@ -7017,6 +7042,26 @@ body.gutter-dragging .grid-gutter {
 .iw-refresh.tone-error {
     border-color: rgba(244, 135, 113, 0.5);
     color: var(--rose-400);
+}
+
+/* A refresh that failed, stated where it cannot be missed. The rose TONE on the
+   button alone was the whole report before, and a colour is not a sentence. */
+.iw-refresh-failed {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 8px 12px 0;
+    padding: 6px 9px;
+    font-size: 11px;
+    line-height: 1.45;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(244, 135, 113, 0.4);
+    background: rgba(244, 135, 113, 0.08);
+    color: var(--rose-400);
+}
+.iw-refresh-failed svg {
+    flex: none;
+    margin-top: 2px;
 }
 
 /* The "not tracking" repair. A warning that only describes a problem is a dead

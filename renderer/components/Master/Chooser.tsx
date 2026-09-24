@@ -114,6 +114,15 @@ interface Props {
     onRestartAgentSpec: (specId: string, mode: RestartMode) => void;
     /** Open the agent-settings editor for an agent by its terminal spec. */
     onEditAgentSpec: (specId: string) => void;
+    /**
+     * Open the AGENT MANAGER for this agent record.
+     *
+     * Keyed on the agent id, not a terminal spec — which is the whole fix. The
+     * menu offers "Edit agent… — its name, purpose, TUI and persona", and those
+     * are record fields; routing it through a spec meant a DORMANT agent (which
+     * has no spec) got a menu item that silently did nothing.
+     */
+    onManageAgent: (agentId: string) => void;
     /** Tier 2: suspend a terminal (keep pty, hide panel). */
     onDisableSpec: (id: string) => void;
     /** Tier 2: resume a suspended terminal (reattach to the live session). */
@@ -189,6 +198,7 @@ export default function Chooser({
     onDestroySpec,
     onRestartAgentSpec,
     onEditAgentSpec,
+    onManageAgent,
     onDisableSpec,
     onEnableSpec,
     onOpenContextMenu,
@@ -1461,7 +1471,14 @@ export default function Chooser({
                                 .agents.stop(row.id)
                                 .catch(() => {});
                         } else if (id === 'edit') {
-                            if (row.specId) onEditAgentSpec(row.specId);
+                            // THE AGENT, not its terminal. This read
+                            // `if (row.specId) onEditAgentSpec(row.specId)` — so
+                            // for a dormant agent, which has no spec, the item
+                            // did nothing at all and said nothing about it. The
+                            // manager is keyed on the agent record and opens
+                            // whether or not anything is running.
+                            if (row.kind === 'agent') onManageAgent(row.id);
+                            else if (row.specId) onEditAgentSpec(row.specId);
                         } else if (id === 'remove-orphan') {
                             // A leftover with a LIVE TUI is asked about twice.
                             // Nothing owns it, so no agent can be asked for a

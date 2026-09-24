@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { refreshControlState } from '../issue-watch-refresh';
+import { refreshControlState, type RefreshOutcome } from '../issue-watch-refresh';
 
 /**
  * The FORCE-REFRESH control — make Tynn re-read GitHub now, rather than waiting
@@ -83,5 +83,69 @@ describe('refreshControlState', () => {
         });
         expect(s.tone).toBe('error');
         expect(s.detail).toMatch(/signed in/i);
+    });
+});
+
+/**
+ * A FAILURE MUST NOT INVENT A CAUSE, and must not hide.
+ *
+ * The owner: "the issue watch refresh button doesn't do anything at all." It
+ * had run and failed — the button in the screenshot is already rose-toned. The
+ * entire report of the failure was a CSS colour and a `title` tooltip, which is
+ * indistinguishable from an untouched button unless you happen to hover it.
+ *
+ * The fallback sentence made it worse: any outcome without an `error` was
+ * described as "Could not reach Tynn", which is a specific and often wrong
+ * claim — a refusal because Genie is not SIGNED IN to Tynn, or because the
+ * workspace is unknown, has nothing to do with reachability. A cause invented
+ * to fill a gap sends someone to check their network over a sign-in problem.
+ */
+describe('a failed refresh reports what actually happened', () => {
+    const outcome = (over: Partial<RefreshOutcome>): RefreshOutcome => ({
+        refreshed: false,
+        reason: 'failed',
+        cooldown: { seconds: 0, nextAllowedAt: null, label: 'now' },
+        ...over,
+    });
+
+    it('passes the real reason through untouched', () => {
+        const s = refreshControlState({
+            busy: false,
+            last: outcome({
+                reason: 'unavailable',
+                error: 'Genie is not signed in to Tynn, so IssueWatch cannot be refreshed.',
+            }),
+        });
+        expect(s.detail).toBe('Genie is not signed in to Tynn, so IssueWatch cannot be refreshed.');
+    });
+
+    it('does NOT invent "could not reach Tynn" when the outcome did not say so', () => {
+        const s = refreshControlState({ busy: false, last: outcome({ error: undefined }) });
+        expect(s.detail ?? '').not.toMatch(/could not reach/i);
+    });
+
+    it('still says SOMETHING — silence is the bug being fixed', () => {
+        // POSITIVE CONTROL for the test above: dropping the fallback entirely
+        // would satisfy it while restoring the original complaint.
+        const s = refreshControlState({ busy: false, last: outcome({ error: undefined }) });
+        expect(s.detail).toBeTruthy();
+    });
+
+    it('marks a failure as one the UI must ANNOUNCE, not merely tint', () => {
+        // The flyout rendered `detail` into `title=` only. A control that
+        // reports a failure exclusively through hover has not reported it.
+        const s = refreshControlState({ busy: false, last: outcome({ error: 'Tynn answered 503.' }) });
+        expect(s.announce).toBe(true);
+    });
+
+    it('POSITIVE CONTROL: a COOLDOWN is not announced — the limit working is not a fault', () => {
+        const s = refreshControlState({
+            busy: false,
+            last: outcome({
+                reason: 'cooldown',
+                cooldown: { seconds: 90, nextAllowedAt: null, label: '1m 30s' },
+            }),
+        });
+        expect(s.announce).toBeFalsy();
     });
 });

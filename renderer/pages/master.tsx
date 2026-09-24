@@ -742,6 +742,18 @@ function MasterInner() {
     // The spec whose AgentInbox purpose/scope is being edited (context menu →
     // "Agent settings…"), or null. Rendered as a modal reusing the create form.
     const [agentEditSpec, setAgentEditSpec] = useState<TerminalSpec | null>(null);
+    /**
+     * The agent whose MANAGER is open — its persona, MCP servers, sidecar and
+     * driver. Keyed on the AGENT RECORD, so it opens for a DORMANT agent.
+     *
+     * The manager is not new and was never unreachable: `AgentSettingsModal`
+     * renders it whenever it finds a record. But that modal takes a
+     * `TerminalSpec`, and the only route to it — "Edit agent…" — was guarded by
+     * `if (row.specId)`. An agent that is not running has no spec, so the menu
+     * item silently did nothing. This is the route that does not go through a
+     * terminal.
+     */
+    const [manageAgentId, setManageAgentId] = useState<string | null>(null);
     // Load it when the settings modal opens on an agent. Cleared on close so a
     // stale record can never describe the NEXT agent someone opens.
     const agentEditWorkspace = agentEditSpec?.workspace_id ?? null;
@@ -2549,6 +2561,7 @@ function MasterInner() {
                             if (!sp) return;
                             void restartAgentSpec(sp, mode);
                         }}
+                        onManageAgent={(id) => setManageAgentId(id)}
                         onEditAgentSpec={(id) => {
                             const sp = specs.find((x) => x.id === id);
                             if (sp) setAgentEditSpec(sp);
@@ -3014,6 +3027,46 @@ function MasterInner() {
                     />
                 );
             })()}
+
+            {/* THE AGENT MANAGER, in the product at last. It was built, tested
+                on three operating systems, and rendered only by the E2E harness
+                page — so nobody outside the suite could reach it. */}
+            {manageAgentId && (
+                <div className="modal-backdrop" onClick={() => setManageAgentId(null)}>
+                    <div
+                        className="modal agent-manager-modal"
+                        role="dialog"
+                        aria-label="Agent manager"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="modal-head">
+                            <span className="modal-title">Agent</span>
+                            <span className="grow" />
+                            <button
+                                type="button"
+                                className="gicon"
+                                onClick={() => setManageAgentId(null)}
+                                aria-label="Close agent manager"
+                                title="Close"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <AgentManager
+                            agentId={manageAgentId}
+                            onChanged={() => {
+                                void api().terminalSpec.list().then(setSpecs).catch(() => {});
+                                if (activeWorkspaceId) {
+                                    void api()
+                                        .agents.list(activeWorkspaceId)
+                                        .then(setAgentRecord)
+                                        .catch(() => {});
+                                }
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
 
             {agentEditSpec && agentEditSpec.meta?.agent && (
                 <AgentSettingsModal

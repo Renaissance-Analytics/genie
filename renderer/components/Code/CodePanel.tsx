@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { CodeEditor } from '@particle-academy/fancy-code';
+import { useResolvedTheme } from '../../lib/theme-boot';
 import FileTree from './FileTree';
 import EditorWand from './EditorWand';
 import WordWrapSync from './WordWrapSync';
@@ -149,6 +150,11 @@ export default function CodePanel({
     // additionally requires the desktop runtime (headless can never full-FS).
     const system = !!workspace && isSystemWorkspace(workspace);
 
+    // The editor follows the APP's theme, not the OS's. fancy-code's "auto"
+    // resolves from `prefers-color-scheme`, which ignores a theme pinned in
+    // Settings — so a pinned-light Genie on a dark OS would still get a dark
+    // editor, which is the bug this fixes arrived at by another route.
+    const editorTheme = useResolvedTheme();
     const [nodes, setNodes] = useState<TreeNodeData[]>([]);
     const [treeVisible, setTreeVisible] = useState(true);
 
@@ -676,9 +682,13 @@ export default function CodePanel({
 
     return (
         <section
-            className={`tpanel${focused ? ' focus' : ''}${attention ? ' attention' : ''}${
-                drag?.dragging ? ' dragging' : ''
-            }`}
+            /* `code-panel` themes the tile CHROME. `.tpanel` and `.tpanel-head`
+               paint from `--term-*`, which is fixed dark in both themes because
+               a terminal's colours are the shell's — right for a terminal, and
+               wrong for an editor, which is a Genie surface and follows the app. */
+            className={`tpanel code-panel${focused ? ' focus' : ''}${
+                attention ? ' attention' : ''
+            }${drag?.dragging ? ' dragging' : ''}`}
             style={style}
             onDragOver={drag?.onDragOver}
             onDrop={drag?.onDrop}
@@ -899,7 +909,7 @@ export default function CodePanel({
                             // absorbed external reloads, so a clean tab shows no diff.
                             diffBase={active.baseline}
                             language={active.language}
-                            theme="dark"
+                            theme={editorTheme}
                             wordWrap={wordWrap}
                             cursorLine={resolveCursorLine(reveal, activeFile)}
                             onChange={(v) => {

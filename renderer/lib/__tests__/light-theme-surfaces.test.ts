@@ -41,3 +41,45 @@ describe('light-theme surface guard', () => {
         );
     });
 });
+
+/**
+ * THE FILE EDITOR IS NOT A TERMINAL.
+ *
+ * The owner: "the file editor panel is not light mode friendly", with the whole
+ * app light and the Code panel — tree, background and editor — black.
+ *
+ * The cause is one honest decision applied one surface too far. `--term-*` is
+ * FIXED DARK in both themes, deliberately: a terminal is dark whatever the app
+ * is, because its colours are the shell's, not Genie's. `.code-host` borrowed
+ * that palette because it sits where a terminal sits — and `<CodeEditor>` was
+ * handed `theme="dark"` outright, though fancy-code accepts `"light"` too.
+ *
+ * An editor is a Genie surface. It follows the app.
+ */
+describe('the code panel follows the app theme', () => {
+    const codeHostBlock = (): string => {
+        const css = read('renderer/styles/master.css');
+        const start = css.indexOf('/* ===== Code view (CodePanel)');
+        expect(start, 'the Code view CSS section moved or was renamed').toBeGreaterThan(-1);
+        // Up to the next top-level section banner.
+        const next = css.indexOf('/* =====', start + 10);
+        return css.slice(start, next === -1 ? css.length : next);
+    };
+
+    it('paints its chrome from theme tokens, not the fixed terminal palette', () => {
+        expect(codeHostBlock()).not.toMatch(/var\(--term-(?:bg|head|fg|border|dim)\)/);
+    });
+
+    it('does not pin the editor to the dark theme', () => {
+        const panel = executable(read('renderer/components/Code/CodePanel.tsx'));
+        expect(panel).not.toMatch(/theme="dark"/);
+    });
+
+    it('POSITIVE CONTROL: the TERMINAL keeps the fixed dark palette', () => {
+        // Without this, "no --term-* anywhere" would pass against a change that
+        // removed the terminal's own colours — which are correct, and are the
+        // reason those tokens exist.
+        const css = read('renderer/styles/master.css');
+        expect(css).toMatch(/\.term-host\s*\{[^}]*var\(--term-bg\)/);
+    });
+});
