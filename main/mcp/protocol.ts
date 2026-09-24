@@ -1545,6 +1545,20 @@ export interface ManageTerminalsResult {
      *  the scrollback that survived in the pty host), or 'exited' (its pty is not
      *  running, so there is nothing to read at all). */
     state?: TerminalReadState;
+    /** read: the dead pty's LAST WORDS, present only when `state: 'exited'` and
+     *  this terminal actually died here (genie#733).
+     *
+     *  Separate from `data` because they are different facts: `data` is what the
+     *  buffer holds NOW — after a relaunch, the NEW process — while this is why
+     *  the previous one stopped. `runAgent diagnose` calls the exit tail the only
+     *  evidence of why an agent went, and then recommends a restart, so it has to
+     *  survive the restart its own advice causes. */
+    exitTail?: { tail: string; exitCode: number; at: number };
+    /** read: present and FALSE when Genie holds no buffer for this terminal at
+     *  all. Empty `data` then means "cannot see it", not "it was quiet" — a
+     *  distinction `state` does not carry, because a bufferless terminal whose
+     *  pty is alive still reports `state: 'live'`. */
+    buffered?: boolean;
     /** write: the input BODY reached the pty. False (with `ok: false`) means
      *  NOTHING was sent — the terminal has no running pty. */
     delivered?: boolean;
@@ -1737,6 +1751,20 @@ export interface RunAgentResult {
     dropped?: boolean;
     /** read: what an EMPTY read means — see ManageTerminalsResult.state. */
     state?: TerminalReadState;
+    /** read: the dead pty's LAST WORDS, present only when `state: 'exited'` and
+     *  this terminal actually died here (genie#733).
+     *
+     *  Separate from `data` because they are different facts: `data` is what the
+     *  buffer holds NOW — after a relaunch, the NEW process — while this is why
+     *  the previous one stopped. `runAgent diagnose` calls the exit tail the only
+     *  evidence of why an agent went, and then recommends a restart, so it has to
+     *  survive the restart its own advice causes. */
+    exitTail?: { tail: string; exitCode: number; at: number };
+    /** read: present and FALSE when Genie holds no buffer for this terminal at
+     *  all. Empty `data` then means "cannot see it", not "it was quiet" — a
+     *  distinction `state` does not carry, because a bufferless terminal whose
+     *  pty is alive still reports `state: 'live'`. */
+    buffered?: boolean;
     /** send: the prompt BODY reached the pty. False (with `ok: false`) means
      *  NOTHING was sent — that agent terminal has no running pty. */
     delivered?: boolean;
