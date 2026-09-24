@@ -67,6 +67,9 @@ Genie:
   format Genie creates and consumes.
 - **[Release pipeline](release-pipeline.md)** — how Genie itself is built,
   tested, and released.
+- **[PTY host exit evidence](pty-host-exit-evidence.md)** — what the detached
+  terminal host records when it exits, the spawn breadcrumbs that precede a
+  create, and what that evidence can and cannot establish.
 
 ---
 

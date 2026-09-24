@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { logHostService } from './host-service';
+import { formatHostSpawnRequest } from './host-diagnostics';
 import {
     terminalManager,
     resolveDefaultShell,
@@ -346,6 +348,7 @@ export function startProcess(specId: string): void {
     );
 
     try {
+        logHostService(formatHostSpawnRequest({ id: specId, provider: 'process', label: spec.label }));
         terminalManager().create({ id: specId, cwd, shell, args });
         // `create()` returning is NOT evidence the command runs — a `command not
         // found` shell exits milliseconds later. The check that IS decidable

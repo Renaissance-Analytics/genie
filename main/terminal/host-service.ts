@@ -1336,6 +1336,8 @@ export interface HostRecoveryDeps {
      *  have no pane to remount, so the supervisor re-derives their status from
      *  the fresh backend and brings back the ones that should be running. */
     reattachProcesses(): void;
+    /** Schedule restoration of saved running agents without any renderer. */
+    reattachAgents(ids: string[]): void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
 }
@@ -1386,6 +1388,11 @@ export async function recoverFromHostLoss(
             host = false; // no backend came back → degrade, don't abort
         }
         try {
+            deps.reattachAgents(ids);
+        } catch {
+            /* a failed agent restore must not strand unrelated terminals */
+        }
+        try {
             deps.reattach(ids);
         } catch {
             /* best-effort per the contract; one failed id can't sink the rest */
@@ -1414,6 +1421,8 @@ export async function recoverFromHostLoss(
  *  re-emit, so we re-subscribe after each recovery. */
 export interface HostLossEmitter {
     once(event: 'error', listener: () => unknown): void;
+    /** Last live mirror on THIS client, even after the global backend changes. */
+    liveIds(): string[];
 }
 
 /**
@@ -1429,13 +1438,18 @@ export interface HostLossEmitter {
  */
 export function wireHostLossRecovery(deps: {
     getActiveClient: () => HostLossEmitter | null;
-    recover: () => Promise<unknown>;
+    recover: (affectedIds: string[]) => Promise<unknown>;
 }): { armed: () => boolean; rearm: () => void } {
     let watching: HostLossEmitter | null = null;
-    const handleLoss = async () => {
+    const handleLoss = async (client: HostLossEmitter) => {
+        // HostClient emits one error on socket loss, not synthetic pty exits.
+        // The package's earlier error listener has already cleared getHostClient
+        // and swapped backends; only this captured object still has the dead
+        // host's live mirror. Never substitute persisted specs for this evidence.
+        const ids = client.liveIds();
         watching = null; // the one-shot fired; the dead client is gone
         try {
-            await deps.recover();
+            await deps.recover(ids);
         } catch {
             /* recoverFromHostLoss never throws; belt-and-suspenders */
         }
@@ -1445,7 +1459,7 @@ export function wireHostLossRecovery(deps: {
         const client = deps.getActiveClient();
         if (!client || client === watching) return;
         watching = client;
-        client.once('error', handleLoss);
+        client.once('error', () => handleLoss(client));
     };
     rearm();
     return { armed: () => watching !== null, rearm };

@@ -73,7 +73,7 @@ vi.mock('node-pty', () => ({
             },
             exit() {
                 this.killed = true;
-                onExit?.({ exitCode: 0 });
+                setTimeout(() => onExit?.({ exitCode: 0 }), 0);
             },
         };
         spawnedPtys.push(pty);
@@ -100,7 +100,9 @@ vi.mock('../../tray', () => ({
     setUpdateAvailable: vi.fn(),
 }));
 
-import { app } from 'electron';
+import { app, ipcMain } from 'electron';
+import { stopRegisteredAgent } from '../../agents/agent-manager';
+import { recordProviderAvailability, resetProviderAvailabilityCache } from '../../agents/availability';
 import {
     addWorkspace,
     createTerminalSpec,
@@ -120,6 +122,8 @@ import { registerAgentInboxSession } from '../../agentinbox/session-registration
 import { terminalManager } from '@particle-academy/fancy-term-host';
 import type { RunAgentRequest, RunAgentResult } from '../protocol';
 import { useTempClaudeHome, writeTranscript } from '../../__tests__/support/claude-transcripts';
+import * as terminalIpc from '../../terminal/ipc';
+import { recoverFromHostLoss } from '../../terminal/host-service';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-saved-agents-'));
 const dataDir = path.join(tmpRoot, 'userData');
@@ -201,6 +205,7 @@ async function registerCaller(name = 'tynn-builder'): Promise<void> {
 }
 
 beforeEach(() => {
+    resetProviderAvailabilityCache();
     terminalManager().killAll();
     for (const s of listTerminalSpecs()) deleteTerminalSpec(s.id);
     for (const agent of listWorkspaceAgents(WS_ID)) {
@@ -228,6 +233,192 @@ afterAll(() => {
     } catch {
         /* best-effort */
     }
+});
+
+describe('host-side saved-agent revival', () => {
+    it('host loss revives its captured live agents after unmarked exits without reviving unrelated exited agents', async () => {
+        terminalIpc.subscribeHeadlessBackendEvents();
+        saved('lost'); saved('already-exited'); saved('explicitly-stopped');
+        revive();
+        spawnedPtys[1].exit();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        // The host's authoritative live set, captured before teardown events.
+        const liveOnLostHost = terminalManager().list().map(t => t.id);
+        expect(liveOnLostHost).toContain('lost');
+        expect(liveOnLostHost).not.toContain('already-exited');
+        spawnedPtys[0].exit(); // unmarked: exercise exit delivery before recovery
+        terminalIpc.killTerminalById('explicitly-stopped');
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(getTerminalSpec('lost')?.meta?.was_running).toBe(false);
+        await recoverFromHostLoss({
+            affectedIds: () => liveOnLostHost,
+            snapshotAffected: () => {},
+            respawn: async () => ({ host: true }),
+            reattach: () => {},
+            reattachProcesses: () => {},
+            reattachAgents: ids => terminalIpc.reviveRunningAgents(run => run(), ids),
+            emitStatus: () => {},
+        });
+        expect(terminalManager().isLive('lost')).toBe(true);
+        expect(terminalIpc.terminalHasWindow('lost')).toBe(false);
+        expect(getTerminalSpec('lost')?.meta?.was_running).toBe(true);
+        expect(terminalManager().isLive('already-exited')).toBe(false);
+        expect(terminalManager().isLive('explicitly-stopped')).toBe(false);
+    });
+    function rendererCreate() {
+        let create: any;
+        const spy = vi.spyOn(ipcMain, 'handle').mockImplementation((channel: string, handler: any) => {
+            if (channel === 'terminal:create') create = handler;
+        });
+        terminalIpc.registerTerminalIpc();
+        spy.mockRestore();
+        return (id: string) => create({ sender: { once() {}, off() {}, isDestroyed: () => false } }, { id, cwd: wsDir });
+    }
+    function saved(id: string, meta = {}) {
+        return createTerminalSpec({ id, workspace_id: WS_ID, cwd: wsDir, label: id,
+            type: 'terminal', meta: { agent: 'claude', agent_id: id, agent_command: 'echo revived-agent', was_running: true, ...meta } });
+    }
+    const revive = (schedule: (run: () => void, delay: number) => void = run => run()) =>
+        terminalIpc.reviveRunningAgents(schedule);
+
+    it('boots without a renderer and a subsequent attach launches no second copy', async () => {
+        saved('headless');
+        revive();
+        expect(terminalManager().isLive('headless')).toBe(true);
+        expect(terminalIpc.terminalHasWindow('headless')).toBe(false);
+        const attached = terminalIpc.createAgentTerminal({ id: 'headless', workspaceId: WS_ID, cwd: wsDir,
+            label: 'headless', agentMeta: { agent: 'claude', command: 'echo revived-agent' } });
+        expect(attached.existing).toBe(true);
+        expect(spawnedPtys).toHaveLength(1);
+        await vi.waitFor(() => expect(spawnedPtys[0].written.join('')).toContain('echo revived-agent'));
+        expect(spawnedPtys[0].written.filter(s => s.includes('echo revived-agent'))).toHaveLength(1);
+    });
+
+    it('honours the workspace cap and deliberate stop with a live positive control', () => {
+        setWorkspaceAgentCap(WS_ID, 1);
+        saved('stopped', { user_stopped: true });
+        saved('first');
+        saved('over-cap');
+        revive();
+        expect(terminalManager().isLive('first')).toBe(true);
+        expect(terminalManager().isLive('stopped')).toBe(false);
+        expect(terminalManager().isLive('over-cap')).toBe(false);
+    });
+
+    it('staggered work rechecks stop intent before spawning', () => {
+        saved('first');
+        saved('second');
+        const jobs: Array<{ run: () => void; delay: number }> = [];
+        revive((run, delay) => jobs.push({ run, delay }));
+        expect(jobs).toHaveLength(2);
+        expect(jobs[1].delay).toBeGreaterThan(jobs[0].delay);
+        updateTerminalSpec('second', { meta: { ...getTerminalSpec('second')!.meta, user_stopped: true } });
+        jobs.forEach(job => job.run());
+        expect(terminalManager().isLive('first')).toBe(true);
+        expect(terminalManager().isLive('second')).toBe(false);
+    });
+
+    it('records explicit start and stop, retaining stop intent until a new explicit start', async () => {
+        saved('lifecycle', { was_running: false, user_stopped: true });
+        const launch = () => terminalIpc.createAgentTerminal({ id: 'lifecycle', workspaceId: WS_ID, cwd: wsDir,
+            label: 'lifecycle', agentMeta: { agent: 'claude', command: 'echo revived-agent' } });
+        launch();
+        expect(getTerminalSpec('lifecycle')?.meta).toMatchObject({ was_running: true, user_stopped: false });
+        terminalIpc.killTerminalById('lifecycle');
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(getTerminalSpec('lifecycle')?.meta).toMatchObject({ was_running: false, user_stopped: true });
+        revive();
+        expect(terminalManager().isLive('lifecycle')).toBe(false);
+        launch();
+        expect(terminalManager().isLive('lifecycle')).toBe(true);
+        expect(getTerminalSpec('lifecycle')?.meta).toMatchObject({ was_running: true, user_stopped: false });
+    });
+
+    it('records terminal failure but preserves running intent when Genie shuts down', async () => {
+        terminalIpc.subscribeHeadlessBackendEvents();
+        saved('failed'); saved('quit');
+        revive();
+        spawnedPtys[0].exit();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(getTerminalSpec('failed')?.meta?.was_running).toBe(false);
+        expect(terminalManager().isLive('quit')).toBe(true);
+        terminalIpc.stopAllTerminals();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(getTerminalSpec('quit')?.meta?.was_running).toBe(true);
+    });
+
+    it('panel mount waits for queued revival and cannot bypass deliberate stop', async () => {
+        const attach = rendererCreate();
+        saved('queued'); saved('stopped', { user_stopped: true });
+        const jobs: Array<() => void> = [];
+        revive(run => jobs.push(run));
+        const pending = attach('queued');
+        expect(await Promise.race([Promise.resolve(pending).then(() => 'attached'),
+            new Promise(resolve => setTimeout(() => resolve('pending'), 10))])).toBe('pending');
+        expect(() => attach('stopped')).toThrow(/stopped/i);
+        jobs.forEach(run => run());
+        expect((await pending).existing).toBe(true);
+        expect((await attach('queued')).existing).toBe(true);
+        expect(terminalManager().isLive('queued')).toBe(true);
+        expect(spawnedPtys).toHaveLength(1);
+    });
+
+    it('does not revive a provider known to be unavailable, with a live control', () => {
+        recordProviderAvailability({ id: 'genie', status: 'unavailable', reason: 'missing binary' });
+        saved('missing', { agent: 'genie' }); saved('available');
+        revive();
+        expect(terminalManager().isLive('available')).toBe(true);
+        expect(terminalManager().isLive('missing')).toBe(false);
+    });
+
+    it('explicit stop cancels a queued registered agent even with no live pty yet', async () => {
+        const started = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+        expect(started.ok, JSON.stringify(started)).toBe(true);
+        terminalIpc.stopAllTerminals();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const jobs: Array<() => void> = [];
+        revive(run => jobs.push(run));
+        expect(jobs.length).toBeGreaterThan(0);
+        const registered = listWorkspaceAgents(WS_ID)[0];
+        expect(stopRegisteredAgent(registered.id).ok).toBe(true);
+        jobs.forEach(run => run());
+        expect(terminalManager().isLive(started.id!)).toBe(false);
+        expect(getTerminalSpec(started.id!)?.meta?.user_stopped).toBe(true);
+    });
+
+    it('hibernation preserves running intent instead of recording an explicit agent stop', async () => {
+        saved('hibernated');
+        revive();
+        expect(terminalManager().isLive('hibernated')).toBe(true);
+        terminalIpc.stopWorkspaceTerminalsForHibernation(WS_ID);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(terminalManager().isLive('hibernated')).toBe(false);
+        expect(getTerminalSpec('hibernated')?.meta).toMatchObject({ was_running: true });
+        expect(getTerminalSpec('hibernated')?.meta?.user_stopped).not.toBe(true);
+    });
+
+    it('quitting cancels queued launches while retaining their running intent for next boot', () => {
+        saved('queued-at-quit');
+        const jobs: Array<() => void> = [];
+        revive(run => jobs.push(run));
+        expect(jobs).toHaveLength(1);
+        terminalIpc.stopAllTerminals();
+        jobs.forEach(run => run());
+        expect(terminalManager().isLive('queued-at-quit')).toBe(false);
+        expect(getTerminalSpec('queued-at-quit')?.meta?.was_running).toBe(true);
+    });
+
+    it('adopts observed live agents from a surviving host without inferring liveness for dormant legacy specs', () => {
+        saved('survivor', { was_running: undefined });
+        saved('legacy-dormant', { was_running: undefined });
+        terminalManager().create({ id: 'survivor', cwd: wsDir });
+        revive();
+        expect(getTerminalSpec('survivor')?.meta?.was_running).toBe(true);
+        expect(terminalManager().isLive('survivor')).toBe(true);
+        expect(terminalManager().isLive('legacy-dormant')).toBe(false);
+        expect(spawnedPtys).toHaveLength(1);
+        expect(spawnedPtys[0].written).toHaveLength(0);
+    });
 });
 
 /**
@@ -371,6 +562,7 @@ describe('runAgent start on a SAVED agent', () => {
 
         // The agent finishes and its shell exits. The spec is retained.
         spawnedPtys[spawnedPtys.length - 1]!.exit();
+        await new Promise(resolve => setTimeout(resolve, 10));
         expect(terminalManager().isLive(created.id!)).toBe(false);
 
         const revived = await start({ name: 'tynn-builder' });

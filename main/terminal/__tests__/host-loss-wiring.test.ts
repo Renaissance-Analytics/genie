@@ -13,6 +13,7 @@ import { wireHostLossRecovery, type HostLossEmitter } from '../host-service';
 function fakeClient() {
     const listeners: Array<() => unknown> = [];
     const client: HostLossEmitter = {
+        liveIds: () => [],
         once(_event: 'error', cb: () => unknown) {
             listeners.push(cb);
         },
@@ -28,6 +29,18 @@ function fakeClient() {
 }
 
 describe('wireHostLossRecovery', () => {
+    it('captures the lost client live set even after the global client was cleared', async () => {
+        const a = fakeClient();
+        let ids = ['exited-before-loss', 'running-at-loss'];
+        Object.assign(a.client, { liveIds: () => [...ids] });
+        let active: HostLossEmitter | null = a.client;
+        const recover = vi.fn(async () => {});
+        wireHostLossRecovery({ getActiveClient: () => active, recover });
+        ids = ['running-at-loss'];
+        active = null; // package onHostError runs before Genie's listener
+        await a.fire();
+        expect(recover).toHaveBeenCalledExactlyOnceWith(['running-at-loss']);
+    });
     it('arms onto the active client at construction', () => {
         const a = fakeClient();
         const w = wireHostLossRecovery({

@@ -142,6 +142,8 @@ import type {
 import { registerProtocolHandler, handleGenieUrl, isSignedIn, onAuthChanged } from './auth';
 import {
     registerTerminalIpc,
+    reviveRunningAgents,
+    prepareAgentShutdown,
     stopAllTerminals,
     requestFinalSnapshots,
     snapshotRetainedWindowless,
@@ -310,6 +312,7 @@ import {
     detachedTerminalsEnabled,
     electronEncryptor,
     buildHostRecoveryDeps,
+    retainHostExitTerminalView,
     broadcastToWindows,
 } from './terminal/genie-adapter';
 import {
@@ -400,6 +403,7 @@ import { raiseAskE2E, seedAskE2E } from './e2e/ask';
 import { seedTynnImportE2E } from './e2e/tynn-import';
 import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
 import { seedMasterE2E } from './e2e/master';
+import { registerAgentRevivalE2E } from './e2e/agent-revival';
 import { requestFeedback } from './feedback-open';
 import { seedFlowsE2E } from './e2e/flows';
 
@@ -2013,14 +2017,15 @@ app.whenReady().then(async () => {
         wireHostLossRecovery({
             getActiveClient: () => {
                 const c = getHostClient();
-                return c ? { once: (e, cb) => c.once(e, cb) } : null;
+                if (c) retainHostExitTerminalView(c);
+                return c ? { once: (e, cb) => c.once(e, cb), liveIds: () => c.liveIds() } : null;
             },
-            recover: () =>
+            recover: (affectedIds) =>
                 recoverFromHostLoss(
                     buildHostRecoveryDeps(async () => {
                         const s = await runBackendSelection();
                         return { host: s.host };
-                    }),
+                    }, (ids) => reviveRunningAgents(undefined, ids), affectedIds),
                 ),
         });
     }
@@ -2509,6 +2514,9 @@ app.whenReady().then(async () => {
     // re-register itself against a port nobody is on.
     // Fire-and-forget: it schedules its own work and never blocks boot.
     announceUpgradeToAgents({ endpointKept: mcpEndpoint?.keptAgentConnections() ?? false });
+    // The MCP endpoint and backend are ready. Saved agents must start even if
+    // their workspace has no window or visible panel.
+    reviveRunningAgents();
 
     // Wire the operator's OWN workspace the way every other workspace is wired.
     // Without this it had no `.mcp.json`, no `.agents/skills/` and no Codex
@@ -2534,6 +2542,7 @@ app.whenReady().then(async () => {
     // the endpoint URL exists. Inert in a normal run.
     if (isE2E()) {
         const wsId = 'e2e-push-ws';
+        registerAgentRevivalE2E();
         (globalThis as Record<string, unknown>).__GENIE_E2E_MCP__ = {
             endpointUrl: workspaceEndpointUrl(wsId),
             diagnostics: () => serverPushDiagnostics(),
@@ -3128,6 +3137,7 @@ app.whenReady().then(async () => {
         /** Terminals still running once this teardown is done — what decides whether
          *  the MCP shuttle goes too (genie#346, §3.3). */
         let survivingTerminals = 0;
+        prepareAgentShutdown();
         if (isHostBacked()) {
             // UPDATE-quit teardown branches on the ACTIVE BACKEND KIND, because
             // only ONE kind pins Genie's binary:
