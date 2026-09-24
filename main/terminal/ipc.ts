@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { logHostService } from './host-service';
+import { formatHostSpawnRequest } from './host-diagnostics';
 import {
     terminalManager,
     subscribeBackendEvents,
@@ -804,6 +806,9 @@ export function createAgentTerminal(opts: {
     };
     // Idempotent on the id: if a live pty already owns it, this reattaches
     // (existing:true, scrollback replayed) instead of spawning a duplicate.
+    if (!terminalManager().isLive(id)) {
+        logHostService(formatHostSpawnRequest({ id, provider: opts.agentMeta?.agent, label: opts.label }));
+    }
     const result = terminalManager().create(createOpts);
     noteTerminalActivity(id);
 
@@ -1518,6 +1523,9 @@ export function registerTerminalIpc(): void {
                         },
                     };
                 }
+            }
+            if (!mgr().isLive(opts.id)) {
+                logHostService(formatHostSpawnRequest({ id: opts.id, provider: spec?.meta?.agent, label: spec?.label }));
             }
             const result = mgr().create(opts);
             // Agent terminal reattach after a restart: re-launch it (resuming the
