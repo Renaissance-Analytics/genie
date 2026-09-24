@@ -63,6 +63,8 @@ import type { AgentInboxAgentType } from '../agentinbox/types';
 import { withProviderStartupInstructions } from '../agents/startup';
 import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { launchBlockReason } from '../agents/availability';
+import { agentsToRevive } from '../agents/revival';
+import { AGENT_UPGRADE_NUDGE_INTERVAL_MS } from '../agents/upgrade-announcement';
 import { resolveSavedAgentLaunch } from '../agents/launch-command';
 import { isTuiId } from '../agents/registry';
 import { buildSubmitBytes } from './keystrokes';
@@ -562,6 +564,8 @@ export function withTerminalGenieUrl(
  * they can report what was launched.
  */
 export function createAgentTerminal(opts: {
+    /** Automatic restoration cannot clear a deliberate stop. */
+    restore?: boolean;
     /**
      * Honor a caller-supplied terminal id. Local spawns let the renderer pick the
      * id (Terminal.tsx keys ALL its later I/O off it); a REMOTE plain spawn must do
@@ -642,6 +646,9 @@ export function createAgentTerminal(opts: {
     // this function did for every re-create, and it is why reattaching had to be
     // built rather than just called.
     const priorSpec = getTerminalSpec(id);
+    if (opts.restore && priorSpec?.meta?.user_stopped) {
+        throw new Error('This agent was stopped. Start it explicitly to run it again.');
+    }
 
     // genie#313 — a FRESH agent-terminal (no saved spec yet, so nothing is lost
     // by refusing) for a provider the boot-time detect pass already found
@@ -810,6 +817,16 @@ export function createAgentTerminal(opts: {
         logHostService(formatHostSpawnRequest({ id, provider: opts.agentMeta?.agent, label: opts.label }));
     }
     const result = terminalManager().create(createOpts);
+    if (!opts.restore) {
+        const queued = queuedAgentRevivals.get(id);
+        queuedAgentRevivals.delete(id);
+        queued?.finish(true);
+    }
+    if (opts.agentMeta) {
+        const current = getTerminalSpec(id);
+        if (current) updateTerminalSpec(id, { meta: { ...current.meta, was_running: true,
+            ...(!opts.restore ? { user_stopped: false } : {}) } });
+    }
     noteTerminalActivity(id);
 
     // LAUNCH THE AGENT — here, in the Host, the moment the pty exists (genie #63
@@ -839,7 +856,7 @@ export function createAgentTerminal(opts: {
     // A panel was opened — record when (genie#585). The same event the
     // `terminal:create` handler records, reached from the MCP tools, a remote
     // window or mobile instead of a desktop window mounting a pane.
-    notePanelOpened(id);
+    if (!opts.restore) notePanelOpened(id);
 
     // Tell every window the spec set changed so the new terminal appears live.
     broadcastTerminalSpecsChanged();
@@ -1063,6 +1080,88 @@ function deliverAgentLaunch(id: string, command: string): void {
     }, AGENT_LAUNCH_SETTLE_MS);
     if (typeof (timer as { unref?: () => void }).unref === 'function') {
         (timer as { unref: () => void }).unref();
+    }
+}
+
+const queuedAgentRevivals = new Map<string, {
+    ready: Promise<boolean>;
+    finish: (live: boolean) => void;
+}>();
+
+/** Panel mounts wait for the host's stagger, then perform a warm attach. */
+function afterAgentRevival<T>(id: string, attach: () => T): T | Promise<T> {
+    const queued = queuedAgentRevivals.get(id);
+    if (!queued) return attach();
+    return queued.ready.then(live => {
+        if (!live) throw new Error('Agent restoration was cancelled or refused. Start the agent explicitly.');
+        return attach();
+    });
+}
+
+/** Restore saved running agents without waiting for a window or a workspace panel. */
+export function reviveRunningAgents(
+    schedule: (run: () => void, delayMs: number) => void = (run, delay) => {
+        const timer = setTimeout(run, delay);
+        timer.unref?.();
+    },
+    liveOnLostHost?: readonly string[],
+): void {
+    const lost = liveOnLostHost ? new Set(liveOnLostHost) : undefined;
+    // A surviving host supplies live evidence for specs written before this
+    // field existed. Never backfill dormant specs from their mere existence.
+    const specs = listTerminalSpecs().filter(spec => !lost || lost.has(spec.id)).map(spec => {
+        if (spec.meta?.agent && !spec.meta.user_stopped && (lost?.has(spec.id) || terminalManager().isLive(spec.id))) {
+            return updateTerminalSpec(spec.id, { meta: { ...spec.meta, was_running: true } }) ?? spec;
+        }
+        return spec;
+    });
+    const candidates = agentsToRevive(specs);
+    let slot = 0;
+    for (const candidate of candidates) {
+        if (queuedAgentRevivals.has(candidate.id)) continue;
+        let finish!: (live: boolean) => void;
+        const ready = new Promise<boolean>(resolve => { finish = resolve; });
+        const reservation = { ready, finish };
+        queuedAgentRevivals.set(candidate.id, reservation);
+        schedule(() => {
+            if (queuedAgentRevivals.get(candidate.id) !== reservation) return;
+            queuedAgentRevivals.delete(candidate.id);
+            let live = false;
+            try {
+                let spec = getTerminalSpec(candidate.id);
+                // A teardown exit can arrive after scheduling. The captured live
+                // set identifies this host generation; an explicit start/stop
+                // cancels its reservation, so it cannot override a newer run.
+                if (spec && lost?.has(spec.id) && !spec.meta?.user_stopped) {
+                    spec = { ...spec, meta: { ...spec.meta, was_running: true } };
+                }
+                if (!spec || agentsToRevive([spec]).length === 0) return;
+                if (!spec.workspace_id || !isTuiId(spec.meta?.agent)) return;
+                // A surviving detached-host pty spends no new slot and needs no launch.
+                live = terminalManager().isLive(spec.id);
+                if (live) return;
+                const reason = launchBlockReason(spec.meta.agent);
+                const cap = decideAgentTerminalSpawn(spec.workspace_id, 'agent');
+                if (reason || !cap.allowed) {
+                    console.warn(`[agents] Cannot restore ${spec.id}: ${reason ?? cap.reason}`);
+                    return;
+                }
+                createAgentTerminal({
+                    id: spec.id,
+                    workspaceId: spec.workspace_id,
+                    cwd: spec.cwd,
+                    label: spec.label,
+                    restore: true,
+                    agentMeta: { agent: spec.meta.agent, command: spec.meta.agent_command ?? '' },
+                });
+                live = terminalManager().isLive(spec.id);
+                broadcastTerminalRestarted(spec.id);
+            } catch (error) {
+                console.warn(`[agents] Failed to restore ${candidate.id}`, error);
+            } finally {
+                finish(live);
+            }
+        }, slot++ * AGENT_UPGRADE_NUDGE_INTERVAL_MS);
     }
 }
 
@@ -1294,7 +1393,14 @@ function releaseHarnessPullTransport(id: string): void {
     if (agentId) harnessTransportRegistry.unbindPull(agentId);
 }
 
+const preserveAgentExitIntent = new Set<string>();
+
 function feedTerminalExit(id: string, payload: { exitCode: number; signal?: number }): void {
+    const preserve = preserveAgentExitIntent.delete(id);
+    const spec = getTerminalSpec(id);
+    if (spec?.meta?.agent && !preserve && !terminalManager().isLive(id)) {
+        updateTerminalSpec(id, { meta: { ...spec.meta, was_running: false } });
+    }
     // Supervisor decides a Process runner's fate (no-op for other ids).
     onProcessPtyExit(id, payload);
     // The pty is gone but the SPEC is retained (revivable) and still listed — so
@@ -1408,7 +1514,7 @@ export function registerTerminalIpc(): void {
         (
             event,
             opts: CreateTerminalOpts,
-        ): TerminalInfo & {
+        ) => afterAgentRevival(opts.id, (): TerminalInfo & {
             existing: boolean;
             scrollback: string;
             snapshot?: { serialized: string; savedAt: number };
@@ -1432,6 +1538,15 @@ export function registerTerminalIpc(): void {
             // instead of an interactive login session. Override the args from
             // the spec's meta.command (the shell is resolved above).
             const spec = getTerminalSpec(opts.id);
+            if (spec?.meta?.agent && !mgr().isLive(opts.id)) {
+                if (spec.meta.user_stopped) throw new Error('This agent was stopped. Start it explicitly to run it again.');
+                const reason = isTuiId(spec.meta.agent) ? launchBlockReason(spec.meta.agent) : undefined;
+                if (reason) throw new Error(reason);
+                if (spec.workspace_id) {
+                    const cap = decideAgentTerminalSpawn(spec.workspace_id, 'agent');
+                    if (!cap.allowed) throw new Error(cap.reason);
+                }
+            }
             // A panel mounting in a sleeping workspace must not bring its terminal
             // back (genie#672): the same refusal every other spawn path gets.
             const asleep = hibernationSpawnRefusal(spec?.workspace_id, (id) =>
@@ -1532,10 +1647,14 @@ export function registerTerminalIpc(): void {
             // captured chat session) so it isn't left a plain shell. No-op for a
             // warm reattach or a non-agent terminal. See maybeRelaunchAgent.
             maybeRelaunchAgent(opts.id, result.existing);
+            if (spec?.meta?.agent) {
+                const current = getTerminalSpec(opts.id);
+                if (current) updateTerminalSpec(opts.id, { meta: { ...current.meta, was_running: true } });
+            }
             trackOwner(opts.id, event.sender);
             noteTerminalActivity(opts.id);
             return result;
-        },
+        }),
     );
 
     ipcMain.handle('terminal:shells', () => {
@@ -1741,8 +1860,18 @@ export function registerTerminalIpc(): void {
     });
 }
 
+/** Genie-owned teardown preserves running intent and cancels pending launches. */
+export function prepareAgentShutdown(): void {
+    for (const queued of queuedAgentRevivals.values()) queued.finish(false);
+    queuedAgentRevivals.clear();
+    for (const spec of listTerminalSpecs()) {
+        if (spec.meta?.agent && terminalManager().isLive(spec.id)) preserveAgentExitIntent.add(spec.id);
+    }
+}
+
 /** Tear down every pty on app quit so dangling shell processes don't survive. */
 export function stopAllTerminals(): void {
+    prepareAgentShutdown();
     terminalManager().killAll();
 }
 
@@ -1803,8 +1932,18 @@ export function requestFinalSnapshots(): void {
  * pty killed + snapshot dropped + MCP endpoint released. Returns false when the
  * id matches no live pty (and isn't a known process spec).
  */
-export function killTerminalById(id: string): boolean {
+export function killTerminalById(id: string, options: { preserveRunningIntent?: boolean } = {}): boolean {
+    const queued = queuedAgentRevivals.get(id);
+    queuedAgentRevivals.delete(id);
+    queued?.finish(false);
     const spec = getTerminalSpec(id);
+    if (spec?.meta?.agent) {
+        if (options.preserveRunningIntent) {
+            if (terminalManager().isLive(id)) preserveAgentExitIntent.add(id);
+        } else {
+            updateTerminalSpec(id, { meta: { ...spec.meta, was_running: false, user_stopped: true } });
+        }
+    }
     if (spec?.type === 'process') {
         stopProcess(id);
         return true;
@@ -1869,7 +2008,7 @@ export function stopWorkspaceTerminalsForHibernation(workspaceId: string): strin
         if (spec.workspace_id !== workspaceId) continue;
         try {
             if (spec.type === 'process') stopProcessForHibernation(spec.id);
-            else killTerminalById(spec.id);
+            else killTerminalById(spec.id, { preserveRunningIntent: true });
         } catch {
             /* best-effort — one stubborn terminal can't hold the workspace awake */
         }

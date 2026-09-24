@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
     getDb,
+    getTerminalSpec,
     getWorkspace,
     listAgentRuntimes,
     listWorkspaceAgents,
@@ -480,13 +481,19 @@ export function addAgentMcpServer(agentId: string, input: McpServerInput): Write
 export function stopRegisteredAgent(agentId: string): WriteResult {
     const agent = getWorkspaceAgentById(String(agentId ?? ''));
     if (!agent) return { ok: false, error: 'That agent is no longer registered.' };
+    const terminals = terminalsToStopFor(agent);
     const plan = planAgentStop({
         name: agent.name,
-        terminals: terminalsToStopFor(agent),
+        terminals,
         live: isTerminalLive,
     });
-    if (plan.kind === 'refuse') return { ok: false, error: plan.reason };
-    for (const id of plan.terminalIds) killTerminalById(id);
+    const restorable = terminals.some(id => {
+        const meta = getTerminalSpec(id)?.meta;
+        return meta?.was_running && !meta.user_stopped;
+    });
+    if (plan.kind === 'refuse' && !restorable) return { ok: false, error: plan.reason };
+    // Also cancel dormant bindings queued for revival, including sidecars.
+    for (const id of terminals) killTerminalById(id);
     broadcastAgentsChanged();
     return { ok: true };
 }

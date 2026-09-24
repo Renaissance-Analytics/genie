@@ -36,6 +36,7 @@ function deps(over: Partial<HostRecoveryDeps> = {}): {
         respawn: async () => { order.push('respawn'); return { host: true }; },
         reattach: (ids) => { order.push(`reattach:${ids.join(',')}`); },
         reattachProcesses: () => { order.push('processes'); },
+        reattachAgents: () => { order.push('agents'); },
         emitStatus: (s) => { order.push(`status:${s}`); status.push(s); },
         ...over,
     };
@@ -43,6 +44,14 @@ function deps(over: Partial<HostRecoveryDeps> = {}): {
 }
 
 describe('recoverFromHostLoss', () => {
+    it('revives agents host-side before asking any renderer to reattach', async () => {
+        const { d, order } = deps();
+        Object.assign(d, { reattachAgents: () => order.push('agents') });
+        await recoverFromHostLoss(d);
+        expect(order).toContain('agents');
+        expect(order.indexOf('agents')).toBeGreaterThan(order.indexOf('respawn'));
+        expect(order.indexOf('agents')).toBeLessThan(order.indexOf('reattach:t-1,t-2'));
+    });
     it('snapshots BEFORE respawn and re-attaches AFTER, ending in "recovered" when a host returns', async () => {
         const { d, order, status } = deps();
 
@@ -55,6 +64,7 @@ describe('recoverFromHostLoss', () => {
             'snapshot:t-1,t-2',
             'status:recovering',
             'respawn',
+            'agents',
             'reattach:t-1,t-2',
             // The HEADLESS half (genie#655). `reattach` is a broadcast to the
             // renderer, and a supervised process has no pane to remount — so

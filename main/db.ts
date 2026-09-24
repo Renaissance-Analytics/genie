@@ -5964,7 +5964,7 @@ export interface TerminalSpecMeta {
     /** Process views: relaunch the command (with backoff) if it exits/crashes. */
     restart_on_exit?: boolean;
     /**
-     * Process views: persisted "was running" intent. Set true while the process
+     * Process and agent views: persisted "was running" intent. Set true while the process
      * is running and false on a deliberate stop or terminal failure, so a
      * process active when Genie went down (quit/update/crash) is auto-restored
      * on next launch — like a service. Distinct from `autostart` (which the
@@ -5972,7 +5972,7 @@ export interface TerminalSpecMeta {
      */
     was_running?: boolean;
     /**
-     * Process views: the user PAUSED this process — they deliberately stopped it
+     * Process and agent views: the user PAUSED this process — they deliberately stopped it
      * and have not started it since (genie#407). Persisted, and boot honours it:
      * `startAutostartProcesses()` skips a spec carrying it, whatever `autostart`
      * says.
