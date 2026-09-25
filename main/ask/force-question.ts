@@ -1192,8 +1192,9 @@ function createAskWindow(): BrowserWindow {
             sandbox: false,
         },
     });
-    // Float above full-screen apps and other always-on-top windows, then grab
-    // focus so the user lands on the modal immediately.
+    // Float above full-screen apps and other always-on-top windows, deliberately
+    // without taking focus: a question must never take the keyboard out of a
+    // sentence the owner is typing to an agent.
     w.setAlwaysOnTop(true, 'screen-saver');
     w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
@@ -1229,8 +1230,7 @@ function createAskWindow(): BrowserWindow {
         // the modal taller than the screen and its Cancel/Submit row past the
         // bottom edge — which reads as a clipped footer and is not one.
         fitAskWindowToDisplay(w);
-        w.show();
-        w.focus();
+        w.showInactive();
     });
     // A close without an answer (window control, OS, or our own teardown when
     // the queue drains) cancels EVERY still-queued request so no caller hangs.

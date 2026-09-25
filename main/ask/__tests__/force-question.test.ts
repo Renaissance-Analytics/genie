@@ -18,6 +18,10 @@ import type { ForceQuestion } from '../../mcp/protocol';
 // --- mock state -------------------------------------------------------------
 interface FakeWin {
     id: number;
+    readyToShow?: () => void;
+    showInactive: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
     shown: Array<{ id: string; questions: ForceQuestion[]; queued: number }>;
     /** Captured `ask:queue` pushes (PendingQuestions v2 — the full queue view). */
     queues: Array<{
@@ -102,9 +106,12 @@ vi.mock('electron', () => {
         on(ev: string, fn: () => void): void {
             if (ev === 'closed') (this as unknown as FakeWin).closedHandlers.push(fn);
         }
-        once(): void {}
-        focus(): void {}
-        show(): void {}
+        once(event: string, fn: () => void): void {
+            if (event === 'ready-to-show') (this as unknown as FakeWin).readyToShow = fn;
+        }
+        showInactive = vi.fn();
+        focus = vi.fn();
+        show = vi.fn();
         isDestroyed(): boolean {
             return (this as unknown as FakeWin).destroyed;
         }
@@ -195,6 +202,25 @@ describe('ForceTheQuestion FIFO queue', () => {
         });
     });
     afterEach(() => vi.clearAllMocks());
+
+    it('shows inactive without taking focus, including when a second question arrives', async () => {
+        const first = forceQuestion(Q('A'));
+        const modal = win();
+        expect(modal.readyToShow).toBeTypeOf('function');
+        modal.readyToShow!();
+        expect.soft(modal.showInactive).toHaveBeenCalledOnce();
+        expect.soft(modal.focus).not.toHaveBeenCalled();
+        expect.soft(modal.show).not.toHaveBeenCalled();
+
+        const second = forceQuestion(Q('B'));
+        expect(state.windows).toHaveLength(1);
+        expect(modal.queues.at(-1)?.pending).toHaveLength(2);
+        expect.soft(modal.showInactive).toHaveBeenCalledOnce();
+        expect.soft(modal.focus).not.toHaveBeenCalled();
+        expect.soft(modal.show).not.toHaveBeenCalled();
+        modal.close();
+        await Promise.all([first, second]);
+    });
 
     it('pushes the FULL pending queue (priority-ordered, head first) to the window (v2)', async () => {
         const pA = forceQuestion(Q('A'), 'ws-a'); // head (normal)
