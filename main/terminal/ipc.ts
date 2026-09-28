@@ -930,8 +930,10 @@ export function createAgentTerminal(opts: {
             configArgs: codexAppServerConfigArgs(command),
         }).then(async (running) => {
             const configured = configuredAgent();
-            harnessTransportRegistry.bind(agentId!, 'codex-app-server', (payload) =>
-                running.session.deliver(payload),
+            harnessTransportRegistry.bind(
+                agentId!, 'codex-app-server',
+                (payload) => running.session.deliver(payload),
+                (threadId) => running.session.readProgress(threadId),
             );
             if (configured) {
                 markWorkspaceAgentTransportState(
