@@ -92,6 +92,7 @@ import { restartAgentTerminal } from '../host-tools';
 import { createAgentTerminal, AGENT_LAUNCH_SETTLE_MS } from '../../terminal/ipc';
 import { GENIE_OS_TERMINAL_ID } from '../../agents/os-agent';
 import { agentInboxBroker } from '../../agentinbox/broker';
+import { dbAgentInboxStore, noopAgentInboxStore } from '../../agentinbox/store';
 import { resetProviderAvailabilityCache } from '../../agents/availability';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 
@@ -238,19 +239,31 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
     });
 
     it('keeps the agent’s identity, so its AgentInbox mail is not stranded', async () => {
-        const id = await launchUnresumableAgent();
-        const agentId = getTerminalSpec(id)?.meta?.agent_id;
-        expect(agentId).toBeTruthy();
+        agentInboxBroker.setStore(dbAgentInboxStore);
+        try {
+            const id = await launchUnresumableAgent();
+            const agentId = getTerminalSpec(id)?.meta?.agent_id as string;
+            expect(agentId).toBeTruthy();
+            agentInboxBroker.send({ system: true, toAgentId: agentId, text: 'already read' });
+            const read = await agentInboxBroker.receive(agentId);
+            agentInboxBroker.send({ system: true, toAgentId: agentId, text: 'queued for restart' });
 
-        const r = await restartAgentTerminal(id, 'fresh');
+            const r = await restartAgentTerminal(id, 'fresh');
 
-        // The SAME spec, and the same AgentInbox identity. A fresh CONVERSATION
-        // is not a fresh AGENT: minting a new `agent_id` strands its queued mail,
-        // cursors, channel membership and DM history, and leaves the AMS grid
-        // drawing one registered agent as two squares.
-        expect(r.ok && r.newId).toBe(id);
-        expect(getTerminalSpec(id)?.meta?.agent_id).toBe(agentId);
-        expect(listTerminalSpecs().filter((s) => s.meta?.agent === 'genie')).toHaveLength(1);
+            // The SAME spec, and the same AgentInbox identity. A fresh CONVERSATION
+            // is not a fresh AGENT: minting a new `agent_id` strands its queued mail,
+            // cursors, channel membership and DM history, and leaves the AMS grid
+            // drawing one registered agent as two squares.
+            expect(r.ok && r.newId).toBe(id);
+            expect(getTerminalSpec(id)?.meta?.agent_id).toBe(agentId);
+            expect(listTerminalSpecs().filter((s) => s.meta?.agent === 'genie')).toHaveLength(1);
+            const received = await agentInboxBroker.receive(agentId);
+            expect(received.messages.map((m) => m.text)).toEqual(['queued for restart']);
+            expect(received.cursor).toBeGreaterThan(read.cursor);
+            expect((await agentInboxBroker.receive(agentId)).messages).toEqual([]);
+        } finally {
+            agentInboxBroker.setStore(noopAgentInboxStore);
+        }
     });
 
     it('POSITIVE CONTROL: a resumable agent with a captured id still RESUMES', async () => {

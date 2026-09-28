@@ -119,7 +119,7 @@ export interface ServerDeps {
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
         to?: string,
-    ) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
+    ) => Promise<{ ok: boolean; agentId?: string; inboxAgentId?: string; error?: string }>;
     /** Resolve the caller's workspace IssueWatch snapshot (checkIssues + imDone counts). */
     checkIssues: (terminalId: string) => Promise<IssueWatchSnapshot>;
     /** A "you have N unread AgentInbox messages" nudge for the caller's terminal, folded into

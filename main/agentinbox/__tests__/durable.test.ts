@@ -121,6 +121,44 @@ describe('AgentInbox durable inbox (Track B)', () => {
         store = makeStore();
     });
 
+    it('restores the read cursor and only unread mail after a terminal leaves and rejoins', async () => {
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'already read' });
+        const read = await b.receive('b');
+        b.leaveByTerminal('t-b');
+        join(b, 'b');
+        expect(await b.receive('b')).toEqual({ messages: [], cursor: read.cursor });
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'queued across restart' });
+        b.leaveByTerminal('t-b');
+        join(b, 'b', { chatSessionId: 'new-conversation' });
+        const received = await b.receive('b');
+        expect(received.messages.map((m) => m.text)).toEqual(['queued across restart']);
+        expect(received.cursor).toBeGreaterThan(read.cursor);
+    });
+
+    it('recovers late joins without boot hydration and never duplicates unread mail', async () => {
+        const old = new AgentInboxBroker();
+        old.setStore(store);
+        join(old, 'a');
+        join(old, 'b');
+        old.send({ fromAgentId: 'a', toAgentId: 'b', text: 'pending' });
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'b');
+        expect((await b.receive('b', { cursor: 0 })).messages.map((m) => m.text)).toEqual(['pending']);
+        join(b, 'a');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'next' });
+        b.rehydrateMessages();
+        b.rehydrateMessages();
+        join(b, 'b');
+        const received = await b.receive('b');
+        expect(received.messages.map((m) => m.text)).toEqual(['next']);
+        expect(received.cursor).toBe(2);
+    });
+
     it('write-throughs a DM to the store', () => {
         const b = new AgentInboxBroker();
         b.setStore(store);

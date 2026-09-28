@@ -173,7 +173,7 @@ export function buildHostServerDeps(
                     reason,
                     ...(to ? { to } : {}),
                 });
-                return { ok: true, agentId: 'genie:workstation' };
+                return { ok: true, agentId: 'genie:workstation', inboxAgentId: 'genie:workstation' };
             }
             const agent = markWorkspaceAgentReadyByTerminal(getDb(), terminalId);
             if (!agent) {
@@ -193,7 +193,15 @@ export function buildHostServerDeps(
             // and waits for a person. Both are satisfied by the same thumb, so
             // an agent that answers once answers whichever is running.
             agentUpgradeDrain.acknowledge(agent.id, reason);
-            return { ok: true, agentId: agent.id };
+            // AMS configuration IDs and durable inbox addresses can differ
+            // (registered agents and their runtime terminals have separate rows).
+            // Keep the existing AMS result stable and name the mail address.
+            const inboxAgentId = getTerminalSpec(terminalId)?.meta?.agent_id;
+            return {
+                ok: true,
+                agentId: agent.id,
+                ...(typeof inboxAgentId === 'string' && inboxAgentId ? { inboxAgentId } : {}),
+            };
         },
         checkIssues: (terminalId) => checkIssuesForMcp(terminalId),
         agentInboxMailLine: (terminalId) =>
