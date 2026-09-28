@@ -363,6 +363,32 @@ describe('host-side saved-agent revival', () => {
         expect(spawnedPtys).toHaveLength(1);
     });
 
+    it('attaches surviving terminals immediately without consuming cold-start revival slots', async () => {
+        const attach = rendererCreate();
+        saved('warm-survivor', { was_running: undefined });
+        terminalManager().create({ id: 'warm-survivor', cwd: wsDir });
+        saved('cold-restore');
+        const jobs: Array<{ run: () => void; delay: number }> = [];
+        revive((run, delay) => jobs.push({ run, delay }));
+        try {
+            const result = await Promise.race([
+                Promise.resolve(attach('warm-survivor')).then(() => 'attached'),
+                new Promise(resolve => setTimeout(() => resolve('waiting-for-revival'), 20)),
+            ]);
+            expect(result).toBe('attached');
+            expect(terminalIpc.terminalHasWindow('warm-survivor')).toBe(true);
+            expect(getTerminalSpec('warm-survivor')?.meta?.was_running).toBe(true);
+            expect(jobs).toHaveLength(1);
+            expect(jobs[0].delay).toBe(0);
+            expect(terminalManager().isLive('cold-restore')).toBe(false);
+        } finally {
+            jobs.forEach(job => job.run());
+        }
+        expect(terminalManager().isLive('warm-survivor')).toBe(true);
+        expect(terminalManager().isLive('cold-restore')).toBe(true);
+        expect(spawnedPtys).toHaveLength(2);
+    });
+
     it('does not revive a provider known to be unavailable, with a live control', () => {
         recordProviderAvailability({ id: 'genie', status: 'unavailable', reason: 'missing binary' });
         saved('missing', { agent: 'genie' }); saved('available');

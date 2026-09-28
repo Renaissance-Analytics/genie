@@ -1118,6 +1118,10 @@ export function reviveRunningAgents(
     const candidates = agentsToRevive(specs);
     let slot = 0;
     for (const candidate of candidates) {
+        // A surviving host already owns this PTY. Reserving a staggered revival
+        // makes terminal:create wait before it can replay the live screen, even
+        // though there is nothing to launch. Only cold starts need a queue slot.
+        if (terminalManager().isLive(candidate.id)) continue;
         if (queuedAgentRevivals.has(candidate.id)) continue;
         let finish!: (live: boolean) => void;
         const ready = new Promise<boolean>(resolve => { finish = resolve; });
