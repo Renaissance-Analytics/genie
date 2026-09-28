@@ -2534,6 +2534,7 @@ function observeWorkspaceAgents(
                     harnessTransportRegistry.isVerified(inboxId, required),
                 readyAt: agent.ready_at,
                 joinedInbox: !!inboxId && !!agentInboxBroker.getInfo(inboxId),
+                unreadMessages: terminalId ? agentInboxBroker.unreadForTerminal(terminalId).count : 0,
                 collisionGroup: agent.collision_group,
                 // The row's `tui` is a string column; `launchBlockReason` is a
                 // Map lookup that answers `undefined` for anything it has not
@@ -2635,7 +2636,7 @@ export async function runAgentForMcp(
                 }
                 const observedAt = Date.now();
                 const wanted = req.name?.trim();
-                const diagnoses = scope
+                const observations = scope
                     .flatMap((target) => observeWorkspaceAgents(target, observedAt))
                     .filter((obs) => !wanted || obs.name === wanted)
                     .filter(
@@ -2643,8 +2644,17 @@ export async function runAgentForMcp(
                             !req.id ||
                             obs.recordTerminalId === req.id ||
                             obs.runtimeTerminalId === req.id,
-                    )
-                    .map(diagnoseAgent);
+                    );
+                const diagnoses = await Promise.all(observations.map(async (obs) => {
+                    const terminalId = obs.runtimeTerminalId ?? obs.recordTerminalId;
+                    const spec = terminalId ? getTerminalSpec(terminalId) : undefined;
+                    const inboxId = spec?.meta?.agent_id;
+                    const threadId = spec?.meta?.chat_session_id;
+                    const progress = obs.ptyLive && typeof inboxId === 'string'
+                        ? await harnessTransportRegistry.readProgress(inboxId, typeof threadId === 'string' ? threadId : null)
+                        : { state: 'unknown' as const };
+                    return diagnoseAgent({ ...obs, progress });
+                }));
                 // `note` carries the one line, built by the module that did the
                 // reasoning. Re-deriving a summary at the protocol layer would be
                 // a second opinion about the same facts.

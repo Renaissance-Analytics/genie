@@ -41,6 +41,8 @@
  * it — so the two things a boot legitimately has not done yet are excused, and
  * nothing else is.
  */
+import type { HarnessProgress } from '../agentinbox/harness-transport';
+
 export const AGENT_SETTLING_MS = 90_000;
 
 /**
@@ -79,14 +81,16 @@ export type AgentAilment =
     /** Two agents share a name and nobody has said which survives. */
     | 'name-collision'
     /** Reachable by every wiring check, and not moving: mail waiting, pty silent. */
-    | 'not-progressing';
+    | 'not-progressing'
+    /** The harness itself reports it cannot continue, and says why. */
+    | 'harness-blocked';
 
 /**
  * `wedged` means SOMETHING NEEDS THE OPERATOR — not necessarily that a pty is
  * hung. A registered agent whose provider cannot launch is wedged with nothing
  * running at all.
  */
-export type AgentCondition = 'healthy' | 'dormant' | 'starting' | 'wedged';
+export type AgentCondition = 'healthy' | 'dormant' | 'starting' | 'wedged' | 'unverified';
 
 export interface AgentFinding {
     ailment: AgentAilment;
@@ -173,6 +177,8 @@ export interface AgentObservation {
      */
     lastOutputAt: number | null;
     observedAt: number;
+    progress?: HarnessProgress;
+    unreadMessages?: number;
 }
 
 export interface AgentDiagnosis {
@@ -189,6 +195,8 @@ export interface AgentDiagnosis {
     /** Causal order — the first is the thing to fix. */
     findings: AgentFinding[];
     handoffPath: string | null;
+    progress: HarnessProgress;
+    unreadMessages: number;
 }
 
 /** PURE. One agent's observation → what is wrong with it and what fixes that. */
@@ -209,6 +217,8 @@ export function diagnoseAgent(obs: AgentObservation): AgentDiagnosis {
         tui: obs.tui,
         terminalId,
         handoffPath: obs.handoffPath,
+        progress: obs.progress ?? { state: 'unknown' as const },
+        unreadMessages: obs.unreadMessages ?? 0,
     };
 
     // --- not running at all -------------------------------------------------
@@ -283,10 +293,30 @@ export function diagnoseAgent(obs: AgentObservation): AgentDiagnosis {
     }
     pushCollision(findings, obs);
 
-    // Only once nothing else is wrong. A missing broker entry or an unbound
-    // transport EXPLAINS unread mail; reporting both would hand the operator two
-    // repairs for one cause and let them pick the wrong one.
-    pushStalled(findings, obs);
+    // THE HARNESS'S OWN WORD FIRST, and only one of these two ever fires.
+    //
+    // `pushStalled` below can only INFER a stall, from mail going unread while the pty
+    // stays silent — and it cannot fire at all for an agent with no mail waiting, which
+    // is precisely the agent parked on its own input box. A harness that reports
+    // `blocked` has NAMED the cause instead, so it is both earlier and better evidence.
+    //
+    // Mutually exclusive deliberately: a harness stuck on a model picker will also look
+    // silent with unread mail, and reporting `harness-blocked` AND `not-progressing`
+    // would hand the operator two repairs for one fault and let them pick the wrong one
+    // — the same reason the block below waits for everything else to come up clean.
+    if (findings.length === 0 && obs.progress?.state === 'blocked') {
+        findings.push({
+            ailment: 'harness-blocked',
+            detail: `The harness cannot continue: ${obs.progress.reason}. ${shell.unreadMessages} unread message(s).`,
+            repair: '`runAgent read` to inspect the prompt, then have the owner resolve its choice or approval. Do not send an automatic Enter.',
+        });
+    } else {
+        // Only once nothing else is wrong. A missing broker entry or an unbound
+        // transport EXPLAINS unread mail; reporting both would hand the operator two
+        // repairs for one cause and let them pick the wrong one.
+        pushStalled(findings, obs);
+    }
+
 
     if (findings.length > 0) {
         return { ...shell, condition: 'wedged', findings, summary: `${obs.name} — ${findings[0]!.detail}` };
@@ -301,11 +331,17 @@ export function diagnoseAgent(obs: AgentObservation): AgentDiagnosis {
             summary: `${obs.name} — started recently and still coming up. Nothing to repair yet.`,
         };
     }
+    if (shell.progress.state === 'unknown' || (shell.progress.state === 'idle' && shell.unreadMessages > 0)) {
+        return {
+            ...shell, condition: 'unverified', findings,
+            summary: `${obs.name} — wiring is up; progress is unverified. ${shell.unreadMessages} unread message(s). ` +
+                (shell.progress.state === 'idle' ? 'Harness is idle with pending mail. ' : 'No current harness execution state is available. ') +
+                'Read its terminal before choosing a repair; silence alone does not prove a stall.',
+        };
+    }
     return {
-        ...shell,
-        condition: 'healthy',
-        findings,
-        summary: `${obs.name} — healthy: running, transport bound, in the inbox, boot reported.`,
+        ...shell, condition: 'healthy', findings,
+        summary: `${obs.name} — healthy wiring; harness reports ${shell.progress.state === 'active' ? 'an active turn (not a guarantee of continued progress)' : 'idle with no pending mail'}. ${shell.unreadMessages} unread message(s).`,
     };
 }
 
@@ -488,7 +524,7 @@ export function triageSummary(diagnoses: readonly AgentDiagnosis[]): string {
     if (diagnoses.length === 0) {
         return 'No agents to triage — no registered agents in the workspaces you can act on.';
     }
-    const counted: AgentCondition[] = ['healthy', 'starting', 'dormant', 'wedged'];
+    const counted: AgentCondition[] = ['healthy', 'starting', 'dormant', 'wedged', 'unverified'];
     const parts = counted
         .map((condition) => ({
             condition,
@@ -499,7 +535,7 @@ export function triageSummary(diagnoses: readonly AgentDiagnosis[]): string {
 
     const noun = diagnoses.length === 1 ? 'agent' : 'agents';
     const head = `${diagnoses.length} ${noun}: ${parts.join(', ')}.`;
-    const wedged = diagnoses.filter((d) => d.condition === 'wedged');
+    const wedged = diagnoses.filter((d) => d.condition === 'wedged' || d.condition === 'unverified');
     if (wedged.length === 0) return head;
     return `${head} ${wedged.map((d) => `${d.workspaceName}/${d.name} — ${d.findings[0]?.ailment ?? 'unknown'}`).join('; ')}.`;
 }

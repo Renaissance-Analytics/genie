@@ -1,4 +1,4 @@
-import type { HarnessTransportPayload } from './harness-transport';
+import type { HarnessProgress, HarnessTransportPayload } from './harness-transport';
 
 export interface CodexAppServerSocket {
     send(data: string): void;
@@ -75,6 +75,7 @@ export class CodexAgentInboxSession {
     private deliveredMessageIds = new Set<string>();
     private inFlightMessageIds = new Map<string, Promise<void>>();
     private busy = true;
+    private turnFailure: string | null = null;
     private currentThreadId: string | null = null;
 
     /** ONCE. A notification that repeats every turn would fill the log with the same sample and
@@ -104,6 +105,29 @@ export class CodexAgentInboxSession {
 
     get isIdle(): boolean {
         return !!this.currentThreadId && !this.busy;
+    }
+
+    /** Read live metadata only. Never hydrate history, resume, or start a turn. */
+    async readProgress(expectedThreadId: string | null): Promise<HarnessProgress> {
+        if (!expectedThreadId || expectedThreadId !== this.currentThreadId) return { state: 'unknown' };
+        try {
+            const result = await this.request('thread/read', {
+                threadId: expectedThreadId, includeTurns: false,
+            }) as { thread?: { id?: string; status?: { type?: string; activeFlags?: string[] } } };
+            if (result.thread?.id !== expectedThreadId) return { state: 'unknown' };
+            const status = result.thread.status;
+            if (status?.type === 'active') {
+                const wait = status.activeFlags?.find(flag => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+                return wait ? { state: 'blocked', reason: wait } : { state: 'active' };
+            }
+            if (status?.type === 'systemError') return { state: 'blocked', reason: 'harness-error' };
+            if (status?.type === 'idle') {
+                return this.turnFailure ? { state: 'blocked', reason: this.turnFailure } : { state: 'idle' };
+            }
+        } catch {
+            // Failed query or unsupported protocol is unknown, never healthy.
+        }
+        return { state: 'unknown' };
     }
 
     async initialize(cwd: string, resumeThreadId?: string | null): Promise<void> {
@@ -254,14 +278,29 @@ export class CodexAgentInboxSession {
             }
             return;
         }
+        // RATE LIMITS FIRST, and the order is load-bearing.
+        //
+        // `account/rateLimits/updated` is an ACCOUNT-level frame — it carries no
+        // `threadId` at all. The thread guard below would therefore drop every one of
+        // them and the overage capture would quietly stop working: a frame that is not
+        // thread-scoped, failing a thread-scoped test.
         if (message.method === 'account/rateLimits/updated') {
             this.maybeSampleRateLimit(message.params);
             return;
         }
 
+        // Everything past here IS thread-scoped. Without this, a notification about
+        // another conversation on the same socket reads as this agent's — which is how
+        // a progress observation ends up reporting a different agent's turn.
+        if (message.params?.threadId !== this.currentThreadId) return;
         if (message.method === 'turn/started') {
+            this.turnFailure = null;
             this.busy = true;
         } else if (message.method === 'turn/completed') {
+            const turn = message.params?.turn as { status?: string; error?: { codexErrorInfo?: unknown } } | undefined;
+            this.turnFailure = turn?.status === 'failed'
+                ? (turn.error?.codexErrorInfo === 'usageLimitExceeded' || turn.error?.codexErrorInfo === 'rateLimitExceeded' ? 'usage-limit' : 'turn-failed')
+                : null;
             this.busy = false;
             this.flushOne();
         }
