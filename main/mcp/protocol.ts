@@ -1740,11 +1740,13 @@ export interface RunAgentResult {
     /** send: the prompt BODY reached the pty. False (with `ok: false`) means
      *  NOTHING was sent — that agent terminal has no running pty. */
     delivered?: boolean;
-    /** send: the submit keystroke landed too. A multi-line prompt is two writes
-     *  (body, then Enter after a delay), so `delivered: true, submitted: false`
-     *  is a real outcome: the prompt is in the TUI's input box, UNSUBMITTED, and
-     *  the agent has not seen it. */
-    submitted?: boolean;
+    /** send: true requires TUI acceptance; false means no submit was delivered;
+     * null means Enter reached the PTY but acceptance is unverified. The PTY
+     * transport has no TUI acknowledgement, so it never returns true. */
+    submitted?: boolean | null;
+    /** send: an Enter was requested and its bytes reached the PTY. This does
+     * not establish that the TUI accepted the prompt or started a turn. */
+    submitKeyDelivered?: boolean;
     /**
      * restart / send: what Genie actually established, in one line.
      *
@@ -2818,7 +2820,7 @@ const THUMBS_UP_TOOL = {
 const RUN_AGENT_TOOL = {
     name: 'runAgent',
     description:
-        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is normally a separate `registerAgent` call. Actions: `sidecar` (register and launch YOUR `<name>-slave` agent under the different TUI named by `agent`, or reattach it); `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send`; `read`; `stop`; `restart` (resumes the conversation — add `fresh: true` to kill it and start a NEW one, the only restart that reaches a wedged or dead agent). A sidecar is a separate live agent with its own context cost; alternate TUI runtimes on one agent are previous drivers, not sidecars. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `sidecar`, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
+        "Start and control a REGISTERED coding agent (claude / codex / a custom CLI) in this workspace — or one you govern. Registration is normally a separate `registerAgent` call. Actions: `sidecar` (register and launch YOUR `<name>-slave` agent under the different TUI named by `agent`, or reattach it); `list` (registered agents, including dormant ones); `diagnose` (read-only — WHY an agent is wedged and which repair fits); `start` (launch or resume the registered `name`; defaults to the Workspace Agent); `send` (writes prompt and, by default, Enter; `delivered` and `submitKeyDelivered` report PTY writes, while `submitted:null` means TUI acceptance is unverified; read before retrying); `read`; `stop`; `restart` (resumes the conversation — add `fresh: true` to kill it and start a NEW one, the only restart that reaches a wedged or dead agent). A sidecar is a separate live agent with its own context cost; alternate TUI runtimes on one agent are previous drivers, not sidecars. A running agent uses a distinct AgentPanel on the Floor while its durable AMS identity survives TUI and panel restarts. TRIAGE: `diagnose` joins the agent record, its runtime, its pty, its harness transport and its AgentInbox membership and reports a CAUSE — never joined the inbox, transport never verified, a binding lost to a Genie restart, boot never completed, a dead pty, a name collision — each with the existing verb that addresses it. Run it BEFORE a repair: a restart aimed at a healthy agent costs its conversation. With no `id`/`name` it examines every agent in the workspace; with no `workspaceId` a workstation operator sweeps the whole machine. SAFETY: first launch, `sidecar`, `send`, and `restart` are approval-gated when the workspace requires it; listing, diagnosing, reading, and reattaching are read-only/already-approved.",
     inputSchema: {
         type: 'object',
         properties: {
@@ -2872,7 +2874,7 @@ const RUN_AGENT_TOOL = {
             prompt: {
                 type: 'string',
                 description:
-                    'send: the prompt/text to deliver to the running agent. SUBMITTED by default (multi-line is wrapped in bracketed paste with the Enter delivered separately so a TUI submits it). Set `submit:false` to load without sending. May be empty when `submit` or `key` is given.',
+                    'send: write prompt/text and request Enter by default. PTY delivery does not confirm TUI acceptance: submitted:null means unverified. Set `submit:false` to load without Enter. May be empty when `submit` or `key` is given.',
             },
             submit: {
                 type: 'boolean',
@@ -4766,6 +4768,8 @@ ${body}` }],
                     summary = result.note ?? 'runAgent diagnose ok.';
                 } else if (action === 'read') {
                     summary = `Read ${result.data?.length ?? 0} byte(s)${result.dropped ? ' (some earlier output was dropped)' : ''}.${readStateNote(result.state)}`;
+                } else if (action === 'send' && result.note) {
+                    summary = result.note;
                 } else if (action === 'send' && result.submitted === false) {
                     // The prompt is in the TUI's input box, unread. "send ok" is
                     // exactly the false success the agent would act on.
