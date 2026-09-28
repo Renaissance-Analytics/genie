@@ -742,7 +742,7 @@ describe('handleMcpMessage', () => {
             id: 't-agent',
             delivered: true,
             submitted: false,
-            note: 'The text reached the terminal but the submit Enter did not.',
+            note: 'The text reached the terminal but is UNSUBMITTED: the submit Enter did not land.',
         });
         const res = await handleMcpMessage(
             {
@@ -758,6 +758,21 @@ describe('handleMcpMessage', () => {
         )[0];
         expect(summary).toMatch(/unsubmitted/i);
         expect(summary).not.toMatch(/send ok/i);
+    });
+
+    it('runAgent send: unverified acceptance is visible in the summary', async () => {
+        const runAgent = vi.fn().mockResolvedValue({
+            ok: true, id: 't-agent', delivered: true, submitted: null,
+            submitKeyDelivered: true,
+            note: 'Input and Enter delivered; TUI acceptance is unverified.',
+        });
+        const res = await handleMcpMessage({
+            jsonrpc: '2.0', id: 48, method: 'tools/call',
+            params: { name: 'runAgent', arguments: { action: 'send', id: 't-agent', prompt: 'x' } },
+        }, ctx({ runAgent }));
+        const summary = (res?.result as { content: Array<{ text: string }> }).content[0].text.split(String.fromCharCode(10, 10))[0];
+        expect(summary).toMatch(/unverified/i);
+        expect(summary).not.toMatch(/send ok|unsubmitted/i);
     });
 
     it('runAgent send: POSITIVE CONTROL — a submitted prompt still summarizes as ok', async () => {

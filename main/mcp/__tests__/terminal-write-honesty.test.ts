@@ -241,15 +241,17 @@ describe('manageTerminals write — reports what reached the pty', () => {
     });
 });
 
-describe('runAgent send — the same three outcomes', () => {
-    it('POSITIVE CONTROL: a live agent terminal is sent and submitted', async () => {
+describe('runAgent send — does not confuse PTY delivery with TUI acceptance', () => {
+    it('a live PTY accepts both writes without acknowledging prompt acceptance', async () => {
         const { id, pty } = await makeTarget();
 
         const r = await runAgentForMcp(CALLER_ID, { action: 'send', id, prompt: MULTI });
 
         expect(r.ok).toBe(true);
         expect(r.delivered).toBe(true);
-        expect(r.submitted).toBe(true);
+        expect(r.submitted).toBeNull();
+        expect(r.submitKeyDelivered).toBe(true);
+        expect(r.note).toMatch(/unverified/i);
         expect(pty.written).toHaveLength(2);
     });
 
@@ -276,4 +278,31 @@ describe('runAgent send — the same three outcomes', () => {
         expect(r.note).toMatch(/unsubmitted|not submitted/i);
         expect(pty.written).toHaveLength(1);
     });
+});
+
+describe('runAgent send submission intent', () => {
+    it.each([
+        { prompt: 'short prompt' },
+        { prompt: 'long prompt '.repeat(30) },
+        { key: 'enter' },
+    ])('never infers acceptance from a successful write: %j', async (input) => {
+        const { id, pty } = await makeTarget();
+        const r = await runAgentForMcp(CALLER_ID, { action: 'send', id, ...input });
+        expect(pty.written.join('')).toContain(String.fromCharCode(13));
+        expect(r.delivered).toBe(true);
+        expect(r.submitKeyDelivered).toBe(true);
+        expect(r.submitted).toBeNull();
+        expect(r.note).toMatch(/unverified/i);
+    });
+    it.each([{ prompt: 'draft', submit: false }, { key: 'escape' }, { key: 'ctrl-c' }])(
+        'does not claim submission when none was requested: %j', async (input) => {
+            const { id, pty } = await makeTarget();
+            const r = await runAgentForMcp(CALLER_ID, { action: 'send', id, ...input });
+            expect(pty.written).toHaveLength(1);
+            expect(r.delivered).toBe(true);
+            expect(r.submitKeyDelivered).toBe(false);
+            expect(r.submitted).toBe(false);
+            expect(r.note).toMatch(/not requested/i);
+        },
+    );
 });
