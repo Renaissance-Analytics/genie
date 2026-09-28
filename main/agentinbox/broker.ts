@@ -937,13 +937,24 @@ export class AgentInboxBroker {
             }
         }
         for (const agent of this.agents.values()) {
-            agent.cursor = this.store.getCursor(agent.agentId);
-            for (const msg of this.store.undeliveredFor(agent.agentId, [], agent.cursor)) {
-                this.push(agent, msg);
-            }
+            this.restoreInbox(agent);
         }
         // Boot restores a real backlog — the badge must reflect it immediately.
         this.emitLagIfChanged();
+    }
+
+    /** Restore on every new registration, including terminal restarts and late
+     * MCP re-joins, not only application boot. Repeated hydration is harmless. */
+    private restoreInbox(agent: AgentInboxAgent): void {
+        this.seq = Math.max(this.seq, this.store.maxSeq());
+        agent.cursor = Math.max(agent.cursor, this.store.getCursor(agent.agentId));
+        const queued = new Set(agent.inbox.map((msg) => msg.id));
+        for (const msg of this.store.undeliveredFor(agent.agentId, [], agent.cursor)) {
+            if (!queued.has(msg.id)) {
+                this.push(agent, msg);
+                queued.add(msg.id);
+            }
+        }
     }
 
     /**
@@ -1166,7 +1177,9 @@ export class AgentInboxBroker {
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
+        if (!existing) this.restoreInbox(agent);
         this.emitPresence(agent);
+        this.emitLagIfChanged();
         return this.toInfo(agent);
     }
 

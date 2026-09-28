@@ -470,7 +470,7 @@ export interface McpContext {
         terminalId: string,
         reason: 'boot' | 'ack' | 'shutdown',
         to?: string,
-    ) => Promise<{ ok: boolean; agentId?: string; error?: string }>;
+    ) => Promise<{ ok: boolean; agentId?: string; inboxAgentId?: string; error?: string }>;
     /**
      * Resolve the caller's workspace and return its IssueWatch snapshot (open
      * Issues / PRs / security alerts + per-bucket counts) for the `checkIssues`
@@ -4234,7 +4234,7 @@ export async function handleMcpMessage(
                 const to = typeof raw.to === 'string' && raw.to.trim() ? raw.to.trim() : undefined;
                 const result = await ctx.onThumbsUp(ctx.terminalId, reason, to);
                 const text = result.ok
-                    ? `Agent ${result.agentId ?? ''} is ready (${reason}).`
+                    ? `AMS agent ${result.agentId ?? ''} is ready (${reason}). AgentInbox address: ${result.inboxAgentId ?? 'unavailable'}.`
                     : `thumbsUp failed: ${result.error ?? 'unknown error'}`;
                 return ok(msg.id, { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(result, null, 2)}` }] });
             }

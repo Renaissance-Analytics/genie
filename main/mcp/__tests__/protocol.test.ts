@@ -1600,7 +1600,7 @@ describe('handleMcpMessage', () => {
     });
 
     it('thumbsUp marks the bound agent ready and reports the acknowledgement', async () => {
-        const onThumbsUp = vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-ready' });
+        const onThumbsUp = vi.fn().mockResolvedValue({ ok: true, agentId: 'cfg-ready', inboxAgentId: 'mail-ready' });
         const res = await handleMcpMessage(
             {
                 jsonrpc: '2.0',
@@ -1615,6 +1615,8 @@ describe('handleMcpMessage', () => {
         const text = (res?.result as { content: Array<{ text: string }> }).content[0].text;
         expect(text).toContain('ready');
         expect(text).toContain('cfg-ready');
+        expect(text).toContain('AMS agent cfg-ready');
+        expect(text).toContain('AgentInbox address: mail-ready');
     });
 
     // --- imDone: "Never report a success you have not verified" --------------
