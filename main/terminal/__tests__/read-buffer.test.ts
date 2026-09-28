@@ -166,3 +166,76 @@ describe('TerminalReadBuffer', () => {
         expect(b.cursor('t1')).toBe(8); // monotonic even after trims
     });
 });
+
+/**
+ * WHEN a terminal last spoke — the fact `diagnose` reads to tell a working agent
+ * from one frozen on a prompt.
+ *
+ * Everything else in this buffer answers "what did it say"; nothing answered
+ * "was that recent". An agent parked on a TUI dialog stays bound, joined and
+ * booted, and every check Genie had said healthy while it sat there for hours.
+ * A working TUI emits constantly — spinners, tool lines, redraws — so silence is
+ * measurable, and this is where it is measured.
+ */
+describe('when a terminal last produced output', () => {
+    /** A buffer on a clock the test drives, so no wall time is involved. */
+    const atClock = () => {
+        let t = 1_000;
+        const buf = new TerminalReadBuffer(undefined, () => t);
+        return { buf, tick: (ms: number) => (t += ms), at: () => t };
+    };
+
+    it('is null for a terminal that has never been seen', () => {
+        expect(atClock().buf.lastAppendAt('nope')).toBeNull();
+    });
+
+    it('records the moment output arrived', () => {
+        const { buf, at } = atClock();
+        buf.append('t1', 'hello');
+
+        expect(buf.lastAppendAt('t1')).toBe(at());
+    });
+
+    it('moves forward with each new chunk', () => {
+        const { buf, tick, at } = atClock();
+        buf.append('t1', 'first');
+        const first = buf.lastAppendAt('t1');
+        tick(5_000);
+        buf.append('t1', 'second');
+
+        expect(buf.lastAppendAt('t1')).toBe(at());
+        expect(buf.lastAppendAt('t1')).not.toBe(first);
+    });
+
+    it('does NOT move for an empty append, which is not output', () => {
+        const { buf, tick } = atClock();
+        buf.append('t1', 'hello');
+        const spoke = buf.lastAppendAt('t1');
+        tick(9_000);
+        buf.append('t1', '');
+
+        expect(buf.lastAppendAt('t1')).toBe(spoke);
+    });
+
+    it('stays null for a buffer SEEDED from restored scrollback', () => {
+        // The decisive case. Restored history is output from before this process
+        // existed; dating it "now" would make a terminal silent for hours look
+        // like it just spoke, and hand `diagnose` the false reassurance this
+        // whole field exists to remove.
+        const { buf } = atClock();
+
+        expect(buf.seed('t1', 'pages of old output')).toBe(true);
+        expect(buf.lastAppendAt('t1')).toBeNull();
+    });
+
+    it('starts reporting once a seeded terminal actually speaks', () => {
+        // POSITIVE CONTROL for the case above: null must mean "has not spoken",
+        // not "seeded terminals are invisible forever".
+        const { buf, tick, at } = atClock();
+        buf.seed('t1', 'old output');
+        tick(3_000);
+        buf.append('t1', 'new output');
+
+        expect(buf.lastAppendAt('t1')).toBe(at());
+    });
+});

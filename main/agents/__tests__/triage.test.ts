@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     AGENT_SETTLING_MS,
+    AGENT_STALLED_MAIL_MS,
     diagnoseAgent,
     triageSummary,
     type AgentObservation,
@@ -46,6 +47,9 @@ const running = (over: Partial<AgentObservation> = {}): AgentObservation => ({
     handoffPath: null,
     restartRefusal: null,
     boundAt: 0,
+    // A healthy agent's inbox is clear and it was producing output a moment ago.
+    oldestUnreadMailAt: null,
+    lastOutputAt: 999_000,
     observedAt: 1_000_000,
     ...over,
 });
@@ -384,5 +388,98 @@ describe('triageSummary', () => {
 
     it('handles a workstation with no agents at all', () => {
         expect(triageSummary([])).toMatch(/no agents/i);
+    });
+});
+
+/**
+ * AN AGENT THAT IS WIRED UP AND NOT MOVING (the Sept 24 miss).
+ *
+ * tynn-slave sat frozen on a Codex rate-limit prompt — "Approaching rate limits.
+ * Switch to gpt-5.6-luna?" — from 10:41 until somebody looked at the screen. For
+ * those hours `diagnose` answered: *"healthy: running, transport bound, in the
+ * inbox, boot reported."* Every plumbing check was green and every one of them
+ * was true. A DM sent to it four hours earlier had never been read, and the
+ * operator who sent it went on believing work was underway.
+ *
+ * The gap is what the observation contained. Bindings, markers and cursors say
+ * the agent is REACHABLE; none of them says it is PROGRESSING. So the fix is a
+ * fact, not a heuristic: mail has been waiting, and the pty has emitted nothing
+ * since it arrived.
+ *
+ * BOTH halves are required, and the two controls below are why:
+ *
+ *  - Silence alone is not a fault. An idle agent with an empty inbox is exactly
+ *    what a healthy agent between tasks looks like.
+ *  - Unread mail alone is not a fault either. An agent mid-turn is producing
+ *    output constantly and will read its inbox when the turn ends.
+ *
+ * Flagging either one on its own would put a finding on agents that are fine,
+ * and this module's whole premise is that "an operator who learns to ignore the
+ * tool is worse off than one who never had it".
+ */
+describe('an agent that is reachable but not progressing', () => {
+    /** Mail that arrived long enough ago to matter, and silence ever since. */
+    const stalled = (over: Partial<AgentObservation> = {}): AgentObservation =>
+        running({
+            observedAt: 1_000_000,
+            oldestUnreadMailAt: 1_000_000 - AGENT_STALLED_MAIL_MS - 1,
+            lastOutputAt: 1_000_000 - AGENT_STALLED_MAIL_MS - 60_000,
+            ...over,
+        });
+
+    it('is WEDGED, not healthy — mail is waiting and nothing has moved', () => {
+        const d = diagnoseAgent(stalled());
+
+        expect(d.condition).toBe('wedged');
+        expect(ailments(stalled())).toContain('not-progressing');
+    });
+
+    it('sends the operator to the SCREEN, which is the only place the cause shows', () => {
+        // The cause was a TUI prompt. No binding, cursor or marker could have
+        // revealed it; somebody had to look. A restart here would have cost the
+        // conversation and fixed nothing.
+        const finding = diagnoseAgent(stalled()).findings.find(
+            (f) => f.ailment === 'not-progressing',
+        );
+
+        expect(finding?.repair).toMatch(/manageTerminals read/);
+        // It may WARN about restarting — it must not send them to one. A restart
+        // here costs the conversation and fixes nothing.
+        expect(finding?.repair).not.toMatch(/`runAgent restart`/);
+    });
+
+    it('CONTROL: an idle agent with an empty inbox is healthy', () => {
+        // Silence on its own is not evidence of anything.
+        expect(
+            diagnoseAgent(stalled({ oldestUnreadMailAt: null })).condition,
+        ).toBe('healthy');
+    });
+
+    it('CONTROL: an agent that is mid-turn is healthy, however much mail is waiting', () => {
+        // Output since the mail arrived means it is working, not stuck.
+        expect(
+            diagnoseAgent(stalled({ lastOutputAt: 1_000_000 - 1_000 })).condition,
+        ).toBe('healthy');
+    });
+
+    it('CONTROL: mail that only just arrived is not yet a fault', () => {
+        // An agent is allowed a moment to get to its inbox.
+        expect(
+            diagnoseAgent(stalled({ oldestUnreadMailAt: 1_000_000 - 1_000 })).condition,
+        ).toBe('healthy');
+    });
+
+    it('does not accuse a DORMANT agent — mail waiting for a stopped agent is normal', () => {
+        expect(ailments(stalled({ ptyLive: false, terminalSpecExists: true }))).not.toContain(
+            'not-progressing',
+        );
+    });
+
+    it('never hides a REAL wiring fault behind it', () => {
+        // Causal order: an agent that is also missing from the broker has a
+        // cause that explains the unread mail, and that is the one to fix.
+        const both = ailments(stalled({ joinedInbox: false }));
+
+        expect(both[0]).toBe('not-joined-to-inbox');
     });
 });

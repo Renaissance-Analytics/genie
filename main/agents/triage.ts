@@ -43,6 +43,20 @@
  */
 export const AGENT_SETTLING_MS = 90_000;
 
+/**
+ * How long mail may sit unread before an otherwise-healthy agent is called
+ * stalled.
+ *
+ * Long enough that a normal turn cannot trip it — an agent mid-task does not
+ * read its inbox, and should not be accused of anything for that. Short enough
+ * that an operator waiting on a reply finds out in the same sitting rather than
+ * four hours later, which is how long the Sept 24 freeze went unnoticed.
+ *
+ * It is only half the test. Silence since the mail arrived is the other half,
+ * and the two together are what separate "stuck" from "busy".
+ */
+export const AGENT_STALLED_MAIL_MS = 10 * 60_000;
+
 export type AgentAilment =
     /** Its provider cannot launch on this machine, so it cannot be started. */
     | 'provider-unavailable'
@@ -63,7 +77,9 @@ export type AgentAilment =
     /** The runtime and the cached mirror name different terminals. */
     | 'runtime-mirror-mismatch'
     /** Two agents share a name and nobody has said which survives. */
-    | 'name-collision';
+    | 'name-collision'
+    /** Reachable by every wiring check, and not moving: mail waiting, pty silent. */
+    | 'not-progressing';
 
 /**
  * `wedged` means SOMETHING NEEDS THE OPERATOR — not necessarily that a pty is
@@ -130,6 +146,19 @@ export interface AgentObservation {
     restartRefusal: string | null;
     /** When its terminal binding was last written. Null when never bound. */
     boundAt: number | null;
+    /**
+     * When the OLDEST message it has not read arrived, or null when its inbox is
+     * clear. Derived from the durable ACK cursor, so it survives a restart.
+     */
+    oldestUnreadMailAt: number | null;
+    /**
+     * When its pty last produced ANY output, or null when nothing has been seen.
+     *
+     * The only fact in this observation about whether the agent is DOING
+     * something rather than merely wired up correctly. A working TUI emits
+     * constantly — spinners, tool lines, redraws — so silence is measurable.
+     */
+    lastOutputAt: number | null;
     observedAt: number;
 }
 
@@ -230,6 +259,11 @@ export function diagnoseAgent(obs: AgentObservation): AgentDiagnosis {
         pushMirror(findings, obs);
     }
     pushCollision(findings, obs);
+
+    // Only once nothing else is wrong. A missing broker entry or an unbound
+    // transport EXPLAINS unread mail; reporting both would hand the operator two
+    // repairs for one cause and let them pick the wrong one.
+    pushStalled(findings, obs);
 
     if (findings.length > 0) {
         return { ...shell, condition: 'wedged', findings, summary: `${obs.name} — ${findings[0]!.detail}` };
@@ -364,6 +398,45 @@ function pushMirror(out: AgentFinding[], obs: AgentObservation): void {
             `"${obs.recordTerminalId}" — something wrote one and not the other, and every surface ` +
             'reading the record is looking at the wrong terminal.',
         repair: restartRepair(obs, '`runAgent restart` rebinds both records to one terminal.'),
+    });
+}
+
+/**
+ * Mail is waiting and the pty has said nothing since it arrived.
+ *
+ * This is the only finding here that is about BEHAVIOUR rather than wiring, and
+ * it exists because every wiring check passed while an agent sat frozen on a TUI
+ * prompt for four hours (Sept 24). Bindings prove an agent can be REACHED. They
+ * cannot distinguish reached-and-working from reached-and-stuck, and the
+ * difference is the whole question an operator is asking.
+ *
+ * Both halves are required. Silence alone describes a healthy idle agent;
+ * unread mail alone describes a healthy busy one. Only together do they say that
+ * something is waiting and nothing is moving. Deliberately conservative: a
+ * finding that fires on working agents teaches people to ignore the tool, which
+ * costs more than the miss it was meant to catch.
+ */
+function pushStalled(out: AgentFinding[], obs: AgentObservation): void {
+    // `== null` deliberately: an observation gathered by a caller that does not
+    // know about these fields yet must read as "no mail, nothing to say" rather
+    // than accusing every agent it looks at.
+    if (!obs.ptyLive || obs.oldestUnreadMailAt == null) return;
+    const waiting = obs.observedAt - obs.oldestUnreadMailAt;
+    if (waiting < AGENT_STALLED_MAIL_MS) return;
+    // Any output AFTER the mail landed means it is working, whatever it is
+    // working on. Only silence spanning the wait counts.
+    if (obs.lastOutputAt != null && obs.lastOutputAt >= obs.oldestUnreadMailAt) return;
+    out.push({
+        ailment: 'not-progressing',
+        detail:
+            `Reachable by every wiring check, and not moving: mail has been unread for ` +
+            `${Math.round(waiting / 60_000)} minutes and its pty has produced no output since it ` +
+            'arrived. The agent is bound, joined and booted — none of which means it is running a turn.',
+        repair:
+            '`manageTerminals read` on its terminal — it is most likely parked on a TUI prompt ' +
+            'nobody has answered (a trust dialog, a rate-limit picker). Answer that and it carries ' +
+            'on. Do NOT restart on this finding alone: the conversation is intact and a restart ' +
+            'would cost it.',
     });
 }
 

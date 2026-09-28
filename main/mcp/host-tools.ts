@@ -65,6 +65,7 @@ import {
     decideAgentTerminalSpawn,
     writeToTerminal,
     readTerminalOutput,
+    terminalLastOutputAt,
     agentSessionTranscriptExists,
     agentCwdHasConversation,
     whenTerminalIdReleased,
@@ -2483,6 +2484,11 @@ function observeWorkspaceAgents(
                 // RECENT, which errs toward "still starting" rather than toward a
                 // false alarm.
                 boundAt: terminalId ? runtime?.updated_at ?? agent.updated_at : null,
+                // The two facts about whether it is MOVING, as opposed to wired
+                // up. Keyed on the terminal's own `meta.agent_id` (★ above), not
+                // the workspace-agent id — the broker knows it by the former.
+                oldestUnreadMailAt: inboxId ? agentInboxBroker.oldestUnreadAt(inboxId) : null,
+                lastOutputAt: terminalId ? terminalLastOutputAt(terminalId) : null,
                 observedAt,
             };
         });
