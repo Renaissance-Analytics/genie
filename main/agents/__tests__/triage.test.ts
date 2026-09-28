@@ -47,6 +47,8 @@ const running = (over: Partial<AgentObservation> = {}): AgentObservation => ({
     restartRefusal: null,
     boundAt: 0,
     observedAt: 1_000_000,
+    progress: { state: 'active' },
+    unreadMessages: 0,
     ...over,
 });
 
@@ -384,5 +386,34 @@ describe('triageSummary', () => {
 
     it('handles a workstation with no agents at all', () => {
         expect(triageSummary([])).toMatch(/no agents/i);
+    });
+});
+
+describe('runtime progress, independently of healthy plumbing', () => {
+    it('reports a harness waiting for model selection as blocked', () => {
+        const d = diagnoseAgent(running({
+            progress: { state: 'blocked', reason: 'usage-limit' }, unreadMessages: 2,
+        }));
+        expect(d.condition).toBe('wedged');
+        expect(d.findings[0]?.ailment).toBe('harness-blocked');
+        expect(d.summary).toMatch(/usage-limit/);
+        expect(d.findings[0]?.repair).toMatch(/read|inspect/i);
+        expect(d.findings[0]?.repair).not.toMatch(/restart/);
+    });
+    it('does not certify progress from wiring alone', () => {
+        const d = diagnoseAgent(running({ progress: { state: 'unknown' }, unreadMessages: 2 }));
+        expect(d.condition).toBe('unverified');
+        expect(d.summary).toMatch(/2 unread/);
+        expect(d.summary).toMatch(/progress.*unverified/i);
+    });
+    it('distinguishes an idle agent with mail from an idle agent with nothing pending', () => {
+        expect(diagnoseAgent(running({ progress: { state: 'idle' }, unreadMessages: 1 })).condition).toBe('unverified');
+        expect(diagnoseAgent(running({ progress: { state: 'idle' }, unreadMessages: 0 })).condition).toBe('healthy');
+    });
+    it('does not diagnose silence or pending mail as a hung active turn', () => {
+        const d = diagnoseAgent(running({ progress: { state: 'active' }, unreadMessages: 3, observedAt: 999999999 }));
+        expect(d.condition).toBe('healthy');
+        expect(d.summary).toMatch(/active turn/);
+        expect(d.summary).toMatch(/3 unread/);
     });
 });

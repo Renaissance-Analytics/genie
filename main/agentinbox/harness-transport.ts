@@ -41,7 +41,13 @@ export type HarnessTransportDelivery =
  */
 export type HarnessDeliveryMode = 'push' | 'pull';
 
+/** Execution evidence from the harness, not a heartbeat or terminal redraw. */
+export type HarnessProgress =
+    | { state: 'active' | 'idle' | 'unknown' }
+    | { state: 'blocked'; reason: string };
+
 interface BoundHarnessTransport {
+    readProgress?: (threadId: string | null) => Promise<HarnessProgress>;
     kind: WorkspaceAgentTransport;
     mode: HarnessDeliveryMode;
     send: ((payload: HarnessTransportPayload) => Promise<void> | void) | null;
@@ -86,11 +92,13 @@ export class HarnessTransportRegistry {
         agentId: string,
         kind: WorkspaceAgentTransport,
         send: NonNullable<BoundHarnessTransport['send']>,
+        readProgress?: BoundHarnessTransport['readProgress'],
     ): void {
         this.sessions.set(agentId, {
             kind,
             mode: 'push',
             send,
+            readProgress,
             openPolls: 0,
             provenAt: this.now(),
         });
@@ -209,6 +217,16 @@ export class HarnessTransportRegistry {
     isVerified(agentId: string, kind?: WorkspaceAgentTransport): boolean {
         const session = this.live(agentId);
         return !!session && (kind === undefined || session.kind === kind);
+    }
+
+    async readProgress(agentId: string, threadId: string | null): Promise<HarnessProgress> {
+        const observe = this.live(agentId)?.readProgress;
+        if (!observe) return { state: 'unknown' };
+        try {
+            return await observe(threadId);
+        } catch {
+            return { state: 'unknown' };
+        }
     }
 
     /** Confirm an existing harness-owned binding without changing its sender. */
