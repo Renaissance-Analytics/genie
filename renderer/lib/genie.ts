@@ -1107,6 +1107,7 @@ export interface ToolchainRepairResult {
      *  Genie writes today. A stale one printed a startup warning into every
      *  composer run, every artisan command and every site log. */
     inis: string[];
+    extensions?: Array<{ dir: string; ok: boolean; changed?: boolean; error?: string }>;
 }
 
 /** The whole Toolchain page read (`devServer.toolchainInstalls`). */

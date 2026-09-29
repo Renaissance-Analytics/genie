@@ -349,7 +349,16 @@ export function repairNotice(result: {
      *  Genie writes today — a stale one printed a startup warning into every
      *  composer run and every site log. */
     inis?: string[];
+    extensions?: Array<{ dir: string; ok: boolean; changed?: boolean; error?: string }>;
 }): string {
+    const failures = result.extensions?.filter((r) => !r.ok) ?? [];
+    if (failures.length) {
+        return `PHP extension repair is incomplete: ${failures.map((r) => `${r.dir}: ${r.error ?? 'Redis could not be verified'}`).join('; ')}. Existing sites keep their current runtime.`;
+    }
+    const verified = result.extensions?.filter((r) => r.ok) ?? [];
+    const extensionNote = verified.length
+        ? ` Redis verified in PHP CLI and CGI for ${verified.map((r) => r.dir).join(', ')}.${verified.some((r) => r.changed) ? ' Restart running PHP sites and workers to load it.' : ''}`
+        : '';
     const iniNote =
         result.inis && result.inis.length > 0
             ? ` Genie also brought ${result.inis.length} of its own php.ini file${
@@ -378,18 +387,18 @@ export function repairNotice(result: {
             result.after.shadowed.length === 1 ? 's' : ''
         } to an install Genie does not manage — Genie has no version of ${
             result.after.shadowed.length === 1 ? 'it' : 'them'
-        } to offer, so add one under Languages.${staleNote}`;
+        } to offer, so add one under Languages.${extensionNote}${staleNote}`;
     }
 
     if (!result.changed && result.before.toolsFirst) {
-        return `Nothing needed changing — Genie's own toolchain was already first on PATH.${iniNote}${staleNote}`;
+        return `Nothing needed changing — Genie's own toolchain was already first on PATH.${iniNote}${extensionNote}${staleNote}`;
     }
 
     const named =
         fixed.length > 0
             ? ` ${listNames(fixed)} now resolve${fixed.length === 1 ? 's' : ''} to the version Genie manages.`
             : '';
-    return `Genie's toolchain now comes first on PATH.${named}${iniNote} Terminals, sites and agents already running keep the environment they started with — restart them to pick this up.${staleNote}`;
+    return `Genie's toolchain now comes first on PATH.${named}${iniNote}${extensionNote} Terminals, sites and agents already running keep the environment they started with — restart them to pick this up.${staleNote}`;
 }
 
 /**
