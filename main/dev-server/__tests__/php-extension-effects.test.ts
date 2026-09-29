@@ -69,6 +69,13 @@ describe('real PHP extension effects behind bounded process/network primitives',
         await expect(readFile(staged.dll)).rejects.toThrow();
         await expect(readFile(h.archive)).rejects.toThrow();
     });
+    it('names the failing SAPI and loader complaint when preflight fails on another machine', async () => {
+        const h = await harness();
+        vi.mocked(h.deps.run).mockResolvedValueOnce({ code: 0, stdout: MODULES, stderr: '' })
+            .mockResolvedValueOnce({ code: 0, stdout: '[PHP Modules]\nCore\n[Zend Modules]', stderr: 'PHP Startup: Unable to load dynamic library redis: missing runtime DLL' });
+        await expect(h.fx.verify({ dir: h.dir, exe: join(h.dir, 'php.exe'), platform: 'win32' }, '/staged/php_redis.dll'))
+            .rejects.toThrow(/php-cgi\.exe.*Unable to load dynamic library redis/);
+    });
     it('rejects corrupted archives before extraction and cleans the download', async () => {
         const h = await harness();
         await expect(h.fx.stage({ ...h.artifact, sha256: '0'.repeat(64) })).rejects.toThrow(/checksum/i);

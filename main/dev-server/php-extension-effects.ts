@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdtemp, readFile, rm, rmdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseModuleList } from './toolchain-version-install';
 import type { PhpAbi, PhpExtensionEffects } from './php-extensions';
@@ -32,7 +32,13 @@ export function createPhpExtensionEffects(deps: PhpExtensionPrimitives): PhpExte
             for (const exe of [install.exe, join(install.dir, 'php-cgi.exe')]) {
                 const result = await deps.run(exe, args);
                 const loaded = parseModuleList(result.stdout, result.stderr);
-                if (result.code !== 0 || loaded.warnings || !loaded.modules.includes('redis')) return false;
+                if (result.code !== 0 || loaded.warnings || !loaded.modules.includes('redis')) {
+                    // Preflight uses -n and only the verified DLL: no application
+                    // ini or code is executed, so its bounded loader complaint
+                    // can explain why a clean machine differs from this one.
+                    if (dll) throw new Error(`Redis preflight failed in ${basename(exe)} (exit ${result.code}): ${loaded.warnings || 'redis was not listed as loaded'}`);
+                    return false;
+                }
             }
             return true;
         },
