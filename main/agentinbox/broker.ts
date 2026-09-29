@@ -1166,6 +1166,12 @@ export class AgentInboxBroker {
         };
         this.agents.set(agent.agentId, agent);
         this.byTerminal.set(agent.terminalId, agent.agentId);
+        // FIRST time this run: take the read position and the waiting mail from the
+        // store. `rehydrateMessages` did this once at boot and nowhere else, so an
+        // agent that registered later — which is exactly what a restarted agent
+        // does — came back at cursor 0 with an empty inbox, and mail queued for it
+        // was never delivered at all.
+        if (!existing) this.restoreFromStore(agent);
         this.emitPresence(agent);
         return this.toInfo(agent);
     }
@@ -1429,7 +1435,26 @@ export class AgentInboxBroker {
 
     // --- delivery ----------------------------------------------------------
 
+    /**
+     * Give a newly-known agent its durable read position and anything still
+     * waiting for it.
+     *
+     * Safe when no store is wired: the no-op store returns cursor 0 and no
+     * undelivered messages, so a broker without one behaves exactly as before.
+     */
+    private restoreFromStore(agent: AgentInboxAgent): void {
+        agent.cursor = this.store.getCursor(agent.agentId);
+        for (const msg of this.store.undeliveredFor(agent.agentId, [], agent.cursor)) {
+            this.push(agent, msg);
+        }
+    }
+
     private push(agent: AgentInboxAgent, msg: AgentInboxMessage): void {
+        // Seqs are globally unique and monotonic, so a seq already in this inbox
+        // is always the SAME message being re-queued — never a new one. Both the
+        // boot rehydrate and a late re-join restore undelivered mail from the
+        // store, and whichever runs second must not double it.
+        if (agent.inbox.some((m) => m.seq === msg.seq)) return;
         agent.inbox.push(msg);
         if (agent.inbox.length > INBOX_CAP) {
             agent.inbox.splice(0, agent.inbox.length - INBOX_CAP);
