@@ -415,6 +415,22 @@ export { ptyIsLive as isTerminalLive };
  * The result says which of the three answers it is, because "0 bytes, quiet",
  * "0 bytes, just restored" and "0 bytes, no pty" are not the same news.
  */
+/**
+ * When this terminal last produced output, or null when nothing has been seen.
+ *
+ * The one signal Genie has about whether a terminal is DOING something rather
+ * than merely existing. `runAgent diagnose` pairs it with the agent's unread
+ * mail: bound, joined and booted all say an agent is REACHABLE, and none of them
+ * would have caught the agent that sat frozen on a TUI prompt for four hours
+ * while every check reported healthy.
+ *
+ * Null for a terminal whose buffer was restored from surviving scrollback and
+ * has said nothing since — restored history is not evidence of current activity.
+ */
+export function terminalLastOutputAt(id: string): number | null {
+    return agentReadBuffer.lastAppendAt(id);
+}
+
 export function readTerminalOutput(
     id: string,
     opts: { cursor?: number; bytes?: number },

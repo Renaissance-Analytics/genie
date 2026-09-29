@@ -43,6 +43,10 @@ interface Entry {
     buf: string;
     /** Total bytes (chars) EVER appended — the monotonic cursor space. */
     total: number;
+    /** When output last arrived. The one fact here about whether a terminal is
+     *  DOING anything, rather than merely existing — `diagnose` reads it to tell
+     *  a working agent from one frozen on a prompt. */
+    lastAt: number;
 }
 
 export interface ReadResult {
@@ -81,9 +85,12 @@ export type TerminalReadState = 'live' | 'restored' | 'exited';
 export class TerminalReadBuffer {
     private readonly cap: number;
     private readonly entries = new Map<string, Entry>();
+    /** Injectable so the append timestamp is testable without waiting. */
+    private readonly now: () => number;
 
-    constructor(cap: number = CAP_BYTES) {
+    constructor(cap: number = CAP_BYTES, now: () => number = Date.now) {
         this.cap = cap > 0 ? cap : CAP_BYTES;
+        this.now = now;
     }
 
     /** Append a chunk of pty output for `id`, trimming to the cap. */
@@ -91,10 +98,11 @@ export class TerminalReadBuffer {
         if (!data) return;
         let e = this.entries.get(id);
         if (!e) {
-            e = { buf: '', total: 0 };
+            e = { buf: '', total: 0, lastAt: 0 };
             this.entries.set(id, e);
         }
         e.total += data.length;
+        e.lastAt = this.now();
         const combined = e.buf + data;
         // Keep only the last `cap` chars; older output ages out of the window.
         e.buf = combined.length > this.cap ? combined.slice(combined.length - this.cap) : combined;
@@ -171,6 +179,11 @@ export class TerminalReadBuffer {
                     ? scrollback.slice(scrollback.length - this.cap)
                     : scrollback,
             total: scrollback.length,
+            // 0, NOT now(): this is history restored from the backend, not output
+            // that just arrived. Dating it now would make a terminal that has been
+            // silent for hours look like it spoke a moment ago — the exact false
+            // reassurance `diagnose` reads this to avoid.
+            lastAt: 0,
         });
         return true;
     }
@@ -187,6 +200,18 @@ export class TerminalReadBuffer {
         if (!e) return;
         const keep = Math.max(0, bytes);
         if (e.buf.length > keep) e.buf = e.buf.slice(e.buf.length - keep);
+    }
+
+    /**
+     * When output last arrived for `id`, or null when we have never seen any.
+     *
+     * Null covers two cases that are the same answer for a caller: no buffer at
+     * all, and a buffer seeded from restored scrollback that has said nothing
+     * since. Neither is evidence the terminal is doing something now.
+     */
+    lastAppendAt(id: string): number | null {
+        const e = this.entries.get(id);
+        return e && e.lastAt > 0 ? e.lastAt : null;
     }
 
     /** Every terminal id we currently hold a buffer for (reaping/diagnostics). */

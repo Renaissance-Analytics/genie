@@ -988,6 +988,26 @@ export class AgentInboxBroker {
         return a.inbox.some((m) => m.seq > a.cursor);
     }
 
+    /**
+     * When the OLDEST message this agent has not read arrived, or null when its
+     * inbox is clear.
+     *
+     * Read by `runAgent diagnose`, which pairs it with the terminal's last output
+     * to tell a busy agent from a stuck one. `hasMail` answers whether anything
+     * is waiting; this answers HOW LONG, which is the part that distinguishes
+     * "mid-turn" from "frozen on a prompt since this morning".
+     */
+    oldestUnreadAt(agentId: string): number | null {
+        const a = this.agents.get(agentId);
+        if (!a) return null;
+        let oldest: number | null = null;
+        for (const m of a.inbox) {
+            if (m.seq <= a.cursor) continue;
+            if (oldest === null || m.ts < oldest) oldest = m.ts;
+        }
+        return oldest;
+    }
+
     /** Unread summary for the agent bound to a TERMINAL — powers the turn-boundary
      *  nudge folded into `imDone` (Track A): surface waiting messages at the exact
      *  point an agent hands back, without ever writing into its pty. Empty when the
