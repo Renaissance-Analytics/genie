@@ -678,6 +678,46 @@ export function listPendingQuestions(): PendingQuestion[] {
  * Returns false when `id` is unknown — the benign phone-after-desktop race (the
  * desktop already answered it), surfaced to the phone as "already answered".
  */
+/**
+ * GIVE UP on a pending question — the deliberate kill, from either list.
+ *
+ * `finish` only ever searched the modal queue, so once a question was PARKED the
+ * sole way out was to answer it. That is not a choice a person always has: a
+ * question can be put aside and then turn out to be moot, and leaving it in the
+ * flyout forever with an agent still blocked behind it is worse than the problem
+ * parking solved.
+ *
+ * Mirrors {@link answerPendingQuestion}, including its ordering rule: resolve and
+ * report BEFORE dropping the durable row, so a failed delivery still has
+ * something to act on (genie#482).
+ */
+export function cancelPendingQuestion(id: string): boolean {
+    if (queue.some((q) => q.id === id)) {
+        finish(id, { cancelled: true, answers: [] });
+        return true;
+    }
+    const di = deferred.findIndex((d) => d.id === id);
+    if (di === -1) return false;
+    const [d] = deferred.splice(di, 1);
+    d.resolve?.({ cancelled: true, answers: [] });
+    if (d.askerTerminalId) {
+        // `outcome: 'dismissed'` so the agent is told the person declined, rather
+        // than handed an empty answer it could act on as a choice.
+        deliverAnswer({
+            terminalId: d.askerTerminalId,
+            questionId: d.id,
+            questions: d.questions,
+            answers: [],
+            deferralReason: d.deferralReason,
+            outcome: 'dismissed',
+        });
+    }
+    forget(d.id);
+    forgetDraft(d.id);
+    notifyQuestionsChanged();
+    return true;
+}
+
 export function answerPendingQuestion(
     id: string,
     answers: ForceAnswer[],
@@ -1157,7 +1197,9 @@ export function registerForceQuestionIpc(cfg: Config): void {
         finish(id, { cancelled: false, answers: answers ?? [] });
     });
     ipcMain.handle('ask:cancel', (_e, id: string) => {
-        finish(id, { cancelled: true, answers: [] });
+        // Reaches a PARKED question too — cancel is the give-up verb for both
+        // lists, or a question put aside could never be abandoned.
+        cancelPendingQuestion(id);
     });
     // The renderer signals it has attached its `ask:show` listener. Deliver the
     // current head NOW (race-free) — pushing on did-finish-load could fire

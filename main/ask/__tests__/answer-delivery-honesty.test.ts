@@ -168,6 +168,10 @@ describe('an undelivered answer is reported, not swallowed', () => {
         });
     });
     afterEach(() => {
+        // Closing PARKS now, so closing is no longer a way to clear module state —
+        // leaving it here leaked parked rows into the next test and broke even the
+        // positive control. Cancel each one explicitly.
+        for (const q of fq.listPendingQuestions()) fq.cancelPendingQuestion(q.id);
         for (const w of state.windows) if (!w.destroyed) w.close();
         fq.setDeferredAnswerSink(null);
         for (const p of fq.listPendingQuestions()) fq.answerPendingQuestion(p.id, []);
@@ -302,15 +306,21 @@ describe('an undelivered answer is reported, not swallowed', () => {
 });
 
 /**
- * A DISMISSED question must reach the agent as a dismissal, not as an answer.
+ * A CANCELLED question must reach the agent as a dismissal, not as an answer.
  *
- * The owner dismissed a question before an upgrade, and the agent received
+ * The owner cancelled a question before an upgrade, and the agent received
  * "Your ForceTheQuestion was answered:" followed by nothing. The modal's resolve
  * forwarded every result to the answer sink without looking at `cancelled`, so a
- * dismissal was delivered as an empty answer — which an agent can act on as if
+ * cancellation was delivered as an empty answer — which an agent can act on as if
  * the person had chosen nothing, when in fact they never chose at all.
+ *
+ * This used to be driven through `ask:dismiss`, back when dismissing and
+ * cancelling were the same act. They are not any more: dismissing PARKS the
+ * question (nothing is delivered, because the agent is still waiting) and Cancel
+ * is the deliberate kill. The property is unchanged and now lives where the kill
+ * does — a cancellation that arrives looking like an answer is still the bug.
  */
-describe('a dismissed question is delivered as a dismissal', () => {
+describe('a cancelled question is delivered as a dismissal', () => {
     beforeEach(() => {
         state.windows = [];
         state.nextWcId = 1;
@@ -340,7 +350,8 @@ describe('a dismissed question is delivered as a dismissal', () => {
         await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
         const win = state.windows[0]!;
 
-        await state.ipc.get('ask:dismiss')!({ sender: { id: win.webContents.id } });
+        const id = fq.listPendingQuestions()[0]!.id;
+        await state.ipc.get('ask:cancel')!({ sender: { id: win.webContents.id } }, id);
 
         expect(delivered).toHaveLength(1);
         expect(delivered[0]!.outcome).toBe('dismissed');
@@ -352,13 +363,17 @@ describe('a dismissed question is delivered as a dismissal', () => {
         expect(message).not.toMatch(/no option selected/);
     });
 
-    it('treats closing the question window the same way', async () => {
+    it('delivers NOTHING when the window is merely closed — the question is parked', async () => {
+        // Closing used to count as a dismissal and tell the agent to give up. It
+        // is "not now" now: the question waits in the flyout and the agent waits
+        // with it, so there is nothing truthful to deliver yet.
         const delivered = capture();
         await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
 
         state.windows[0]!.close();
 
-        expect(delivered.map((d) => d.outcome)).toEqual(['dismissed']);
+        expect(delivered).toEqual([]);
+        expect(fq.listPendingQuestions()).toHaveLength(1);
     });
 
     it('does not tell the person their ANSWER was lost when they gave none', async () => {
@@ -366,7 +381,10 @@ describe('a dismissed question is delivered as a dismissal', () => {
         // For a dismissal there was no reply, so that notice would be false.
         fq.setDeferredAnswerSink(() => ({ delivered: false, reason: 'no-agent' }));
         await fq.forceQuestion(Q('Ship'), 'ws', 'normal', {}, 'T1');
-        await state.ipc.get('ask:dismiss')!({ sender: { id: state.windows[0]!.webContents.id } });
+        const id = fq.listPendingQuestions()[0]!.id;
+        // `ask:cancel` ignores its event (it is addressed by question id), so
+        // this must not depend on a window existing.
+        await state.ipc.get('ask:cancel')!({ sender: { id: 0 } }, id);
         expect(state.notices).toEqual([]);
     });
 

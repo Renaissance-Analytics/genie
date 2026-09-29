@@ -242,15 +242,33 @@ describe('a pending question is written down as it is raised', () => {
         expect(store.load().map((q) => q.questions[0].header)).toEqual(['B']);
     });
 
-    it('forgets every question when closing the modal cancels the queue', async () => {
+    it('KEEPS every question when the modal is closed — closing parks, it does not cancel', async () => {
+        // Was: closing resolved the whole queue as cancelled, so the durable rows
+        // were dropped on the grounds that the user had "already refused" them.
+        // They had not — closing a window is not refusing. The rows are rewritten
+        // as deferred, which is the half that matters here: a question put aside
+        // and then lost to a restart is the original complaint one layer down.
         await fq.forceQuestion(Q('A'), 'ws', 'normal', {}, 'T1');
         await fq.forceQuestion(Q('B'), 'ws', 'normal', {}, 'T2');
         expect(store.load()).toHaveLength(2);
 
-        win().close(); // the user closed the window: every queued ask is cancelled
+        win().close();
 
-        // They were resolved, not lost — resurrecting them would re-ask
-        // questions the user has already refused.
+        const stored = store.load();
+        expect(stored.map((q) => q.questions[0].header)).toEqual(['A', 'B']);
+        expect(stored.every((q) => q.deferred && q.deferralReason === 'dismissed')).toBe(true);
+    });
+
+    it('forgets a question the user actually CANCELS', async () => {
+        // POSITIVE CONTROL for the above. Without it, "closing keeps them" would
+        // pass just as well against a build that had stopped forgetting anything
+        // at all — and a cancelled question coming back from the dead on the next
+        // boot re-asks something the person really did refuse.
+        await fq.forceQuestion(Q('A'), 'ws', 'normal', {}, 'T1');
+        expect(store.load()).toHaveLength(1);
+
+        fq.cancelPendingQuestion(fq.listPendingQuestions()[0]!.id);
+
         expect(store.load()).toEqual([]);
     });
 

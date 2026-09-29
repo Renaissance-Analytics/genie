@@ -129,7 +129,26 @@ vi.mock('../../testing-browser', () => ({
     openTestingBrowser: () => Promise.resolve(),
 }));
 
-import { forceQuestion, registerForceQuestionIpc, setQuestionTransport } from '../force-question';
+import {
+    cancelPendingQuestion,
+    forceQuestion,
+    listPendingQuestions,
+    registerForceQuestionIpc,
+    setQuestionTransport,
+} from '../force-question';
+
+/**
+ * Resolve every raised question so a test's promise cannot dangle.
+ *
+ * These tests used to end with `w.close(); await done;`, which worked only
+ * because closing the modal resolved the whole queue as cancelled. Closing
+ * PARKS now — the question survives, on purpose — so closing is no longer a
+ * way to settle anything. Nothing here is about close semantics; they are
+ * about drawer geometry and link routing, so they say `cancel` and mean it.
+ */
+function drain(): void {
+    for (const q of listPendingQuestions()) cancelPendingQuestion(q.id);
+}
 import { ASK_DRAWER_WIDTH, ASK_MODAL_WIDTH } from '../drawer-bounds';
 
 const Q: ForceQuestion[] = [
@@ -178,7 +197,7 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
         setDrawer(w.id, false);
         expect(w.bounds.width).toBe(ASK_MODAL_WIDTH);
 
-        w.close();
+        drain();
         await done;
     });
 
@@ -188,7 +207,7 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
         setDrawer(w.id, true);
         expect(w.bounds.y).toBe(y);
         expect(w.bounds.height).toBe(height);
-        w.close();
+        drain();
         await done;
     });
 
@@ -200,7 +219,7 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
         // handle. Leaving it lifted would be a user-visible change nobody asked for.
         expect(w.resizableLog).toEqual([true, false]);
         expect(w.resizable).toBe(false);
-        w.close();
+        drain();
         await done;
     });
 
@@ -209,7 +228,7 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
         const width = w.bounds.width;
         setDrawer(w.id + 999, true);
         expect(w.bounds.width).toBe(width);
-        w.close();
+        drain();
         await done;
     });
 
@@ -219,7 +238,7 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
         // resolve a path when it does not know which workspace to resolve it in.
         const { listPendingQuestions } = await import('../force-question');
         expect(listPendingQuestions()[0]?.workspacePath).toBe('/work/space');
-        w.close();
+        drain();
         await done;
     });
 });
