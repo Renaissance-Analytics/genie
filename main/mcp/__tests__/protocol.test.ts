@@ -2263,3 +2263,63 @@ describe('formatWorkspaceMap — repo checkout drift (genie#317)', () => {
         expect(out).not.toContain('git fetch');
     });
 });
+
+/**
+ * THE VALIDATOR IS ACTUALLY WIRED IN.
+ *
+ * `main/ask/__tests__/question-input.test.ts` proves the rules. It proves nothing
+ * about whether the HANDLER consults them — a validator that is correct and
+ * called by no one leaves the reported bug exactly where it was, and every test
+ * in that file still passes. This is the boundary check.
+ *
+ * The bug it closes: a malformed payload used to reach `onForceQuestion` and
+ * become an always-on-top modal of blank pills that the person could not answer.
+ * So the assertion is not only that an error comes back — it is that the modal
+ * was never raised.
+ */
+describe('ForceTheQuestion refuses a payload that would render blank', () => {
+    const call = (questions: unknown, c = ctx()) =>
+        handleMcpMessage(
+            {
+                jsonrpc: '2.0',
+                id: 9,
+                method: 'tools/call',
+                params: { name: 'ForceTheQuestion', arguments: { questions } },
+            },
+            c,
+        );
+
+    it('refuses bare-string options and never raises the modal', async () => {
+        const c = ctx();
+        const res = (await call(
+            [{ header: 'Ship', question: 'Ship it?', options: ['Yes', 'No'] }],
+            c,
+        )) as { error?: { code: number; message: string } };
+
+        expect(res.error?.code).toBe(-32602);
+        expect(res.error?.message).toContain('questions[0].options[0]');
+        // The part that matters to the person: nothing appeared on screen.
+        expect(c.onForceQuestion).not.toHaveBeenCalled();
+    });
+
+    it('names the field for a missing header', async () => {
+        const res = (await call([{ question: 'Ship it?', options: [{ label: 'Yes' }] }])) as {
+            error?: { message: string };
+        };
+
+        expect(res.error?.message).toContain('questions[0].header');
+    });
+
+    it('POSITIVE CONTROL — a well-formed payload still reaches the modal', async () => {
+        // Without this, "it refuses" would pass just as well against a build that
+        // refused every question ever asked.
+        const c = ctx();
+        const res = (await call(
+            [{ header: 'Ship', question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+            c,
+        )) as { error?: unknown };
+
+        expect(res.error).toBeUndefined();
+        expect(c.onForceQuestion).toHaveBeenCalledTimes(1);
+    });
+});

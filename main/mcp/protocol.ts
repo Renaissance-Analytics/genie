@@ -17,6 +17,7 @@ import type { UpgradeCaller } from '../agents/upgrade-guide';
 import type { AgentTuiId } from '../agents/registry';
 import type { AgentDiagnosis } from '../agents/triage';
 import type { QuestionPriority } from '../ask/question-priority';
+import { validateForceQuestions } from '../ask/question-input';
 import type { TerminalReadState } from '../terminal/read-buffer';
 import type {
     SetEnvRequest,
@@ -5104,14 +5105,17 @@ ${body}` }],
                 });
             }
             if (params.name === 'ForceTheQuestion') {
-                const questions = params.arguments?.questions;
-                if (!Array.isArray(questions) || questions.length === 0) {
-                    return err(
-                        msg.id,
-                        -32602,
-                        'ForceTheQuestion requires a non-empty `questions` array.',
-                    );
-                }
+                // The declared schema requires `header`, `question`, `options` and a
+                // `label` on every option — and nothing used to enforce any of it.
+                // This checked only that `questions` was a non-empty array and cast
+                // the rest, so a malformed call became a modal of blank pills that
+                // the person could not answer and could only dismiss. Clients are
+                // meant to validate against the published schema; several do not,
+                // and "the client should have checked" is no answer to someone
+                // looking at a question they cannot use.
+                const validated = validateForceQuestions(params.arguments?.questions);
+                if ('error' in validated) return err(msg.id, -32602, validated.error);
+                const questions = validated.questions;
                 // genie#321 — refuse when the answer could not be delivered back.
                 // This used to accept from any caller and promise "the answer
                 // will be delivered to your AgentInbox", including from terminals
