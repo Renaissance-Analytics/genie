@@ -177,6 +177,28 @@ const Q = (header: string): ForceQuestion[] => [
     { header, question: `${header}?`, options: [{ label: 'Yes' }, { label: 'No' }] },
 ];
 
+/**
+ * Drain every pending question by CANCELLING it.
+ *
+ * Teardown used to be `win().close()`, which worked only because closing the
+ * window resolved the whole queue as cancelled — the very behaviour the owner
+ * reported as a bug. Closing now PARKS, so a test that ends that way leaves live
+ * promises and module state behind. Teardown has to say "kill these" explicitly,
+ * which is the honest thing for it to have been saying all along.
+ */
+function drain(): void {
+    // `answerPendingQuestion` because it resolves BOTH lists. `ask:cancel` only
+    // reaches the modal queue, so it cannot clear a question that has been
+    // parked — which is the whole point of parking, and would hang teardown.
+    for (const q of listPendingQuestions()) answerPendingQuestion(q.id, []);
+}
+
+/** Resolve a parked question so its promise never dangles after a test. */
+async function cleanUp(p: Promise<unknown>): Promise<void> {
+    for (const q of listPendingQuestions()) answerPendingQuestion(q.id, []);
+    await p;
+}
+
 /** The single shared window (last created). */
 function win(): FakeWin {
     return state.windows[state.windows.length - 1];
@@ -206,7 +228,7 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C', 'B']);
         expect(pending[0].workspaceLabel).toBe('ws-a');
         expect(pending[1].priority).toBe('urgent');
-        win().close();
+        drain();
         await Promise.all([pA, pB, pC]);
     });
 
@@ -224,7 +246,7 @@ describe('ForceTheQuestion FIFO queue', () => {
 
         const pending = win().queues[win().queues.length - 1].pending;
         expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'C']); // B gone, head A unchanged
-        win().close();
+        drain();
         await Promise.all([pA, pB, pC]);
     });
 
@@ -244,7 +266,7 @@ describe('ForceTheQuestion FIFO queue', () => {
         const pLocal = forceQuestion(Q('Local'));
         const local = listPendingQuestions().find((q) => q.questions[0].header === 'Local')!;
         expect(local.remoteHost).toBeUndefined();
-        win().close();
+        drain();
         await Promise.all([p, pLocal]);
     });
 
@@ -254,7 +276,7 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(win().shown).toHaveLength(1);
         expect(win().shown[0].questions[0].header).toBe('A');
         expect(win().shown[0].queued).toBe(0);
-        win().close(); // drain so module state doesn't leak into the next test
+        drain(); // drain so module state doesn't leak into the next test
         await p;
     });
 
@@ -269,7 +291,7 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(win().shown[0].questions[0].header).toBe('A');
         const pending = win().queues[win().queues.length - 1].pending;
         expect(pending.map((q) => q.questions[0].header)).toEqual(['A', 'B']);
-        win().close();
+        drain();
         await Promise.all([pA, pB]);
     });
 
@@ -297,7 +319,7 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(win().shown).toHaveLength(2);
         expect(win().shown[1].questions[0].header).toBe('C');
 
-        win().close();
+        drain();
         await Promise.all([pA, pB, pC]);
     });
 
@@ -327,24 +349,30 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect(rB.answers[0].note).toBe('later');
     });
 
-    it('dismiss cancels the shown request and advances to the next', async () => {
+    it('dismiss PARKS the shown request and advances to the next', async () => {
+        // It used to resolve A as cancelled. It no longer does: dismissing is
+        // "not now", and A stays answerable in the Questions flyout. What is
+        // unchanged — and is what this test is really for — is that the queue
+        // advances, so B is not stuck behind a question nobody wants on screen.
         const pA = forceQuestion(Q('A'));
         const pB = forceQuestion(Q('B'));
 
         await invokeIpc('ask:dismiss', win().id);
-        const rA = await pA;
-        expect(rA.cancelled).toBe(true);
 
-        // B advances into the same window.
         const shownB = win().shown[win().shown.length - 1];
         expect(shownB.questions[0].header).toBe('B');
+        expect(listPendingQuestions().map((q) => q.questions[0]!.header)).toContain('A');
 
         await invokeIpc('ask:cancel', win().id, shownB.id);
-        const rB = await pB;
-        expect(rB.cancelled).toBe(true);
+        expect((await pB).cancelled).toBe(true);
+        drain();
+        await pA;
     });
 
-    it('closing the window cancels EVERY still-queued request', async () => {
+    it('closing the window PARKS every still-queued request', async () => {
+        // Was: one close resolved all three as cancelled, so a stray window close
+        // told every waiting agent to give up. They are parked now — see the
+        // `dismissing parks a question` block for the promise-level proof.
         const pA = forceQuestion(Q('A'));
         const pB = forceQuestion(Q('B'));
         const pC = forceQuestion(Q('C'));
@@ -352,10 +380,9 @@ describe('ForceTheQuestion FIFO queue', () => {
         // OS/window-control close of the shared modal.
         win().close();
 
-        const [rA, rB, rC] = await Promise.all([pA, pB, pC]);
-        expect(rA.cancelled).toBe(true);
-        expect(rB.cancelled).toBe(true);
-        expect(rC.cancelled).toBe(true);
+        expect(listPendingQuestions().map((q) => q.questions[0]!.header)).toEqual(['A', 'B', 'C']);
+        drain();
+        await Promise.all([pA, pB, pC]);
     });
 
     it('answering the last request closes the shared window', async () => {
@@ -480,7 +507,7 @@ describe('QuestionTransport routing (host-core decouple)', () => {
         setQuestionTransport(null);
         void forceQuestion(Q('A'));
         expect(state.windows).toHaveLength(1); // the BrowserWindow modal
-        win().close();
+        drain();
     });
 });
 
@@ -600,7 +627,7 @@ describe('ForceTheQuestion DND availability', () => {
         const before = state.windows.length;
         void forceQuestion(Q('C'), 'ws', 'normal', { workspaceId: 'ws1' });
         expect(state.windows.length).toBe(before + 1); // the modal opened
-        win().close();
+        drain();
     });
 
     it('an available agent FTQ returns immediately, opens the modal, and delivers its answer through AgentInbox', async () => {
@@ -745,7 +772,7 @@ describe('forwarded question DND (per-remote-host availability)', () => {
             workstationId: 'host:abc',
         });
         expect(seen[0]?.workstationId).toBe('host:abc');
-        win().close();
+        drain();
         await p;
     });
 
@@ -799,7 +826,7 @@ describe('forwarded question DND (per-remote-host availability)', () => {
             workstationId: 'host:abc',
         });
         expect(state.windows.length).toBe(before + 1);
-        win().close();
+        drain();
     });
 });
 
@@ -829,7 +856,7 @@ describe('pending-question arrival time (createdAt)', () => {
         setQuestionClock(() => 9_999);
         const row = listPendingQuestions().find((q) => q.questions[0].header === 'A')!;
         expect(row.createdAt).toBe(1_000);
-        win().close();
+        drain();
         await p;
     });
 
@@ -853,7 +880,7 @@ describe('pending-question arrival time (createdAt)', () => {
         });
         const row = listPendingQuestions().find((q) => q.questions[0].header === 'Z')!;
         expect(row.createdAt).toBe(42);
-        win().close();
+        drain();
     });
 
     it('falls back to the forward time when the host is too old to send one', () => {
@@ -867,6 +894,97 @@ describe('pending-question arrival time (createdAt)', () => {
         });
         const row = listPendingQuestions().find((q) => q.questions[0].header === 'Old')!;
         expect(row.createdAt).toBe(8_000);
+        drain();
+    });
+});
+
+/**
+ * DISMISSING IS NOT CANCELLING.
+ *
+ * The owner, after losing a question they meant to come back to: *"I dismissed
+ * that FTQ but it deleted it from the pending questions list as well. Only
+ * Cancel should actually kill the request, not dismissing with esc, x or
+ * clicking the dismiss button."*
+ *
+ * All four routes out of the window — Cancel, the dismiss button, Escape, and
+ * the window's own close — went through one `finish(id, { cancelled: true })`.
+ * So getting the modal off the screen and telling the agent to give up were the
+ * same gesture, and the only way to keep a question was to answer it right then.
+ * That is exactly backwards for the case the queue exists for: several agents
+ * asking at once, and a person who wants to deal with them in their own order.
+ *
+ * The split:
+ *
+ *  - **Cancel** — deliberate. The agent is told, the question is forgotten, and
+ *    nothing is left behind. Unchanged.
+ *  - **Dismiss / Escape / close** — "not now". The question is PARKED in the
+ *    pending list, the asking agent keeps waiting, and it can be answered later
+ *    from the Questions flyout. Nothing is destroyed.
+ *
+ * The parked row keeps its `resolve`, so a later answer still reaches the agent
+ * that is blocked on it — the same mechanism a DND-deferred question already
+ * uses. Parking is not a new lifecycle, it is the existing one reached a new way.
+ */
+describe('dismissing parks a question instead of killing it', () => {
+    /** Did this promise settle within a turn of the event loop? */
+    const settled = async (p: Promise<unknown>): Promise<boolean> => {
+        const marker = Symbol('pending');
+        return (await Promise.race([p, Promise.resolve(marker)])) !== marker;
+    };
+
+    it('leaves the question in the pending list', async () => {
+        const p = forceQuestion(Q('Keep me'), 'ws-a');
+        await invokeIpc('ask:dismiss', win().id);
+
+        expect(listPendingQuestions().map((q) => q.questions[0]!.header)).toContain('Keep me');
+        await cleanUp(p);
+    });
+
+    it('does NOT resolve the agent that is waiting on it', async () => {
+        // The whole point. A resolved promise is an agent told to move on.
+        const p = forceQuestion(Q('Keep me'), 'ws-a');
+        await invokeIpc('ask:dismiss', win().id);
+
+        expect(await settled(p)).toBe(false);
+        await cleanUp(p);
+    });
+
+    it('can still be answered afterwards, and the answer reaches the asker', async () => {
+        // POSITIVE CONTROL: parking must not be a quiet way to strand a question.
+        // If this fails, "it stays in the list" is worthless — the row would be a
+        // tombstone rather than something a person can act on.
+        const p = forceQuestion(Q('Keep me'), 'ws-a');
+        const id = listPendingQuestions()[0]!.id;
+        await invokeIpc('ask:dismiss', win().id);
+
+        answerPendingQuestion(id, [
+            { header: 'Keep me', question: 'Keep me?', selected: ['Yes'], note: '' },
+        ]);
+
+        expect(await p).toMatchObject({ cancelled: false });
+        expect(listPendingQuestions()).toHaveLength(0);
+    });
+
+    it('CANCEL still kills it — that is the difference', async () => {
+        const p = forceQuestion(Q('Drop me'), 'ws-a');
+        const id = listPendingQuestions()[0]!.id;
+        await invokeIpc('ask:cancel', win().id, id);
+
+        expect(await p).toMatchObject({ cancelled: true });
+        expect(listPendingQuestions()).toHaveLength(0);
+    });
+
+    it('closing the window parks EVERY queued question rather than cancelling them', async () => {
+        // The widest version of the same bug: one stray close resolved the whole
+        // queue as cancelled, so every agent waiting was told to give up at once.
+        const a = forceQuestion(Q('A'), 'ws-a');
+        const b = forceQuestion(Q('B'), 'ws-b');
         win().close();
+
+        expect(await settled(a)).toBe(false);
+        expect(await settled(b)).toBe(false);
+        expect(listPendingQuestions()).toHaveLength(2);
+        drain();
+        await Promise.all([a, b]);
     });
 });

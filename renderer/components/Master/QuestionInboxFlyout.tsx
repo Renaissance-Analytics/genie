@@ -542,7 +542,13 @@ export function PendingCard({
                                 color: 'var(--amber-500, #f59e0b)',
                             }}
                         >
-                            DND — answer at your leisure
+                            {pending.deferralReason === 'dismissed'
+                                ? 'Put aside — answer when you’re ready'
+                                : pending.deferralReason === 'unshowable'
+                                  ? 'Couldn’t show a popup — answer here'
+                                  : pending.deferralReason === 'restart'
+                                    ? 'Waited through a restart'
+                                    : 'DND — answer at your leisure'}
                         </span>
                     )}
                     {/* How long the agent has been waiting. A question can sit here
