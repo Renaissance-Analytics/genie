@@ -20,6 +20,9 @@ on:
     paths:
       - 'main/dev-server/toolchain-versions.ts'
       - 'main/dev-server/toolchain-version-install.ts'
+      - 'main/dev-server/toolchain-manager.ts'
+      - 'main/dev-server/php-extensions.ts'
+      - 'main/dev-server/php-extension-effects.ts'
       - 'main/dev-server/toolchain-resolve.ts'
       - 'main/dev-server/serve-config.ts'
       - 'main/dev-server/__tests__/php-zts-windows.real.test.ts'

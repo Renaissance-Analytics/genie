@@ -14,6 +14,7 @@ import {
     phpThreadSafeDll,
 } from '../toolchain-versions';
 import { parseModuleList } from '../toolchain-version-install';
+import { ensureManagedPhpExtensions } from '../toolchain-manager';
 
 /**
  * REAL: the PHP Genie installs on Windows is thread-safe AND serves (genie#669).
@@ -25,8 +26,9 @@ import { parseModuleList } from '../toolchain-version-install';
  * precisely because it is "the FastCGI build", so the second is not a given.
  *
  * Windows only, because these are Windows builds: the `hosting-windows` CI job
- * runs it. It downloads from the SAME URLs the recipe names, unpacks with the
- * same `Expand-Archive` Genie's installer uses, and writes the same php.ini.
+ * runs it. It downloads from the SAME URLs the recipe names, unpacks with
+ * Windows' bsdtar, and writes the same php.ini. The PECL test then calls the
+ * production extension installer, including its downloader and checksum gate.
  */
 
 const isWindows = process.platform === 'win32';
@@ -63,9 +65,9 @@ describe.skipIf(!isWindows)('REAL Windows PHP — the thread-safe build Genie in
         const zip = path.join(work, 'php.zip');
         await download(assetFor(recipe, { os: 'win32', arch: 'x64' })!.urls, zip);
         const unpack = spawnSync(
-            'powershell',
-            ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${phpDir}' -Force`],
-            { encoding: 'utf8' },
+            'tar',
+            ['-xf', zip, '-C', phpDir],
+            { encoding: 'utf8', windowsHide: true, timeout: 300_000 },
         );
         expect(unpack.status, unpack.stderr).toBe(0);
         writeFileSync(path.join(phpDir, 'php.ini'), phpIniContents(phpDir, 'win32'));
@@ -103,6 +105,22 @@ describe.skipIf(!isWindows)('REAL Windows PHP — the thread-safe build Genie in
         expect(v.status, v.stderr).toBe(0);
         expect(parsePhpThreadSafety(v.stdout)).toBe(true);
     });
+
+    it('installs PECL Redis through the production toolchain and verifies CLI and CGI', async () => {
+        const exe = path.join(phpDir, 'php.exe');
+        const before = spawnSync(exe, ['-r', 'echo extension_loaded("redis") ? "loaded" : "absent";'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+        expect(before.status).toBe(0);
+        expect(before.stdout).toBe('absent');
+        const installed = await ensureManagedPhpExtensions(phpDir, exe);
+        expect(installed).toEqual({ ok: true, changed: true });
+        const after = spawnSync(exe, ['-r', 'echo json_encode([extension_loaded("redis"), class_exists("Redis"), phpversion("redis")]);'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+        expect(after.status, after.stderr).toBe(0);
+        expect(JSON.parse(after.stdout)).toEqual([true, true, '6.3.0']);
+        const cgi = spawnSync(path.join(phpDir, 'php-cgi.exe'), ['-m'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+        expect(cgi.status, cgi.stderr).toBe(0);
+        expect(parseModuleList(cgi.stdout, cgi.stderr).modules).toContain('redis');
+        expect(await ensureManagedPhpExtensions(phpDir, exe)).toEqual({ ok: true, changed: false });
+    }, 120_000);
 
     it("loads every extension Genie's php.ini names, with no loader warning", () => {
         const m = spawnSync(path.join(phpDir, 'php.exe'), ['-c', path.join(phpDir, 'php.ini'), '-m'], {

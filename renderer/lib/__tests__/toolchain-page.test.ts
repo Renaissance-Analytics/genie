@@ -327,6 +327,19 @@ describe('removing a version tells you what it costs', () => {
  * "php was wrong, now it isn't" is checkable and "PATH was wrong" is not.
  */
 describe('repairNotice', () => {
+    it('reports extension failure even when PATH was already correct', () => {
+        const clean = { toolsFirst: true, shadowed: [], stale: [] };
+        const result = { before: clean, after: clean, changed: false, extensions: [{ dir: 'PHP 8.4', ok: false, error: 'Redis checksum mismatch' }] };
+        expect(repairNotice(result)).toContain('Redis checksum mismatch');
+        expect(repairNotice(result)).not.toContain('Nothing needed changing');
+    });
+    it('names verified Redis installs and explains when running sites pick them up', () => {
+        const clean = { toolsFirst: true, shadowed: [], stale: [] };
+        const result = { before: clean, after: clean, changed: true, extensions: [{ dir: 'PHP 8.4', ok: true, changed: true }] };
+        expect(repairNotice(result)).toContain('Redis');
+        expect(repairNotice(result)).toContain('PHP 8.4');
+        expect(repairNotice(result)).toMatch(/restart/i);
+    });
     const clean = { toolsFirst: true, shadowed: [], stale: [] };
 
     it('names the tools that were being answered by a foreign install', () => {

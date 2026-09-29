@@ -174,6 +174,8 @@ export function planVersionInstall(
 // --- the effects ------------------------------------------------------------
 
 export interface VersionInstallEffects {
+    /** Install and verify the curated PECL set against this actual PHP ABI. */
+    ensurePhpExtensions(dir: string, exe: string): Promise<{ ok: boolean; error?: string }>;
     /** Fetch the first URL that answers. */
     download(urls: string[]): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
     /** Unpack an archive into `dest`, stripping the archive's top directory. */
@@ -436,6 +438,11 @@ export async function installEngineVersion(
             const loaded = await fx.listModules(plan.exe);
             const problem = describeModuleFailure(plan, loaded);
             if (problem) return fail(problem);
+        }
+
+        if (plan.tool === 'php') {
+            const extensions = await fx.ensurePhpExtensions(plan.dir, plan.exe);
+            if (!extensions.ok) return fail(extensions.error ?? 'Required PHP extensions could not be installed.');
         }
 
         // Proven, so now make it FINDABLE. Last, and only on success: a PATH
