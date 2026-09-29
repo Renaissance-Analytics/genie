@@ -166,6 +166,27 @@ const SITE: DevSiteConfig = {
 
 const SITE_ID = devSiteIdFor('acme', 'web');
 
+describe('Redis clients inside a workspace sandbox', () => {
+    it.each([false, true])('probes PHP inside the serving container (redis loaded=%s)', async (loaded) => {
+        const runtime = fakeRuntime();
+        const originalExec = runtime.exec.bind(runtime);
+        runtime.exec = async (container, argv, opts) => {
+            const result = await originalExec(container, argv, opts);
+            return argv.at(-1) === '-m'
+                ? { code: 0, stdout: `[PHP Modules]\ncurl\n${loaded ? 'redis\n' : ''}[Zend Modules]\n`, stderr: '' }
+                : result;
+        };
+        const m = manager(runtime, { [SITE_ID]: { ...SITE, command: ['/usr/bin/php', 'artisan', 'serve'] } }, {
+            serviceEnvFor: async () => ({ REDIS_HOST: 'redis', REDIS_PORT: '6379' }),
+        });
+        expect((await m.start('acme', SITE_ID)).state).toBe('running');
+        expect(runtime.execs).toContainEqual(expect.objectContaining({ id: SANDBOX_ID, argv: ['/usr/bin/php', '-m'] }));
+        const launches = runtime.execs.filter((call) => call.argv[0] === 'sh' && call.env?.REDIS_HOST === 'redis');
+        expect(launches.length).toBeGreaterThan(0);
+        expect(launches[0].env?.REDIS_CLIENT).toBe(loaded ? 'phpredis' : 'predis');
+    });
+});
+
 function manager(
     runtime: ContainerRuntime,
     sites: DevSites = { [SITE_ID]: SITE },
