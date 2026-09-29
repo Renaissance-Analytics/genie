@@ -91,11 +91,12 @@ vi.mock('electron', () => {
 vi.mock('../../db', () => ({ getAllSettings: () => ({ notify_sound: 'off' }) }));
 
 import {
-    forceQuestion,
-    registerForceQuestionIpc,
-    listPendingQuestions,
     answerPendingQuestion,
+    cancelPendingQuestion,
+    forceQuestion,
+    listPendingQuestions,
     onQuestionsChanged,
+    registerForceQuestionIpc,
 } from '../force-question';
 
 const Q = (header: string): ForceQuestion[] => [
@@ -126,7 +127,8 @@ describe('force-question server exports', () => {
         expect(pending[0].workspaceLabel).toBe('Project A');
         expect(pending[0].index).toBe(0);
         expect(pending[1].index).toBe(1);
-        lastWin().close();
+        // Closing PARKS now, so it no longer settles anything — cancel instead.
+        for (const q of listPendingQuestions()) cancelPendingQuestion(q.id);
         await Promise.all([pA, pB]);
     });
 
@@ -162,7 +164,7 @@ describe('force-question server exports', () => {
         const pB = forceQuestion(Q('B')); // enqueue → 2
         const id = listPendingQuestions()[0].id;
         answerPendingQuestion(id, []); // resolve → 1
-        lastWin().close(); // drain B → 0
+        cancelPendingQuestion(listPendingQuestions()[0].id); // drain B → 0
         await Promise.all([pA, pB]);
         off();
         // Saw the rising then falling counts (exact sequence: 1,2,1,0).

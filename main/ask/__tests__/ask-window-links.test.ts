@@ -102,7 +102,26 @@ vi.mock('../../testing-browser', () => ({
     openTestingBrowser: (...a: unknown[]) => browserMock.open(...a),
 }));
 
-import { forceQuestion, registerForceQuestionIpc, setQuestionTransport } from '../force-question';
+import {
+    cancelPendingQuestion,
+    forceQuestion,
+    listPendingQuestions,
+    registerForceQuestionIpc,
+    setQuestionTransport,
+} from '../force-question';
+
+/**
+ * Resolve every raised question so a test's promise cannot dangle.
+ *
+ * These tests used to end with `w.close(); await done;`, which worked only
+ * because closing the modal resolved the whole queue as cancelled. Closing
+ * PARKS now — the question survives, on purpose — so closing is no longer a
+ * way to settle anything. Nothing here is about close semantics; they are
+ * about drawer geometry and link routing, so they say `cancel` and mean it.
+ */
+function drain(): void {
+    for (const q of listPendingQuestions()) cancelPendingQuestion(q.id);
+}
 
 const Q = (header: string): ForceQuestion[] => [
     { header, question: `${header}?`, options: [{ label: 'Yes' }] },
@@ -150,7 +169,7 @@ describe('the ForceTheQuestion modal window guards its links (genie#196)', () =>
         expect(shellMock.openExternal).toHaveBeenCalledWith(
             'https://github.com/Renaissance-Analytics/genie',
         );
-        w.close();
+        drain();
         await done;
     });
 
@@ -164,7 +183,7 @@ describe('the ForceTheQuestion modal window guards its links (genie#196)', () =>
             'https://civi.gen/status',
         );
         expect(shellMock.openExternal).not.toHaveBeenCalled();
-        w.close();
+        drain();
         await done;
     });
 
@@ -174,7 +193,7 @@ describe('the ForceTheQuestion modal window guards its links (genie#196)', () =>
         clickLink(w, 'https://tynn.gen/');
         expect(shellMock.openExternal).toHaveBeenCalledWith('https://tynn.gen/');
         expect(browserMock.open).not.toHaveBeenCalled();
-        w.close();
+        drain();
         await done;
     });
 
@@ -184,7 +203,7 @@ describe('the ForceTheQuestion modal window guards its links (genie#196)', () =>
         expect(navigated).toBe(false);
         expect(shellMock.openExternal).not.toHaveBeenCalled();
         expect(browserMock.open).not.toHaveBeenCalled();
-        w.close();
+        drain();
         await done;
     });
 
@@ -193,7 +212,7 @@ describe('the ForceTheQuestion modal window guards its links (genie#196)', () =>
         expect(w.onWindowOpen).toBeTypeOf('function');
         expect(w.onWindowOpen!({ url: 'https://example.com/' })).toEqual({ action: 'deny' });
         expect(shellMock.openExternal).toHaveBeenCalledWith('https://example.com/');
-        w.close();
+        drain();
         await done;
     });
 });

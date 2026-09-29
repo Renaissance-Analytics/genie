@@ -370,8 +370,11 @@ export interface PendingQuestionSpec {
     priority?: 'low' | 'normal' | 'high' | 'urgent';
     /** The remote host it was forwarded from (undefined ⇒ local). */
     remoteHost?: string;
-    /** True for a DND-deferred question (never popped a modal). */
+    /** True for a DEFERRED question — it is not on the modal right now. */
     deferred?: boolean;
+    /** WHY it is deferred, so the inbox badge can say the true reason instead of
+     *  calling every deferred row a DND one. Absent on an older host. */
+    deferralReason?: 'dnd' | 'unshowable' | 'restart' | 'dismissed';
     /** When the question ARRIVED (ms epoch), stamped at enqueue — the inbox shows
      *  it as "came in 5m ago". Absent when it was forwarded from a host running an
      *  older build, so render nothing rather than assuming a time. */

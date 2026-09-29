@@ -169,7 +169,7 @@ function deferredAgentMessage(decision: AvailabilityDecision): string {
  *   - `undefined`: the modal WAS shown and this is its ordinary answer; only the
  *     DELIVERY is asynchronous, by design (see `raiseDesktopModal`).
  */
-export type DeferralReason = 'dnd' | 'unshowable' | 'restart';
+export type DeferralReason = 'dnd' | 'unshowable' | 'restart' | 'dismissed';
 
 /**
  * An asynchronous agent question's late answer, ready to hand back to the asker.
@@ -284,7 +284,9 @@ export function formatDeferredAnswer(d: DeferredAnswerDelivery): string {
               ? 'Your ForceTheQuestion was answered (it had been deferred because the modal could not be shown):'
               : d.deferralReason === 'restart'
                 ? 'Your ForceTheQuestion was answered (Genie restarted while it was pending, so it waited in the user’s inbox):'
-                : 'Your ForceTheQuestion was answered:';
+                : d.deferralReason === 'dismissed'
+                  ? 'Your ForceTheQuestion was answered (the user put the modal aside and came back to it):'
+                  : 'Your ForceTheQuestion was answered:';
     return `${intro}\n\n${lines.join('\n')}\n\n(questionId: ${d.questionId})`;
 }
 
@@ -617,10 +619,17 @@ export interface PendingQuestion {
      *  display name), or undefined for a LOCAL question. The queue view labels it so
      *  a host's question is never shown as if it were local. */
     remoteHost?: string;
-    /** PendingQuestions UX — true for a DND-DEFERRED question: it never popped a
-     *  modal (the user was heads-down), it's here to answer at leisure. The inbox
-     *  styles it without the blocking-modal urgency. */
+    /** PendingQuestions UX — true for a DEFERRED question: it is not on the modal,
+     *  it's here to answer at leisure. The inbox styles it without the
+     *  blocking-modal urgency. */
     deferred?: boolean;
+    /**
+     * WHY it is deferred — so the inbox can say the true reason rather than
+     * assuming. The badge read "DND" for every deferred row, which was already
+     * wrong for a question the modal could not show and for one that outlived a
+     * restart, and would be wrong again for one the user simply put aside.
+     */
+    deferralReason?: DeferralReason;
     /**
      * When the question ARRIVED (ms epoch), stamped at enqueue — so the inbox can
      * say "came in 5m ago" instead of leaving the owner guessing whether an agent
@@ -656,6 +665,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         priority: d.priority,
         remoteHost: d.remoteHost,
         deferred: true,
+        deferralReason: d.deferralReason,
         createdAt: d.createdAt,
     }));
     return [...active, ...dnd];
@@ -668,6 +678,46 @@ export function listPendingQuestions(): PendingQuestion[] {
  * Returns false when `id` is unknown — the benign phone-after-desktop race (the
  * desktop already answered it), surfaced to the phone as "already answered".
  */
+/**
+ * GIVE UP on a pending question — the deliberate kill, from either list.
+ *
+ * `finish` only ever searched the modal queue, so once a question was PARKED the
+ * sole way out was to answer it. That is not a choice a person always has: a
+ * question can be put aside and then turn out to be moot, and leaving it in the
+ * flyout forever with an agent still blocked behind it is worse than the problem
+ * parking solved.
+ *
+ * Mirrors {@link answerPendingQuestion}, including its ordering rule: resolve and
+ * report BEFORE dropping the durable row, so a failed delivery still has
+ * something to act on (genie#482).
+ */
+export function cancelPendingQuestion(id: string): boolean {
+    if (queue.some((q) => q.id === id)) {
+        finish(id, { cancelled: true, answers: [] });
+        return true;
+    }
+    const di = deferred.findIndex((d) => d.id === id);
+    if (di === -1) return false;
+    const [d] = deferred.splice(di, 1);
+    d.resolve?.({ cancelled: true, answers: [] });
+    if (d.askerTerminalId) {
+        // `outcome: 'dismissed'` so the agent is told the person declined, rather
+        // than handed an empty answer it could act on as a choice.
+        deliverAnswer({
+            terminalId: d.askerTerminalId,
+            questionId: d.id,
+            questions: d.questions,
+            answers: [],
+            deferralReason: d.deferralReason,
+            outcome: 'dismissed',
+        });
+    }
+    forget(d.id);
+    forgetDraft(d.id);
+    notifyQuestionsChanged();
+    return true;
+}
+
 export function answerPendingQuestion(
     id: string,
     answers: ForceAnswer[],
@@ -943,6 +993,78 @@ function showHead(): void {
  * the window when the queue drains. Resolving a NON-head id (rare) just removes
  * it without disturbing what's shown.
  */
+/**
+ * PARK a raised question: take it off the modal and leave it in the pending list.
+ *
+ * What "dismiss" now means. Cancel is the deliberate kill — the agent is told and
+ * the row is forgotten; parking is "not now", and destroys nothing. The item
+ * keeps its `resolve`, so answering it later from the Questions flyout still
+ * resolves the agent that is blocked on it: the same live-promise deferral a
+ * forwarded DND question already uses, reached from a different gesture.
+ *
+ * The durable row is REWRITTEN as deferred rather than dropped. A parked question
+ * that did not survive a restart would be the original complaint again, one layer
+ * down — the person put it aside precisely because they meant to come back.
+ */
+function park(id: string, opts: { advance?: boolean } = {}): void {
+    const idx = queue.findIndex((q) => q.id === id);
+    if (idx === -1) return;
+    const [item] = queue.splice(idx, 1);
+    const createdAt = item.createdAt ?? questionClock();
+    deferred.push({
+        id: item.id,
+        askKey: item.askKey,
+        questions: item.questions,
+        workspaceLabel: item.workspaceLabel,
+        workspaceId: item.workspaceId,
+        workspacePath: item.workspacePath,
+        priority: item.priority,
+        createdAt,
+        remoteHost: item.forward ? item.forward.hostLabel : undefined,
+        // The live promise. Without this the row is a tombstone: visible, and
+        // answering it would reach nobody.
+        resolve: item.resolve,
+        askerTerminalId: item.askerTerminalId,
+        forward: item.forward
+            ? { connKey: item.forward.connKey, hostId: item.forward.hostId }
+            : undefined,
+        deferralReason: 'dismissed',
+    });
+    if (item.askKey) {
+        persist({
+            id: item.id,
+            askKey: item.askKey,
+            askerTerminalId: item.askerTerminalId,
+            questions: item.questions,
+            workspaceId: item.workspaceId,
+            workspaceLabel: item.workspaceLabel,
+            workspacePath: item.workspacePath,
+            priority: item.priority,
+            deferred: true,
+            deferralReason: 'dismissed',
+            createdAt,
+        });
+    }
+    // The draft is deliberately KEPT — half-ticked options and a part-written
+    // note are the reason someone parks a question rather than cancelling it.
+    notifyQuestionsChanged();
+    // The window is ALREADY going (this is the close handler draining the queue).
+    // Advancing would call showHead() into a dying window, and that failure path
+    // resolves the question cancelled — parking every item except the head, and
+    // killing the one the person was actually looking at.
+    if (opts.advance === false) return;
+    if (idx !== 0) {
+        pushQueue();
+        return;
+    }
+    if (queue.length === 0) {
+        if (win && !win.isDestroyed()) win.close();
+        win = null;
+        return;
+    }
+    showHead();
+}
+
 function finish(id: string, result: ForceQuestionResult): void {
     const idx = queue.findIndex((q) => q.id === id);
     if (idx === -1) return;
@@ -1075,7 +1197,9 @@ export function registerForceQuestionIpc(cfg: Config): void {
         finish(id, { cancelled: false, answers: answers ?? [] });
     });
     ipcMain.handle('ask:cancel', (_e, id: string) => {
-        finish(id, { cancelled: true, answers: [] });
+        // Reaches a PARKED question too — cancel is the give-up verb for both
+        // lists, or a question put aside could never be abandoned.
+        cancelPendingQuestion(id);
     });
     // The renderer signals it has attached its `ask:show` listener. Deliver the
     // current head NOW (race-free) — pushing on did-finish-load could fire
@@ -1088,8 +1212,11 @@ export function registerForceQuestionIpc(cfg: Config): void {
     // payload loads — the loading view's only escape). Resolves the SHOWN
     // request as cancelled and advances to the next queued one.
     ipcMain.handle('ask:dismiss', (e) => {
+        // PARK, never kill. Escape, the X and the dismiss button all land here,
+        // and none of them is a decision to give up on the question — they are
+        // "get this off my screen". Only Cancel tells the agent to stop.
         const item = itemBySender(e.sender.id);
-        if (item) finish(item.id, { cancelled: true, answers: [] });
+        if (item) park(item.id);
     });
     // The file drawer opened or closed (Tynn #272). It sits BESIDE the question,
     // never over it, so the window has to grow — and shrink back — rather than
@@ -1236,17 +1363,12 @@ function createAskWindow(): BrowserWindow {
     // the queue drains) cancels EVERY still-queued request so no caller hangs.
     w.on('closed', () => {
         if (win === w) win = null;
-        const dropped = queue.splice(0, queue.length);
-        for (const item of dropped) {
-            // Cancelled deliberately (the user shut the window on them), so the
-            // durable copies go too — resurrecting these would re-ask questions
-            // they have already declined to answer.
-            forget(item.id);
-            item.resolve({ cancelled: true, answers: [] });
-        }
-        // The whole queue was cancelled — push the cleared state to the mobile
-        // channel too (one notify covers the batch).
-        if (dropped.length) notifyQuestionsChanged();
+        // Closing the window is the WIDEST version of a dismissal, not a mass
+        // cancel. It used to resolve every waiting agent as cancelled, so one
+        // stray close told the whole queue to give up at once. Park them: the
+        // rows stay in the Questions flyout and every promise stays live.
+        const parked = queue.map((q) => q.id);
+        for (const id of parked) park(id, { advance: false });
     });
     return w;
 }
