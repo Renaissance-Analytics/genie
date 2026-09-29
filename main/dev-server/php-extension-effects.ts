@@ -28,7 +28,10 @@ export function createPhpExtensionEffects(deps: PhpExtensionPrimitives): PhpExte
             } catch { return null; }
         },
         async verify(install, dll) {
-            const args = dll ? ['-n', '-d', `extension=${dll}`, '-m'] : ['-c', join(install.dir, 'php.ini'), '-m'];
+            // -d is parsed as INI, even with literal process argv. Windows temp
+            // paths often contain RUNNER~1; unquoted ~ is an INI operator and
+            // silently truncates the DLL path. Quote the value for PHP itself.
+            const args = dll ? ['-n', '-d', `extension="${dll.replace(/\\/g, '/')}"`, '-m'] : ['-c', join(install.dir, 'php.ini'), '-m'];
             for (const exe of [install.exe, join(install.dir, 'php-cgi.exe')]) {
                 const result = await deps.run(exe, args);
                 const loaded = parseModuleList(result.stdout, result.stderr);
