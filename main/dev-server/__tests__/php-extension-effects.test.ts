@@ -42,11 +42,15 @@ describe('real PHP extension effects behind bounded process/network primitives',
         expect(await h.fx.inspect('/managed/php.exe')).toBeNull();
         expect(h.deps.run).toHaveBeenCalled();
     });
-    it.each([undefined, '/staged/php_redis.dll'])('verifies CLI and CGI, with the intended ini scope (%s)', async (dll) => {
+    it.each([
+        [undefined, undefined],
+        ['/staged/php_redis.dll', 'extension="/staged/php_redis.dll"'],
+        ['C:\\Users\\RUNNER~1\\Temp (test)\\php_redis.dll', 'extension="C:/Users/RUNNER~1/Temp (test)/php_redis.dll"'],
+    ])('verifies CLI and CGI, with the intended ini scope (%s)', async (dll, directive) => {
         const h = await harness();
         const install = { dir: h.dir, exe: join(h.dir, 'php.exe'), platform: 'win32' };
         expect(await h.fx.verify(install, dll)).toBe(true);
-        const args = dll ? ['-n', '-d', `extension=${dll}`, '-m'] : ['-c', join(h.dir, 'php.ini'), '-m'];
+        const args = dll ? ['-n', '-d', directive, '-m'] : ['-c', join(h.dir, 'php.ini'), '-m'];
         expect(h.deps.run).toHaveBeenCalledWith(install.exe, args);
         expect(h.deps.run).toHaveBeenCalledWith(join(h.dir, 'php-cgi.exe'), args);
     });
