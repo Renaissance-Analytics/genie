@@ -588,3 +588,105 @@ describe('imDone agentinbox-mail nudge (Track A)', () => {
         expect(many).toContain('from a, b');
     });
 });
+
+/**
+ * A REJOINING AGENT KEEPS ITS PLACE IN ITS INBOX.
+ *
+ * `join()` set `cursor: existing?.cursor ?? 0`, and the persisted ACK cursor was
+ * read in exactly one place — `rehydrateMessages()`, which runs once at boot.
+ * Any agent that joined AFTER that came back at cursor 0, with every message it
+ * had ever received undelivered again.
+ *
+ * Which is what a restarted agent does. Observed: a sidecar was restarted, came
+ * back reporting "cursor 0", and could not find a DM queued for it minutes
+ * earlier — it was somewhere in a replay of its entire history. The mail had not
+ * been lost; the agent's idea of where it had got to had.
+ *
+ * The fix is one expression: when there is no in-memory predecessor, ask the
+ * store instead of assuming zero. It is safe by construction — the no-op store
+ * every un-wired broker starts with returns 0 from `getCursor`, so a broker
+ * without a store behaves exactly as before.
+ */
+describe('an agent that rejoins keeps its read position', () => {
+    let store: ReturnType<typeof makeStore>;
+    beforeEach(() => {
+        store = makeStore();
+    });
+
+    /** A Genie restart: a fresh broker over the same store, rehydrated. */
+    const restarted = (): AgentInboxBroker => {
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        // Boot order. `rehydrateMessages` re-queues each KNOWN agent's undelivered
+        // mail — and at this point none are known, which is the whole problem: an
+        // agent that registers later never gets this treatment.
+        b.rehydrateMessages();
+        return b;
+    };
+
+    it('DELIVERS mail queued before the restart to an agent that rejoins after it', async () => {
+        // The reported symptom, and the half that actually loses a message. A
+        // sidecar was restarted, a DM sent to it minutes earlier was never
+        // delivered, and it reported sitting at cursor 0.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'read me' });
+
+        const after = restarted();
+        join(after, 'b'); // the LATE re-join — after rehydrateMessages has run
+
+        const got = await after.receive('b');
+        expect(got.messages.map((m) => m.text)).toEqual(['read me']);
+    });
+
+    it('does NOT replay mail it had already read', async () => {
+        // The other half. Re-queueing without restoring the cursor would hand a
+        // restarted agent its entire history again — which is the flood the
+        // sidecar was hunting my message inside of.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'old news' });
+        b.acknowledge('b', store.rows[store.rows.length - 1]!.seq);
+
+        const after = restarted();
+        join(after, 'b');
+
+        expect((await after.receive('b')).messages).toEqual([]);
+    });
+
+    it('delivers only what is NEW when some was read and some was not', async () => {
+        // POSITIVE CONTROL for the two above together: neither "delivers
+        // everything" nor "delivers nothing" can satisfy this.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'already read' });
+        b.acknowledge('b', store.rows[0]!.seq);
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'still waiting' });
+
+        const after = restarted();
+        join(after, 'b');
+
+        expect((await after.receive('b')).messages.map((m) => m.text)).toEqual(['still waiting']);
+    });
+
+    it('a re-join in the SAME run keeps the live cursor, and does not re-deliver', async () => {
+        // The store is the fallback for "never seen this agent", not an authority
+        // that may rewind one that is running.
+        const b = new AgentInboxBroker();
+        b.setStore(store);
+        join(b, 'a');
+        join(b, 'b');
+        b.send({ fromAgentId: 'a', toAgentId: 'b', text: 'one' });
+        await b.receive('b'); // reads it, advancing the live cursor
+
+        join(b, 'b'); // re-join, same run
+
+        expect((await b.receive('b')).messages).toEqual([]);
+    });
+});
