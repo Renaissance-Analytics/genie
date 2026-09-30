@@ -34,8 +34,14 @@
  * you if you forget — that is what it is for.
  */
 
-/** The methods Genie uses against Tynn. */
-export type TynnMethod = 'GET' | 'POST' | 'PUT';
+/**
+ * The methods Genie uses against Tynn.
+ *
+ * `DELETE` is safe to declare even though it is destructive: the live probe never
+ * sends a declared method. It sends OPTIONS and reads the `Allow` header, so a
+ * DELETE endpoint is checked for existence without anything being deleted.
+ */
+export type TynnMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 export interface TynnEndpoint {
     /** The method Genie sends. Asserted against Tynn's own `Allow` header. */
