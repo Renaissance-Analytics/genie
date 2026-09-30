@@ -56,21 +56,45 @@ function classesUsed(block: string): string[] {
     return [...out];
 }
 
+/**
+ * The stylesheets, parsed ONCE with fixed patterns.
+ *
+ * These lookups used to build a `new RegExp` out of the class name or selector
+ * they were asked about, escaping `-` and `.` and NOT backslashes — which CodeQL
+ * flagged as `js/incomplete-sanitization`, twice, at high severity. It was right:
+ * a half-escape is a bug waiting for the input that exercises the gap.
+ *
+ * Patching the escape would have kept the pattern that produced the finding. No
+ * regex is built from data here any more: the CSS is parsed with constant
+ * patterns into a set and a map, and both questions become lookups. Simpler, and
+ * the whole class of alert goes with it.
+ */
+const CLASSES: ReadonlySet<string> = new Set(
+    [...CSS.matchAll(/\.(-?[A-Za-z_][\w-]*)/g)].map((m) => m[1]!),
+);
+
+/** Every top-level rule, as its selector list and its declaration body. */
+const RULES: ReadonlyArray<{ selectors: string[]; body: string }> = [
+    ...CSS.matchAll(/([^@{}][^{}]*)\{([^{}]*)\}/g),
+].map((m) => ({
+    selectors: m[1]!.split(',').map((x) => x.trim()),
+    body: m[2]!,
+}));
+
 /** Does any rule in the stylesheets target this class? */
 function styled(cls: string): boolean {
-    return new RegExp(`\\.${cls.replace(/[-]/g, '\\-')}(?![\\w-])`).test(CSS);
+    return CLASSES.has(cls);
 }
 
 /** The value of `prop` on the first rule whose selector list contains `selector`. */
 function decl(selector: string, prop: string): string | null {
-    const re = new RegExp(
-        `(?:^|[},])\\s*${selector.replace(/[.\-]/g, '\\$&')}\\s*\\{([^{}]*)\\}`,
-        'm',
-    );
-    const body = re.exec(CSS)?.[1];
-    if (!body) return null;
-    const d = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'm').exec(body);
-    return d ? d[1]!.trim() : null;
+    const rule = RULES.find((r) => r.selectors.includes(selector));
+    if (!rule) return null;
+    for (const line of rule.body.split(';')) {
+        const at = line.indexOf(':');
+        if (at !== -1 && line.slice(0, at).trim() === prop) return line.slice(at + 1).trim();
+    }
+    return null;
 }
 
 describe('every class the agent-manager modal uses is a class that exists', () => {
