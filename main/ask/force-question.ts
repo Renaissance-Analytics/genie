@@ -34,6 +34,7 @@ import {
     ASK_MODAL_MIN_WIDTH,
     ASK_MODAL_WIDTH,
     askModalStartSize,
+    askSizeToRemember,
     askWindowBounds,
     askWindowFit,
     parseAskModalSize,
@@ -1137,6 +1138,12 @@ function readAskModalSizeSetting(): string | undefined {
  * minimum is enforced by Electron, but a stored value outlives this build's
  * idea of it). Best-effort throughout: failing to remember a size must never
  * take a question down.
+ *
+ * `resize` also fires for the file drawer's OWN `setBounds`, which is why the
+ * width goes through `askSizeToRemember` rather than straight to the setting —
+ * see {@link askDrawerBaseWidth}. The bounds are read when the timer FIRES, so
+ * the base width is read there too: a save queued by a real drag and overtaken
+ * by the drawer opening must be judged by the state it lands in.
  */
 let sizeSaveTimer: ReturnType<typeof setTimeout> | null = null;
 function rememberAskModalSize(w: BrowserWindow): void {
@@ -1145,7 +1152,10 @@ function rememberAskModalSize(w: BrowserWindow): void {
         sizeSaveTimer = null;
         try {
             if (w.isDestroyed()) return;
-            const { width, height } = w.getBounds();
+            const { width, height } = askSizeToRemember({
+                current: w.getBounds(),
+                baseWidth: askDrawerBaseWidth,
+            });
             if (width < ASK_MODAL_MIN_WIDTH || height < ASK_MODAL_MIN_HEIGHT) return;
             setSettings({ [MODAL_SIZE_SETTING]: JSON.stringify({ width, height }) } as never);
         } catch {
@@ -1154,6 +1164,19 @@ function rememberAskModalSize(w: BrowserWindow): void {
     }, 400);
     if (typeof sizeSaveTimer.unref === 'function') sizeSaveTimer.unref();
 }
+
+/**
+ * The width the ask window has with the file drawer CLOSED — non-null exactly
+ * while the drawer is open, null the rest of the time.
+ *
+ * It is the drawer's memory of what to give back, and it is deliberately held in
+ * memory rather than read back out of the remembered-size setting. Reading it
+ * back was the bug: the drawer's own widening is a `resize`, the listener saved
+ * it as the size the user chose, and closing the drawer then "returned" the
+ * window to the width it already had. macOS caught it first because its runner's
+ * work area clamps the widened window, but nothing about it is macOS.
+ */
+let askDrawerBaseWidth: number | null = null;
 
 function readDrafts(): AskDraftStore {
     try {
@@ -1244,8 +1267,17 @@ function setAskDrawerOpen(senderId: number, open: boolean): void {
         if (!resizable) win.setResizable(true);
         // Widen from the size the user chose, not the stock width — otherwise
         // closing the drawer would discard a window they had resized (genie#703).
-        const baseWidth =
-            askModalStartSize(parseAskModalSize(readAskModalSizeSetting())).width;
+        // On OPEN that is the width the window has right now, since the drawer is
+        // closed; on CLOSE it is what we recorded then, falling back to the stored
+        // setting for a drawer that was already open when this build took over.
+        const baseWidth = open
+            ? (askDrawerBaseWidth ?? current.width)
+            : (askDrawerBaseWidth ??
+              askModalStartSize(parseAskModalSize(readAskModalSizeSetting())).width);
+        // BEFORE `setBounds`, so the `resize` it fires is already judged against
+        // the right base — and cleared before the shrink, so the narrower window
+        // is remembered as the ordinary user-chosen size it now is.
+        askDrawerBaseWidth = open ? baseWidth : null;
         win.setBounds(askWindowBounds({ current, workArea, drawerOpen: open, baseWidth }));
         if (!resizable) win.setResizable(false);
     } catch {
@@ -1363,6 +1395,9 @@ function createAskWindow(): BrowserWindow {
     // the queue drains) cancels EVERY still-queued request so no caller hangs.
     w.on('closed', () => {
         if (win === w) win = null;
+        // The next modal opens with the drawer closed, so this window's idea of
+        // the width to give back must not outlive it.
+        askDrawerBaseWidth = null;
         // Closing the window is the WIDEST version of a dismissal, not a mass
         // cancel. It used to resolve every waiting agent as cancelled, so one
         // stray close told the whole queue to give up at once. Park them: the
