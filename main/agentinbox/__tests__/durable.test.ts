@@ -45,6 +45,7 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[]; cursors: Ma
                         (m.kind === 'channel' && !!m.channel && keys.has(m.channel))),
             );
         },
+        hasDmFrom(from: string, to: string) { return rows.some(r => r.kind === 'dm' && r.from === from && r.to === to); },
         sentDmReceipts(fromId, limit) {
             return rows
                 .filter((m) => m.from === fromId && m.kind === 'dm')
