@@ -149,6 +149,15 @@ describe('REAL SeaweedFS — a workspace reaches its own bucket and nothing else
      */
     let cli: ContainerRef | null = null;
 
+    // The file-level afterEach stops and REMOVES every container a test started,
+    // so a ref cached across tests is a dead id by the next one. That surfaced on
+    // CI as `No such container: …` from the second test onward, on a run where
+    // the engine itself was fine — the anonymous-refusal test passed. Forget it
+    // here and let the next test start a fresh one.
+    afterEach(() => {
+        cli = null;
+    });
+
     const startCli = async (): Promise<ContainerRef> => {
         if (cli) return cli;
         cli = await run(AWS_CLI_IMAGE, `genie-realtest-aws-${nonce()}`, {
