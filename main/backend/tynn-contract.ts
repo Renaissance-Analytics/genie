@@ -216,6 +216,30 @@ export const TYNN_ENDPOINTS: readonly TynnEndpoint[] = [
         evidence: '/workstations/',
         breaks: 'No connect grant can be minted, so connecting to a Virtual Workstation fails outright.',
     },
+    // WORKSPACE SHARE LINKS — one workspace, shared by link, claimed by whoever
+    // opens it first. All three share one path, so the mint/list pair is one
+    // declaration per method and the revoke carries the id suffix.
+    {
+        method: 'POST',
+        path: '/workstations/{workstation}/share-links',
+        caller: 'main/backend/tynn.ts',
+        evidence: '/share-links',
+        breaks: 'No workspace can be shared by link — the Create link button in workspace settings fails.',
+    },
+    {
+        method: 'GET',
+        path: '/workstations/{workstation}/share-links',
+        caller: 'main/backend/tynn.ts',
+        evidence: '/share-links',
+        breaks: 'The link manager lists nothing, so live links look absent and cannot be invalidated.',
+    },
+    {
+        method: 'DELETE',
+        path: '/workstations/{workstation}/share-links/{invite}',
+        caller: 'main/backend/tynn.ts',
+        evidence: '/share-links/',
+        breaks: 'A shared link cannot be invalidated — the only real control over a link already sent.',
+    },
 
     // ── The host-facing surface (Tynn `routes/api.php`) ─────────────────────
     // Stateless and signature-authed: the headless host and genie-cloud call

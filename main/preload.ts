@@ -865,6 +865,19 @@ const api = {
             ipcRenderer.invoke('workspaces:get-issuewatch-policy', id),
         setIssuewatchPolicy: (id: string, buckets: unknown) =>
             ipcRenderer.invoke('workspaces:set-issuewatch-policy', id, buckets),
+        /** Whether this machine is enrolled with Tynn (a share link needs a
+         *  workstation to be scoped to), and the sentence to show when it is not. */
+        shareLinkAvailability: () => ipcRenderer.invoke('workspaces:share-link-availability'),
+        /** Mint a share link for THIS workspace. The `url` comes back once and
+         *  only once — the list never re-serves it. */
+        mintShareLink: (id: string, capability: 'control' | 'readonly') =>
+            ipcRenderer.invoke('workspaces:mint-share-link', id, capability),
+        /** The live share links for this workspace, for the link manager. */
+        listShareLinks: (id: string) => ipcRenderer.invoke('workspaces:list-share-links', id),
+        /** Invalidate one link. Reports failure — a link shown as dead while it is
+         *  still live is the worst thing this surface could do. */
+        revokeShareLink: (linkId: string) =>
+            ipcRenderer.invoke('workspaces:revoke-share-link', linkId),
         getIssuewatchGranularity: (id: string) =>
             ipcRenderer.invoke('workspaces:get-issuewatch-granularity', id),
         setIssuewatchGranularity: (id: string, granularity: unknown) =>

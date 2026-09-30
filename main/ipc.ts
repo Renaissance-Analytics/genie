@@ -1,4 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import {
+    listWorkspaceShareLinks,
+    mintWorkspaceShareLink,
+    revokeWorkspaceShareLink,
+    shareLinkAvailability,
+} from './tynn/workspace-share-links';
 import fsSync from 'node:fs';
 import { readBoardForPanel, reviewBoardPost, type WireDeps } from './artboard/wire';
 import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron';
@@ -1201,6 +1207,22 @@ export function registerIpcHandlers(): void {
             setWorkspaceIssuewatchPolicyBuckets(id, buckets);
             return { ok: true };
         },
+    );
+    // SHARE ONE WORKSPACE BY LINK. Thin passthroughs — every decision (which
+    // workstation this machine is, what an unenrolled machine says, whether a
+    // failed revoke is reported as failed) lives in main/tynn/workspace-share-links.ts
+    // where it is testable.
+    ipcMain.handle('workspaces:share-link-availability', () => shareLinkAvailability());
+    ipcMain.handle(
+        'workspaces:mint-share-link',
+        (_e, id: string, capability: 'control' | 'readonly') =>
+            mintWorkspaceShareLink(id, capability),
+    );
+    ipcMain.handle('workspaces:list-share-links', (_e, id: string) =>
+        listWorkspaceShareLinks(id),
+    );
+    ipcMain.handle('workspaces:revoke-share-link', (_e, linkId: string) =>
+        revokeWorkspaceShareLink(linkId),
     );
     ipcMain.handle('workspaces:get-issuewatch-granularity', (_e, id: string) =>
         getWorkspaceIssuewatchGranularity(id),
