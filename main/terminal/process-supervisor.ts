@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { logHostService } from './host-service';
-import { formatHostSpawnRequest } from './host-diagnostics';
+import { formatHostSpawnRequest, formatPtyExit } from './host-diagnostics';
+import { SpawnGuard } from './spawn-guard';
 import {
     terminalManager,
     resolveDefaultShell,
@@ -131,6 +132,16 @@ export function getProcessLog(id: string): string {
 export function clearProcessLog(id: string): void {
     procLogs.delete(id);
 }
+
+/**
+ * The ceiling every process spawn passes under. See `spawn-guard.ts` for why it
+ * lives here rather than in the backoff policy: the policy is correct, and at
+ * least one restart path does not go through it.
+ */
+const spawnGuard = new SpawnGuard();
+
+/** When each pty started, so an exit can report how long it lived. */
+const startedAt = new Map<string, number>();
 
 function ensure(id: string): ProcState {
     let st = procs.get(id);
@@ -347,8 +358,29 @@ export function startProcess(specId: string): void {
         `\n[genie] launching in ${cwd}\n[genie] $ ${spec.meta.command}  (via ${path.basename(shell)})\n\n`,
     );
 
+    // EVERY process pty is created here, so this is the one place a loop can be
+    // stopped without arguing that each restart path is correct.
+    const verdict = spawnGuard.check(specId);
+    if (verdict.refuse) {
+        const msg =
+            `[genie] refusing to start: ${verdict.recent} starts in the last minute. ` +
+            'This process is crashlooping, and a loop like this has taken the whole ' +
+            'terminal host down before. Fix the command, then start it again — a ' +
+            'deliberate start from the UI clears this.\n';
+        recordProcessOutput(specId, msg);
+        logHostService(
+            `pty spawn REFUSED ${JSON.stringify({ id: specId, label: spec.label ?? null, recent: verdict.recent })}`,
+        );
+        setStatus(specId, 'failed');
+        // Clear the running intent, or the next launch restores it straight back
+        // into the loop this just stopped.
+        persistWasRunning(specId, false);
+        return;
+    }
+
     try {
         logHostService(formatHostSpawnRequest({ id: specId, provider: 'process', label: spec.label }));
+        startedAt.set(specId, Date.now());
         terminalManager().create({ id: specId, cwd, shell, args });
         // `create()` returning is NOT evidence the command runs — a `command not
         // found` shell exits milliseconds later. The check that IS decidable
@@ -488,6 +520,9 @@ export function restartProcess(specId: string): void {
     const st = ensure(specId);
     clearTimer(st);
     st.attempt = 0;
+    // A person asked for this. They have whatever the log told them in front of
+    // them; the guard is here to stop an automatic loop, not to overrule a human.
+    spawnGuard.clear(specId);
     if (st.status === 'running' || st.status === 'restarting') {
         st.userStopped = true;
         st.restartRequested = true;
@@ -527,6 +562,26 @@ export function onProcessPtyExit(
     id: string,
     payload: { exitCode: number; signal?: number },
 ): void {
+    // THE MISSING HALF of the breadcrumb. Every start was recorded and no outcome
+    // ever was, so a five-day crashloop read as ordinary activity in the log.
+    // `lifetimeMs` is what makes it legible: 200ms is a loop, four hours is a
+    // service that finished.
+    const began = startedAt.get(id);
+    startedAt.delete(id);
+    try {
+        logHostService(
+            formatPtyExit({
+                id,
+                label: getTerminalSpec(id)?.label ?? null,
+                provider: 'process',
+                exitCode: payload.exitCode ?? null,
+                signal: payload.signal ?? null,
+                lifetimeMs: began ? Date.now() - began : null,
+            }),
+        );
+    } catch {
+        /* a log line must never be the reason an exit is not handled */
+    }
     const st = procs.get(id);
     if (!st) return;
     if (st.restartRequested) {

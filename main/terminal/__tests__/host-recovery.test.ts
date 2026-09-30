@@ -122,3 +122,92 @@ describe('recoverFromHostLoss', () => {
         expect(status).toEqual(['recovering', 'degraded']);
     });
 });
+
+/**
+ * "RECOVERED" MUST MEAN THE AGENTS CAME BACK.
+ *
+ * The outcome was decided on one fact — whether a host process returned:
+ *
+ *     const outcome = host ? 'recovered' : 'degraded';
+ *
+ * Nothing asked whether a single terminal survived. So when the shared host died
+ * of an access violation with 22 terminals live, recovery respawned a host,
+ * relaunched every agent, every `claude --resume` exited 1 milliseconds later —
+ * and the banner said RECOVERED. The owner saw "[process exited with code 1]" on
+ * every screen in every workspace while Genie reported success.
+ *
+ * That is the blast radius made permanent. The host fault is survivable; a
+ * recovery that cannot tell whether it worked is not, because nobody is told to
+ * look.
+ *
+ * A revival that relaunched nothing is DEGRADED. The word is already wired to a
+ * banner; it just has to be true.
+ */
+describe('the outcome tells the truth about the agents', () => {
+    it('is DEGRADED when every agent failed to come back, even though a host did', async () => {
+        const { d, status } = deps();
+        Object.assign(d, { reattachAgents: () => ({ attempted: 3, revived: 0 }) });
+
+        expect(await recoverFromHostLoss(d)).toBe('degraded');
+        expect(status).toContain('degraded');
+    });
+
+    it('is DEGRADED when only some came back', async () => {
+        // Partial is not success. One dead agent is a person waiting on a turn
+        // that will never start.
+        const { d } = deps();
+        Object.assign(d, { reattachAgents: () => ({ attempted: 3, revived: 2 }) });
+
+        expect(await recoverFromHostLoss(d)).toBe('degraded');
+    });
+
+    it('CONTROL: is RECOVERED when every agent came back', async () => {
+        // Without this, "degraded" would pass against a build that had simply
+        // stopped saying recovered at all.
+        const { d } = deps();
+        Object.assign(d, { reattachAgents: () => ({ attempted: 3, revived: 3 }) });
+
+        expect(await recoverFromHostLoss(d)).toBe('recovered');
+    });
+
+    it('CONTROL: is RECOVERED when there were no agents to revive', async () => {
+        // A host that died holding only plain shells recovered fine. Reporting
+        // degraded here would cry wolf and teach people to ignore the banner.
+        const { d } = deps();
+        Object.assign(d, { reattachAgents: () => ({ attempted: 0, revived: 0 }) });
+
+        expect(await recoverFromHostLoss(d)).toBe('recovered');
+    });
+
+    it('still reports degraded when no host returned at all', async () => {
+        const { d } = deps();
+        Object.assign(d, {
+            respawn: async () => ({ host: false }),
+            reattachAgents: () => ({ attempted: 2, revived: 2 }),
+        });
+
+        expect(await recoverFromHostLoss(d)).toBe('degraded');
+    });
+
+    it('tolerates a reattachAgents that reports nothing, as it used to', async () => {
+        // The old signature returned void. A caller that has not been updated
+        // must not make recovery claim a failure it did not observe.
+        const { d } = deps();
+        Object.assign(d, { reattachAgents: () => undefined });
+
+        expect(await recoverFromHostLoss(d)).toBe('recovered');
+    });
+
+    it('a THROWING revival is degraded, not silently recovered', async () => {
+        // It was already caught so one failure could not sink the rest. Caught is
+        // right; calling the result "recovered" afterwards is not.
+        const { d } = deps();
+        Object.assign(d, {
+            reattachAgents: () => {
+                throw new Error('revival blew up');
+            },
+        });
+
+        expect(await recoverFromHostLoss(d)).toBe('degraded');
+    });
+});

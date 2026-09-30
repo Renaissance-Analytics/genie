@@ -34,9 +34,65 @@ describe('Codex App Server lifecycle launch contracts', () => {
         );
     });
 
-    it('does not add a second remote binding', () => {
-        const command = 'codex --remote ws://127.0.0.1:1';
-        expect(codexRemoteTuiLaunch(command, 'ws://127.0.0.1:2')).toBe(command);
+    /**
+     * A STALE ADDRESS IS WORSE THAN NO ADDRESS.
+     *
+     * This used to return the command untouched whenever it already carried a
+     * `--remote`, which is right about not double-binding and wrong about which
+     * address survives. An agent's saved `agent_command` keeps the port from the
+     * run it was created in, and Genie's App Server takes a NEW port every time
+     * it starts — so every relaunch after a restart pointed codex at a socket
+     * nobody was listening on:
+     *
+     *     Error: failed to connect to remote app server at `ws://127.0.0.1:51340/`:
+     *     No connection could be made because the target machine actively refused it.
+     *
+     * The agent does not degrade, it does not start. Owner-reported, with every
+     * codex slave down.
+     */
+    it('REPLACES a stale address rather than keeping it', () => {
+        expect(codexRemoteTuiLaunch('codex --remote ws://127.0.0.1:1', 'ws://127.0.0.1:2')).toBe(
+            'codex --remote ws://127.0.0.1:2 --remote-auth-token-env GENIE_CODEX_APP_TOKEN',
+        );
+    });
+
+    it('still does not add a SECOND binding', () => {
+        // The original intent, which was never in doubt. One `--remote`, and one
+        // token flag — codex rejects a repeated option.
+        const out = codexRemoteTuiLaunch(
+            'codex --remote ws://127.0.0.1:1 --remote-auth-token-env GENIE_CODEX_APP_TOKEN',
+            'ws://127.0.0.1:2',
+        );
+        expect(out.match(/--remote /g)).toHaveLength(1);
+        expect(out.match(/--remote-auth-token-env/g)).toHaveLength(1);
+        expect(out).toContain('ws://127.0.0.1:2');
+    });
+
+    it('replaces the address written with `=` too', () => {
+        const out = codexRemoteTuiLaunch('codex --remote=ws://127.0.0.1:1', 'ws://127.0.0.1:2');
+        expect(out).toContain('ws://127.0.0.1:2');
+        expect(out).not.toContain('127.0.0.1:1');
+    });
+
+    it('keeps the prompt after `--`, where the flags must not go', () => {
+        // The subtlety this function exists for: `--` ends option parsing, so a
+        // binding appended after the prompt reads as a subcommand and the TUI
+        // exits. Refreshing an address must not undo that.
+        const out = codexRemoteTuiLaunch(
+            'codex --remote ws://127.0.0.1:1 -- "do the thing"',
+            'ws://127.0.0.1:2',
+        );
+        expect(out).toContain('ws://127.0.0.1:2');
+        expect(out.trimEnd().endsWith('-- "do the thing"')).toBe(true);
+        expect(out.indexOf('--remote')).toBeLessThan(out.indexOf('--'.padEnd(3) + '"'));
+    });
+
+    it('CONTROL: a command with no binding still gets one', () => {
+        // Without this, "replaces the stale one" would pass against a function
+        // that had stopped binding anything at all.
+        expect(codexRemoteTuiLaunch('codex --model gpt-5', 'ws://127.0.0.1:9')).toContain(
+            '--remote ws://127.0.0.1:9',
+        );
     });
 
     it('carries managed Codex config overrides into the App Server process', () => {

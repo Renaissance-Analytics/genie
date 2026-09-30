@@ -1337,7 +1337,18 @@ export interface HostRecoveryDeps {
      *  the fresh backend and brings back the ones that should be running. */
     reattachProcesses(): void;
     /** Schedule restoration of saved running agents without any renderer. */
-    reattachAgents(ids: string[]): void;
+    /**
+     * Relaunch the agents that were live on the dead host.
+     *
+     * Returns what it ATTEMPTED and what actually came back, because the outcome
+     * below used to be decided on whether a host process returned and nothing
+     * else — so a recovery in which every `claude --resume` exited 1 still
+     * reported "recovered". `void` is still accepted: a caller that cannot say
+     * must not make recovery claim a failure it did not observe.
+     */
+    reattachAgents(
+        ids: string[],
+    ): { attempted: number; revived: number } | Promise<{ attempted: number; revived: number }> | void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
 }
@@ -1387,10 +1398,15 @@ export async function recoverFromHostLoss(
         } catch {
             host = false; // no backend came back → degrade, don't abort
         }
+        // Caught, as before — one failed agent must not strand the rest. What is
+        // new is that the failure is REMEMBERED: catching it and then reporting
+        // success is how 22 dead terminals were announced as a recovery.
+        let agentsRecovered = true;
         try {
-            deps.reattachAgents(ids);
+            const agents = await deps.reattachAgents(ids);
+            if (agents && agents.attempted > 0) agentsRecovered = agents.revived >= agents.attempted;
         } catch {
-            /* a failed agent restore must not strand unrelated terminals */
+            agentsRecovered = false;
         }
         try {
             deps.reattach(ids);
@@ -1404,7 +1420,12 @@ export async function recoverFromHostLoss(
         } catch {
             /* best-effort — a failed sweep must not sink the terminals' recovery */
         }
-        const outcome: 'recovered' | 'degraded' = host ? 'recovered' : 'degraded';
+        // "Recovered" has to mean the WORK came back, not that a process did. A
+        // host holding only plain shells recovers fine with no agents to revive
+        // (`attempted: 0`), and saying degraded there would cry wolf and teach
+        // people to ignore the banner.
+        const outcome: 'recovered' | 'degraded' =
+            host && agentsRecovered ? 'recovered' : 'degraded';
         try {
             deps.emitStatus(outcome);
         } catch {

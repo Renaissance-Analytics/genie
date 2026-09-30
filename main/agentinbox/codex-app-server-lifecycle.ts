@@ -76,8 +76,39 @@ function promptSeparatorIndex(command: string): number {
  * prompt still appends, since there is nothing to insert before.
  */
 export function codexRemoteTuiLaunch(command: string, address: string): string {
-    if (REMOTE_FLAG.test(command)) return command;
     const binding = `--remote ${address} --remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`;
+    // A command that ALREADY carries a binding gets its address REPLACED, not
+    // left alone. An agent's saved `agent_command` keeps the port from the run it
+    // was created in, and the App Server takes a new one every time it starts —
+    // so returning the command untouched pointed every relaunched codex at a
+    // socket nobody was listening on, and the agent did not start at all:
+    //
+    //     Error: failed to connect to remote app server at `ws://127.0.0.1:51340/`:
+    //     No connection could be made because the target machine actively refused it.
+    //
+    // A stale address is worse than no address: without one codex runs and simply
+    // has no mail transport; with a dead one it exits.
+    if (REMOTE_FLAG.test(command)) {
+        const withAddress = command.replace(
+            /(^|\s)--remote(?:=|\s+)\S+/,
+            `$1--remote ${address}`,
+        );
+        const TOKEN_FLAG = /(^|\s)--remote-auth-token-env(?:=|\s+)\S+/;
+        // The token flag may be missing entirely — an older saved command, or one
+        // a person wrote by hand. Add it rather than assuming the pair travels
+        // together, or codex connects to the right socket and is refused on auth.
+        const rebound = TOKEN_FLAG.test(withAddress)
+            ? withAddress.replace(
+                  TOKEN_FLAG,
+                  `$1--remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`,
+              )
+            : withAddress.replace(
+                  `--remote ${address}`,
+                  `--remote ${address} --remote-auth-token-env ${CODEX_APP_TOKEN_ENV}`,
+              );
+        return rebound.replace(/\s{2,}/g, ' ').trimEnd();
+    }
+
     const trimmed = command.trim();
     const separator = promptSeparatorIndex(trimmed);
     if (separator === -1) return `${trimmed} ${binding}`;
