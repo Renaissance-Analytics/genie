@@ -117,6 +117,21 @@ const REFUSALS: Readonly<Record<string, string>> = {
     // refusal here could never fire. Pinned by a test rather than trusted.
 };
 
+/**
+ * Every kind with a stated refusal, for the guard that keeps `check` in step with
+ * this table.
+ *
+ * Enumerated rather than hand-listed: a kind added to `REFUSALS` or to
+ * `PAUSES_WITHOUT_RESUME` joins the guard automatically, which is the only way
+ * the two stay together. They had already come apart once — admission consulted
+ * neither, so `check` called a graph holding `terminal_run` allowed while the
+ * executor refused it.
+ */
+export const REFUSED_KINDS: readonly string[] = [
+    ...Object.keys(REFUSALS),
+    ...PAUSES_WITHOUT_RESUME,
+];
+
 /** Why Genie refuses this kind, or null when it has no stated reason. */
 export function refusalFor(canonicalKind: string): string | null {
     if (PAUSES_WITHOUT_RESUME.has(canonicalKind)) return PAUSE_UNSUPPORTED;

@@ -34,7 +34,7 @@
 import { decideAppCall } from '../apps/bridge-decision';
 import { capabilityForTool } from '../apps/capabilities';
 import { isGenieNodeKind, toolForNodeKind } from './nodes';
-import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED } from './refusals';
+import { PAUSES_WITHOUT_RESUME, PAUSE_UNSUPPORTED, refusalFor } from './refusals';
 import { describeAuthority, type FlowAuthority } from './authority';
 
 /**
@@ -194,7 +194,27 @@ export function decideFlowAdmission(
             // Either way it would fail closed at run time, but only AFTER
             // everything upstream had already run. That is the exact outcome
             // admission exists to prevent, so it is refused here instead.
-            if (!isGenieNodeKind(kind)) continue;
+            if (!isGenieNodeKind(kind)) {
+                // SOMEBODY ELSE'S NODE — but Genie may still have said it will
+                // not run one. `refusals.ts` is that statement, and until this
+                // line only the EXECUTOR consulted it: `check` called a graph
+                // holding `terminal_run` allowed, measured
+                // `{"allowed":true,"capabilities":[],"refusals":[]}`, and the
+                // real reason arrived at 3am in a run-history line.
+                //
+                // An agent that builds a graph, calls `check`, and acts on the
+                // answer is the caller this hurts most — it did everything right
+                // and was told a broken flow was fine.
+                const stated = refusalFor(kind);
+                if (stated) {
+                    refusals.push({
+                        nodeId,
+                        ...(label ? { label } : {}),
+                        reason: `Genie does not run this step — ${stated}`,
+                    });
+                }
+                continue;
+            }
             refusals.push({
                 nodeId,
                 ...(label ? { label } : {}),

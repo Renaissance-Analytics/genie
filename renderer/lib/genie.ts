@@ -4035,8 +4035,18 @@ export interface GenieApi {
             scope?: FlowScope;
             graph: unknown;
         }) => Promise<FlowView | null>;
-        /** Arm or disarm. Reconciles the schedules and the file watchers too. */
-        setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
+        /**
+         * Arm or disarm. Reconciles the schedules and the file watchers too.
+         *
+         * ARMING can be REFUSED: a flow holding a step Genie will not run must
+         * not reach a schedule, where it would fail unattended every time it
+         * fired. The refusal carries the per-step reasons, which already name
+         * what to use instead. Disarming is never refused.
+         */
+        setEnabled: (
+            flowId: string,
+            enabled: boolean,
+        ) => Promise<FlowView | { error: string; refusals: FlowNodeRefusalView[] } | null>;
         remove: (flowId: string) => Promise<boolean>;
         /** What this graph WOULD be allowed to do, without running it. */
         check: (scope: FlowScope, graph: unknown) => Promise<FlowAdmissionView>;

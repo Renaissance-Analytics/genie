@@ -70,7 +70,13 @@ export default function FlowsTab({ appId }: Props) {
 
     const toggle = useCallback(
         async (flow: FlowSummaryView) => {
-            await api().flows.setEnabled(flow.id, !flow.enabled);
+            setError(null);
+            const result = await api().flows.setEnabled(flow.id, !flow.enabled);
+            // Arming a flow Genie will not run is REFUSED, and the reason has to
+            // land here. Without this the toggle would flip back on the refresh
+            // below with nothing said — indistinguishable from a broken switch,
+            // and the flow would look armable forever.
+            if (result && 'error' in result) setError(result.error);
             await refresh();
         },
         [refresh],

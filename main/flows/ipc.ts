@@ -28,6 +28,7 @@
 import { ipcMain } from 'electron';
 import type { ServerDeps } from '../mcp/server';
 import { decideFlowAdmission } from './admission';
+import { armingRefusal } from './arming';
 import { authorityForScope } from './authority';
 import { genieNodeDefinitions } from './kinds';
 import { starterFlowGraph } from './graph';
@@ -235,11 +236,37 @@ export function registerFlowsIpc(deps: ServerDeps): void {
     });
 
     ipcMain.handle('flows:set-enabled', (_e, flowId: string, enabled: boolean) => {
-        setFlowEnabled(String(flowId), enabled === true);
+        const id = String(flowId);
+        const arming = enabled === true;
+
+        // ARMING is checked; DISARMING never is. A flow that cannot be armed is
+        // precisely the flow somebody most needs to switch off, and guarding both
+        // directions would trap a failing one in the armed state.
+        //
+        // The editor already shows refusals on the canvas and `save` already
+        // returns them to an agent — but neither is the moment a draft starts
+        // costing attention unattended. Without this a flow whose step Genie
+        // refuses could be armed onto a schedule and fail every thirty minutes
+        // forever, which is what it did.
+        if (arming) {
+            const flow = getFlow(id);
+            if (flow?.graph) {
+                const refusal = armingRefusal(
+                    decideFlowAdmission(
+                        flow.graph as never,
+                        authorityForScope(flow.scope as never, grantFor),
+                    ),
+                    flow.title,
+                );
+                if (refusal) return { error: refusal.error, refusals: refusal.refusals };
+            }
+        }
+
+        setFlowEnabled(id, arming);
         reconcileFlowSchedules();
         reconcileFlowWatches();
         pushFlowsChanged();
-        return getFlow(String(flowId));
+        return getFlow(id);
     });
 
     ipcMain.handle('flows:delete', (_e, flowId: string) => {
