@@ -2,6 +2,7 @@ import { app } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { hostDrift, hostKeyFromScriptPath, type HostDrift } from './host-drift';
 import {
     buildServiceDescriptor,
     ensureHostService,
@@ -714,6 +715,63 @@ export function detachedHostPinsBinary(): boolean {
         return detachedModePinsInstallTree(marker, pid, userDataDir);
     } catch {
         return true;
+    }
+}
+
+/**
+ * Is the RUNNING detached host the one this build ships?
+ *
+ * The host survives an update on purpose, so its code only changes when it
+ * crashes or somebody restarts it. Nothing compared the two, so a Genie shipping
+ * a newer `fancy-term-host` could run indefinitely against an older one — and a
+ * fix inside the host package would install and change nothing. See
+ * `host-drift.ts` for why this reads the live SCRIPT PATH rather than a version
+ * the host reports about itself.
+ *
+ * Never throws and never guesses: an unreadable marker answers "no drift"
+ * (`running: null`), because a warning that fires when it cannot tell is a
+ * warning nobody reads twice.
+ */
+/**
+ * The host key THIS BUILD would use.
+ *
+ * Read from `resolveMaterializedHostScript()` rather than re-deriving the
+ * versions: that function already resolves the script this build materializes,
+ * and its path carries the key. One source for both sides of the comparison
+ * means they cannot drift apart in the code that measures drift.
+ */
+export function expectedHostKey(): string | null {
+    try {
+        return hostKeyFromScriptPath(resolveMaterializedHostScript());
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The whole check: what this build ships vs what is running.
+ *
+ * Null when this build's own key cannot be resolved — there is nothing to
+ * compare against, and a comparison with an unknown is not a finding.
+ */
+export function hostVersionDrift(): HostDrift | null {
+    const expected = expectedHostKey();
+    return expected ? runningHostDrift(expected) : null;
+}
+
+export function runningHostDrift(expectedKey: string): HostDrift {
+    try {
+        const userDataDir = app.getPath('userData');
+        const marker = JSON.parse(
+            fs.readFileSync(path.join(userDataDir, DETACHED_MODE_FILE), 'utf8'),
+        ) as Partial<DetachedHostIdentity>;
+        const pid = readPidfile(userDataDir)?.pid ?? null;
+        // The marker must describe the process that is actually alive. A stale
+        // marker from a previous host is not evidence about this one.
+        const live = pid !== null && marker.pid === pid;
+        return hostDrift(expectedKey, live ? (marker.scriptPath ?? null) : null);
+    } catch {
+        return hostDrift(expectedKey, null);
     }
 }
 
