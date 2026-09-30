@@ -2,7 +2,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createDockerRuntime } from '../../docker-adapter';
 import { provisionSteps, runProvisionSteps } from '../provision';
-import { workspaceDnsName, workspaceSqlIdentifier } from '../catalog';
+import {
+    DEFAULT_VERSIONS,
+    engineSpecFor,
+    workspaceDnsName,
+    workspaceSqlIdentifier,
+} from '../catalog';
 import type { ContainerRef, ContainerRuntime } from '../../container-runtime';
 import type { EngineAdmin, WorkspaceSlice } from '../provision';
 
@@ -27,7 +32,9 @@ import type { EngineAdmin, WorkspaceSlice } from '../provision';
  * failure — it was the documented behaviour.
  */
 
-const MINIO_IMAGE = 'quay.io/minio/minio:latest';
+// PINNED, not `latest`. MinIO's `latest` disappearing is why this file's S3 half
+// had to be rewritten at all; a moving tag for the client would repeat it.
+const AWS_CLI_IMAGE = 'amazon/aws-cli:2.31.31';
 const REDIS_IMAGE = 'redis:7-alpine';
 const LABEL = { 'genie.realtest': '1' };
 
@@ -72,7 +79,7 @@ async function ensureImage(image: string): Promise<void> {
 async function run(
     image: string,
     name: string,
-    extra: { env?: Record<string, string>; command?: string[] },
+    extra: { env?: Record<string, string>; command?: string[]; entrypoint?: string[] },
 ): Promise<ContainerRef> {
     const ref = await rt.runContainer({
         workspaceId: WORKSPACE,
@@ -97,7 +104,8 @@ async function waitFor(check: () => Promise<boolean>, budgetMs = 40_000): Promis
 
 beforeAll(async () => {
     if (!hasDocker) return;
-    await ensureImage(MINIO_IMAGE);
+    await ensureImage(engineSpecFor('seaweedfs').image(DEFAULT_VERSIONS.seaweedfs));
+    await ensureImage(AWS_CLI_IMAGE);
     await ensureImage(REDIS_IMAGE);
     await rt.networkEnsure(WORKSPACE);
 }, 180_000);
@@ -113,29 +121,100 @@ afterAll(async () => {
     if (hasDocker) await rt.networkRemove(WORKSPACE).catch(() => {});
 });
 
-describe('REAL MinIO — a workspace reaches its own bucket and nothing else', () => {
+describe('REAL SeaweedFS — a workspace reaches its own bucket and nothing else', () => {
+    /**
+     * The MinIO version of this block is gone because MinIO's images are gone
+     * (genie#758) — both registries answer 401 anonymously and Docker Hub's tag
+     * list reports `object not found`. The BOUNDARY it asserted is not gone and
+     * must not be: it is the only thing proving a scoped credential is actually
+     * scoped. So it changed engines rather than being deleted.
+     *
+     * The image ref AND the container's entrypoint come from the CATALOG rather
+     * than being restated here. That matters more than usual: the entrypoint is
+     * exactly where the security property lives, because
+     * `weed/s3api/auth_credentials.go:414` leaves the S3 gateway ALLOW-ALL unless
+     * it is started with `-s3.config`. Restating it would let this pass against a
+     * construction Genie does not ship.
+     *
+     * Calls go through a real AWS CLI in a sibling container — the same SigV4
+     * path an application takes — rather than a tool baked into the engine image.
+     */
+    const spec = engineSpecFor('seaweedfs');
+    const SEAWEED_IMAGE = spec.image(DEFAULT_VERSIONS.seaweedfs);
+
+    /**
+     * One long-lived CLI container, driven with `exec`. A one-shot `docker run`
+     * per call would need its exit status, and the runtime exposes no `wait` —
+     * `exec` returns a CommandResult, which is what every assertion here reads.
+     */
+    let cli: ContainerRef | null = null;
+
+    const startCli = async (): Promise<ContainerRef> => {
+        if (cli) return cli;
+        cli = await run(AWS_CLI_IMAGE, `genie-realtest-aws-${nonce()}`, {
+            // The image's ENTRYPOINT is `aws`, so it would exit immediately.
+            entrypoint: ['sh'],
+            command: ['-c', 'sleep 3600'],
+        });
+        return cli;
+    };
+
+    /** `aws ...` as a given identity. Credentials ride in via `env` so they never
+     *  appear in an argv a process listing would show. */
+    const awsAs = async (
+        endpoint: string,
+        accessKey: string,
+        secretKey: string,
+        argv: string[],
+    ) => {
+        const c = await startCli();
+        return rt.exec(c.id, [
+            'env',
+            `AWS_ACCESS_KEY_ID=${accessKey}`,
+            `AWS_SECRET_ACCESS_KEY=${secretKey}`,
+            'AWS_DEFAULT_REGION=us-east-1',
+            'aws',
+            '--endpoint-url',
+            endpoint,
+            ...argv,
+        ]);
+    };
+
+    const startEngine = async (): Promise<{ ref: ContainerRef; endpoint: string }> => {
+        const name = `genie-realtest-seaweed-${nonce()}`;
+        const ref = await run(SEAWEED_IMAGE, name, {
+            // THE ENTRYPOINT UNDER TEST: it writes the admin identity and then
+            // execs the image's own entrypoint. If it did not, the gateway would
+            // come up unauthenticated — which is why the anonymous probe below is
+            // asserted before anything else.
+            entrypoint: spec.entrypoint?.(ADMIN.password),
+        });
+        await waitFor(async () => {
+            const probe = await rt.exec(ref.id, ['sh', '-c', 'nc -z 127.0.0.1 8333']);
+            return probe.code === 0;
+        }, 120_000);
+        return { ref, endpoint: `http://${name}:8333` };
+    };
+
+    it.skipIf(!hasDocker)(
+        'refuses an ANONYMOUS caller — the property the entrypoint exists for',
+        async () => {
+            // Asserted on its own, and first. Without `-s3.config` SeaweedFS
+            // answers every unsigned request, so a suite that only checked
+            // CROSS-workspace access would pass against a wide-open engine: each
+            // workspace would indeed reach its own bucket, and so would everyone.
+            const { endpoint } = await startEngine();
+
+            const anon = await awsAs(endpoint, '', '', ['s3api', 'list-buckets']);
+            expect(anon.code).not.toBe(0);
+        },
+        300_000,
+    );
+
     it.skipIf(!hasDocker)(
         'provisions two workspaces, and refuses each one the other’s bucket',
         async () => {
-            const ref = await run(MINIO_IMAGE, `genie-realtest-minio-${nonce()}`, {
-                env: { MINIO_ROOT_USER: ADMIN.user, MINIO_ROOT_PASSWORD: ADMIN.password },
-                command: ['server', '/data', '--console-address', ':9001'],
-            });
-            await waitFor(async () => (await rt.exec(ref.id, ['mc', '--version'])).code === 0);
-            await waitFor(
-                async () =>
-                    (
-                        await rt.exec(ref.id, [
-                            'mc',
-                            'alias',
-                            'set',
-                            'probe',
-                            'http://127.0.0.1:9000',
-                            ADMIN.user,
-                            ADMIN.password,
-                        ])
-                    ).code === 0,
-            );
+            const { ref, endpoint } = await startEngine();
 
             const acme = sliceFor('acme-1a2b3c4d');
             const notes = sliceFor('notes-9f8e7d6c');
@@ -143,108 +222,89 @@ describe('REAL MinIO — a workspace reaches its own bucket and nothing else', (
                 const result = await runProvisionSteps(
                     rt,
                     ref.id,
-                    provisionSteps('minio', ADMIN, slice),
+                    provisionSteps('seaweedfs', ADMIN, slice),
                 );
                 expect(result.ok, result.error).toBe(true);
             }
 
-            // Sign in as `acme` with EXACTLY the credential env-wiring hands the
-            // workspace: access key = its bucket name, secret = its own password.
-            const asAcme = async (...argv: string[]) => rt.exec(ref.id, ['mc', ...argv]);
-            expect(
-                (
-                    await asAcme(
-                        'alias',
-                        'set',
-                        'acme',
-                        'http://127.0.0.1:9000',
-                        acme.dnsName,
-                        acme.password,
-                    )
-                ).code,
-            ).toBe(0);
-
-            // Its own bucket: writable.
-            const wrote = await rt.exec(ref.id, [
-                'sh',
-                '-c',
-                `echo hello > /tmp/f.txt && mc cp /tmp/f.txt acme/${acme.dnsName}/f.txt`,
+            // Its own bucket, with EXACTLY the credential `env-wiring.ts` hands the
+            // workspace: access key = bucket name, secret = its own password.
+            const wrote = await awsAs(endpoint, acme.dnsName, acme.password, [
+                's3api',
+                'put-object',
+                '--bucket',
+                acme.dnsName,
+                '--key',
+                'f.txt',
             ]);
             expect(wrote.code, wrote.stderr).toBe(0);
 
-            // The other workspace's bucket: refused, for reading AND for the
-            // command that would destroy it.
-            const listed = await asAcme('ls', `acme/${notes.dnsName}`);
+            // The other workspace's bucket: refused for reading…
+            const listed = await awsAs(endpoint, acme.dnsName, acme.password, [
+                's3api',
+                'list-objects-v2',
+                '--bucket',
+                notes.dnsName,
+            ]);
             expect(listed.code).not.toBe(0);
-            const removed = await asAcme('rb', '--force', `acme/${notes.dnsName}`);
+
+            // …and for the call that would destroy it.
+            const removed = await awsAs(endpoint, acme.dnsName, acme.password, [
+                's3api',
+                'delete-bucket',
+                '--bucket',
+                notes.dnsName,
+            ]);
             expect(removed.code).not.toBe(0);
 
-            // …and it is still there.
-            const still = await rt.exec(ref.id, ['mc', 'ls', 'probe/']);
+            // …and it is still there, seen by an identity permitted to look.
+            const still = await awsAs(endpoint, 'genie', ADMIN.password, [
+                's3api',
+                'list-buckets',
+            ]);
+            expect(still.code, still.stderr).toBe(0);
             expect(still.stdout).toContain(notes.dnsName);
         },
-        180_000,
+        300_000,
     );
 
-    it.skipIf(!hasDocker)('converges when provisioning runs again, keeping the data', async () => {
-        const ref = await run(MINIO_IMAGE, `genie-realtest-minio-${nonce()}`, {
-            env: { MINIO_ROOT_USER: ADMIN.user, MINIO_ROOT_PASSWORD: ADMIN.password },
-            command: ['server', '/data', '--console-address', ':9001'],
-        });
-        await waitFor(
-            async () =>
-                (
-                    await rt.exec(ref.id, [
-                        'mc',
-                        'alias',
-                        'set',
-                        'probe',
-                        'http://127.0.0.1:9000',
-                        ADMIN.user,
-                        ADMIN.password,
-                    ])
-                ).code === 0,
-        );
+    it.skipIf(!hasDocker)(
+        'converges when provisioning runs again, keeping the data',
+        async () => {
+            const { ref, endpoint } = await startEngine();
 
-        const acme = sliceFor('acme-1a2b3c4d');
-        const steps = provisionSteps('minio', ADMIN, acme);
-        expect((await runProvisionSteps(rt, ref.id, steps)).ok).toBe(true);
+            const acme = sliceFor('acme-1a2b3c4d');
+            const steps = provisionSteps('seaweedfs', ADMIN, acme);
+            expect((await runProvisionSteps(rt, ref.id, steps)).ok).toBe(true);
 
-        await rt.exec(ref.id, [
-            'sh',
-            '-c',
-            `echo hello > /tmp/f.txt && mc cp /tmp/f.txt probe/${acme.dnsName}/f.txt`,
-        ]);
+            const wrote = await awsAs(endpoint, acme.dnsName, acme.password, [
+                's3api',
+                'put-object',
+                '--bucket',
+                acme.dnsName,
+                '--key',
+                'f.txt',
+            ]);
+            expect(wrote.code, wrote.stderr).toBe(0);
 
-        // Provisioning runs on EVERY acquire, so the second pass must succeed and
-        // must not empty the bucket it created the first time.
-        const again = await runProvisionSteps(rt, ref.id, steps);
-        expect(again.ok, again.error).toBe(true);
-        const listed = await rt.exec(ref.id, ['mc', 'ls', `probe/${acme.dnsName}`]);
-        expect(listed.stdout).toContain('f.txt');
+            // Provisioning runs on EVERY acquire, so a second pass must succeed and
+            // must not empty what the first created. `s3.configure` is convergent
+            // by construction — GetUser, then Create on NotFound, Update otherwise
+            // — and this is what holds that claim to account.
+            const again = await runProvisionSteps(rt, ref.id, steps);
+            expect(again.ok, again.error).toBe(true);
 
-        // THE UPGRADE PATH. That object was written by ROOT, which is how every
-        // object in an existing install got there — MinIO was a namespace engine
-        // and the root credential was what a workspace was handed. The scoped
-        // user has to be able to read what root left behind, or switching
-        // strategies would strand every existing bucket.
-        expect(
-            (
-                await rt.exec(ref.id, [
-                    'mc',
-                    'alias',
-                    'set',
-                    'acme',
-                    'http://127.0.0.1:9000',
-                    acme.dnsName,
-                    acme.password,
-                ])
-            ).code,
-        ).toBe(0);
-        const asWorkspace = await rt.exec(ref.id, ['mc', 'cat', `acme/${acme.dnsName}/f.txt`]);
-        expect(asWorkspace.code, asWorkspace.stderr).toBe(0);
-        expect(asWorkspace.stdout).toContain('hello');
-    }, 180_000);
+            const listed = await awsAs(endpoint, acme.dnsName, acme.password, [
+                's3api',
+                'list-objects-v2',
+                '--bucket',
+                acme.dnsName,
+            ]);
+            expect(listed.code, listed.stderr).toBe(0);
+            expect(listed.stdout).toContain('f.txt');
+        },
+        300_000,
+    );
 });
 
 describe('REAL Redis — the key prefix, and the commands it cannot scope', () => {

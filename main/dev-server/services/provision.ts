@@ -482,6 +482,82 @@ function minioSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
 }
 
 /**
+ * SeaweedFS: one bucket and one credential admitted to that bucket alone.
+ *
+ * ## Why `s3.configure` and not `s3.user.provision`
+ *
+ * This is the decisive constraint and it is worth stating plainly, because
+ * `s3.user.provision` reads like the obvious command for the job.
+ *
+ * Genie GENERATES a workspace's password and then tells the workspace what it is
+ * (`env-wiring.ts` puts it in `AWS_SECRET_ACCESS_KEY`). A provisioning step here
+ * cannot report anything back — these are fire-and-forget argv, with no way to
+ * capture output, which is the same limitation recorded on `minioSteps` above.
+ *
+ * `command_s3_user_provision.go:158` GENERATES the access key inside the engine.
+ * Nothing could then discover it, so the workspace would hold a credential
+ * Genie never learns. `s3.configure` takes `-access_key`/`-secret_key` as INPUT,
+ * exactly as `mc admin user add` did, so the credential Genie already minted is
+ * the credential that exists.
+ *
+ * ## Convergence
+ *
+ * Re-provisioning has to be safe — Genie re-runs these. `s3.bucket.create` on an
+ * existing bucket is a no-op, and `command_s3_configure.go` reads GetUser ->
+ * CreateUser on NotFound -> UpdateUser otherwise, so a second run updates in
+ * place rather than failing or stacking a duplicate identity.
+ *
+ * ## Why every step is a `sh -c`
+ *
+ * `weed shell` takes its commands on STDIN — `weed/command/shell.go` defines no
+ * `-c` flag, and the documented form is a pipe. So each step needs a shell. The
+ * strings piped in are constants plus two values the asserts below constrain.
+ */
+function seaweedSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] {
+    const bucket = assertDnsName(slice.dnsName);
+    const password = assertPassword(slice.password, 'workspace');
+    // Not interpolated anywhere below, but asserted for the same reason the MinIO
+    // branch asserts it: this function must refuse an admin credential that did
+    // not come from the generator, rather than pass it into a shell.
+    assertPassword(admin.password, 'admin');
+
+    // `weed/command/shell.go:23-25` — `-master` and `-filer` both default to the
+    // EMPTY string, so a bare `weed shell` connects to nothing and every step
+    // fails for a reason that has nothing to do with S3. The ports are `weed
+    // server`'s own defaults, which `catalog.ts` starts it on.
+    const shell = (command: string): string[] => [
+        'sh',
+        '-c',
+        `printf '%s\\n' '${command}' | weed shell -master=localhost:9333 -filer=localhost:8888`,
+    ];
+
+    return [
+        {
+            label: 'bucket',
+            argv: shell(`s3.bucket.create -name ${bucket}`),
+        },
+        {
+            label: 'user',
+            // The access key IS the bucket name, matching the MinIO branch and
+            // what `env-wiring.ts` hands the app.
+            //
+            // `-actions` deliberately excludes Admin. An Admin identity reaches
+            // every bucket on the engine, and `-s3.autoCreateBucket`
+            // (server.go:185) lets admins create buckets implicitly on upload —
+            // so granting it would make `-buckets` decorative.
+            //
+            // `-apply` is not optional: without it `command_s3_configure.go`
+            // prints the identity it WOULD write and returns, so provisioning
+            // would report success having changed nothing.
+            argv: shell(
+                `s3.configure -user ${bucket} -access_key ${bucket} -secret_key ${password}` +
+                    ` -buckets ${bucket} -actions Read,Write,List,Tagging -apply`,
+            ),
+        },
+    ];
+}
+
+/**
  * PURE. The commands that carve a workspace's slice out of an engine.
  *
  * An empty list is a real answer, not a gap: for Meilisearch and Mailpit the
@@ -504,7 +580,10 @@ export function provisionSteps(
         case 'redis-acl':
             return redisSteps(admin, slice, options);
         case 's3-scoped-user':
-            return minioSteps(admin, slice);
+            // Two engines share this strategy: SeaweedFS is what Genie ships, and
+            // `minio` remains only for workspaces provisioned before its images
+            // were withdrawn (genie#758).
+            return engine === 'seaweedfs' ? seaweedSteps(admin, slice) : minioSteps(admin, slice);
         default:
             return [];
     }

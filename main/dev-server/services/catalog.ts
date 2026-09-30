@@ -58,6 +58,7 @@ export const SERVICE_ENGINES = [
     'redis',
     'meilisearch',
     'minio',
+    'seaweedfs',
     'mailpit',
     'websockets',
     /** The generic `{image, port, env}` escape hatch. Always dedicated. */
@@ -122,6 +123,13 @@ export interface EngineSpec {
     adminEnv?: (adminPassword: string) => Record<string, string>;
     /** argv the container runs, when the image's default is not what we want. */
     command?: (adminPassword: string) => string[];
+    /**
+     * Replace the image's ENTRYPOINT, when the default one would swallow the
+     * command. SeaweedFS needs it: its entrypoint reads argv as `weed`
+     * subcommands, and this engine must run a shell first to write the S3
+     * identity file before the gateway binds a port.
+     */
+    entrypoint?: (adminPassword: string) => string[];
     /** An in-container readiness check (exit 0 = ready). Absent means "probe
      *  the published port", which is all a generic image affords. */
     readyExec?: (adminPassword: string) => string[];
@@ -132,6 +140,16 @@ export interface EngineSpec {
     readyReply?: RegExp;
     /** A caller-supplied image can have no shared story. */
     alwaysDedicated?: boolean;
+    /**
+     * This engine can no longer be STARTED, and must not be offered for a new
+     * service — but stays in the catalog so existing service rows still resolve
+     * to a spec. `add` refuses it and names the replacement.
+     *
+     * An engine that cannot be delivered is worse than one that is absent: the
+     * request succeeds and the container fails later, somewhere the user is not
+     * looking.
+     */
+    retired?: { reason: string; replacement: ServiceEngine };
 }
 
 // --- the engines ------------------------------------------------------------
@@ -281,6 +299,17 @@ const MINIO: EngineSpec = {
     // every machine, and it surfaced only because CI happened to run the real
     // test. See genie#636.
     image: (version) => `quay.io/minio/minio:${version}`,
+    // RETIRED (genie#758). MinIO withdrew its public images: measured 2026-09-30,
+    // anonymous manifest GETs returned 401 from quay.io AND Docker Hub, and Hub's
+    // tag list answered `object not found`, while `library/redis:7-alpine`
+    // returned 200 from the same probe. Nothing here can be started any more.
+    //
+    // The spec stays so workspaces provisioned before the withdrawal still
+    // resolve; `add` refuses it and points at SeaweedFS.
+    retired: {
+        reason: 'MinIO withdrew its public container images — both quay.io and Docker Hub now refuse anonymous pulls, so this engine cannot start.',
+        replacement: 'seaweedfs',
+    },
     ports: [
         { name: 's3', container: 9000, kind: 'http', primary: true },
         { name: 'console', container: 9001, kind: 'http' },
@@ -291,6 +320,121 @@ const MINIO: EngineSpec = {
     adminEnv: (password) => ({ MINIO_ROOT_USER: 'genie', MINIO_ROOT_PASSWORD: password }),
     command: () => ['server', '/data', '--console-address', ':9001'],
 };
+
+/**
+ * The S3 engine. SeaweedFS, because MinIO's images are gone (genie#758).
+ *
+ * ## Why the engine changed
+ *
+ * MinIO withdrew its public images from BOTH registries. Measured 2026-09-30 with
+ * anonymous manifest GETs: `quay.io/minio/minio:latest` 401,
+ * `docker.io/minio/minio:latest` 401, Docker Hub's tag list `object not found` —
+ * while `library/redis:7-alpine` returned 200 from the same probe, so it is MinIO
+ * and not the registry. Provisioning MinIO therefore failed on every machine.
+ *
+ * ## Why a version can be PINNED here, and could not be for MinIO
+ *
+ * MINIO below says it: MinIO's tags are release timestamps with no stable major,
+ * so `latest` was the only honest default — and `latest` is exactly what stopped
+ * being served. SeaweedFS publishes dotted semver, so `4.48` is a real pin and a
+ * user's engine cannot change under them on a restart.
+ *
+ * ## THE SECURITY DIFFERENCE, which shapes `command` below
+ *
+ * MinIO took root credentials from env, so its API was authenticated from the
+ * first second. SeaweedFS is NOT: `weed/s3api/auth_credentials.go:414` reads
+ *
+ *     iam.isAuthEnabled = identityCount > 0 || startConfigFile != ""
+ *
+ * with the comment "No config file and no identities - this is the normal
+ * allow-all case". Started the naive way — boot now, configure later — every
+ * workspace's bucket on the host would be anonymously readable AND writable for
+ * the length of that window, and permanently if provisioning ever failed.
+ *
+ * Passing `-s3.config` is what makes it fail-CLOSED: line 422 warns that a config
+ * file loading zero identities denies every request, which is the safe direction
+ * to be wrong in. So `command` WRITES the admin identity and only then execs the
+ * server, in one step, leaving no unauthenticated window to lose a race with.
+ *
+ * A `sh -c` rather than a Genie-built image on purpose: an image would need a new
+ * GHCR package, and a new package is created PRIVATE until somebody changes an
+ * owner setting — so it would not pull on a user's desktop until that happened.
+ * This needs nothing published.
+ */
+const SEAWEEDFS: EngineSpec = {
+    engine: 'seaweedfs',
+    runtime: 'container',
+    label: 'SeaweedFS (S3)',
+    summary:
+        'S3-compatible object storage. Shared instance; each workspace gets its own bucket and its own scoped credential, admitted to that bucket alone.',
+    // Dotted semver, newest first. Deliberately NOT `latest` — see the header.
+    versions: ['4.48'],
+    image: (version) => `chrislusf/seaweedfs:${version}`,
+    ports: [
+        // `weed/command/server.go:167` — s3.port defaults to 8333. MinIO's was
+        // 9000; carrying that number over would publish a port nothing serves.
+        { name: 's3', container: 8333, kind: 'http', primary: true },
+        // The filer's own UI, useful for looking at what an app actually wrote.
+        { name: 'filer', container: 8888, kind: 'http' },
+    ],
+    volumes: [{ suffix: 'data', target: '/data' }],
+    provision: 's3-scoped-user',
+    adminUser: 'genie',
+    // No admin env: SeaweedFS has no root-credential environment variables. The
+    // credential is seeded through the config file `command` writes, which is
+    // what enables auth at all.
+    // ENTRYPOINT, not `command`. The image declares
+    // `ENTRYPOINT ["/entrypoint.sh"]` and that script reads its first argument as
+    // a `weed` subcommand, so a `command` beginning with `sh` would become
+    // `weed sh`. The override runs a shell, writes the identity file, and then
+    // EXECS THE IMAGE'S OWN ENTRYPOINT — which fixes /data ownership for the
+    // unprivileged `seaweed` user. Replacing it outright would trade an auth hole
+    // for a permissions one.
+    entrypoint: (adminPassword) => [
+        'sh',
+        '-c',
+        // Every value interpolated here is a constant or the admin password, and
+        // `provision.ts`'s `assertPassword` constrains what that can contain.
+        `mkdir -p ${SEAWEED_CONFIG_DIR} && printf '%s' '${seaweedAdminConfig(adminPassword)}' > ${SEAWEED_CONFIG_PATH} && ` +
+            // `-dir` is supplied by the image entrypoint's own `server` case
+            // (`-dir=/data`), which is why it is not repeated here — server.go:67
+            // would otherwise default it to os.TempDir() and put every
+            // workspace's objects outside the volume.
+            `exec /entrypoint.sh server -master.port=9333 -filer -filer.port=8888 ` +
+            `-s3 -s3.port=8333 -s3.config=${SEAWEED_CONFIG_PATH}`,
+    ],
+};
+
+/** Where the S3 identity config lives inside the container. */
+const SEAWEED_CONFIG_DIR = '/etc/seaweedfs';
+const SEAWEED_CONFIG_PATH = `${SEAWEED_CONFIG_DIR}/s3.json`;
+
+/**
+ * The admin identity, as the JSON `-s3.config` expects.
+ *
+ * `identities` is PLURAL and that matters: `auth_credentials.go` documents the
+ * trap in its own words — 'A singular "identity" otherwise loads as an empty
+ * config, which denies every request with nothing pointing at the mistake.'
+ * SeaweedFS warns and carries on, so the symptom is an engine that refuses
+ * everybody, which reads as a broken credential rather than a typo.
+ *
+ * Field names are `weed/pb/iam.proto:198` (`access_key` / `secret_key`), written
+ * in the camelCase form the protobuf JSON parser also accepts.
+ */
+function seaweedAdminConfig(adminPassword: string): string {
+    return JSON.stringify({
+        identities: [
+            {
+                name: 'genie',
+                credentials: [{ accessKey: 'genie', secretKey: adminPassword }],
+                // Admin, because this is the identity `s3.configure` runs as when
+                // it creates each workspace's scoped user. A workspace never gets
+                // it — see `seaweedSteps` in provision.ts.
+                actions: ['Admin', 'Read', 'Write', 'List', 'Tagging'],
+            },
+        ],
+    });
+}
 
 const MAILPIT: EngineSpec = {
     engine: 'mailpit',
@@ -358,6 +502,7 @@ const CATALOG: Record<ServiceEngine, EngineSpec> = {
     redis: REDIS,
     meilisearch: MEILISEARCH,
     minio: MINIO,
+    seaweedfs: SEAWEEDFS,
     mailpit: MAILPIT,
     websockets: WEBSOCKETS,
     custom: CUSTOM,
