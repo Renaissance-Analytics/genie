@@ -281,6 +281,74 @@ describe('host-side saved-agent revival', () => {
     const revive = (schedule: (run: () => void, delay: number) => void = run => run()) =>
         terminalIpc.reviveRunningAgents(schedule);
 
+    /**
+     * EVERY REVIVAL SETTLES ITS RESERVATION — or `terminal:create` hangs forever.
+     *
+     * `terminal:create` is wrapped in `afterAgentRevival(id, ...)`, which AWAITS
+     * the reservation a queued revival holds for that id. The revival callback
+     * therefore has exactly one obligation on every path out: call `finish`.
+     *
+     * It used to discharge that in a `finally`. The change that added a settle
+     * window replaced the `finally` with a bare call after the `catch` — which
+     * does not run on the four early `return`s inside the `try`. The reservation
+     * never resolved, the IPC never replied, and the renderer showed:
+     *
+     *     Failed to start terminal: Error invoking remote method
+     *     'terminal:create': reply was never sent
+     *
+     * The worst of those returns is the ORDINARY one: "a surviving detached-host
+     * pty spends no new slot and needs no launch". That is the normal state after
+     * an upgrade — the terminals survived, revival correctly skips them, and then
+     * hangs. Shipped in beta.339; the owner had to start an agent by hand.
+     *
+     * So these assert the obligation on the paths that take a SHORTCUT, which is
+     * where it was dropped, rather than on the happy path that always worked.
+     */
+    describe('a revival always settles, whichever way it returns', () => {
+        /**
+         * Did this promise settle at all, or is it hung?
+         *
+         * A REAL timeout, not a microtask race. The first version raced against
+         * `Promise.resolve(marker)`, which wins against any promise needing even
+         * one more microtask — so it reported every healthy revival as hung and
+         * could not tell the bug from the fix.
+         */
+        const settled = (p: Promise<unknown>): Promise<boolean> =>
+            Promise.race([
+                p.then(() => true),
+                new Promise<boolean>((r) => {
+                    const t = setTimeout(() => r(false), 4_000);
+                    t.unref?.();
+                }),
+            ]);
+
+        it('settles when the terminal is ALREADY LIVE — the state after an upgrade', async () => {
+            // The exact path that hung: revival finds the pty still alive (the
+            // detached host kept it), returns early, and must still settle.
+            saved('already-live');
+            await revive();
+            expect(terminalManager().isLive('already-live')).toBe(true);
+
+            expect(await settled(revive())).toBe(true);
+        });
+
+        it('settles when there is nothing to revive at all', async () => {
+            saved('stopped-agent', { user_stopped: true });
+
+            expect(await settled(revive())).toBe(true);
+        });
+
+        it('POSITIVE CONTROL: it still settles on the path that actually launches', async () => {
+            // Without this, "everything settles" would pass against a build that
+            // had stopped reviving anything — the opposite bug, and a worse one.
+            saved('launches');
+            const result = await revive();
+
+            expect(terminalManager().isLive('launches')).toBe(true);
+            expect(result.attempted).toBeGreaterThan(0);
+        });
+    });
+
     it('boots without a renderer and a subsequent attach launches no second copy', async () => {
         saved('headless');
         revive();

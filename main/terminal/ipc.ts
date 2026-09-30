@@ -1171,6 +1171,12 @@ export function reviveRunningAgents(
             if (queuedAgentRevivals.get(candidate.id) !== reservation) return;
             queuedAgentRevivals.delete(candidate.id);
             let live = false;
+            // The settle path below takes over the obligation to `finish`. Every
+            // OTHER way out of this callback — including the early returns — must
+            // still discharge it in the `finally`, or the reservation never
+            // resolves and `afterAgentRevival` leaves `terminal:create` waiting
+            // for a reply that never comes.
+            let settleOwnsFinish = false;
             try {
                 let spec = getTerminalSpec(candidate.id);
                 // A teardown exit can arrive after scheduling. The captured live
@@ -1205,6 +1211,7 @@ export function reviveRunningAgents(
                 // (a session still locked by the process that just died, say)
                 // exits in well under this window.
                 if (live) {
+                    settleOwnsFinish = true;
                     void survives(spec.id, AGENT_REVIVE_SETTLE_MS).then((held) => {
                         if (!held) {
                             console.warn(
@@ -1217,8 +1224,14 @@ export function reviveRunningAgents(
                 }
             } catch (error) {
                 console.warn(`[agents] Failed to restore ${candidate.id}`, error);
+            } finally {
+                // `finally`, NOT a statement after the catch. There are four early
+                // returns above — including the ordinary "already live" one — and
+                // a trailing call runs on none of them. That is exactly how this
+                // hung: revival skipped a surviving terminal, never settled, and
+                // the next `terminal:create` waited forever.
+                if (!settleOwnsFinish) finish(live);
             }
-            finish(live);
         }, slot++ * AGENT_UPGRADE_NUDGE_INTERVAL_MS);
     }
     return Promise.all(outcomes).then((held) => ({
