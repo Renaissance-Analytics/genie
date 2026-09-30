@@ -47,6 +47,23 @@ export interface ConnectableWorkstation {
     source: WorkstationEntitlementSource | null;
 }
 
+/**
+ * One workspace share link. `url` + `token` are present ONLY on the mint
+ * response: the manager's list omits them deliberately, because the URL is the
+ * credential and re-serving it would make a read of the list enough to
+ * reconstruct a link its owner had already revoked.
+ */
+export interface WorkspaceShareLink {
+    id: string;
+    token?: string;
+    url?: string;
+    capability: 'control' | 'readonly';
+    workspace_ids: string[];
+    all_workspaces: boolean;
+    expires_at: string | null;
+    created_at: string | null;
+}
+
 /** The minted connect grant from `POST /workstations/{id}/connect-grant`.
  *  `token` is the short-TTL EdDSA JWS to present in the relay `member-hello`;
  *  capability/scope are resolved SERVER-side (no client self-escalation). */
@@ -483,6 +500,66 @@ export class TynnBackend implements Backend {
         } catch {
             return [];
         }
+    }
+
+    /**
+     * Mint a SHARE LINK for ONE workspace (POST /workstations/{id}/share-links).
+     *
+     * `workspace` is a single id, not a scopes array, because the service refuses
+     * to express anything wider: a link that CAN say `host:all` is a link that
+     * eventually will, handing every workspace on this machine to whoever opens
+     * it. The returned `url` is the credential and is served exactly once — the
+     * link manager never re-serves it — so the caller must surface it right away.
+     *
+     * Throws (rather than returning null) because minting is a deliberate click:
+     * failing quietly would leave the user copying nothing.
+     */
+    async mintWorkspaceShareLink(
+        workstationId: string,
+        workspaceId: string,
+        capability: 'control' | 'readonly',
+    ): Promise<WorkspaceShareLink> {
+        const data = await this.fetch<{ link: WorkspaceShareLink }>(
+            `/workstations/${encodeURIComponent(workstationId)}/share-links`,
+            { method: 'POST', body: { workspace: workspaceId, capability } },
+        );
+        return data.link;
+    }
+
+    /**
+     * The live share links for ONE workspace. The service returns every live link
+     * on the machine (it is the machine's roster), so the narrowing happens here:
+     * workspace settings is about one workspace, and listing another workspace's
+     * links there invites revoking the wrong one.
+     *
+     * Returns [] on failure — this renders inside the settings modal, and a dead
+     * Tynn session must not take the whole modal down with it.
+     */
+    async listWorkspaceShareLinks(
+        workstationId: string,
+        workspaceId: string,
+    ): Promise<WorkspaceShareLink[]> {
+        try {
+            const data = await this.fetch<{ links: WorkspaceShareLink[] }>(
+                `/workstations/${encodeURIComponent(workstationId)}/share-links`,
+            );
+            return (data.links ?? []).filter((l) => (l.workspace_ids ?? []).includes(workspaceId));
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Invalidate one link (DELETE /workstations/{id}/share-links/{invite}). A link
+     * that has been sent cannot be unsent, so this is the only real control over
+     * it — which is why it throws: a revoke the user believes happened and did not
+     * is the worst outcome this surface has.
+     */
+    async revokeWorkspaceShareLink(workstationId: string, linkId: string): Promise<void> {
+        await this.fetch<{ ok: boolean }>(
+            `/workstations/${encodeURIComponent(workstationId)}/share-links/${encodeURIComponent(linkId)}`,
+            { method: 'DELETE' },
+        );
     }
 
     /**

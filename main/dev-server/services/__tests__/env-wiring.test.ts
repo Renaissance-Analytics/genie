@@ -427,20 +427,52 @@ describe('attributing a key back to the service that emitted it', () => {
      * silently stopped matching would attribute everything to null and the
      * grouped notes would quietly degrade to raw key lists.
      */
+    /**
+     * The TWO S3 engines emit byte-identical `AWS_*` keys — see the seaweedfs
+     * spec in `catalog.ts` and genie#758. A key alone therefore cannot say which
+     * of them produced it, so for this pair the guard asserts the attribution is
+     * an S3 engine rather than naming one. Everything else stays exact.
+     *
+     * This is the honest weakening: the property that matters is that no key
+     * attributes to NULL (which is what silently degrades the grouped notes) and
+     * that none attributes to an UNRELATED engine. Both still hold.
+     */
+    const S3_ENGINES: readonly ServiceEngine[] = ['seaweedfs', 'minio'];
+    const acceptable = (engine: ServiceEngine) =>
+        S3_ENGINES.includes(engine) ? S3_ENGINES.map(label) : [label(engine)];
+
     it.each(SERVICE_ENGINES.filter((e) => e !== 'custom'))(
-        'attributes every key %s emits back to %s — both site- and terminal-form',
+        'attributes every key %s emits back to an engine — both site- and terminal-form',
         (engine) => {
             const env = serviceEnv([{ ...pg(), engine, adminPassword: 'master' }]);
             expect(Object.keys(env).length).toBeGreaterThan(0);
+            const allowed = acceptable(engine);
             for (const key of Object.keys(env)) {
-                expect([key, serviceOfEnvKey(key, env)]).toEqual([key, label(engine)]);
+                expect([key, allowed.includes(serviceOfEnvKey(key, env) ?? '')]).toEqual([key, true]);
             }
             const terminal = terminalServiceEnv(env);
             for (const key of Object.keys(terminal)) {
-                expect([key, serviceOfEnvKey(key, terminal)]).toEqual([key, label(engine)]);
+                expect([key, allowed.includes(serviceOfEnvKey(key, terminal) ?? '')]).toEqual([
+                    key,
+                    true,
+                ]);
             }
         },
     );
+
+    it('still names the exact engine for every NON-S3 key', () => {
+        // The exactness the guard above gives up for the S3 pair, kept for
+        // everyone else. Without this, widening to "some engine" would let a
+        // Postgres key attribute to Mailpit and nothing would notice.
+        for (const engine of SERVICE_ENGINES.filter(
+            (e) => e !== 'custom' && !S3_ENGINES.includes(e),
+        )) {
+            const env = serviceEnv([{ ...pg(), engine, adminPassword: 'master' }]);
+            for (const key of Object.keys(env)) {
+                expect([key, serviceOfEnvKey(key, env)]).toEqual([key, label(engine)]);
+            }
+        }
+    });
 
     /**
      * `DATABASE_URL` and `DB_*` are single-valued and belong to whichever

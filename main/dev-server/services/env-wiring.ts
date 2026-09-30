@@ -208,6 +208,12 @@ export function serviceEnv(entries: ProvisionedService[]): Record<string, string
                 break;
             }
 
+            // BOTH S3 engines, one body. SeaweedFS is what Genie ships;
+            // `minio` survives only for workspaces provisioned before its images
+            // were withdrawn (genie#758). They are S3-compatible, so an app's
+            // configuration is byte-identical either way — which is the reason
+            // the engine could be swapped without it being an app migration.
+            case 'seaweedfs':
             case 'minio': {
                 Object.assign(env, {
                     AWS_ENDPOINT: `http://${host}:${port}`,
@@ -424,7 +430,12 @@ const ENGINE_OF_KEY: ReadonlyArray<readonly [RegExp, ServiceEngine]> = [
     [/^MYSQL_/, 'mysql'],
     [/^REDIS_/, 'redis'],
     [/^MEILISEARCH_/, 'meilisearch'],
-    [/^AWS_/, 'minio'],
+    // Both S3 engines emit these, byte for byte, and nothing in the env tells
+    // them apart — so this names the engine Genie SHIPS. A legacy MinIO
+    // workspace's AWS_ keys are therefore labelled SeaweedFS in a diagnostic
+    // message. That is cosmetic and deliberate: the alternative is attributing
+    // them to nothing, which degrades the message this map exists to produce.
+    [/^AWS_/, 'seaweedfs'],
     [/^MAIL_/, 'mailpit'],
     [/^(?:GENIE_WS_|REVERB_|BROADCAST_CONNECTION$)/, 'websockets'],
 ];

@@ -254,6 +254,23 @@ export type HibernateResult =
 
 export type WakeResult = { ok: true; errors: string[] } | { ok: false; error: string };
 
+/**
+ * One workspace share link, as the settings panel sees it. `url`/`token` are
+ * present only on the MINT response: the manager's list omits them on purpose,
+ * because the URL is the credential and re-serving it would let a read of the list
+ * reconstruct a link its owner had already revoked.
+ */
+export interface WorkspaceShareLink {
+    id: string;
+    token?: string;
+    url?: string;
+    capability: 'control' | 'readonly';
+    workspace_ids: string[];
+    all_workspaces: boolean;
+    expires_at: string | null;
+    created_at: string | null;
+}
+
 export interface WorkspaceRow {
     id: string;
     backend: WorkspaceBackend;
@@ -3679,6 +3696,22 @@ export interface GenieApi {
             id: string,
             buckets: IssuewatchPolicyBuckets,
         ) => Promise<{ ok: boolean }>;
+        /** Whether this machine is enrolled with Tynn. A share link is scoped to a
+         *  workspace ON a workstation, so an unregistered machine has nothing to
+         *  share on — and says so instead of showing a form that cannot work. */
+        shareLinkAvailability: () => Promise<
+            { enrolled: true } | { enrolled: false; reason: string }
+        >;
+        /** Mint a share link for one workspace. `link.url` is present ONLY here —
+         *  the manager's list omits it, because the URL is the credential. */
+        mintShareLink: (
+            id: string,
+            capability: 'control' | 'readonly',
+        ) => Promise<{ ok: true; link: WorkspaceShareLink } | { ok: false; error: string }>;
+        /** The live share links for this workspace (no tokens, no urls). */
+        listShareLinks: (id: string) => Promise<WorkspaceShareLink[]>;
+        /** Invalidate one link on demand. */
+        revokeShareLink: (linkId: string) => Promise<{ ok: boolean; error?: string }>;
         /** This workspace's resolved IssueWatch granularity (defaults applied). */
         getIssuewatchGranularity: (id: string) => Promise<IssuewatchGranularity>;
         /** Persist this workspace's IssueWatch granularity (what to watch + ping). */
@@ -4002,8 +4035,18 @@ export interface GenieApi {
             scope?: FlowScope;
             graph: unknown;
         }) => Promise<FlowView | null>;
-        /** Arm or disarm. Reconciles the schedules and the file watchers too. */
-        setEnabled: (flowId: string, enabled: boolean) => Promise<FlowView | null>;
+        /**
+         * Arm or disarm. Reconciles the schedules and the file watchers too.
+         *
+         * ARMING can be REFUSED: a flow holding a step Genie will not run must
+         * not reach a schedule, where it would fail unattended every time it
+         * fired. The refusal carries the per-step reasons, which already name
+         * what to use instead. Disarming is never refused.
+         */
+        setEnabled: (
+            flowId: string,
+            enabled: boolean,
+        ) => Promise<FlowView | { error: string; refusals: FlowNodeRefusalView[] } | null>;
         remove: (flowId: string) => Promise<boolean>;
         /** What this graph WOULD be allowed to do, without running it. */
         check: (scope: FlowScope, graph: unknown) => Promise<FlowAdmissionView>;

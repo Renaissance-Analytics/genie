@@ -419,7 +419,11 @@ export function runArgv(spec: ContainerSpec, opts: ArgvOptions): string[] {
 
     // Image last, command after it — everything before the image is a flag, and
     // anything after it belongs to the container, not to the CLI.
-    args.push(spec.image, ...(spec.command ?? []));
+    // `--entrypoint` takes exactly one word and must precede the image; any
+    // further words are argv, so they go after it, ahead of `command`.
+    const [entryHead, ...entryRest] = spec.entrypoint ?? [];
+    if (entryHead !== undefined) args.push('--entrypoint', entryHead);
+    args.push(spec.image, ...entryRest, ...(spec.command ?? []));
     assertLiteralArgv(args);
     return args;
 }

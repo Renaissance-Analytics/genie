@@ -30,6 +30,7 @@ describe('the catalog', () => {
             'redis',
             'meilisearch',
             'minio',
+            'seaweedfs',
             'mailpit',
             'websockets',
             'custom',
@@ -95,12 +96,14 @@ describe('the catalog', () => {
         expect(ref('mysql')).toBe('mysql:8.4');
         expect(ref('redis')).toBe('redis:7-alpine');
         expect(ref('meilisearch')).toBe('getmeili/meilisearch:v1');
-        // QUAY for MinIO. Docker Hub's `minio/minio` answers every anonymous
-        // pull with 401 — measured against the registry API on 2026-09-11, for
-        // `latest` and for a dated RELEASE tag, while `library/redis:7-alpine`
-        // returned 200 from the same probe. The registry is part of the ref, and
-        // getting it wrong breaks provisioning on every user's machine.
+        // MinIO's ref is now a record of an image that IS NO LONGER SERVED. Both
+        // registries answer 401 to anonymous clients and Hub's tag list says
+        // `object not found` (measured 2026-09-30; `library/redis:7-alpine`
+        // returned 200 from the same probe). The engine stays in the catalog only
+        // so workspaces provisioned against it do not vanish from the UI — new
+        // ones get `seaweedfs`. See genie#758.
         expect(ref('minio')).toBe('quay.io/minio/minio:latest');
+        expect(ref('seaweedfs')).toBe('chrislusf/seaweedfs:4.48');
         expect(ref('mailpit')).toBe('axllent/mailpit:v1.30');
     });
 

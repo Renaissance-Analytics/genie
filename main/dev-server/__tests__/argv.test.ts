@@ -439,3 +439,48 @@ describe('shared service engines (P3)', () => {
         ]);
     });
 });
+
+describe('runArgv — overriding the image entrypoint', () => {
+    /**
+     * Needed by the SeaweedFS engine (genie#758). Its S3 gateway is ALLOW-ALL
+     * unless started with `-s3.config`, so the identity file has to exist before
+     * the server binds its port — which means running a shell first, and the
+     * image's own `ENTRYPOINT ["/entrypoint.sh"]` would otherwise swallow that
+     * shell as a `weed` subcommand.
+     *
+     * The override still CALLS `/entrypoint.sh`, because that script fixes the
+     * data volume's ownership; replacing it outright would trade an auth hole for
+     * a permissions one.
+     */
+    it('passes --entrypoint BEFORE the image, where docker requires it', () => {
+        const args = runArgv(
+            spec({ entrypoint: ['sh', '-c'], command: ['echo hi'] }),
+            { kind: 'docker', platform: 'linux' },
+        );
+
+        expect(valueAfter(args, '--entrypoint')).toBe('sh');
+        // Docker reads flags up to the image name and argv after it. An
+        // --entrypoint that landed after the image would be passed TO the
+        // container as an argument instead of configuring it.
+        expect(args.indexOf('--entrypoint')).toBeLessThan(args.indexOf('alpine:3.20'));
+    });
+
+    it('puts every entrypoint word before the image, and the command after', () => {
+        // `--entrypoint` itself takes ONE word; further words belong in argv,
+        // where they are appended after the image in order.
+        const args = runArgv(
+            spec({ entrypoint: ['sh', '-c'], command: ['printf hi'] }),
+            { kind: 'docker', platform: 'linux' },
+        );
+        const image = args.indexOf('alpine:3.20');
+
+        expect(args.slice(image + 1)).toEqual(['-c', 'printf hi']);
+    });
+
+    it('changes nothing when no entrypoint is given', () => {
+        const without = runArgv(spec({ command: ['echo hi'] }), { kind: 'docker', platform: 'linux' });
+
+        expect(without).not.toContain('--entrypoint');
+        expect(without.slice(without.indexOf('alpine:3.20') + 1)).toEqual(['echo hi']);
+    });
+});

@@ -513,6 +513,15 @@ export async function runManageService(
                         { catalog: catalogEntries() },
                     );
                 }
+                // A RETIRED engine cannot start, so adding one would report
+                // success and fail later at the pull — where nobody is looking.
+                const retired = engineSpecFor(req.engine).retired;
+                if (retired) {
+                    return fail(
+                        `${req.engine} is retired: ${retired.reason} Use \`${retired.replacement}\` instead — it speaks the same protocol, so an app's configuration does not change.`,
+                        { catalog: catalogEntries() },
+                    );
+                }
                 const version = resolveEngineVersion(req.engine, req.version);
                 if (!version) {
                     return fail(
