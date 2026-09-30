@@ -2009,6 +2009,32 @@ button.iw-feedback-note.as-link:hover {
     color: var(--fg-2);
     line-height: 1.55;
 }
+
+/* THE AGENT MANAGER's card. It rides the same `.prompt-scrim` / `.prompt-card`
+   as every other modal here — that is deliberate, and it is the fix: this used
+   to be wrapped in `modal-backdrop` / `modal`, class names that existed nowhere,
+   so the manager rendered inline at the end of the document and "Edit agent…"
+   looked like a dead button for three reports running.
+
+   Only the SIZE differs. A prompt is 380px and a few lines tall; the manager is
+   a tabbed editor for an agent's persona, MCP servers, sidecars and driver, so
+   it takes a working width and scrolls inside a bounded height rather than
+   growing past the window on a small display. */
+.agent-manager-card {
+    width: 720px;
+    max-height: calc(100vh - var(--titlebar-h) - 64px);
+    overflow: hidden;
+}
+.agent-manager-card > .prompt-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+/* The manager itself is the part that scrolls, so the title row stays put. */
+.agent-manager-card > :not(.prompt-title) {
+    min-height: 0;
+    overflow-y: auto;
+}
 .prompt-label {
     font-size: 11px;
     color: var(--fg-3);

@@ -3030,17 +3030,31 @@ function MasterInner() {
 
             {/* THE AGENT MANAGER, in the product at last. It was built, tested
                 on three operating systems, and rendered only by the E2E harness
-                page — so nobody outside the suite could reach it. */}
+                page — so nobody outside the suite could reach it.
+
+                It then spent three more reports UNREACHABLE for a second reason:
+                this wrapper was written with `modal-backdrop` / `modal` /
+                `modal-head` / `modal-title`, and not one of those classes existed
+                in any stylesheet. An unstyled backdrop is not an overlay — no
+                `position: fixed`, no `z-index`, no centring — so the manager laid
+                out inline at the end of the document, under everything, and
+                "Edit agent…" looked like a dead button.
+
+                It now uses the scrim and card every other modal here uses, which
+                is the point: a name that already has a rule cannot silently refer
+                to nothing. `renderer/lib/__tests__/agent-manager-modal.test.ts`
+                fails on any class in this block that the stylesheets do not
+                define. */}
             {manageAgentId && (
-                <div className="modal-backdrop" onClick={() => setManageAgentId(null)}>
+                <div className="prompt-scrim" onMouseDown={() => setManageAgentId(null)}>
                     <div
-                        className="modal agent-manager-modal"
+                        className="prompt-card agent-manager-card"
                         role="dialog"
                         aria-label="Agent manager"
-                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
                     >
-                        <div className="modal-head">
-                            <span className="modal-title">Agent</span>
+                        <div className="prompt-title">
+                            <span>Agent</span>
                             <span className="grow" />
                             <button
                                 type="button"
