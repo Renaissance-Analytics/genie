@@ -1115,13 +1115,35 @@ function afterAgentRevival<T>(id: string, attach: () => T): T | Promise<T> {
 }
 
 /** Restore saved running agents without waiting for a window or a workspace panel. */
+/**
+ * How long a revived agent must stay alive before the revival is believed.
+ *
+ * `create()` returning is not evidence the agent RUNS — the same fact
+ * `process-supervisor.ts` records for processes, which got a settle window while
+ * agent revival never did. A `claude --resume` whose session is still locked by
+ * the process that just died prints and exits in well under a second, and the
+ * old check (`isLive` on the next line) counted every one of those as revived.
+ *
+ * That is how a host crash with 22 live terminals was announced as "recovered"
+ * while every screen showed `[process exited with code 1]`.
+ */
+export const AGENT_REVIVE_SETTLE_MS = 1_500;
+
+/** Still alive `ms` after it was started? Resolves false if it died meanwhile. */
+function survives(id: string, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(terminalManager().isLive(id)), ms);
+        timer.unref?.();
+    });
+}
+
 export function reviveRunningAgents(
     schedule: (run: () => void, delayMs: number) => void = (run, delay) => {
         const timer = setTimeout(run, delay);
         timer.unref?.();
     },
     liveOnLostHost?: readonly string[],
-): void {
+): Promise<{ attempted: number; revived: number }> {
     const lost = liveOnLostHost ? new Set(liveOnLostHost) : undefined;
     // A surviving host supplies live evidence for specs written before this
     // field existed. Never backfill dormant specs from their mere existence.
@@ -1132,6 +1154,11 @@ export function reviveRunningAgents(
         return spec;
     });
     const candidates = agentsToRevive(specs);
+    // Each reservation's `ready` resolves with whether that agent actually held.
+    // Collected so the CALLER can be told — host recovery decides "recovered" vs
+    // "degraded" on this, and used to decide it on whether a host process
+    // returned, which is true even when every agent is dead.
+    const outcomes: Promise<boolean>[] = [];
     let slot = 0;
     for (const candidate of candidates) {
         if (queuedAgentRevivals.has(candidate.id)) continue;
@@ -1139,6 +1166,7 @@ export function reviveRunningAgents(
         const ready = new Promise<boolean>(resolve => { finish = resolve; });
         const reservation = { ready, finish };
         queuedAgentRevivals.set(candidate.id, reservation);
+        outcomes.push(ready);
         schedule(() => {
             if (queuedAgentRevivals.get(candidate.id) !== reservation) return;
             queuedAgentRevivals.delete(candidate.id);
@@ -1172,13 +1200,31 @@ export function reviveRunningAgents(
                 });
                 live = terminalManager().isLive(spec.id);
                 broadcastTerminalRestarted(spec.id);
+                // A pty registering is not the agent running. Believe the revival
+                // only if it is still there a moment later; a resume that fails
+                // (a session still locked by the process that just died, say)
+                // exits in well under this window.
+                if (live) {
+                    void survives(spec.id, AGENT_REVIVE_SETTLE_MS).then((held) => {
+                        if (!held) {
+                            console.warn(
+                                `[agents] ${candidate.id} was relaunched and exited immediately — not revived`,
+                            );
+                        }
+                        finish(held);
+                    });
+                    return;
+                }
             } catch (error) {
                 console.warn(`[agents] Failed to restore ${candidate.id}`, error);
-            } finally {
-                finish(live);
             }
+            finish(live);
         }, slot++ * AGENT_UPGRADE_NUDGE_INTERVAL_MS);
     }
+    return Promise.all(outcomes).then((held) => ({
+        attempted: held.length,
+        revived: held.filter(Boolean).length,
+    }));
 }
 
 function maybeRelaunchAgent(id: string, existing: boolean): void {
