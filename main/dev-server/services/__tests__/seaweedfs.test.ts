@@ -238,6 +238,28 @@ describe('provisioning one workspace', () => {
         expect(joined).toContain('-filer=localhost:8888');
     });
 
+    it('tolerates an EXISTING bucket, and nothing else', () => {
+        // `s3.bucket.create` has no `-ignoreExisting` and returns `bucket %s
+        // already exists` — a non-zero exit. Provisioning runs on every acquire,
+        // so without this the SECOND run fails and every restart breaks.
+        //
+        // Caught by the real-container test after this file had already claimed
+        // convergence: the claim was reasoned from `s3.configure` being
+        // convergent rather than read off `s3.bucket.create`.
+        const bucketStep = steps()
+            .map((step) => step.argv.join(' '))
+            .find((a) => a.includes('s3.bucket.create')) as string;
+
+        expect(bucketStep).toContain("already exists");
+        expect(bucketStep).toContain('exit 0');
+
+        // NOT a blanket tolerance. `|| true` would swallow a real failure — no
+        // filer, no permission, a malformed name — behind a step that reported
+        // success having made no bucket.
+        expect(bucketStep).not.toMatch(/\|\|\s*true/);
+        expect(bucketStep).toContain('exit 1');
+    });
+
     it('is CONVERGENT, so re-provisioning an existing workspace is safe', () => {
         // command_s3_configure.go GetUser -> CreateUser on NotFound -> UpdateUser
         // otherwise, and `s3.bucket.create` on an existing bucket is a no-op.

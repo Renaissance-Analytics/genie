@@ -502,10 +502,16 @@ function minioSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[] 
  *
  * ## Convergence
  *
- * Re-provisioning has to be safe — Genie re-runs these. `s3.bucket.create` on an
- * existing bucket is a no-op, and `command_s3_configure.go` reads GetUser ->
- * CreateUser on NotFound -> UpdateUser otherwise, so a second run updates in
- * place rather than failing or stacking a duplicate identity.
+ * Re-provisioning has to be safe — Genie re-runs these on every acquire.
+ *
+ * `command_s3_configure.go` is convergent by itself: GetUser -> CreateUser on
+ * NotFound -> UpdateUser otherwise, so a second run updates in place rather than
+ * failing or stacking a duplicate identity.
+ *
+ * `s3.bucket.create` is NOT. It has no `-ignoreExisting` and errors `bucket %s
+ * already exists`, so the bucket step makes itself convergent — see it below.
+ * This paragraph previously claimed both were no-ops, which was reasoning from
+ * one command to the other rather than reading the second.
  *
  * ## Why every step is a `sh -c`
  *
@@ -534,7 +540,29 @@ function seaweedSteps(admin: EngineAdmin, slice: WorkspaceSlice): ProvisionStep[
     return [
         {
             label: 'bucket',
-            argv: shell(`s3.bucket.create -name ${bucket}`),
+            // CONVERGENT BY HAND, because `s3.bucket.create` is not convergent on
+            // its own. It has no `-ignoreExisting` flag, and
+            // `command_s3_bucket_create.go:122` returns `bucket %s already exists`
+            // — a non-zero exit, which fails the step.
+            //
+            // An earlier version of this file asserted it was a no-op, reasoning
+            // from `s3.configure` being convergent. It is not, and the
+            // real-container test caught it: provisioning runs on EVERY acquire,
+            // so the second pass failed and would have broken every restart.
+            //
+            // ONLY "already exists" is tolerated. A blanket `|| true` would hide a
+            // real failure — no filer, no permission, a malformed name — behind a
+            // step reporting success with no bucket made.
+            argv: [
+                'sh',
+                '-c',
+                `out=$(printf '%s
+' 's3.bucket.create -name ${bucket}' | ` +
+                    `weed shell -master=localhost:9333 -filer=localhost:8888 2>&1) && exit 0; ` +
+                    `printf '%s
+' "$out" >&2; ` +
+                    `case "$out" in *'already exists'*) exit 0 ;; esac; exit 1`,
+            ],
         },
         {
             label: 'user',
