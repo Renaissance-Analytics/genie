@@ -201,9 +201,18 @@ jobs:
       # registry problem, at a named step, before any test runs. The alternative
       # — leaving it to the tests — is what produced the misdiagnosis.
       #
-      # These are the Docker Hub images the real suite runs. The Genie Postgres
-      # image is NOT listed: `postgres-image.real.test.ts` builds it from the
-      # pgvector base below, which is the thing that needs fetching.
+      # These are the images the real suite runs. The Genie Postgres image is NOT
+      # listed: `postgres-image.real.test.ts` builds it from the pgvector base
+      # below, which is the thing that needs fetching.
+      #
+      # `quay.io/minio/minio:latest` USED to be here and is gone. MinIO withdrew
+      # its images from BOTH registries — measured 2026-09-30, anonymous manifest
+      # GETs returned 401 from quay AND Docker Hub, and Hub's tag list reported
+      # `object not found`, while `library/redis:7-alpine` returned 200 from the
+      # same probe. That failure is what this step reported for weeks, correctly,
+      # AS a registry problem. The S3 engine is SeaweedFS now (genie#758), pinned
+      # to a real semver tag rather than a moving one, and the boundary test drives
+      # a real AWS CLI so the same tag discipline applies to it.
       #
       # Retried, because a registry blip is not a code failure and a one-shot
       # pull turns one into the other. Still bounded: three attempts, then a
@@ -215,7 +224,7 @@ jobs:
       - name: Pull the images the real tests run
         timeout-minutes: 8
         run: |
-          for image in redis:7-alpine pgvector/pgvector:pg17 quay.io/minio/minio:latest; do
+          for image in redis:7-alpine pgvector/pgvector:pg17 chrislusf/seaweedfs:4.48 amazon/aws-cli:2.31.31; do
             for attempt in 1 2 3; do
               if docker pull "$image"; then
                 break

@@ -1013,6 +1013,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                     ...(ownerId ? { [WORKSPACE_LABEL]: ownerId } : {}),
                 },
                 ...(spec.command ? { command: spec.command(admin.password) } : {}),
+                ...(spec.entrypoint ? { entrypoint: spec.entrypoint(admin.password) } : {}),
                 env: {
                     ...(spec.adminEnv?.(admin.password) ?? {}),
                     ...(config.engine === 'custom' ? config.env ?? {} : {}),

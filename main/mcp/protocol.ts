@@ -2612,6 +2612,7 @@ const MANAGE_SERVICE_TOOL = {
                     'redis',
                     'meilisearch',
                     'minio',
+                    'seaweedfs',
                     'mailpit',
                     'websockets',
                     'custom',

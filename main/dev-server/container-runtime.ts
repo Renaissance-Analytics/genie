@@ -188,6 +188,19 @@ export interface ContainerSpec {
      *  recognised on the next run (see `argv.ts#devContainerNameFor`). */
     name: string;
     image: string;
+    /**
+     * Replace the image's ENTRYPOINT. Only the FIRST word configures docker
+     * (`--entrypoint` takes one); the rest are appended before `command`, which
+     * is where docker expects them.
+     *
+     * Exists for SeaweedFS (genie#758): its S3 gateway is allow-all unless
+     * started with `-s3.config`, so the identity file must be written before the
+     * server binds a port — which needs a shell, and the image's own entrypoint
+     * would otherwise read that shell as a `weed` subcommand. An override is
+     * expected to still CALL the original entrypoint where it does real work; the
+     * SeaweedFS one fixes data-volume ownership.
+     */
+    entrypoint?: string[];
     /** Literal argv appended after the image. Never a shell string. */
     command?: string[];
     env?: Record<string, string>;
