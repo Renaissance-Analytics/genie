@@ -73,6 +73,7 @@ import {
     agentLaunchLoadedChannel,
     isTerminalLive,
 } from '../terminal/ipc';
+import { deliverInput } from '../terminal/submit';
 import { agentName, agentRef, savedAgentKey, type AgentTui } from '../agents/identity';
 import {
     agentAllowedTuis,
@@ -640,13 +641,21 @@ async function deliverTerminalInput(
     id: string,
     built: { bytes: string; submitAfter?: string },
 ): Promise<TerminalInputDelivery> {
-    const delivered = writeToTerminal(id, built.bytes);
-    if (!built.submitAfter) return { delivered, submitted: delivered };
-    // Nothing to submit if the body never arrived — and a bare CR into a
-    // half-dead terminal is exactly the stray Enter this warns callers about.
-    if (!delivered) return { delivered: false, submitted: false };
-    await new Promise((resolve) => setTimeout(resolve, PASTE_SUBMIT_DELAY_MS));
-    return { delivered: true, submitted: writeToTerminal(id, built.submitAfter) };
+    // The decision lives in `terminal/submit.ts` with its I/O injected, so the
+    // waiting and the confirming are testable without a pty. This used to submit
+    // on a fixed 60ms timer and report success whenever the BYTE reached the pty
+    // — which on a freshly-restarted Codex meant the Enter arrived at a TUI that
+    // was not listening, the prompt sat unsubmitted in the composer, and the call
+    // said it had been sent.
+    return deliverInput(id, built, {
+        write: (terminalId, data) => writeToTerminal(terminalId, data),
+        lastOutputAt: (terminalId) => terminalLastOutputAt(terminalId),
+        sleep: (ms) =>
+            new Promise((resolve) => {
+                const timer = setTimeout(resolve, ms);
+                timer.unref?.();
+            }),
+    });
 }
 
 /**
