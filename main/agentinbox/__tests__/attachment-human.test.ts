@@ -43,6 +43,7 @@ function makeStore(): AgentInboxStore & { rows: AgentInboxMessage[] } {
         getCursor: () => 0,
         setCursor: () => {},
         undeliveredFor: () => [],
+        hasDmFrom: (from: string, to: string) => rows.some(r => r.kind === 'dm' && r.from === from && r.to === to),
         sentDmReceipts: () => [],
         clearChannel: () => 0,
         deleteDmThread: () => 0,

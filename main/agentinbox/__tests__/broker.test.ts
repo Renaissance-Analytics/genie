@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentInboxBroker, INBOX_CAP } from '../broker';
+import { AgentInboxBroker, INBOX_CAP, LOG_CAP } from '../broker';
 import type { AgentInboxBrokerEvent, AgentInboxJoinInput } from '../types';
 
 /** Build a join input with sane defaults. */
@@ -521,6 +521,8 @@ describe('AgentInboxBroker — server-push notify sink', () => {
             getCursor: () => 0,
             setCursor: () => {},
             undeliveredFor: (agentId: string) => (agentId === 'B' ? [stored] : []),
+            hasDmFrom: (from: string, to: string) =>
+                stored.kind === 'dm' && stored.from === from && stored.to === to,
             sentDmReceipts: () => [],
             clearChannel: () => 0,
             deleteDmThread: () => 0,
@@ -741,5 +743,64 @@ describe('AgentInboxBroker — re-binding an unchanged chat session', () => {
         broker.setChatSession('a1', 'session-b');
         expect(events.filter((e) => e.type === 'presence')).toHaveLength(1);
         expect(broker.getInfo('a1')?.chatSessionId).toBe('session-b');
+    });
+});
+
+/**
+ * A PRIVATE AGENT STAYS REPLIABLE — the permission must not expire.
+ *
+ * The owner: *"even if an agent is not 'visible' to the workstation, it is
+ * visible to any agents that it talks to."* That is already the intended
+ * contract — the `agentinbox` tool says "when one messages you first, you may
+ * reply in that durable thread" — and `reachable()` implements it.
+ *
+ * It implements it FRAGILELY. The evidence that the private agent opened the
+ * thread is `dmLogs[pair][0]` — the first entry of an in-memory log that is
+ * trimmed at LOG_CAP and rebuilt at boot from `loadRecent`. So the permission
+ * decays two ways:
+ *
+ *  - talk long enough and the opener is evicted by the cap;
+ *  - restart Genie and the opener may never be loaded.
+ *
+ * Either way replies to a private agent start being refused, silently, in the
+ * middle of a working conversation. Visibility is supposed to govern DISCOVERY,
+ * not whether an answer can be delivered.
+ */
+describe('replying to a private agent keeps working', () => {
+    it('after the in-memory thread has been trimmed past its cap', () => {
+        const b = fresh();
+        b.join(input({ agentId: 'PRIVATE', workspaceId: 'w1', scope: 'hidden' }));
+        b.join(input({ agentId: 'PUBLIC', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
+
+        // PRIVATE opens the thread — this is what earns the reply.
+        expect(b.send({ fromAgentId: 'PRIVATE', toAgentId: 'PUBLIC', text: 'Can you help?' }).ok).toBe(true);
+        // A long conversation. The opener falls out of the capped log.
+        for (let i = 0; i < LOG_CAP + 5; i++) {
+            b.send({ fromAgentId: 'PUBLIC', toAgentId: 'PRIVATE', text: 'chat ' + i });
+        }
+
+        expect(b.send({ fromAgentId: 'PUBLIC', toAgentId: 'PRIVATE', text: 'still here?' }).ok).toBe(true);
+    });
+
+    it('CONTROL: an unrelated agent still cannot reach a hidden one', () => {
+        // Without this, "replies keep working" would pass against a build that
+        // had simply stopped enforcing scope — which is the opposite bug and a
+        // disclosure, not an inconvenience.
+        const b = fresh();
+        b.join(input({ agentId: 'PRIVATE', workspaceId: 'w1', scope: 'hidden' }));
+        b.join(input({ agentId: 'STRANGER', workspaceId: 'w3', slug: 'ws-three', scope: 'all' }));
+
+        expect(b.send({ fromAgentId: 'STRANGER', toAgentId: 'PRIVATE', text: 'hello?' }).ok).toBe(false);
+    });
+
+    it('CONTROL: a hidden agent is still absent from the directory', () => {
+        // The fix must not make it discoverable. Repliable and listed are
+        // different things, and conflating them is the disclosure this guards.
+        const b = fresh();
+        b.join(input({ agentId: 'PRIVATE', workspaceId: 'w1', scope: 'hidden' }));
+        b.join(input({ agentId: 'PUBLIC', workspaceId: 'w2', slug: 'ws-two', scope: 'all' }));
+        b.send({ fromAgentId: 'PRIVATE', toAgentId: 'PUBLIC', text: 'hi' });
+
+        expect(b.discoverableFor('PUBLIC').map((a) => a.agentId)).not.toContain('PRIVATE');
     });
 });

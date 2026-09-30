@@ -35,6 +35,16 @@ export interface AgentInboxStore {
      *  seq). Lets a sender tell 'queued' from 'seen' and decide whether to escalate
      *  (issue #9). Derived from the existing cursors — no per-message state. */
     sentDmReceipts(fromId: string, limit: number): DmReceipt[];
+    /**
+     * Has `fromId` ever sent `toId` a DM?
+     *
+     * The durable answer to "is there already a thread here", which decides
+     * whether a PRIVATE agent may be replied to. It used to be read off the
+     * first entry of a capped in-memory log, so the permission decayed: a long
+     * conversation evicted the opener, and a restart might never load it. The
+     * reply then started being refused mid-conversation, silently.
+     */
+    hasDmFrom(fromId: string, toId: string): boolean;
     /** Wipe a channel's persisted history (genie #64). Returns rows deleted.
      *  Cursors are deliberately untouched — clearing the human's view of a
      *  conversation must never rewind an agent's ACK position. */
@@ -87,6 +97,9 @@ export const noopAgentInboxStore: AgentInboxStore = {
     },
     sentDmReceipts() {
         return [];
+    },
+    hasDmFrom() {
+        return false;
     },
     clearChannel() {
         return 0;
@@ -271,6 +284,20 @@ export const dbAgentInboxStore: AgentInboxStore = {
             )
             .all(cursor, agentId, agentId, ...channelKeys);
         return hydrate(rows);
+    },
+    hasDmFrom(fromId, toId) {
+        // EXISTS, not a fetch: the question is whether a thread was ever opened,
+        // and the answer must not depend on how much history is still cached or
+        // on a LIMIT that a busy pair would outgrow.
+        const row = getDb()
+            .prepare<[string, string], { hit: number }>(
+                `SELECT 1 AS hit
+                   FROM whisper_messages
+                  WHERE from_id = ? AND to_id = ? AND kind = 'dm'
+                  LIMIT 1`,
+            )
+            .get(fromId, toId);
+        return !!row;
     },
     sentDmReceipts(fromId, limit) {
         // A DM is SEEN once its recipient's ACK cursor (advanced on `receive`) has
