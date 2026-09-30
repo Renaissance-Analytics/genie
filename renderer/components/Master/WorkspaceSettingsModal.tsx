@@ -12,6 +12,7 @@ import type {
     IssuewatchPolicy,
     IssuewatchPolicyBuckets,
     WorkspaceAgentAccess,
+    WorkspaceShareLink,
 } from '../../lib/genie';
 import { api } from '../../lib/genie';
 import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
@@ -427,6 +428,8 @@ export default function WorkspaceSettingsModal({
 
                 <TynnProvisionPanel workspaceId={workspace.id} />
 
+                <WorkspaceSharePanel workspaceId={workspace.id} />
+
                 {workspace.path && <EnvelopeReposPanel workspacePath={workspace.path} />}
 
                 {workspace.path && <KnowledgeFoldersPanel workspacePath={workspace.path} />}
@@ -676,6 +679,200 @@ export default function WorkspaceSettingsModal({
 
 /** Dense section: a slim heading (+ optional one-line sub / right-aligned
  *  action) over its rows. Reuses the shared .set-section primitives. */
+
+/** What a workspace share link grants. Read-only is the default because a link
+ *  goes to somebody who does not have access yet, and `control` hands them the
+ *  terminals on the owner's own machine. */
+const SHARE_CAPABILITY_OPTIONS = [
+    { value: 'readonly', label: 'Read only — they can look, not drive' },
+    { value: 'control', label: 'Control — they can use the terminals' },
+];
+
+/**
+ * SHARE THIS WORKSPACE BY LINK — create, copy, and the LINK MANAGER.
+ *
+ * The owner's ask, in their words: "individual workspaces from Genie that I can
+ * share to a user by giving them a link that opens a Genie window to that
+ * workspace", plus "a link manager in the workspace settings so users can
+ * invalidate links on demand."
+ *
+ * Two properties drive the whole shape of this panel:
+ *
+ *  - The URL is the CREDENTIAL, and it is served exactly once. Tynn's manager list
+ *    deliberately omits tokens, so a link that is not copied while it is on screen
+ *    is gone — which is why the fresh link gets its own block, stays there until
+ *    dismissed, and copies on one click.
+ *  - A link that has been sent cannot be unsent. Revoking is therefore the only
+ *    real control over it, and a revoke that silently failed would be worse than
+ *    no revoke at all — so a failure is shown, and the list is re-read from the
+ *    service rather than optimistically pruned.
+ *
+ * An unregistered machine gets the reason, not a form: a share link is scoped to a
+ * workspace ON a workstation, and there is no workstation until Genie has
+ * self-registered with Tynn.
+ */
+function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
+    const [availability, setAvailability] = useState<
+        { enrolled: true } | { enrolled: false; reason: string } | null
+    >(null);
+    const [links, setLinks] = useState<WorkspaceShareLink[]>([]);
+    const [capability, setCapability] = useState<'control' | 'readonly'>('readonly');
+    const [minting, setMinting] = useState(false);
+    // The just-minted link. Held in state because this is the ONLY moment its URL
+    // exists in the UI — the list it joins does not carry one.
+    const [fresh, setFresh] = useState<WorkspaceShareLink | null>(null);
+    const [copied, setCopied] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = useCallback(async () => {
+        setLinks(await api().workspaces.listShareLinks(workspaceId));
+    }, [workspaceId]);
+
+    useEffect(() => {
+        void (async () => {
+            setAvailability(await api().workspaces.shareLinkAvailability());
+            await load();
+        })();
+    }, [load]);
+
+    const mint = async () => {
+        if (minting) return;
+        setMinting(true);
+        setError(null);
+        try {
+            const res = await api().workspaces.mintShareLink(workspaceId, capability);
+            if (!res.ok) {
+                setError(res.error);
+                return;
+            }
+            setFresh(res.link);
+            setCopied(false);
+            await load();
+        } finally {
+            setMinting(false);
+        }
+    };
+
+    const copy = async (url: string) => {
+        try {
+            await navigator.clipboard.writeText(url);
+            setCopied(true);
+        } catch {
+            // Clipboard denied — the URL is on screen and selectable, so the link
+            // is still obtainable. Saying "copied" when it was not is the failure
+            // that matters here.
+            setCopied(false);
+        }
+    };
+
+    const revoke = async (id: string) => {
+        setError(null);
+        const res = await api().workspaces.revokeShareLink(id);
+        if (!res.ok) setError(res.error ?? 'Could not invalidate that link.');
+        // Re-read either way. An optimistic removal on a FAILED revoke would show
+        // a live link as gone, which is the one lie this panel must not tell.
+        await load();
+        if (fresh && fresh.id === id) setFresh(null);
+    };
+
+    if (availability && !availability.enrolled) {
+        return (
+            <Section title="Share this workspace" sub="Give someone a link that opens it in Genie">
+                <Text size="sm" style={{ color: 'var(--fg-3)' }}>
+                    {availability.reason}
+                </Text>
+            </Section>
+        );
+    }
+
+    return (
+        <Section
+            title="Share this workspace"
+            sub="Give someone a link that opens THIS workspace in their Genie"
+        >
+            <Row
+                label="New link"
+                sub="Claimed by whoever opens it first, then it stops working. Expires in 7 days."
+            >
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Select
+                        value={capability}
+                        onValueChange={(v: string) => setCapability(v as 'control' | 'readonly')}
+                        list={SHARE_CAPABILITY_OPTIONS}
+                    />
+                    <Action size="sm" color="blue" icon="link" disabled={minting} onClick={mint}>
+                        {minting ? 'Creating…' : 'Create link'}
+                    </Action>
+                </div>
+            </Row>
+
+            {fresh?.url && (
+                <div className="ws-tools" data-testid="fresh-share-link">
+                    <Text size="xs" style={{ color: 'var(--amber-400)' }}>
+                        Copy this now — it is shown once and never again.
+                    </Text>
+                    <Input value={fresh.url} readOnly aria-label="Share link URL" />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <Action
+                            size="sm"
+                            color="blue"
+                            icon={copied ? 'check' : 'copy'}
+                            onClick={() => void copy(fresh.url as string)}
+                        >
+                            {copied ? 'Copied' : 'Copy link'}
+                        </Action>
+                        <Action size="sm" icon="x" onClick={() => setFresh(null)}>
+                            Done
+                        </Action>
+                    </div>
+                </div>
+            )}
+
+            {error && (
+                <Text size="xs" style={{ color: 'var(--rose-400)' }}>
+                    {error}
+                </Text>
+            )}
+
+            {/* THE LINK MANAGER. Always rendered, even empty: "no live links" is an
+                answer, and hiding the section when there are none makes the feature
+                look absent to anyone who has not created one yet. */}
+            <Row label="Live links" vertical>
+                {links.length === 0 ? (
+                    <Text size="xs" style={{ color: 'var(--fg-3)' }}>
+                        No live links for this workspace.
+                    </Text>
+                ) : (
+                    links.map((link) => (
+                        <div
+                            key={link.id}
+                            className="ws-tools"
+                            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                        >
+                            <Badge>{link.capability === 'control' ? 'Control' : 'Read only'}</Badge>
+                            <Text size="xs" style={{ color: 'var(--fg-3)' }}>
+                                {link.expires_at
+                                    ? `Expires ${new Date(link.expires_at).toLocaleDateString()}`
+                                    : 'No expiry'}
+                            </Text>
+                            <span style={{ marginLeft: 'auto' }}>
+                                <Action
+                                    size="sm"
+                                    color="red"
+                                    icon="trash"
+                                    onClick={() => void revoke(link.id)}
+                                >
+                                    Invalidate
+                                </Action>
+                            </span>
+                        </div>
+                    ))
+                )}
+            </Row>
+        </Section>
+    );
+}
+
 function Section({
     title,
     sub,
