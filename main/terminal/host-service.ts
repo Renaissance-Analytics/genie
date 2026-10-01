@@ -1400,7 +1400,32 @@ export interface HostRecoveryDeps {
     ): { attempted: number; revived: number } | Promise<{ attempted: number; revived: number }> | void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
+    /** Wait between respawn attempts. Injected so the backoff is testable
+     *  without real time; defaults to a real timer. */
+    sleep?(ms: number): Promise<void>;
 }
+
+/**
+ * How hard recovery tries to get a detached host back before giving up and
+ * degrading to in-process (genie#774).
+ *
+ * The failure this exists for is TRANSIENT and self-clearing: a host that has
+ * just died has not yet released its named pipe, so an immediate respawn hits
+ * `EADDRINUSE` and dies in ~500ms — while a second later it would have bound
+ * cleanly. Recovery used to attempt the respawn EXACTLY ONCE, so it lost that
+ * race and degraded permanently. The owner's machine then sat on the in-process
+ * backend for hours, where terminals do not survive a restart, so every Genie
+ * blink killed every agent and only a human noticing could end it.
+ *
+ * The owner's rule: *"we should never have to manually fix issues, genie should
+ * handle that."*
+ *
+ * The BUDGET is what matters, not the count: it must comfortably outlast a pipe
+ * release (the measured collision died 542ms in), and it must END — a machine
+ * that genuinely cannot host terminals has to fall back rather than spin with no
+ * terminals at all.
+ */
+const RESPAWN_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000];
 
 /** True while a recovery is in flight, so a second death signal can't stack a
  *  concurrent recovery on top (which would double snapshot/respawn/reattach). */
@@ -1441,11 +1466,27 @@ export async function recoverFromHostLoss(
         } catch {
             /* best-effort */
         }
+        // RETRY, don't give up on the first loss (genie#774). A thrown respawn
+        // counts as a failed ATTEMPT rather than an abort: giving up on the first
+        // exception would be the single-attempt bug wearing a different hat.
         let host = false;
-        try {
-            ({ host } = await deps.respawn());
-        } catch {
-            host = false; // no backend came back → degrade, don't abort
+        const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => {
+            const t = setTimeout(r, ms);
+            (t as { unref?: () => void }).unref?.();
+        }));
+        for (let attempt = 0; ; attempt++) {
+            try {
+                ({ host } = await deps.respawn());
+            } catch {
+                host = false;
+            }
+            if (host) break;
+            if (attempt >= RESPAWN_BACKOFF_MS.length) break; // budget spent → degrade
+            try {
+                await sleep(RESPAWN_BACKOFF_MS[attempt]!);
+            } catch {
+                break; // a sleep that fails must not strand the recovery
+            }
         }
         // Caught, as before — one failed agent must not strand the rest. What is
         // new is that the failure is REMEMBERED: catching it and then reporting

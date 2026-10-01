@@ -211,3 +211,118 @@ describe('the outcome tells the truth about the agents', () => {
         expect(await recoverFromHostLoss(d)).toBe('degraded');
     });
 });
+
+/**
+ * THE HOST COMES BACK BY ITSELF (genie#774).
+ *
+ * The owner's rule, after a day without terminals: *"the upgrade should bring
+ * that back up. we should never have to manually fix issues, genie should handle
+ * that."*
+ *
+ * It did not. `respawn()` was attempted EXACTLY ONCE, and a single failure meant
+ * `host = false` → `degraded` → nothing ever tried again. On 2026-10-01 that left
+ * the machine on the in-process backend for hours: terminals stopped surviving
+ * restarts, so every Genie blink killed every agent, and the only way out was a
+ * human noticing.
+ *
+ * The failure it loses to is TRANSIENT and self-clearing. A host that has just
+ * died has not yet released its named pipe, so an immediate respawn hits
+ * `EADDRINUSE` and dies in half a second — while a second later it would have
+ * bound cleanly. One attempt is precisely the wrong number.
+ *
+ * So the respawn is retried with backoff. The budget matters more than the count:
+ * it has to outlast a pipe release, and it has to end, because a machine that
+ * genuinely cannot host terminals must still fall back rather than spin.
+ */
+describe('recoverFromHostLoss keeps trying to get a host back (genie#774)', () => {
+    /** A deps bundle whose respawn fails `failures` times, then succeeds. */
+    function retryDeps(failures: number) {
+        const slept: number[] = [];
+        let attempts = 0;
+        return {
+            slept,
+            attempts: () => attempts,
+            deps: {
+                ...deps().d,
+                respawn: async () => {
+                    attempts += 1;
+                    return { host: attempts > failures };
+                },
+                sleep: async (ms: number) => {
+                    slept.push(ms);
+                },
+            } as HostRecoveryDeps,
+        };
+    }
+
+    it('retries a respawn that lost the race for the pipe, and recovers', async () => {
+        // THE case that happened: one immediate failure, then it binds.
+        const r = retryDeps(1);
+        const outcome = await recoverFromHostLoss(r.deps);
+
+        expect(r.attempts()).toBeGreaterThan(1);
+        expect(outcome).toBe('recovered');
+    });
+
+    it('waits BETWEEN attempts, and waits longer each time', async () => {
+        // A tight retry loop would just lose the same race five times in a
+        // row and still report degraded — the delay is the whole mechanism.
+        const r = retryDeps(3);
+        await recoverFromHostLoss(r.deps);
+
+        expect(r.slept.length).toBeGreaterThanOrEqual(2);
+        expect(r.slept.at(-1)!).toBeGreaterThan(r.slept[0]!);
+    });
+
+    it('outlasts a pipe release — the total budget is seconds, not milliseconds', async () => {
+        // The measured failure died 542ms after spawning. A budget shorter than
+        // that would never have caught it.
+        const r = retryDeps(99); // never succeeds
+        await recoverFromHostLoss(r.deps);
+
+        const total = r.slept.reduce((a, b) => a + b, 0);
+        expect(total).toBeGreaterThanOrEqual(5_000);
+    });
+
+    it('STILL degrades when a host genuinely cannot come back', async () => {
+        // The retry must END. A machine that cannot host terminals has to fall
+        // back to in-process rather than spin forever with no terminals at all.
+        const r = retryDeps(99);
+        const outcome = await recoverFromHostLoss(r.deps);
+
+        expect(outcome).toBe('degraded');
+    });
+
+    it('POSITIVE CONTROL: a respawn that works first time is attempted ONCE', async () => {
+        // Without this the fix could retry unconditionally, which would delay
+        // every ordinary recovery by the full backoff budget.
+        const r = retryDeps(0);
+        const outcome = await recoverFromHostLoss(r.deps);
+
+        expect(r.attempts()).toBe(1);
+        expect(r.slept).toEqual([]);
+        expect(outcome).toBe('recovered');
+    });
+
+    it('treats a THROWN respawn as a failed attempt, not an abort', async () => {
+        // `respawn` is documented as never throwing, but a recovery that gave up
+        // on the first exception would be the single-attempt bug wearing a
+        // different hat.
+        let attempts = 0;
+        const slept: number[] = [];
+        const outcome = await recoverFromHostLoss({
+            ...deps().d,
+            respawn: async () => {
+                attempts += 1;
+                if (attempts < 2) throw new Error('spawn exploded');
+                return { host: true };
+            },
+            sleep: async (ms: number) => {
+                slept.push(ms);
+            },
+        } as HostRecoveryDeps);
+
+        expect(attempts).toBe(2);
+        expect(outcome).toBe('recovered');
+    });
+});
