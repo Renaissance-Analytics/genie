@@ -360,7 +360,7 @@ function splitLines(text: string): string[] {
 
 export function parsePs(stdout: string, workspaceId?: string): ContainerSummary[] {
     return splitLines(stdout).flatMap((line) => {
-        const [id, rawName, image, rawState, status] = line.split('\t');
+        const [id, rawName, image, rawState, status, command] = line.split('\t');
         if (!id || !rawName) return [];
         const state = String(rawState ?? '').trim() as ContainerState;
         return [
@@ -371,6 +371,9 @@ export function parsePs(stdout: string, workspaceId?: string): ContainerSummary[
                 image: image ?? '',
                 state: CONTAINER_STATES.includes(state) ? state : 'unknown',
                 status: (status ?? '').trim(),
+                // Absent on a runtime that does not report it; the one caller
+                // treats "cannot tell" as "leave it alone" rather than guessing.
+                ...(command ? { command: command.trim() } : {}),
                 workspaceId,
             },
         ];

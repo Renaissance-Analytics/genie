@@ -273,6 +273,15 @@ export interface ContainerSummary {
     state: ContainerState;
     /** The CLI's human status column (`Up 3 minutes`). */
     status?: string;
+    /** The container's own launch command, when the runtime reports one.
+     *
+     *  Read for exactly one decision: a container's command is FIXED at create,
+     *  so a Redis adopted from an older Genie carries the command it was made
+     *  with — without the `--user` declaration that makes its workspace
+     *  credential survive a restart (genie#771). Optional, and absent means
+     *  "cannot tell": the caller leaves such a container alone rather than
+     *  recreating one it has no evidence about. */
+    command?: string;
     /** Set when the listing was filtered to one workspace — every row in such a
      *  listing carries that label by construction, so it is not re-parsed. */
     workspaceId?: string;
