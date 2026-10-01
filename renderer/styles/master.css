@@ -900,6 +900,16 @@
     border-radius: 7px;
 }
 .gicon {
+    /* THE ANCHOR for `.iw-btn-badge`, which is absolutely positioned at the
+       button's top-right corner. Without a containing block here the badge
+       resolved against whatever was positioned further up the title bar and
+       painted off the button entirely — so the Questions and Lists counts were
+       computed correctly and were simply never visible. IssueWatch and
+       AgentInbox escaped it only because `.iw-btn` and `.agentinbox-btn` each
+       declare `position: relative` themselves, which is the per-button patch
+       this replaces: badging is a property of a header icon, not of four
+       specific ones. */
+    position: relative;
     width: 30px;
     height: 30px;
     border-radius: var(--radius-lg);
