@@ -1258,11 +1258,60 @@ export async function selectTerminalBackend(deps: {
     >;
     initDetached: () => Promise<{ host: boolean; reattachIds: string[] }>;
     isHostBackedProbe: () => boolean;
+    /** A host that is ALREADY SERVING, or null when none is (genie#774).
+     *
+     *  Deliberately its own probe rather than reusing `isHostBackedProbe`: that
+     *  one answers "is the backend host-backed", which is also true immediately
+     *  AFTER a successful spawn. Overloading it makes every ordinary selection
+     *  look like an adoption. These are two different questions asked at two
+     *  different moments. */
+    adoptExisting?: () => { kind: HostBackendKind; ids: string[] } | null;
 }): Promise<BackendSelection> {
-    setHostBackendKind('inprocess');
     if (!deps.detachedEnabled) {
+        // The off switch wins over any probe: a backend the user turned off must
+        // not be resurrected by a stale "a host is backed" answer.
+        setHostBackendKind('inprocess');
         return { kind: 'inprocess', host: false, reattachIds: [] };
     }
+
+    // ── ALREADY SERVING? ADOPT IT. ───────────────────────────────────────────
+    // genie#774. Selection is reachable from FOUR callers — boot, `genie host
+    // start`, `genie host restart`, and host-loss recovery's respawn — and it
+    // used to spawn unconditionally. On 2026-10-01 one of them ran while a
+    // detached host was serving every pty on the machine; the second host hit
+    //
+    //   listen EADDRINUSE: \\.\pipe\genie-ptyhost-9bcd7ce6d23f
+    //
+    // died in 542ms, and eleven seconds later the incumbent went down too and
+    // took every terminal, worker and agent with it.
+    //
+    // `fancy-term-host` was RIGHT to refuse the double bind. The defect was that
+    // Genie asked, so the guard belongs here — in the one place all four callers
+    // pass through — rather than in each of them.
+    //
+    // Checked BEFORE `setHostBackendKind('inprocess')`, which used to be the
+    // first statement and is the subtle half of the bug: it disowned the live
+    // host on the way in, so everything afterwards reasoned as though there were
+    // no backend, and then collided with the one that was really there.
+    //
+    // A probe that THROWS is "cannot tell", never "a host is serving" — falling
+    // through to normal selection risks a collision, but refusing to select at
+    // all would leave the machine with no terminal backend whatsoever.
+    let serving: { kind: HostBackendKind; ids: string[] } | null = null;
+    try {
+        serving = deps.adoptExisting?.() ?? null;
+    } catch {
+        serving = null;
+    }
+    if (serving) {
+        // Deliberately NOT reset to 'inprocess' first: the live host's kind is
+        // already the truth, and disowning it is what made a healthy fleet
+        // report as in-process on the way into a collision.
+        setHostBackendKind(serving.kind);
+        return { kind: serving.kind, host: true, reattachIds: serving.ids };
+    }
+
+    setHostBackendKind('inprocess');
 
     // 1) Service first.
     let svc:

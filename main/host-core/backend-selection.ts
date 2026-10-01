@@ -2,9 +2,10 @@ import {
     selectTerminalBackend,
     activateHostService,
     removeRunKeyAutostart,
+    hostBackendKind,
 } from '../terminal/host-service';
 import { getSnapshotStore } from '../terminal/genie-adapter';
-import { initTerminalBackend, isHostBacked } from '@particle-academy/fancy-term-host';
+import { getHostClient, initTerminalBackend, isHostBacked } from '@particle-academy/fancy-term-host';
 
 /**
  * The terminal-backend fallback chain (per-user OS service → detached host →
@@ -42,6 +43,31 @@ export async function runBackendSelection(opts: BackendSelectionOptions) {
             }),
         initDetached: () => initTerminalBackend(),
         isHostBackedProbe: () => isHostBacked(),
+        // genie#774 — ADOPT a host that is already serving rather than spawning a
+        // rival that collides on the pipe and takes the fleet down with it. Both
+        // halves must agree: the package says a host is backed, AND there is a
+        // live client to read the terminals off. Either alone is not evidence of
+        // a host this process can actually talk to.
+        adoptExisting: () => {
+            let backed = false;
+            try {
+                backed = isHostBacked();
+            } catch {
+                return null;
+            }
+            if (!backed) return null;
+            const client = getHostClient();
+            if (!client) return null;
+            let ids: string[] = [];
+            try {
+                ids = client.liveIds();
+            } catch {
+                ids = []; // adopting with no id list still beats spawning a rival
+            }
+            // Whatever kind it was selected as last time ('detached' or
+            // 'service') is the truth; never relabel a live host.
+            return { kind: hostBackendKind(), ids };
+        },
     });
 }
 

@@ -379,3 +379,131 @@ describe('selectTerminalBackend (fallback chain)', () => {
         expect(sel.kind).toBe('inprocess');
     });
 });
+
+/**
+ * NEVER SPAWN A SECOND HOST WHILE ONE IS SERVING (genie#774).
+ *
+ * On 2026-10-01 every terminal, worker and agent on the owner's machine died at
+ * once. Not a crash: Genie ran backend selection while a detached host was
+ * already serving every pty, selection spawned a SECOND host, and that host hit
+ *
+ *   [pty-host] server error: listen EADDRINUSE:
+ *   address already in use \.\pipe\genie-ptyhost-9bcd7ce6d23f
+ *
+ * died in 542ms (`code=3 uptimeMs=542`), and eleven seconds later the incumbent
+ * went down too and took the fleet. `fancy-term-host` was right to refuse the
+ * double bind; the defect is that Genie asked.
+ *
+ * Selection is reachable from FOUR callers — boot, `genie host start`,
+ * `genie host restart`, and host-loss recovery's respawn — so any of them could
+ * do this at any moment. The guard belongs here, in the one place they all pass
+ * through, rather than in each caller.
+ *
+ * The specific trap is the first statement of the old implementation:
+ * `setHostBackendKind('inprocess')` ran BEFORE anything was probed, so a live
+ * host was disowned on the way in and then collided with on the way out.
+ */
+describe('selectTerminalBackend adopts a host that is already serving (genie#774)', () => {
+    const neverCalled = () => {
+        throw new Error('must not be called while a host is already serving');
+    };
+
+    it('adopts the live host instead of spawning a second one', async () => {
+        const activate = vi.fn(async () => ({ ok: false as const, reason: 'unused' }));
+        const init = vi.fn(async () => ({ host: true, reattachIds: ['spawned'] }));
+
+        const sel = await selectTerminalBackend({
+            detachedEnabled: true,
+            activateService: activate,
+            initDetached: init,
+            isHostBackedProbe: () => false,
+            adoptExisting: () => ({ kind: 'detached', ids: ['t1','t2'] }),
+        });
+
+        // THE fix: neither path that can bind the pipe may run.
+        expect(init).not.toHaveBeenCalled();
+        expect(activate).not.toHaveBeenCalled();
+        expect(sel).toMatchObject({ kind: 'detached', host: true, reattachIds: ['t1', 't2'] });
+    });
+
+    it('leaves the recorded backend kind alone when it adopts', async () => {
+        // `setHostBackendKind('inprocess')` as the first statement is what
+        // disowned the live host. Adopting must not report the fleet as
+        // in-process — `isHostBacked()` and every caller read this.
+        //
+        // The package must agree that a host is backed, because `hostBackendKind()`
+        // re-checks it and downgrades to 'inprocess' when it disagrees. That
+        // self-correction is right, and it means a world where `adoptExisting`
+        // says "serving" while `isHostBacked()` says no cannot actually occur.
+        state.isHostBacked = true;
+        setHostBackendKind('detached');
+
+        await selectTerminalBackend({
+            detachedEnabled: true,
+            activateService: neverCalled as never,
+            initDetached: neverCalled as never,
+            isHostBackedProbe: () => true,
+            adoptExisting: () => ({ kind: 'detached', ids: [] }),
+        });
+
+        expect(hostBackendKind()).toBe('detached');
+    });
+
+    it('POSITIVE CONTROL: still selects normally when NO host is serving', async () => {
+        // Without this the guard could simply never spawn, which would be a
+        // machine with no terminals at all rather than a machine with one host.
+        const activate = vi.fn(async () => ({ ok: false as const, reason: 'no runtime' }));
+        const init = vi.fn(async () => ({ host: true, reattachIds: ['x'] }));
+        let backed = false;
+
+        const sel = await selectTerminalBackend({
+            detachedEnabled: true,
+            activateService: activate,
+            initDetached: async () => {
+                backed = true; // the spawn is what makes it host-backed
+                return init();
+            },
+            isHostBackedProbe: () => backed,
+            adoptExisting: () => null,
+        });
+
+        expect(init).toHaveBeenCalled();
+        expect(sel).toMatchObject({ kind: 'detached', host: true, reattachIds: ['x'] });
+    });
+
+    it('does not adopt when detached terminals are OFF', async () => {
+        // The off switch wins. A stale probe must not resurrect a backend the
+        // user turned off.
+        const sel = await selectTerminalBackend({
+            detachedEnabled: false,
+            activateService: neverCalled as never,
+            initDetached: neverCalled as never,
+            isHostBackedProbe: () => true,
+            adoptExisting: () => ({ kind: 'detached', ids: ['t1'] }),
+        });
+
+        expect(sel).toMatchObject({ kind: 'inprocess', host: false });
+    });
+
+    it('still selects when the probe itself throws', async () => {
+        // "Cannot tell" is not "a host is serving". A probe that throws must
+        // not leave the machine with no terminal backend at all.
+        const init = vi.fn(async () => ({ host: true, reattachIds: ['x'] }));
+        let backed = false;
+
+        await selectTerminalBackend({
+            detachedEnabled: true,
+            activateService: async () => ({ ok: false as const, reason: 'x' }),
+            initDetached: async () => {
+                backed = true;
+                return init();
+            },
+            isHostBackedProbe: () => backed,
+            adoptExisting: () => {
+                throw new Error('probe exploded');
+            },
+        });
+
+        expect(init).toHaveBeenCalled();
+    });
+});
