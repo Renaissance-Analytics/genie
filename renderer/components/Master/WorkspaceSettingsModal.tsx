@@ -19,6 +19,10 @@ import { scopeValue, setScopeEntry } from '../../lib/ftq-availability';
 import { resolveWorkspaceKind } from '../../lib/workspace-kind';
 import { workspaceInitials } from '../../lib/workspace-avatar';
 import {
+    DEFAULT_SHARE_LINK_EXPIRY_DAYS,
+    SHARE_LINK_EXPIRY_CHOICES,
+} from '../../../main/tynn/share-link-options';
+import {
     agentCapField,
     describeInheritedAgentCap,
     readAgentCapField,
@@ -688,6 +692,13 @@ const SHARE_CAPABILITY_OPTIONS = [
     { value: 'control', label: 'Control — they can use the terminals' },
 ];
 
+/** How long the link stays redeemable. Built from the same list main validates
+ *  against, so the picker cannot offer a value the mint would refuse. */
+const SHARE_EXPIRY_OPTIONS = SHARE_LINK_EXPIRY_CHOICES.map((days) => ({
+    value: String(days),
+    label: days === 1 ? 'Expires in 1 day' : `Expires in ${days} days`,
+}));
+
 /**
  * SHARE THIS WORKSPACE BY LINK — create, copy, and the LINK MANAGER.
  *
@@ -717,6 +728,7 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
     >(null);
     const [links, setLinks] = useState<WorkspaceShareLink[]>([]);
     const [capability, setCapability] = useState<'control' | 'readonly'>('readonly');
+    const [expiresInDays, setExpiresInDays] = useState<number>(DEFAULT_SHARE_LINK_EXPIRY_DAYS);
     const [minting, setMinting] = useState(false);
     // The just-minted link. Held in state because this is the ONLY moment its URL
     // exists in the UI — the list it joins does not carry one.
@@ -740,7 +752,10 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
         setMinting(true);
         setError(null);
         try {
-            const res = await api().workspaces.mintShareLink(workspaceId, capability);
+            const res = await api().workspaces.mintShareLink(workspaceId, {
+                capability,
+                expiresInDays,
+            });
             if (!res.ok) {
                 setError(res.error);
                 return;
@@ -792,13 +807,19 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
         >
             <Row
                 label="New link"
-                sub="Claimed by whoever opens it first, then it stops working. Expires in 7 days."
+                sub="Claimed by whoever opens it first, then it stops working."
             >
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Select
                         value={capability}
                         onValueChange={(v: string) => setCapability(v as 'control' | 'readonly')}
                         list={SHARE_CAPABILITY_OPTIONS}
+                    />
+                    <Select
+                        value={String(expiresInDays)}
+                        onValueChange={(v: string) => setExpiresInDays(Number(v))}
+                        list={SHARE_EXPIRY_OPTIONS}
+                        aria-label="Link expiry"
                     />
                     <Action size="sm" color="blue" icon="link" disabled={minting} onClick={mint}>
                         {minting ? 'Creating…' : 'Create link'}

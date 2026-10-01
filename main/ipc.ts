@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { dispatchConnectLink } from './tynn/connect-dispatch';
 import {
     listWorkspaceShareLinks,
     mintWorkspaceShareLink,
+    mintWorkstationShareLink,
     revokeWorkspaceShareLink,
     shareLinkAvailability,
 } from './tynn/workspace-share-links';
@@ -356,7 +358,7 @@ import {
 import QRCode from 'qrcode';
 import { registerShortcuts } from './shortcuts';
 import { claimPendingFeedback } from './feedback-open';
-import { startSignIn, redeemCode } from './auth';
+import { startSignIn, redeemCode, handleGenieUrl } from './auth';
 import {
     showSettingsWindow,
     showDocsWindow,
@@ -1215,8 +1217,40 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('workspaces:share-link-availability', () => shareLinkAvailability());
     ipcMain.handle(
         'workspaces:mint-share-link',
-        (_e, id: string, capability: 'control' | 'readonly') =>
-            mintWorkspaceShareLink(id, capability),
+        (_e, id: string, options: { capability: 'control' | 'readonly'; expiresInDays?: number }) =>
+            mintWorkspaceShareLink(id, options ?? { capability: 'readonly' }),
+    );
+    // A link over the WHOLE machine, or several of its workspaces. Separate
+    // channel from the one above rather than a flag on it: they take different
+    // arguments and only one of them can reach a workspace the caller never
+    // named, so conflating the two would make that the same code path.
+    ipcMain.handle(
+        'workstation:mint-share-link',
+        (
+            _e,
+            options: {
+                capability: 'control' | 'readonly';
+                expiresInDays?: number;
+                allWorkspaces?: boolean;
+                workspaces?: string[];
+            },
+        ) => mintWorkstationShareLink(options ?? { capability: 'readonly' }),
+    );
+    // "Connect to…" — one box, two kinds of link, routed in main because only one
+    // of them may leave the app. `shell:open-external` refuses every protocol but
+    // http(s) by design, so a `genie://` link pasted here has to go to Genie's own
+    // protocol router — the same one the OS calls when such a link is clicked.
+    ipcMain.handle('connect:link', async (_e, pasted: string) =>
+        // The host THIS Genie is signed in to — a link for any other one is
+        // refused rather than opened, so pasting a stranger's URL cannot make
+        // Genie fetch an arbitrary page on somebody's behalf.
+        dispatchConnectLink(String(pasted ?? ''), getTynnBackend().host(), {
+            openExternal: async (url) => {
+                await shell.openExternal(url);
+                return { ok: true };
+            },
+            openGenieUrl: (url) => handleGenieUrl(url),
+        }),
     );
     ipcMain.handle('workspaces:list-share-links', (_e, id: string) =>
         listWorkspaceShareLinks(id),

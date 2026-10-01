@@ -68,13 +68,17 @@ describe('TynnBackend.mintWorkspaceShareLink', () => {
                 : json({}),
         );
 
-        const out = await new TynnBackend().mintWorkspaceShareLink('wst1', 'ws-design', 'readonly');
+        const out = await new TynnBackend().mintWorkspaceShareLink('wst1', 'ws-design', 'readonly', 14);
 
         const post = captured.find((c) => c.method === 'POST');
         expect(post?.url).toBe('https://tynn.gen/workstations/wst1/share-links');
+        // The expiry the user picked, sent explicitly. Tynn has always accepted
+        // `expires_in_days` and defaulted it to 7; omitting it meant every link
+        // expired in a week whatever the picker said.
         expect(JSON.parse(post?.body ?? '{}')).toEqual({
             workspace: 'ws-design',
             capability: 'readonly',
+            expires_in_days: 14,
         });
         expect(out.url).toBe('https://tynn.gen/invites/accept/tok-abc');
         expect(out.id).toBe('inv1');
@@ -86,11 +90,86 @@ describe('TynnBackend.mintWorkspaceShareLink', () => {
             req.url.includes('/share-links') ? json({ link: { id: 'i', url: 'u' } }) : json({}),
         );
 
-        await new TynnBackend().mintWorkspaceShareLink('wst1', 'ws-design', 'control');
+        await new TynnBackend().mintWorkspaceShareLink('wst1', 'ws-design', 'control', 7);
 
         const body = JSON.parse(captured.find((c) => c.method === 'POST')?.body ?? '{}');
         expect(body).not.toHaveProperty('scopes');
         expect(body.capability).toBe('control');
+    });
+});
+
+/**
+ * WORKSTATION share links — the other half the owner asked for: *"I can either
+ * share a workspace individually … or I can share my entire workstation."*
+ *
+ * Same endpoint, and deliberately still no `scopes` array. Tynn builds the
+ * scopes from named fields, so the client states what it wants rather than
+ * composing an entitlement — the whole reason a one-workspace link could never
+ * quietly become a whole-machine one.
+ */
+describe('TynnBackend.mintWorkstationShareLink', () => {
+    it('names the workspaces a workstation link reaches', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, (req) =>
+            req.url.includes('/share-links')
+                ? json({ link: { id: 'inv2', url: 'u', token: 't' } }, 201)
+                : json({}),
+        );
+
+        await new TynnBackend().mintWorkstationShareLink(
+            'wst1',
+            { workspaces: ['design', 'payroll'], capability: 'control', expiresInDays: 14 },
+        );
+
+        const body = JSON.parse(captured.find((c) => c.method === 'POST')?.body ?? '{}');
+        expect(body).toEqual({
+            workspaces: ['design', 'payroll'],
+            capability: 'control',
+            expires_in_days: 14,
+        });
+        // Never both. `all_workspaces` present and false would still be a second
+        // way of saying the same thing, and the service takes the flag first.
+        expect(body).not.toHaveProperty('all_workspaces');
+        expect(body).not.toHaveProperty('workspace');
+    });
+
+    it('asks for the whole machine in the field that means it', async () => {
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, (req) =>
+            req.url.includes('/share-links') ? json({ link: { id: 'i', url: 'u' } }, 201) : json({}),
+        );
+
+        await new TynnBackend().mintWorkstationShareLink('wst1', {
+            allWorkspaces: true,
+            capability: 'readonly',
+            expiresInDays: 7,
+        });
+
+        const body = JSON.parse(captured.find((c) => c.method === 'POST')?.body ?? '{}');
+        expect(body.all_workspaces).toBe(true);
+        // The list is omitted entirely rather than sent empty: `workspaces: []` is
+        // a 422 at the service, so sending it alongside the flag would turn the
+        // widest link into a refusal.
+        expect(body).not.toHaveProperty('workspaces');
+    });
+
+    it('still sends no scopes array', async () => {
+        // The property the single-workspace form has always had, restated for the
+        // wider link — it is the wider one that would do the damage.
+        const captured: CapturedRequest[] = [];
+        mockFetch(captured, (req) =>
+            req.url.includes('/share-links') ? json({ link: { id: 'i', url: 'u' } }, 201) : json({}),
+        );
+
+        await new TynnBackend().mintWorkstationShareLink('wst1', {
+            allWorkspaces: true,
+            capability: 'control',
+            expiresInDays: 7,
+        });
+
+        expect(
+            JSON.parse(captured.find((c) => c.method === 'POST')?.body ?? '{}'),
+        ).not.toHaveProperty('scopes');
     });
 });
 

@@ -360,6 +360,21 @@ export const IconCopy = ({ size = 14, ...p }: Props) =>
         p.className,
         p.style,
     );
+/** Share — three nodes on two edges (lucide `share-2`). Used for "give someone
+ *  this workspace", which is a link OUT to a person rather than a chain-link. */
+export const IconShare = ({ size = 14, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="18" cy="5" r="3" />
+            <circle cx="6" cy="12" r="3" />
+            <circle cx="18" cy="19" r="3" />
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconLock = ({ size = 13, ...p }: Props) =>
     wrap(
         size,

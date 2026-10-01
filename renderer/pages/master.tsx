@@ -11,6 +11,8 @@ import FeedbackModal from '../components/Master/FeedbackModal';
 import { feedbackWorkspaceFor } from '../lib/feedback-target';
 import Chooser from '../components/Master/Chooser';
 import ProjectContextMenu from '../components/Master/ProjectContextMenu';
+import ShareWorkspaceModal from '../components/Master/ShareWorkspaceModal';
+import SharingFlyout from '../components/Master/SharingFlyout';
 import NewAgentModal from '../components/Master/NewAgentModal';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import {
@@ -133,6 +135,7 @@ import {
     IconEye,
     IconCpu,
     IconListTree,
+    IconShare,
     IconMessage,
     IconMailQuestion,
     IconFlow,
@@ -385,6 +388,10 @@ function MasterInner() {
     } | null>(null);
     const [addingWorkspace, setAddingWorkspace] = useState(false);
     const [settingsWorkspaceId, setSettingsWorkspaceId] = useState<string | null>(null);
+    /** Which workspace the Share modal is open for (right-click → Share workspace). */
+    const [shareWsId, setShareWsId] = useState<string | null>(null);
+    /** The global Sharing flyout — what is shared, workstation links, Connect to…. */
+    const [sharingOpen, setSharingOpen] = useState(false);
     /** The workspace whose AGENT ROSTER is open — the registry plus the
      *  `.agents/*` files Genie has not registered (genie#465). */
     const [agentsWsId, setAgentsWsId] = useState<string | null>(null);
@@ -2601,6 +2608,9 @@ function MasterInner() {
                         onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                         onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
                         agentInboxLag={agentInboxLag}
+                        {...(isRemoteWindow()
+                            ? {}
+                            : { onShowSharing: () => setSharingOpen((o) => !o) })}
                         onShowQuestions={() => setQuestionsOpen((o) => !o)}
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
                         questionCount={questionCount}
@@ -2876,6 +2886,7 @@ function MasterInner() {
                         onSiteManager={() => setSiteManagerWsId(ws.id)}
                         onProcessManager={() => setProcessManagerWsId(ws.id)}
                         onFeedback={() => setFeedbackWsId(ws.id)}
+                        {...(isRemoteWindow() ? {} : { onShare: () => setShareWsId(ws.id) })}
                         hibernated={isHibernated(ws)}
                         busy={hibernationBusy[ws.id] ?? null}
                         onHibernate={() => void hibernateWorkspaceRow(ws.id)}
@@ -2915,6 +2926,35 @@ function MasterInner() {
                     <WorkspaceSettingsModal
                         workspace={ws}
                         onClose={() => setSettingsWorkspaceId(null)}
+                    />
+                );
+            })()}
+
+            <SharingFlyout
+                open={sharingOpen}
+                onClose={() => setSharingOpen(false)}
+                workspaces={workspaces}
+                tynnHost={hosts.tynn}
+                onShareWorkspace={(id) => {
+                    setSharingOpen(false);
+                    setShareWsId(id);
+                }}
+            />
+
+            {/* Share workspace — the right-click entry (owner's ask). "Manage
+                links…" hands over to Workspace settings, which owns the list of
+                live links and revoking them; this modal is the one-off act. */}
+            {shareWsId && (() => {
+                const ws = workspacesById.get(shareWsId);
+                if (!ws) return null;
+                return (
+                    <ShareWorkspaceModal
+                        workspace={ws}
+                        onClose={() => setShareWsId(null)}
+                        onManageLinks={() => {
+                            setShareWsId(null);
+                            setSettingsWorkspaceId(ws.id);
+                        }}
                     />
                 );
             })()}
@@ -4136,6 +4176,7 @@ function TitleBar({
     onShowTaskManager,
     onShowAgentInbox,
     agentInboxLag = 0,
+    onShowSharing,
     onShowQuestions,
     questionCount = 0,
     onShowLists,
@@ -4162,6 +4203,9 @@ function TitleBar({
     onShowAgentInbox?: () => void;
     /** Messages the AGENTS haven't received/ACKed — see the master's lag effect. */
     agentInboxLag?: number;
+    /** Open the Sharing flyout. Absent in a remote window — the links belong to
+     *  the workstation that OWNS the workspaces, not the one driving it. */
+    onShowSharing?: () => void;
     onShowQuestions?: () => void;
     questionCount?: number;
     onShowLists?: () => void;
@@ -4327,6 +4371,21 @@ function TitleBar({
                     </span>
                 )}
             </button>
+            {/* SHARING. The global counterpart to the workspace right-click: what
+                is already given away, workstation-wide links, and the inbound
+                "Connect to…". Not in a remote window — the links belong to the
+                workstation that OWNS the workspaces, not the one driving it. */}
+            {onShowSharing && (
+                <button
+                    type="button"
+                    className="gicon sharing-btn"
+                    title="Sharing — what you have shared, and how to connect to someone else"
+                    aria-label="Sharing"
+                    onClick={() => onShowSharing()}
+                >
+                    <IconShare size={16} />
+                </button>
+            )}
             <button
                 type="button"
                 className="gicon questions-btn"

@@ -870,8 +870,22 @@ const api = {
         shareLinkAvailability: () => ipcRenderer.invoke('workspaces:share-link-availability'),
         /** Mint a share link for THIS workspace. The `url` comes back once and
          *  only once — the list never re-serves it. */
-        mintShareLink: (id: string, capability: 'control' | 'readonly') =>
-            ipcRenderer.invoke('workspaces:mint-share-link', id, capability),
+        mintShareLink: (
+            id: string,
+            options: { capability: 'control' | 'readonly'; expiresInDays?: number },
+        ) => ipcRenderer.invoke('workspaces:mint-share-link', id, options),
+        /** Mint a link over the WHOLE machine, or several of its workspaces —
+         *  the other half of the owner's sharing model. Same one-shot `url`. */
+        mintWorkstationShareLink: (options: {
+            capability: 'control' | 'readonly';
+            expiresInDays?: number;
+            allWorkspaces?: boolean;
+            workspaces?: string[];
+        }) => ipcRenderer.invoke('workstation:mint-share-link', options),
+        /** "Connect to…" — hand a pasted link to main, which decides whether it
+         *  leaves the app. A `genie://` link must NOT: `shell:open-external`
+         *  refuses non-http(s) by design, so it goes to Genie's own router. */
+        connectLink: (pasted: string) => ipcRenderer.invoke('connect:link', pasted),
         /** The live share links for this workspace, for the link manager. */
         listShareLinks: (id: string) => ipcRenderer.invoke('workspaces:list-share-links', id),
         /** Invalidate one link. Reports failure — a link shown as dead while it is

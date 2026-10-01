@@ -518,10 +518,61 @@ export class TynnBackend implements Backend {
         workstationId: string,
         workspaceId: string,
         capability: 'control' | 'readonly',
+        expiresInDays: number,
     ): Promise<WorkspaceShareLink> {
         const data = await this.fetch<{ link: WorkspaceShareLink }>(
             `/workstations/${encodeURIComponent(workstationId)}/share-links`,
-            { method: 'POST', body: { workspace: workspaceId, capability } },
+            {
+                method: 'POST',
+                // `expires_in_days` was always accepted (integer 1..30, default 7)
+                // and never sent, so every link Genie minted expired in a week
+                // whatever the user picked. Sent explicitly now rather than left
+                // to the service's default, so what the user chose is what goes.
+                body: { workspace: workspaceId, capability, expires_in_days: expiresInDays },
+            },
+        );
+        return data.link;
+    }
+
+    /**
+     * Mint a share link for a whole WORKSTATION — several named workspaces, or
+     * the machine itself.
+     *
+     * The owner's other half: *"I can either share a workspace individually …
+     * or I can share my entire workstation."* Same endpoint as the
+     * single-workspace form, and deliberately still NO `scopes` array: Tynn
+     * builds the entitlement from named fields, so the client says what it wants
+     * rather than composing one. That is the whole reason a one-workspace link
+     * cannot quietly become a whole-machine one.
+     *
+     * `allWorkspaces` and `workspaces` are mutually exclusive on the wire. The
+     * service takes the flag first, and `workspaces: []` is a 422 there — so
+     * sending both would turn the widest link into a refusal.
+     */
+    async mintWorkstationShareLink(
+        workstationId: string,
+        opts: {
+            capability: 'control' | 'readonly';
+            expiresInDays: number;
+            /** The whole machine, including workspaces assigned later. */
+            allWorkspaces?: boolean;
+            /** An explicit allowlist. Ignored when `allWorkspaces` is set. */
+            workspaces?: readonly string[];
+        },
+    ): Promise<WorkspaceShareLink> {
+        const reach = opts.allWorkspaces
+            ? { all_workspaces: true }
+            : { workspaces: [...(opts.workspaces ?? [])] };
+        const data = await this.fetch<{ link: WorkspaceShareLink }>(
+            `/workstations/${encodeURIComponent(workstationId)}/share-links`,
+            {
+                method: 'POST',
+                body: {
+                    ...reach,
+                    capability: opts.capability,
+                    expires_in_days: opts.expiresInDays,
+                },
+            },
         );
         return data.link;
     }
