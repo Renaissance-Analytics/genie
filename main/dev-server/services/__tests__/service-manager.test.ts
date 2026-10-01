@@ -54,6 +54,10 @@ interface Fake extends ContainerRuntime {
     /** How many times the engine list was swept — the cost of one adoption pass.
      *  A test can prove a pass was taken, or that none was. */
     readonly sweeps: { n: number };
+    /** Rewrite a live container's reported command, so a test can make one look
+     *  like it was created by an older Genie — the only way to exercise the
+     *  recreate path without a real old container (genie#771). */
+    setCommand(name: string, command: string | undefined): void;
 }
 
 function fakeRuntime(
@@ -111,6 +115,15 @@ function fakeRuntime(
         pulled,
         containers,
         sweeps,
+        /** Rewrite a live container's reported command, so a test can make one
+         *  look like it was created by an older Genie — which is the only way to
+         *  exercise the recreate path without a real old container. */
+        setCommand(name: string, command: string | undefined) {
+            const c = containers.get(name);
+            if (!c) return;
+            if (command === undefined) delete (c as { command?: string }).command;
+            else (c as { command?: string }).command = command;
+        },
         async detect() {
             return opts.detection ?? DOCKER_OK;
         },
@@ -148,6 +161,9 @@ function fakeRuntime(
                 name: spec.name,
                 image: spec.image,
                 state: 'running',
+                // As a real runtime reports it: a container's command is fixed at
+                // create, and `docker ps --no-trunc` hands it back on every listing.
+                ...(spec.command ? { command: spec.command.join(' ') } : {}),
                 ...(spec.workspaceId === null ? {} : { workspaceId: spec.workspaceId }),
             });
             // `publishNothing` stands in for a host whose runtime published (or
@@ -2197,5 +2213,197 @@ describe('a Redis is ready only when the credential it hands out authenticates (
         expect(check).toContain(workspaceSqlIdentifier('a'));
         expect(check).toContain('pw-Workspace_1');
         expect(check.map((a) => a.toLowerCase())).toContain('ping');
+    });
+});
+
+/**
+ * THE ADOPT PATH — genie#643's unmet acceptance criterion, and genie#771.
+ *
+ * `ACL SETUSER` is in-memory state, and `--appendonly yes` persists the keyspace
+ * rather than the ACLs. So when a container restarts out of band — Docker Desktop
+ * restarting, a reboot, an engine hiccup — the `ws_<id>` user vanishes while the
+ * workspace `.env` goes on naming it. The keyspace survives, the port answers and
+ * the container logs "Ready to accept connections", which is exactly why it never
+ * looked like a credentials problem.
+ *
+ * genie#643 asked for "a test that reproduces the start path that skipped
+ * provisioning" and was closed without one. These are it, and between them they
+ * cover both halves:
+ *
+ *  - the DURABLE half: the workspace user is declared on the container's own
+ *    launch command, so every start re-applies it, including starts Genie never
+ *    sees (`redis-acl-durability.test.ts` pins the command's shape);
+ *  - the DIAGNOSTIC half: an ADOPTED container is still proven with the
+ *    workspace credential before it is called ready — the thing that let `ready`
+ *    sit in front of a dead credential twice.
+ */
+describe('adopting an existing Redis still proves the workspace credential (genie#771)', () => {
+    it('declares the workspace user on the container it creates', async () => {
+        // The durability property at the manager seam rather than the catalog's:
+        // it is the manager that must hand the slice down, and a `command()` that
+        // never receives one silently falls back to the old, un-durable form.
+        const runtime = fakeRuntime();
+        const config = { ...REDIS7, password: 'pw-Workspace_1' };
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: config } }));
+
+        await manager.acquire('a', 'redis');
+
+        const command = runtime.ran.find((r) => r.image.startsWith('redis:'))?.command ?? [];
+        expect(command).toContain('--user');
+        expect(command).toContain(workspaceSqlIdentifier('a'));
+        // The ACL form,  — a bare value would mean the rule was built
+
+        // by hand here rather than by `redisUserAclRule`.
+
+        expect(command).toContain('>pw-Workspace_1');
+        // And the admin is still behind a password — an `--aclfile` would have
+        // removed `requirepass` on the next boot.
+        expect(command).toContain('--requirepass');
+        expect(command).not.toContain('--aclfile');
+    });
+
+    it('re-proves the credential when the container is ADOPTED, not created', async () => {
+        const runtime = fakeRuntime();
+        const config = { ...REDIS7, password: 'pw-Workspace_1' };
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: config } }));
+
+        await manager.acquire('a', 'redis');
+        const created = runtime.ran.length;
+        runtime.execs.length = 0;
+
+        // Second acquire: the container is already there, so this takes the
+        // ADOPT branch and creates nothing.
+        const status = await manager.acquire('a', 'redis');
+
+        expect(runtime.ran.length).toBe(created);
+        expect(status.state).toBe('running');
+        const check = runtime.execs.find((e) => e.argv.includes('--user'))?.argv ?? [];
+        expect(check).toContain(workspaceSqlIdentifier('a'));
+        expect(check).toContain('pw-Workspace_1');
+    });
+
+    it('refuses to call an ADOPTED container ready when its credential is dead', async () => {
+        // The failure this whole issue is about, on the path it actually took.
+        // Before the readiness probe authenticated as the workspace user, an
+        // adopted container whose ACL had been dropped reported `ready` and every
+        // throttled route in the app 500'd behind it.
+        const runtime = fakeRuntime({
+            redisReply: (argv) =>
+                argv.includes('--user')
+                    ? 'WRONGPASS invalid username-password pair or user is disabled.'
+                    : undefined,
+        });
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('failed');
+        expect(status.error).toContain('WRONGPASS');
+    });
+});
+
+/**
+ * CONTAINERS THAT PREDATE THE FIX — the half a changed default cannot reach.
+ *
+ * A container's command is FIXED at create. Declaring the workspace user in the
+ * launch command makes every NEW Redis survive a restart, and does nothing at all
+ * for the ones already running on the owner's machine — which are exactly the
+ * ones that have been losing their ACL. "Fixed for workspaces created from now
+ * on" is the shape of fix this issue has already been closed with twice.
+ *
+ * So an adopted Redis whose command lacks the declaration is recreated ONCE. Its
+ * data is a named volume, which is what makes that safe, and it is the same
+ * remedy — and the same at-most-once guard — the port republish already uses.
+ */
+describe('a Redis created before the ACL fix is recreated once (genie#771)', () => {
+    it('recreates an adopted container whose command has no --user', async () => {
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+        await manager.acquire('a', 'redis');
+
+        // Rewrite the live container to look like one made by an older Genie.
+        const name = runtime.ran.find((r) => r.image.startsWith('redis:'))!.name;
+        runtime.setCommand(name, 'redis-server --requirepass admin --appendonly yes');
+        const createdBefore = runtime.ran.length;
+
+        const status = await manager.acquire('a', 'redis');
+
+        expect(status.state).toBe('running');
+        expect(runtime.ran.length).toBe(createdBefore + 1);
+        expect(runtime.ran.at(-1)!.command).toContain('--user');
+    });
+
+    it('leaves a container that ALREADY declares the user alone', async () => {
+        // POSITIVE CONTROL, and the one that matters for cost: without it this
+        // would recreate every Redis on every acquire, killing live connections
+        // for nothing.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+        await manager.acquire('a', 'redis');
+        const createdBefore = runtime.ran.length;
+
+        await manager.acquire('a', 'redis');
+
+        expect(runtime.ran.length).toBe(createdBefore);
+    });
+
+    it('leaves it alone when the runtime reports no command at all', async () => {
+        // "Cannot tell" is not "needs recreating". A runtime that does not report
+        // the command must not make Genie destroy and rebuild every engine it
+        // adopts, which is the failure mode the port republish guard exists for.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+        await manager.acquire('a', 'redis');
+        const name = runtime.ran.find((r) => r.image.startsWith('redis:'))!.name;
+        runtime.setCommand(name, undefined);
+        const createdBefore = runtime.ran.length;
+
+        await manager.acquire('a', 'redis');
+
+        expect(runtime.ran.length).toBe(createdBefore);
+    });
+
+    it('recreates at most once, however many times it is acquired', async () => {
+        // The guard the port republish learned the hard way: a runtime that
+        // cannot honour the request must not loop Genie into endless recreation.
+        const runtime = fakeRuntime();
+        const manager = createDevServiceManager(deps(runtime, { a: { redis: REDIS7 } }));
+        await manager.acquire('a', 'redis');
+        const name = runtime.ran.find((r) => r.image.startsWith('redis:'))!.name;
+        runtime.setCommand(name, 'redis-server --requirepass admin --appendonly yes');
+        const createdBefore = runtime.ran.length;
+
+        await manager.acquire('a', 'redis');
+        runtime.setCommand(name, 'redis-server --requirepass admin --appendonly yes');
+        await manager.acquire('a', 'redis');
+
+        expect(runtime.ran.length).toBe(createdBefore + 1);
+    });
+});
+
+/**
+ * The recreate above is scoped by asking the SPEC what it would build today, not
+ * by naming Redis. This is the test that keeps it scoped: an engine that never
+ * declares a user in its command can never look like it is missing one.
+ */
+describe('the ACL recreate touches only engines that declare a user', () => {
+    it('leaves a dedicated engine with no --user in its spec alone', async () => {
+        // Without the spec check this would destroy and rebuild every dedicated
+        // container once per Genie run, for an ACL they never had.
+        const runtime = fakeRuntime();
+        const config = {
+            engine: 'minio' as const,
+            version: '2025',
+            dedicated: true,
+            enabled: true,
+            password: 'pw-Workspace_1',
+        };
+        const manager = createDevServiceManager(deps(runtime, { a: { minio: config } }));
+        await manager.acquire('a', 'minio');
+        const createdBefore = runtime.ran.length;
+
+        await manager.acquire('a', 'minio');
+
+        expect(runtime.ran.length).toBe(createdBefore);
     });
 });

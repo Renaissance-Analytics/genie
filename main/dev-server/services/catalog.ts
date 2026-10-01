@@ -1,3 +1,4 @@
+import { redisUserAclRule } from './redis-acl';
 import { workspaceSlugFor } from '../argv';
 
 /**
@@ -97,6 +98,22 @@ export interface EngineVolume {
     target: string;
 }
 
+/**
+ * The workspace a container belongs to, for the engines that have to NAME it in
+ * their own launch command or readiness probe (genie#771).
+ *
+ * A subset of `WorkspaceSlice` on purpose: the catalog is a declaration of what
+ * each engine wants, and importing the provisioning type here would make it
+ * depend on the layer that runs it.
+ */
+export interface EngineSliceHint {
+    identifier: string;
+    password: string;
+    /** Whether this container is this workspace's alone — some grants are only
+     *  safe when it is (Redis's `FLUSHDB`). */
+    dedicated?: boolean;
+}
+
 export interface EngineSpec {
     engine: ServiceEngine;
     /** Host-native engines ship with Genie; container engines require Docker/Podman. */
@@ -121,8 +138,15 @@ export interface EngineSpec {
      *  every one of these engines ignores it once its volume is initialised,
      *  which is why the credential is persisted rather than regenerated. */
     adminEnv?: (adminPassword: string) => Record<string, string>;
-    /** argv the container runs, when the image's default is not what we want. */
-    command?: (adminPassword: string) => string[];
+    /** argv the container runs, when the image's default is not what we want.
+     *
+     *  `slice` is the workspace this container belongs to, when it has one — a
+     *  dedicated engine knows it at create time. Redis uses it to DECLARE the
+     *  workspace user in the launch command, so the credential survives a
+     *  container restart rather than living only in memory (genie#771). Optional
+     *  because a shared engine has no single workspace, and because a container
+     *  created before the slice is known must still start. */
+    command?: (adminPassword: string, slice?: EngineSliceHint) => string[];
     /**
      * Replace the image's ENTRYPOINT, when the default one would swallow the
      * command. SeaweedFS needs it: its entrypoint reads argv as `weed`
@@ -131,8 +155,13 @@ export interface EngineSpec {
      */
     entrypoint?: (adminPassword: string) => string[];
     /** An in-container readiness check (exit 0 = ready). Absent means "probe
-     *  the published port", which is all a generic image affords. */
-    readyExec?: (adminPassword: string) => string[];
+     *  the published port", which is all a generic image affords.
+     *
+     *  Given the `slice`, the probe authenticates AS THE WORKSPACE USER. A
+     *  readiness check that uses the admin credential reports `ready` in front of
+     *  a dead workspace credential — which is what let a Redis with a dropped ACL
+     *  look healthy twice (genie#643, genie#771). */
+    readyExec?: (adminPassword: string, slice?: EngineSliceHint) => string[];
     /** What `readyExec` prints when the engine is ready, for a client whose exit
      *  code does not carry the server's answer. `redis-cli` exits 0 on an error
      *  reply, so a Redis still `LOADING` its data "passed" a bare exit-code check
@@ -259,8 +288,45 @@ const REDIS: EngineSpec = {
     adminUser: 'default',
     // The redis image reads no password env — it is a server flag. `appendonly`
     // so a restart does not silently empty every workspace's cache.
-    command: (password) => ['redis-server', '--requirepass', password, '--appendonly', 'yes'],
-    readyExec: (password) => ['redis-cli', '-a', password, '--no-auth-warning', 'ping'],
+    //
+    // `--user` DECLARES the workspace credential in the container's own command,
+    // which is what makes it survive a restart (genie#771). `ACL SETUSER` alone is
+    // in-memory state and `--appendonly` persists the keyspace, not the ACLs — so
+    // a reboot dropped the user while the workspace `.env` went on naming it, and
+    // every `throttle:`-middleware route 500'd behind a cache that would not
+    // authenticate. Declared here, every start re-applies it, INCLUDING the start
+    // that adopts an existing container and never provisions at all.
+    //
+    // Deliberately not `--aclfile`: measured on `redis:7-alpine`, a missing file
+    // aborts startup, and `ACL SAVE` writes `default on nopass ~* &* +@all` back,
+    // which silently removes `requirepass` on the next boot.
+    command: (password, slice) => [
+        'redis-server',
+        '--requirepass',
+        password,
+        '--appendonly',
+        'yes',
+        ...(slice
+            ? ['--user', slice.identifier, ...redisUserAclRule(slice.identifier, slice.password, {
+                  dedicated: slice.dedicated === true,
+              })]
+            : []),
+    ],
+    // As the WORKSPACE user when there is one: a probe that authenticates as
+    // admin reports ready in front of a dead workspace credential, which is the
+    // half of genie#643 that was never closed.
+    readyExec: (password, slice) =>
+        slice
+            ? [
+                  'redis-cli',
+                  '--user',
+                  slice.identifier,
+                  '--pass',
+                  slice.password,
+                  '--no-auth-warning',
+                  'ping',
+              ]
+            : ['redis-cli', '-a', password, '--no-auth-warning', 'ping'],
     readyReply: /^PONG$/m,
 };
 

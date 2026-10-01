@@ -22,7 +22,7 @@ import { planServicePorts, preferredServicePort } from './service-ports';
 import type { HostSiteRoute } from '../host-reconcile';
 import type { DevGenSite } from '../site-manager';
 import { purgeVerdict, sliceTenantsOf } from './tenancy';
-import type { EngineSpec, ServiceEngine } from './catalog';
+import type { EngineSliceHint, EngineSpec, ServiceEngine } from './catalog';
 import type { EngineInventoryRow } from './inventory';
 import type { ProvisionedService } from './env-wiring';
 import type { EngineAdmin, WorkspaceSlice } from './provision';
@@ -743,6 +743,13 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         });
     }
 
+    /** Whether the engine came up, and what it last SAID if it did not — so a
+     *  failure can repeat the engine's own words instead of "check `logs`". */
+    interface ReadyOutcome {
+        ready: boolean;
+        said?: string;
+    }
+
     /** Poll the engine's own readiness check, or the published port. */
     async function waitReady(
         runtime: ContainerRuntime,
@@ -750,10 +757,22 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         admin: EngineAdmin,
         containerId: string,
         endpoints: ServiceEndpoint[],
-    ): Promise<boolean> {
+        /** The workspace credential to probe WITH, when there is one. Readiness
+         *  that authenticates as admin reports ready in front of a dead
+         *  workspace credential — the half of genie#643 that stayed open, and
+         *  how a Redis with a dropped ACL looked healthy twice. */
+        sliceOf?: EngineSliceHint,
+    ): Promise<ReadyOutcome> {
         const deadline = Date.now() + readyTimeoutMs;
-        const readyExec = spec.readyExec?.(admin.password);
+        const readyExec = spec.readyExec?.(admin.password, sliceOf);
         const primary = endpoints.find((e) => e.hostPort);
+        // The LAST thing the engine actually said, carried out so the failure can
+        // repeat it. "ready:false" with no reason is the complaint genie#771 made
+        // about this exact path: the probe now authenticates as the workspace
+        // user, so when the credential is dead the engine says `WRONGPASS` — and
+        // swallowing that in favour of "never became ready — check `logs`" would
+        // trade one silent failure for another.
+        let lastReply: string | undefined;
 
         for (;;) {
             if (readyExec) {
@@ -765,8 +784,10 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 // The REPLY where the engine's client exits 0 regardless of it
                 // (genie#643) — otherwise `LOADING` or `NOAUTH` reads as ready.
                 if (result?.code === 0 && (!spec.readyReply || spec.readyReply.test(result.stdout ?? ''))) {
-                    return true;
+                    return { ready: true };
                 }
+                const said = (result?.stdout || result?.stderr || '').trim();
+                if (said) lastReply = said;
             } else if (primary?.hostPort && deps.probeReady) {
                 if (
                     await deps.probeReady({
@@ -775,13 +796,15 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                         timeoutMs: Math.min(2_000, Math.max(250, deadline - Date.now())),
                     })
                 ) {
-                    return true;
+                    return { ready: true };
                 }
             } else {
                 // Nothing to ask. Honest answer: unknown, reported as not-ready.
-                return false;
+                return { ready: false };
             }
-            if (Date.now() + READY_RETRY_MS >= deadline) return false;
+            if (Date.now() + READY_RETRY_MS >= deadline) {
+                return lastReply ? { ready: false, said: lastReply } : { ready: false };
+            }
             await new Promise((resolve) => setTimeout(resolve, READY_RETRY_MS));
         }
     }
@@ -903,6 +926,23 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
         // story, so it cannot be shared.
         const dedicated = config.dedicated || Boolean(spec.alwaysDedicated);
         const ownerId = dedicated ? workspaceId : null;
+        // The workspace's own credential, hoisted ABOVE container creation
+        // (genie#771). It used to be built after the container was running,
+        // because only provisioning needed it — but Redis has to DECLARE its
+        // workspace user in the launch command for the credential to survive a
+        // container restart, and the readiness probe has to authenticate AS that
+        // user rather than as admin. Both happen before the old slice existed.
+        //
+        // Only for a DEDICATED container: a shared engine has no single
+        // workspace to name, and `command`/`readyExec` take the hint as optional
+        // for exactly that reason.
+        const sliceHint: EngineSliceHint | undefined = dedicated
+            ? {
+                  identifier: workspaceSqlIdentifier(workspaceId),
+                  password: config.password,
+                  dedicated: true,
+              }
+            : undefined;
         const recordKey = engineRecordKeyFor(engineKey, ownerId);
         const containerName = serviceContainerNameFor(engineKey, ownerId ?? undefined);
         const image = config.engine === 'custom' ? config.image ?? '' : spec.image(config.version);
@@ -1012,7 +1052,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                     [ROLE_LABEL]: SERVICE_ROLE,
                     ...(ownerId ? { [WORKSPACE_LABEL]: ownerId } : {}),
                 },
-                ...(spec.command ? { command: spec.command(admin.password) } : {}),
+                ...(spec.command ? { command: spec.command(admin.password, sliceHint) } : {}),
                 ...(spec.entrypoint ? { entrypoint: spec.entrypoint(admin.password) } : {}),
                 env: {
                     ...(spec.adminEnv?.(admin.password) ?? {}),
@@ -1072,6 +1112,42 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 // named volume is what makes doing so safe. Guarded by the same
                 // at-most-once set, so a runtime that cannot honour the request
                 // still cannot loop us.
+                // The THIRD reason, and the one a changed default cannot reach on
+                // its own (genie#771): a container's command is FIXED at create,
+                // so a Redis adopted from an older Genie is still running the
+                // command it was made with — without the `--user` declaration
+                // that keeps its workspace credential alive across a restart.
+                // Those are precisely the containers that have been losing it.
+                //
+                // "Cannot tell" is NOT "needs recreating": a runtime that reports
+                // no command leaves the container alone, rather than having Genie
+                // destroy and rebuild every engine it adopts. Same at-most-once
+                // guard as the republish below, for the same reason.
+                // Asked of the SPEC rather than hard-coded to Redis: recreate when
+                // the command this engine would be created with today declares a
+                // user and the running one does not. An engine that never declares
+                // one can never match, so nothing else is touched.
+                const wantsUserInCommand =
+                    sliceHint && spec.command
+                        ? spec.command(admin.password, sliceHint).includes('--user')
+                        : false;
+                if (
+                    wantsUserInCommand &&
+                    !republished.has(containerName) &&
+                    typeof existing.command === 'string' &&
+                    existing.command.length > 0 &&
+                    !existing.command.includes('--user')
+                ) {
+                    republished.add(containerName);
+                    await runtime.stop(containerId).catch(() => {});
+                    await runtime.remove(containerId).catch(() => {});
+                    const recreated = await createContainer();
+                    if (!recreated.ok) {
+                        return failed(workspaceId, serviceId, config, recreated.error);
+                    }
+                    containerId = recreated.id;
+                }
+
                 const expectsPublish =
                     (config.engine === 'custom' && Boolean(config.port)) || spec.ports.length > 0;
                 if (expectsPublish && !republished.has(containerName)) {
@@ -1097,13 +1173,20 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
             }
 
             const endpoints = await endpointsFor(runtime, spec, config, containerName, containerId);
-            const ready = await waitReady(runtime, spec, admin, containerId, endpoints);
-            if (!ready) {
+            const ready = await waitReady(runtime, spec, admin, containerId, endpoints, sliceHint);
+            if (!ready.ready) {
                 return failed(
                     workspaceId,
                     serviceId,
                     config,
-                    `${spec.label} started but never became ready — check \`logs\`.`,
+                    // The engine's OWN last words when it gave any. A probe that
+                    // authenticates as the workspace user answers `WRONGPASS`
+                    // when the credential is dead, and that single word is the
+                    // difference between "check `logs`" and knowing what broke
+                    // (genie#771).
+                    ready.said
+                        ? `${spec.label} started but never became ready — it said: ${ready.said}`
+                        : `${spec.label} started but never became ready — check \`logs\`.`,
                 );
             }
 
@@ -1153,7 +1236,7 @@ export function createDevServiceManager(deps: DevServiceManagerDeps): DevService
                 slice,
                 admin,
                 endpoints,
-                ready,
+                ready: ready.ready,
             });
             changed();
             return statusOf(live.get(serviceId)!);

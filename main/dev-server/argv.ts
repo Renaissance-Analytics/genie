@@ -532,7 +532,12 @@ export function portArgv(id: string): string[] {
  * need a per-runtime branch for no gain. Five known fields separated by a
  * character that cannot occur in any of them parses identically on both.
  */
-export const PS_FORMAT = '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}';
+/** The listing columns. `{{.Command}}` is last because it is the only one that
+ *  can contain a tab-free free-form string of arbitrary length, and because it
+ *  is what lets an ADOPTED container be checked for the workspace-user
+ *  declaration it may predate (genie#771). */
+export const PS_FORMAT =
+    '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Command}}';
 
 /**
  * Every listing passes `--no-trunc`, and it is load-bearing.
