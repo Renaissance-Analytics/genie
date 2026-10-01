@@ -1,5 +1,6 @@
 import { TynnBackend, type WorkspaceShareLink } from '../backend/tynn';
 import { readWorkstationIdentity } from './workstation-identity';
+import { normalizeExpiryDays } from './share-link-options';
 
 /**
  * SHARE ONE WORKSPACE BY LINK — the layer between the IPC handlers and Tynn.
@@ -21,6 +22,16 @@ export interface ShareLinkBackend {
         workstationId: string,
         workspaceId: string,
         capability: 'control' | 'readonly',
+        expiresInDays: number,
+    ): Promise<WorkspaceShareLink>;
+    mintWorkstationShareLink(
+        workstationId: string,
+        opts: {
+            capability: 'control' | 'readonly';
+            expiresInDays: number;
+            allWorkspaces?: boolean;
+            workspaces?: readonly string[];
+        },
     ): Promise<WorkspaceShareLink>;
     listWorkspaceShareLinks(
         workstationId: string,
@@ -50,15 +61,29 @@ function defaults(): ShareLinkDeps {
     };
 }
 
+/** What the user chose when they clicked Create link. An options object rather
+ *  than more positional arguments: the minting controls are a list the owner
+ *  intends to grow, and every one of them is optional with a safe default. */
+export interface MintShareLinkOptions {
+    capability: 'control' | 'readonly';
+    /** How long the link stays redeemable. Anything Tynn would refuse falls back
+     *  to the default rather than failing the mint — see `normalizeExpiryDays`. */
+    expiresInDays?: number;
+}
+
 /**
  * Mint a link for one workspace. Never throws — the caller is a click handler in
  * the settings modal, and the failure it most needs to report (Tynn refused) is
  * carried in `error` so the panel can print the service's own words. A generic
  * "something went wrong" would send the user looking in the wrong place.
+ *
+ * The options arrive over IPC, so they are normalised here rather than trusted:
+ * main is the last place that can stop a bad number becoming a 422 the user reads
+ * as "could not create link".
  */
 export async function mintWorkspaceShareLink(
     workspaceId: string,
-    capability: 'control' | 'readonly',
+    options: MintShareLinkOptions,
     deps: ShareLinkDeps = defaults(),
 ): Promise<MintResult> {
     const identity = deps.identity();
@@ -68,8 +93,58 @@ export async function mintWorkspaceShareLink(
         const link = await deps.backend.mintWorkspaceShareLink(
             identity.workstationId,
             workspaceId,
-            capability,
+            options.capability,
+            normalizeExpiryDays(options.expiresInDays),
         );
+        return { ok: true, link };
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+}
+
+/** What the user chose when they minted a WORKSTATION link. */
+export interface MintWorkstationLinkOptions {
+    capability: 'control' | 'readonly';
+    expiresInDays?: number;
+    /** The whole machine, including workspaces assigned later. */
+    allWorkspaces?: boolean;
+    /** An explicit allowlist. Ignored when `allWorkspaces` is set. */
+    workspaces?: readonly string[];
+}
+
+const REACHES_NOTHING =
+    'Pick at least one workspace for this link to reach, or share the whole ' +
+    'workstation. A link that reaches nothing drops whoever opens it into an ' +
+    'empty machine with no explanation.';
+
+/**
+ * Mint a link for a whole workstation — several named workspaces, or the machine.
+ *
+ * The empty-list refusal is made HERE as well as at the service. Tynn also 422s
+ * it, but a 422 arrives as "could not create link"; said here it is a sentence
+ * about what the user picked, and it costs no round trip.
+ */
+export async function mintWorkstationShareLink(
+    options: MintWorkstationLinkOptions,
+    deps: ShareLinkDeps = defaults(),
+): Promise<MintResult> {
+    const identity = deps.identity();
+    if (!identity) return { ok: false, error: NOT_ENROLLED };
+
+    const allWorkspaces = options.allWorkspaces === true;
+    const workspaces = [...(options.workspaces ?? [])];
+    if (!allWorkspaces && workspaces.length === 0) {
+        return { ok: false, error: REACHES_NOTHING };
+    }
+
+    try {
+        const link = await deps.backend.mintWorkstationShareLink(identity.workstationId, {
+            // Never both — the service takes the flag first and refuses an empty
+            // list, so sending the pair would turn the widest link into a 422.
+            ...(allWorkspaces ? { allWorkspaces: true } : { workspaces }),
+            capability: options.capability,
+            expiresInDays: normalizeExpiryDays(options.expiresInDays),
+        });
         return { ok: true, link };
     } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };

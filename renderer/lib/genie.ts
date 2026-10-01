@@ -3706,8 +3706,21 @@ export interface GenieApi {
          *  the manager's list omits it, because the URL is the credential. */
         mintShareLink: (
             id: string,
-            capability: 'control' | 'readonly',
+            options: { capability: 'control' | 'readonly'; expiresInDays?: number },
         ) => Promise<{ ok: true; link: WorkspaceShareLink } | { ok: false; error: string }>;
+        /** Mint a link over the WHOLE machine, or several of its workspaces.
+         *  `allWorkspaces` wins over `workspaces` — the service takes the flag
+         *  first, and an empty list is refused rather than treated as "all". */
+        mintWorkstationShareLink: (options: {
+            capability: 'control' | 'readonly';
+            expiresInDays?: number;
+            allWorkspaces?: boolean;
+            workspaces?: string[];
+        }) => Promise<{ ok: true; link: WorkspaceShareLink } | { ok: false; error: string }>;
+        /** "Connect to…" — main classifies the pasted link and routes it. An
+         *  invite opens in the browser to be redeemed; a `genie://` link is
+         *  handled INSIDE Genie. `note` is always something to show. */
+        connectLink: (pasted: string) => Promise<{ ok: boolean; note: string }>;
         /** The live share links for this workspace (no tokens, no urls). */
         listShareLinks: (id: string) => Promise<WorkspaceShareLink[]>;
         /** Invalidate one link on demand. */

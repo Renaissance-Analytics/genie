@@ -10,6 +10,7 @@ import {
     IconPlus,
     IconServer,
     IconSettings,
+    IconShare,
     IconTerminal,
     IconTrash,
 } from './icons';
@@ -40,6 +41,11 @@ interface Props {
     onProcessManager?: () => void;
     /** Send feedback about GENIE to this workspace's Tynn project (Tynn #249). */
     onFeedback?: () => void;
+    /** Open the Share workspace modal — mint a link that opens THIS workspace in
+     *  somebody else's Genie. Optional so a remote window can omit it: the link
+     *  is scoped to the workstation that OWNS the workspace, and minting one
+     *  from a window driving someone else's machine would share the wrong thing. */
+    onShare?: () => void;
     /** HIBERNATION (genie#672) — asleep, or going either way right now. */
     hibernated?: boolean;
     busy?: 'hibernating' | 'waking' | null;
@@ -67,6 +73,7 @@ export default function ProjectContextMenu({
     onSiteManager,
     onProcessManager,
     onFeedback,
+    onShare,
     hibernated = false,
     busy = null,
     onHibernate,
@@ -216,6 +223,22 @@ export default function ProjectContextMenu({
                         label="Send feedback…"
                         onClick={() => {
                             onFeedback();
+                            onClose();
+                        }}
+                    />
+                )}
+                {/* SHARE. The owner asked for it here by name — everything it
+                    needs already worked and was reachable only from two clicks
+                    inside Workspace settings, which is why the feature read as
+                    missing. Above settings, with the other "do something with
+                    this workspace" items, because giving it to someone is an act
+                    rather than a preference. */}
+                {onShare && (
+                    <CtxItem
+                        icon={<IconShare size={14} />}
+                        label="Share workspace…"
+                        onClick={() => {
+                            onShare();
                             onClose();
                         }}
                     />
