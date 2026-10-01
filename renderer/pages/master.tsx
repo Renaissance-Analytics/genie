@@ -4343,7 +4343,11 @@ function TitleBar({
             </button>
             <button
                 type="button"
-                className="gicon lists-btn"
+                /* NOT `lists-btn` — that is the Lists FLYOUT's Done/Refuse
+                   action-button class (border, filled background, 4px 9px
+                   padding), and wearing it by name collision drew a bordered
+                   pill around this one icon in a row of flat ones. */
+                className="gicon lists-hdr-btn"
                 title={
                     listsUserCount > 0
                         ? `Lists — ${listsUserCount} item${listsUserCount === 1 ? '' : 's'} waiting on you`
