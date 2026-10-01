@@ -1383,7 +1383,7 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
  * check and not a screenshot. A screenshot would go red for a font change; this
  * goes red for exactly one thing.
  */
-const listsButton = () => page.locator('.gicon.lists-btn');
+const listsButton = () => page.locator('.gicon.lists-hdr-btn');
 const listsDock = () => page.locator('.lists-dock');
 const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
 const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
@@ -1427,7 +1427,7 @@ async function headerGeometry() {
             icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x + sx), w: Math.round(r.width) };
         });
         return {
-            button: box('.gicon.lists-btn'),
+            button: box('.gicon.lists-hdr-btn'),
             titlebar: box('.titlebar'),
             toolbar: box('.gtoolbar'),
             body: box('.gbody'),
