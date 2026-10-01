@@ -336,7 +336,9 @@ import {
     recoverFromHostLoss,
     resolveShippedCaddyBin,
     resolveShippedRuntime,
+    logHostService,
 } from './terminal/host-service';
+import { shouldAttemptHostHeal } from './terminal/host-heal';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
     liveHostTerminals,
@@ -1177,6 +1179,76 @@ async function runBackendSelection() {
         userDataDir: app.getPath('userData'),
         detachedEnabled: detachedTerminalsEnabled() && !isE2E(),
     });
+}
+
+/**
+ * SELF-HEALING the terminal backend (genie#774).
+ *
+ * The two fixes either side of this one act at the MOMENT a host is lost.
+ * Neither helps a Genie that is ALREADY sitting on the in-process backend with
+ * no host — which is where the owner's machine sat for hours, killing every
+ * agent on every restart, until a human noticed. Nothing announces that state:
+ * terminals still open, they simply stop surviving a restart.
+ *
+ * So it is checked rather than waited for. Two triggers, no new polling of
+ * anything expensive — the check itself is an in-memory flag read, and it does
+ * nothing at all unless the backend is genuinely degraded:
+ *
+ *  - WINDOW FOCUS. The moment someone looks at Genie is the moment it should be
+ *    right. The questions badge already self-heals on exactly this event and for
+ *    exactly this reason.
+ *  - A slow BACKSTOP timer, because a headless host has no window to focus and a
+ *    machine left alone overnight should still come back.
+ *
+ * `shouldAttemptHostHeal` owns every refusal, including the one that matters
+ * most: never run selection while a host IS backing terminals, which is how the
+ * fleet died in the first place.
+ */
+let hostHealInFlight = false;
+let hostHealLastAttemptAt: number | null = null;
+
+async function attemptHostHeal(trigger: string): Promise<void> {
+    let backed = false;
+    try {
+        backed = isHostBacked();
+    } catch {
+        // Cannot tell is not degraded. Healing on a failed probe would respawn
+        // under a host that might be perfectly healthy.
+        return;
+    }
+    const decision = shouldAttemptHostHeal({
+        detachedEnabled: detachedTerminalsEnabled() && !isE2E(),
+        hostBacked: backed,
+        inFlight: hostHealInFlight,
+        lastAttemptAt: hostHealLastAttemptAt,
+        now: Date.now(),
+    });
+    if (!decision.heal) return;
+
+    hostHealInFlight = true;
+    hostHealLastAttemptAt = Date.now();
+    try {
+        logHostService(`host heal (${trigger}): backend is degraded — re-selecting`);
+        const sel = await runBackendSelection();
+        logHostService(`host heal (${trigger}) → backend: ${sel.kind} host=${sel.host}`);
+    } catch (e) {
+        logHostService(`host heal (${trigger}) failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+        hostHealInFlight = false;
+    }
+}
+
+/** Interval for the backstop sweep. Far longer than the heal's own rate limit —
+ *  the limiter is what actually governs how often a heal runs; this only has to
+ *  be often enough that an unattended machine recovers on a human timescale. */
+const HOST_HEAL_SWEEP_MS = 60_000;
+
+function armHostHealthHeal(): void {
+    app.on('browser-window-focus', () => {
+        void attemptHostHeal('focus');
+    });
+    const timer = setInterval(() => void attemptHostHeal('sweep'), HOST_HEAL_SWEEP_MS);
+    timer.unref?.();
 }
 
 function readPtyHostPid(): number | null {
@@ -2028,6 +2100,7 @@ app.whenReady().then(async () => {
                     }, (ids) => reviveRunningAgents(undefined, ids), affectedIds),
                 ),
         });
+        armHostHealthHeal();
     }
     if (backendInit.host && backendInit.reattachIds.length > 0) {
         // The renderer remounts retained specs on launch via the create() rejoin

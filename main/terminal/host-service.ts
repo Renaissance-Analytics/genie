@@ -1258,11 +1258,60 @@ export async function selectTerminalBackend(deps: {
     >;
     initDetached: () => Promise<{ host: boolean; reattachIds: string[] }>;
     isHostBackedProbe: () => boolean;
+    /** A host that is ALREADY SERVING, or null when none is (genie#774).
+     *
+     *  Deliberately its own probe rather than reusing `isHostBackedProbe`: that
+     *  one answers "is the backend host-backed", which is also true immediately
+     *  AFTER a successful spawn. Overloading it makes every ordinary selection
+     *  look like an adoption. These are two different questions asked at two
+     *  different moments. */
+    adoptExisting?: () => { kind: HostBackendKind; ids: string[] } | null;
 }): Promise<BackendSelection> {
-    setHostBackendKind('inprocess');
     if (!deps.detachedEnabled) {
+        // The off switch wins over any probe: a backend the user turned off must
+        // not be resurrected by a stale "a host is backed" answer.
+        setHostBackendKind('inprocess');
         return { kind: 'inprocess', host: false, reattachIds: [] };
     }
+
+    // ── ALREADY SERVING? ADOPT IT. ───────────────────────────────────────────
+    // genie#774. Selection is reachable from FOUR callers — boot, `genie host
+    // start`, `genie host restart`, and host-loss recovery's respawn — and it
+    // used to spawn unconditionally. On 2026-10-01 one of them ran while a
+    // detached host was serving every pty on the machine; the second host hit
+    //
+    //   listen EADDRINUSE: \\.\pipe\genie-ptyhost-9bcd7ce6d23f
+    //
+    // died in 542ms, and eleven seconds later the incumbent went down too and
+    // took every terminal, worker and agent with it.
+    //
+    // `fancy-term-host` was RIGHT to refuse the double bind. The defect was that
+    // Genie asked, so the guard belongs here — in the one place all four callers
+    // pass through — rather than in each of them.
+    //
+    // Checked BEFORE `setHostBackendKind('inprocess')`, which used to be the
+    // first statement and is the subtle half of the bug: it disowned the live
+    // host on the way in, so everything afterwards reasoned as though there were
+    // no backend, and then collided with the one that was really there.
+    //
+    // A probe that THROWS is "cannot tell", never "a host is serving" — falling
+    // through to normal selection risks a collision, but refusing to select at
+    // all would leave the machine with no terminal backend whatsoever.
+    let serving: { kind: HostBackendKind; ids: string[] } | null = null;
+    try {
+        serving = deps.adoptExisting?.() ?? null;
+    } catch {
+        serving = null;
+    }
+    if (serving) {
+        // Deliberately NOT reset to 'inprocess' first: the live host's kind is
+        // already the truth, and disowning it is what made a healthy fleet
+        // report as in-process on the way into a collision.
+        setHostBackendKind(serving.kind);
+        return { kind: serving.kind, host: true, reattachIds: serving.ids };
+    }
+
+    setHostBackendKind('inprocess');
 
     // 1) Service first.
     let svc:
@@ -1351,7 +1400,32 @@ export interface HostRecoveryDeps {
     ): { attempted: number; revived: number } | Promise<{ attempted: number; revived: number }> | void;
     /** Surface the recovery state to the renderer (the banner). */
     emitStatus(state: 'recovering' | 'recovered' | 'degraded'): void;
+    /** Wait between respawn attempts. Injected so the backoff is testable
+     *  without real time; defaults to a real timer. */
+    sleep?(ms: number): Promise<void>;
 }
+
+/**
+ * How hard recovery tries to get a detached host back before giving up and
+ * degrading to in-process (genie#774).
+ *
+ * The failure this exists for is TRANSIENT and self-clearing: a host that has
+ * just died has not yet released its named pipe, so an immediate respawn hits
+ * `EADDRINUSE` and dies in ~500ms — while a second later it would have bound
+ * cleanly. Recovery used to attempt the respawn EXACTLY ONCE, so it lost that
+ * race and degraded permanently. The owner's machine then sat on the in-process
+ * backend for hours, where terminals do not survive a restart, so every Genie
+ * blink killed every agent and only a human noticing could end it.
+ *
+ * The owner's rule: *"we should never have to manually fix issues, genie should
+ * handle that."*
+ *
+ * The BUDGET is what matters, not the count: it must comfortably outlast a pipe
+ * release (the measured collision died 542ms in), and it must END — a machine
+ * that genuinely cannot host terminals has to fall back rather than spin with no
+ * terminals at all.
+ */
+const RESPAWN_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000];
 
 /** True while a recovery is in flight, so a second death signal can't stack a
  *  concurrent recovery on top (which would double snapshot/respawn/reattach). */
@@ -1392,11 +1466,27 @@ export async function recoverFromHostLoss(
         } catch {
             /* best-effort */
         }
+        // RETRY, don't give up on the first loss (genie#774). A thrown respawn
+        // counts as a failed ATTEMPT rather than an abort: giving up on the first
+        // exception would be the single-attempt bug wearing a different hat.
         let host = false;
-        try {
-            ({ host } = await deps.respawn());
-        } catch {
-            host = false; // no backend came back → degrade, don't abort
+        const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => {
+            const t = setTimeout(r, ms);
+            (t as { unref?: () => void }).unref?.();
+        }));
+        for (let attempt = 0; ; attempt++) {
+            try {
+                ({ host } = await deps.respawn());
+            } catch {
+                host = false;
+            }
+            if (host) break;
+            if (attempt >= RESPAWN_BACKOFF_MS.length) break; // budget spent → degrade
+            try {
+                await sleep(RESPAWN_BACKOFF_MS[attempt]!);
+            } catch {
+                break; // a sleep that fails must not strand the recovery
+            }
         }
         // Caught, as before — one failed agent must not strand the rest. What is
         // new is that the failure is REMEMBERED: catching it and then reporting
