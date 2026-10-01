@@ -27,6 +27,7 @@ interface FakeWin {
     /** Every `resizable` value set, in order — the lift-and-restore is asserted. */
     resizableLog: boolean[];
     closedHandlers: Array<() => void>;
+    resizeHandlers: Array<() => void>;
     close: () => void;
     webContents: Record<string, unknown>;
 }
@@ -50,6 +51,7 @@ vi.mock('electron', () => {
             self.resizable = false;
             self.resizableLog = [];
             self.closedHandlers = [];
+            self.resizeHandlers = [];
             self.webContents = {
                 id: self.id,
                 isLoading: () => false,
@@ -65,7 +67,13 @@ vi.mock('electron', () => {
             return { ...(this as unknown as FakeWin).bounds };
         }
         setBounds(b: { x: number; y: number; width: number; height: number }): void {
-            (this as unknown as FakeWin).bounds = { ...b };
+            const self = this as unknown as FakeWin;
+            const resized = b.width !== self.bounds.width || b.height !== self.bounds.height;
+            self.bounds = { ...b };
+            // Electron emits `resize` for a PROGRAMMATIC `setBounds` exactly as it
+            // does for a drag — which is the whole reason the drawer could poison
+            // the remembered size. A fake that swallows the event cannot show it.
+            if (resized) for (const fn of self.resizeHandlers) fn();
         }
         isResizable(): boolean {
             return (this as unknown as FakeWin).resizable;
@@ -80,7 +88,9 @@ vi.mock('electron', () => {
         loadURL(): void {}
         loadFile(): void {}
         on(ev: string, fn: () => void): void {
-            if (ev === 'closed') (this as unknown as FakeWin).closedHandlers.push(fn);
+            const self = this as unknown as FakeWin;
+            if (ev === 'closed') self.closedHandlers.push(fn);
+            if (ev === 'resize') self.resizeHandlers.push(fn);
         }
         once(): void {}
         focus(): void {}
@@ -114,7 +124,10 @@ const mockDb = vi.hoisted(() => ({
 }));
 vi.mock('../../db', () => ({
     getAllSettings: () => mockDb.settings,
-    setSettings: () => {},
+    // A REAL store. The remembered modal size is read back out of settings on the
+    // very next drawer toggle, so a `setSettings` that throws the write away hides
+    // every bug that round trip can have.
+    setSettings: (patch: Record<string, string>) => Object.assign(mockDb.settings, patch),
     listWorkspaces: () => [{ id: 'ws-1', path: '/work/space' }],
 }));
 vi.mock('../../notify-sound', () => ({
@@ -199,6 +212,79 @@ describe('the ask modal makes room for the file drawer (Tynn #272)', () => {
 
         drain();
         await done;
+    });
+
+    /**
+     * The drawer's own width must never become "the size the user chose".
+     *
+     * `e2e/ask-modal.spec.ts` caught this on macOS and nowhere else, four times in
+     * a day, as a 30s timeout waiting for the window to give the width back after
+     * the drawer closed. It is not a flake and it is not macOS: genie#703 made the
+     * modal resizable and remembers the size on `resize`, and Electron fires
+     * `resize` for the drawer's OWN programmatic `setBounds`. So opening the
+     * drawer saves the widened width, closing it reads that back as the width to
+     * return to, and the window stays wide — after which every question on that
+     * machine opens drawer-wide for ever, until someone finds the setting.
+     *
+     * The 400ms debounce is why it looked like a race: whether the write landed
+     * before the close depended on how long the test in between took, and the long
+     * drawer test is the one that takes longest.
+     */
+    it('does not remember the drawer width as the size the user chose', async () => {
+        vi.useFakeTimers();
+        try {
+            const { w, done } = openModal();
+            expect(w.bounds.width).toBe(ASK_MODAL_WIDTH);
+
+            setDrawer(w.id, true);
+            expect(w.bounds.width).toBe(ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH);
+            // Let the debounced save run while the drawer is open — the E2E spends
+            // seconds here measuring the pane, so in the product it always does.
+            vi.advanceTimersByTime(1000);
+            expect(mockDb.settings.ask_modal_size).not.toContain(
+                String(ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH),
+            );
+
+            setDrawer(w.id, false);
+            expect(w.bounds.width).toBe(ASK_MODAL_WIDTH);
+
+            drain();
+            await done;
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    /**
+     * The positive control for the test above, and the genie#703 behaviour it must
+     * not undo: a size the user REALLY chose is still what the drawer widens from
+     * and shrinks back to. Suppressing the drawer's own resize by suppressing the
+     * remembering altogether would pass the test above and break this one.
+     */
+    it('still widens from — and returns to — a size the user chose', async () => {
+        vi.useFakeTimers();
+        try {
+            const { w, done } = openModal();
+
+            // The user drags the window wider. This is a resize the modal did not
+            // ask for, so it is theirs to keep.
+            w.bounds = { ...w.bounds, width: 900 };
+            for (const fn of w.resizeHandlers) fn();
+            vi.advanceTimersByTime(1000);
+            expect(mockDb.settings.ask_modal_size).toContain('900');
+
+            setDrawer(w.id, true);
+            expect(w.bounds.width).toBe(900 + ASK_DRAWER_WIDTH);
+            vi.advanceTimersByTime(1000);
+
+            setDrawer(w.id, false);
+            expect(w.bounds.width).toBe(900);
+
+            drain();
+            await done;
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('leaves the question where it is, vertically', async () => {

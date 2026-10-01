@@ -162,6 +162,34 @@ export interface AskModalSize {
     height: number;
 }
 
+/**
+ * The size to REMEMBER for a window that currently measures `current`.
+ *
+ * Electron fires `resize` for a programmatic `setBounds` exactly as it does for a
+ * drag, so the drawer's own widening arrives at the remember-the-size listener
+ * indistinguishable from the user pulling the window wider. Stored, it becomes
+ * the width the drawer widens FROM and shrinks back to — so the window never
+ * gives the width back, and from then on every question on that machine opens
+ * drawer-wide.
+ *
+ * `baseWidth` is the width the window has with the drawer CLOSED, and is non-null
+ * exactly while the drawer is open. While it is, the width is not the user's to
+ * choose — the drawer owns it — so the base is what gets remembered.
+ *
+ * The HEIGHT is always the current one: the drawer never touches the vertical
+ * axis, so a height change with the drawer open is a real user resize and
+ * discarding it would lose something they did choose.
+ */
+export function askSizeToRemember({
+    current,
+    baseWidth,
+}: {
+    current: AskModalSize;
+    baseWidth: number | null;
+}): AskModalSize {
+    return { width: baseWidth ?? current.width, height: current.height };
+}
+
 /** The size to open at: the remembered one, or the size the modal has always
  *  had. The default is deliberately unchanged (owner) — making the window
  *  resizable must not also change what it looks like on first open. */

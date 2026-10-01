@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     ASK_DRAWER_WIDTH,
     ASK_MODAL_WIDTH,
+    askSizeToRemember,
     askWindowBounds, askWindowFit, parseAskModalSize, askModalStartSize } from '../drawer-bounds';
 
 /**
@@ -297,5 +298,67 @@ describe('askWindowBounds — the drawer widens from the size the USER chose', (
         expect(askWindowBounds({ current, workArea, drawerOpen: false }).width).toBe(
             ASK_MODAL_WIDTH,
         );
+    });
+});
+
+/**
+ * What gets STORED as "the size the user chose".
+ *
+ * `askWindowBounds` above answers how wide the window should be; this answers
+ * which of the widths it has passed through is the USER'S. They are separate
+ * questions, and conflating them was the bug: Electron fires `resize` for the
+ * drawer's own `setBounds`, so the widened width was saved as the user's, and the
+ * drawer then widened from — and "returned" to — its own width.
+ */
+describe('askSizeToRemember — the drawer never owns the remembered width', () => {
+    it('remembers the base width while the drawer is open, not the widened one', () => {
+        expect(
+            askSizeToRemember({
+                current: { width: ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH, height: 560 },
+                baseWidth: ASK_MODAL_WIDTH,
+            }),
+        ).toEqual({ width: ASK_MODAL_WIDTH, height: 560 });
+    });
+
+    it('remembers the width as it stands when the drawer is closed', () => {
+        // POSITIVE CONTROL: with no drawer open there is nothing to set aside, and
+        // a genuine drag is still the user's to keep (genie#703). A helper that
+        // always refused the current width would pass the case above and silently
+        // stop the modal ever remembering a size at all.
+        expect(askSizeToRemember({ current: { width: 900, height: 700 }, baseWidth: null })).toEqual(
+            { width: 900, height: 700 },
+        );
+    });
+
+    it('keeps a height change made while the drawer is open', () => {
+        // The drawer only ever changes the width, so a height that moved while it
+        // was open moved because the user moved it.
+        expect(
+            askSizeToRemember({
+                current: { width: ASK_MODAL_WIDTH + ASK_DRAWER_WIDTH, height: 900 },
+                baseWidth: ASK_MODAL_WIDTH,
+            }),
+        ).toEqual({ width: ASK_MODAL_WIDTH, height: 900 });
+    });
+
+    it('closes the round trip: a chosen size survives opening and closing the drawer', () => {
+        // The three pieces in the order the product runs them, which is the only
+        // place the defect was visible — each piece alone looked right.
+        const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
+        const chosen = askSizeToRemember({ current: { width: 900, height: 700 }, baseWidth: null });
+        const open = askWindowBounds({
+            current: { x: 0, y: 0, ...chosen },
+            workArea,
+            drawerOpen: true,
+            baseWidth: chosen.width,
+        });
+        const whileOpen = askSizeToRemember({ current: open, baseWidth: chosen.width });
+        const closed = askWindowBounds({
+            current: open,
+            workArea,
+            drawerOpen: false,
+            baseWidth: whileOpen.width,
+        });
+        expect(closed.width).toBe(900);
     });
 });
