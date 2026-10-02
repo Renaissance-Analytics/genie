@@ -7,9 +7,12 @@ import {
     probeHostTool,
     TOOL_SPECS,
     validateHostToolSelection,
+    MANAGED_TOOLCHAIN,
 } from '../toolchain-detect';
 import type { HostToolName } from '../toolchain-detect';
 import { hostToolInvocation } from '../seams';
+import { pmPackageFor, pmCanInstall } from '../toolchain-packages';
+import { NPM_PACKAGES } from '../toolchain-adapters';
 import { AGENT_CLI_CATALOG } from '../../agents/agent-cli-catalog';
 
 describe('renderer toolchain selection boundary', () => {
@@ -152,7 +155,11 @@ describe('detectToolchain', () => {
     it('partitions the wanted set into present and missing', async () => {
         const report = await detectToolchain({ runner: freshDevMachine, platform: 'linux' });
         expect(report.present).toEqual(['git', 'node', 'npm', 'php', 'composer']);
-        expect(report.missing).toEqual(['docker', 'claude-code', 'codex']);
+        // `gh` joins the missing set because the fixture machine has git but not
+        // the GitHub CLI — which is the realistic case and the reason it was
+        // added to the default toolchain. Updated to the new contract rather
+        // than relaxed: the list is still exact.
+        expect(report.missing).toEqual(['gh', 'docker', 'claude-code', 'codex']);
     });
 
     it('records each present tool\u2019s parsed version', async () => {
@@ -495,5 +502,66 @@ describe('a tool Genie declines to probe', () => {
         // nothing downstream mistakes an ordinary answer for a declined one.
         expect(TOOL_SPECS['amazon-q'].probe).toBe(false);
         expect(TOOL_SPECS['claude-code'].probe).not.toBe(false);
+    });
+});
+
+/**
+ * THE GITHUB CLI IS PART OF THE TOOLCHAIN.
+ *
+ * The owner: *"make sure that the tool chain setup wizard, the scans, and
+ * listing include the gh cli install."*
+ *
+ * `gh` is not an optional extra here. Genie's own agents use it constantly — every
+ * PR, issue and release in this repo goes through it — so a fresh machine that
+ * sets up its toolchain and still has no `gh` is a machine whose agents cannot do
+ * their work, and the user has no way to find out from the Toolchain page.
+ *
+ * It belongs in all three places, which are deliberately different lists:
+ * DEFAULT_TOOLCHAIN (what the wizard INSTALLS), TOOL_SPECS (how a scan DETECTS
+ * it), and the package maps (how it is actually installed on each platform).
+ * Being in one and not the others is the failure mode: a row with an Install
+ * button that cannot install, or an install the page cannot see afterwards.
+ */
+describe('the gh CLI is in the toolchain (owner request)', () => {
+    it('is installed by the first-run wizard', () => {
+        expect(DEFAULT_TOOLCHAIN).toContain('gh');
+    });
+
+    it('is listed by the Toolchain page', () => {
+        // MANAGED_TOOLCHAIN is built from DEFAULT_TOOLCHAIN, so this also catches
+        // a future refactor that split them apart and dropped gh from the page.
+        expect(MANAGED_TOOLCHAIN).toContain('gh');
+    });
+
+    it('is DETECTED by a scan, with a version', () => {
+        const spec = TOOL_SPECS.gh;
+        expect(spec).toBeDefined();
+        expect(spec.bin).toBe('gh');
+        expect(spec.versionArgv.length).toBeGreaterThan(0);
+        // Not one of the deliberately un-probed tools: `gh` is a specific enough
+        // binary name that finding one on PATH means you have the GitHub CLI.
+        expect(spec.probe).not.toBe(false);
+    });
+
+    it('parses the version string gh actually prints', () => {
+        // `gh --version` leads with "gh version 2.63.2 (2024-12-05)", which is the
+        // same shape as git's. A spec that detects the tool but reports no version
+        // shows an installed row with a blank version column.
+        expect(parseToolVersion('gh version 2.63.2 (2024-12-05)')).toBe('2.63.2');
+    });
+
+    it('has a real package on EVERY package manager Genie uses', () => {
+        // A tool in the wizard with no package id falls through to a `direct`
+        // download that does not exist for it — an Install button that fails.
+        for (const pm of ['winget', 'brew', 'apt', 'dnf'] as const) {
+            expect(pmPackageFor(pm, 'gh'), `${pm} has no package for gh`).toBeTruthy();
+        }
+    });
+
+    it('installs through the package manager, not npm', () => {
+        // POSITIVE CONTROL on the routing: gh is NOT an npm CLI, and treating it
+        // as one would try `npm i -g gh`, which installs an unrelated package.
+        expect(pmCanInstall('winget', 'gh')).toBe(true);
+        expect(NPM_PACKAGES.gh).toBeUndefined();
     });
 });

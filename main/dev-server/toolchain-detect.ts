@@ -59,6 +59,7 @@ export type HostToolName = DevHostToolName | AgentCliToolId;
 /** The non-agent half: languages, dev tools, and the one Windows prerequisite. */
 export type DevHostToolName =
     | 'git'
+    | 'gh'
     | 'node'
     | 'npm'
     | 'php'
@@ -74,6 +75,10 @@ export type DevHostToolName =
  *  adds it where it exists. */
 export const DEFAULT_TOOLCHAIN: readonly HostToolName[] = [
     'git',
+    // Beside git on purpose: Genie's agents drive GitHub through `gh` for every
+    // PR, issue and release, so a fresh machine without it has agents that
+    // silently cannot do their work.
+    'gh',
     'node',
     'npm',
     'php',
@@ -187,6 +192,10 @@ export interface HostToolSpec {
  */
 export const TOOL_SPECS: Record<HostToolName, HostToolSpec> = {
     git: { name: 'git', bin: 'git', versionArgv: ['--version'] },
+    // The GitHub CLI. Genie's own agents run every PR, issue and release through
+    // it, so a machine that finished setup without it has agents that cannot do
+    // their work — and no row on the Toolchain page saying why.
+    gh: { name: 'gh', bin: 'gh', versionArgv: ['--version'] },
     node: { name: 'node', bin: 'node', versionArgv: ['--version'] },
     npm: { name: 'npm', bin: 'npm', versionArgv: ['--version'] },
     php: { name: 'php', bin: 'php', versionArgv: ['--version'] },

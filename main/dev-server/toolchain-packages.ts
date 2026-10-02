@@ -47,6 +47,7 @@ export interface PmPackage {
 export const PM_PACKAGES: Record<PackageManager, Partial<Record<HostToolName, PmPackage>>> = {
     winget: {
         git: { id: 'Git.Git' },
+        gh: { id: 'GitHub.cli' },
         node: { id: 'OpenJS.NodeJS.LTS' },
         npm: { id: 'OpenJS.NodeJS.LTS' },
         docker: { id: 'Docker.DockerDesktop' },
@@ -57,6 +58,7 @@ export const PM_PACKAGES: Record<PackageManager, Partial<Record<HostToolName, Pm
     },
     brew: {
         git: { id: 'git' },
+        gh: { id: 'gh' },
         node: { id: 'node' },
         npm: { id: 'node' },
         php: { id: 'php' },
@@ -65,6 +67,7 @@ export const PM_PACKAGES: Record<PackageManager, Partial<Record<HostToolName, Pm
     },
     apt: {
         git: { id: 'git' },
+        gh: { id: 'gh' },
         node: { id: 'nodejs' },
         npm: { id: 'npm' },
         php: { id: 'php-cli' },
@@ -73,6 +76,7 @@ export const PM_PACKAGES: Record<PackageManager, Partial<Record<HostToolName, Pm
     },
     dnf: {
         git: { id: 'git' },
+        gh: { id: 'gh' },
         node: { id: 'nodejs' },
         npm: { id: 'npm' },
         php: { id: 'php-cli' },
