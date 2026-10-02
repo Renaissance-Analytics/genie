@@ -1,4 +1,12 @@
 import { devContainerNameFor } from './argv';
+import {
+    frankenphpModulesCommand,
+    phpLoadsRedis,
+    phpModulesCommand,
+    probePhpRedis,
+    redisClient,
+    type PhpRedisProbe,
+} from './php-redis-client';
 import { CADDY_HTTPS_PORT, type CaddySite } from './caddyfile';
 import { applyCaddyConfig } from './caddy-proxy';
 import { GENIE_DEV_BASE_IMAGE, WORKSPACE_MOUNT_TARGET } from './images';
@@ -378,6 +386,8 @@ export interface HostProcessRun {
 }
 
 export interface DevSiteManagerDeps {
+    /** Checks the site's serving binary with the same cwd and environment. */
+    probePhpRedis?: (input: PhpRedisProbe) => Promise<boolean>;
     /**
      * Is this workspace HIBERNATING (genie#672)? Nothing in a sleeping workspace
      * starts on its own — not at boot, not on open, not from a caller — until the
@@ -1327,6 +1337,14 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...serviceEnv,
             };
 
+            const phpProbeCommand = phpModulesCommand(command);
+            if (serviceEnv.REDIS_HOST !== undefined && phpProbeCommand) {
+                const probe = await runtime.exec(containerId, phpProbeCommand, {
+                    workdir: cwd, env, timeoutMs: 5_000,
+                }).catch(() => null);
+                env.REDIS_CLIENT = redisClient(probe?.code === 0 && phpLoadsRedis(probe.stdout), env.REDIS_CLIENT);
+            }
+
             // Run the user's command detached in the sandbox, in the repo's LIVE
             // dir. No copy, no build — this is a development server over the source.
             const started = await startSiteProcess({
@@ -1852,6 +1870,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
               command: string[];
               worker?: string[];
               workerRuns?: string;
+              phpProbeCommand?: string[];
               fcgiPort?: number;
               /** Env the serve mode itself needs, stamped over the site's. */
               env?: Readonly<Record<string, string>>;
@@ -1893,7 +1912,11 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 siteId,
                 frankenphpCaddyfile({ sitePort, root, uploadTmpDir }),
             );
-            return { ok: true, command: frankenphpRunArgv(frankenphp.exe, configPath) };
+            return {
+                ok: true,
+                command: frankenphpRunArgv(frankenphp.exe, configPath),
+                phpProbeCommand: frankenphpModulesCommand(frankenphp.exe),
+            };
         }
         if (hostServe.mode === 'octane') {
             // OCTANE (genie#668): the Octane server IS the web server, so none of
@@ -1936,6 +1959,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             // gets Genie's own install first on its PATH, after the same
             // composer.json check any FrankenPHP site gets.
             let serverEnv: Record<string, string> = { ...OCTANE_SERVE_ENV };
+            let phpProbeCommand = [engine.exe, '-m'];
             if (hostServe.server === 'frankenphp') {
                 if (!deps.resolveFrankenphp) {
                     return { ok: false, error: 'Octane on FrankenPHP is not available in this build (Genie cannot install FrankenPHP here).' };
@@ -1947,6 +1971,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 const late = frankenphpRefusal(repoRequires, frankenphp.phpVersion);
                 if (late) return { ok: false, error: late };
                 serverEnv = { ...serverEnv, ...pathWithFirst(path.dirname(frankenphp.exe)) };
+                phpProbeCommand = frankenphpModulesCommand(frankenphp.exe);
             }
             // OCTANE ON ROADRUNNER finds `rr` the same way, and without one asks to
             // download it — `vendor/bin/rr get-binary`, which writes the binary into
@@ -1970,6 +1995,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                     watch: canWatch,
                 }),
                 env: serverEnv,
+                phpProbeCommand,
                 ...(serverPort === undefined ? {} : { serverPorts: [serverPort] }),
             };
         }
@@ -2028,6 +2054,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 command: caddyServeArgv(deps.caddyBin, configPath),
                 worker: phpFastcgiWorkerCommand(engine.exe, fcgiPort, uploadTmpDir),
                 workerRuns: `PHP ${engine.version} (${engine.exe})`,
+                phpProbeCommand: [engine.exe, '-m'],
                 // Travels out so the live entry remembers WHICH port the backend
                 // holds — readiness has to stay answerable after this start
                 // (genie#305), and Caddy cannot answer it.
@@ -2110,6 +2137,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
          *  PATH would send someone to fix the wrong thing now that the version is
          *  resolved through the toolchain (genie#207). */
         let workerRuns: string | undefined;
+        let phpProbeCommand: string[] | undefined;
         /** The FastCGI port the worker binds, for a `hostServe: php` site. */
         let fcgiPort: number | undefined;
         let serverPorts: number[] | undefined;
@@ -2120,6 +2148,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
             command = planned.command;
             worker = planned.worker;
             workerRuns = planned.workerRuns;
+            phpProbeCommand = planned.phpProbeCommand;
             fcgiPort = planned.fcgiPort;
             serverPorts = planned.serverPorts;
             // Stamped with the host-owned port env: the serve mode's own settings
@@ -2140,6 +2169,7 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
                 ...(config.framework ? { framework: config.framework } : {}),
             });
             command = withP.command;
+            phpProbeCommand = phpModulesCommand(command);
             portEnv = withP.env;
         }
 
@@ -2168,6 +2198,12 @@ export function createDevSiteManager(deps: DevSiteManagerDeps): DevSiteManager {
         }
         const note = notes.length ? notes.join('\n') : undefined;
         const env = { ...composeHostSiteEnv(config, command, serviceHostEnv), ...portEnv };
+        if (serviceHostEnv.REDIS_HOST !== undefined && phpProbeCommand) {
+            const loaded = await (deps.probePhpRedis ?? probePhpRedis)({
+                command: phpProbeCommand, cwd, env: { ...(deps.baseEnv ?? process.env), ...env },
+            }).catch(() => false);
+            env.REDIS_CLIENT = redisClient(loaded, env.REDIS_CLIENT);
+        }
         // The worker's own settings go on LAST: a site env that set a request limit
         // would bring back the exit-after-500 this exists to stop.
         const workerEnv = { ...env, ...PHP_FASTCGI_WORKER_ENV };

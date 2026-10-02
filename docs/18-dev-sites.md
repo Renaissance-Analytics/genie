@@ -88,6 +88,20 @@ Browser is on by default and can be toggled in
 **[Settings → Hosting Manager](08-settings.md)**; turning it off means a `.gen`
 site opens nowhere.
 
+## Redis clients for PHP sites
+
+When Genie injects managed Redis credentials into a PHP site, it also sets
+`REDIS_CLIENT`. At each start it probes the PHP binary serving the site with the
+site's environment: PHP-CGI for FastCGI sites, the embedded PHP for FrankenPHP,
+or the PHP command inside the workspace container. It selects `predis` unless
+that runtime reports a loaded `redis` extension; with the extension loaded it
+defaults to `phpredis` and preserves an explicit client choice in the site's
+configuration. A failed probe selects `predis` conservatively.
+
+Apps using this fallback need `predis/predis` in their Composer dependencies.
+The selection is process environment, recomputed at launch; it does not edit
+the app's files. Static and non-PHP sites receive no PHP client setting.
+
 ## When a PHP site 502s
 
 A site Genie serves with `hostServe: {mode: "php"}` is **two processes**: Genie's
