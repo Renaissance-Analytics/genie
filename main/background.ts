@@ -339,6 +339,7 @@ import {
     logHostService,
 } from './terminal/host-service';
 import { shouldAttemptHostHeal } from './terminal/host-heal';
+import { secondInstanceAction } from './second-instance';
 import { applyRefreshedPath, osPathArgv } from './terminal/host-env-refresh';
 import { spawn as spawnChild } from 'node:child_process';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
@@ -1151,13 +1152,29 @@ function createKnowledgeWindow(): BrowserWindow {
 }
 
 app.on('second-instance', (_event, argv) => {
-    // Windows: protocol URLs come in via argv. Find the genie:// URL.
-    const url = argv.find((a) => a.startsWith('genie://'));
-    if (url) {
-        handleGenieUrl(url);
-    } else {
-        showMainWindow();
+    // Windows: protocol URLs come in via argv. The DECISION — url / raise /
+    // ignore — is `second-instance.ts`, so the rule is testable without an app.
+    //
+    // This used to raise the window for ANY argv that was not a `genie://` URL,
+    // which made a background `genie --version` indistinguishable from somebody
+    // double-clicking the icon. That is what put the owner's Settings window
+    // behind the main one on every toolchain scan: something launches a second
+    // Genie, it quits on the single-instance lock, and this handler pulled the
+    // main window to the front on its way out.
+    const action = secondInstanceAction(argv);
+    if (action.kind === 'url') {
+        handleGenieUrl(action.url);
+        return;
     }
+    if (action.kind === 'raise') {
+        showMainWindow();
+        return;
+    }
+    // A tool call. Stay out of the way — and RECORD it: what launches that
+    // second instance during a toolchain scan is still unidentified, and this
+    // line is what names it the next time rather than costing another
+    // reproduction on the owner's machine.
+    logHostService(`second instance ignored (tool invocation): ${action.argv.join(' ')}`);
 });
 
 // macOS: protocol URLs come in via 'open-url'.
