@@ -421,13 +421,14 @@ Actions (\`action\`):
   name saved under two providers; the record decides otherwise. Optional
   \`instructions\` are PRE-LOADED as the agent's opening prompt. Optional
   \`repo\`/\`cwd\`. Returns \`id\`, \`ref\`, and \`reattached\`.
-- \`send\` — deliver a \`prompt\` to the running agent \`id\`. SUBMITTED by default,
-  even multi-line: the prompt is wrapped in bracketed paste and the Enter is
-  delivered separately (outside the paste) so the agent's TUI submits it instead
-  of leaving it parked as a "[Pasted text +N lines]" buffer. Pass \`submit: false\`
-  to load the prompt without sending, or \`key\` (\`enter\` | \`escape\` | \`ctrl-c\`)
-  to deliver a bare keypress — e.g. a lone \`enter\` to submit or clear a stuck
-  multi-line buffer.
+- \`send\` — write a \`prompt\` to agent terminal \`id\`, requesting Enter by
+  default. \`delivered\` means input reached the PTY; \`submitKeyDelivered\`
+  means Enter reached it too. Neither proves the TUI accepted the prompt:
+  \`submitted: null\` means acceptance is **unverified**. Read before retrying,
+  since a retry may duplicate an accepted prompt. \`submit:false\` loads text
+  without Enter; \`key\` (\`enter\` | \`escape\` | \`ctrl-c\`) sends only that key.
+  With no submission requested, or Enter not delivered, \`submitted\` is false.
+  A dead PTY returns \`ok:false\` and \`delivered:false\`.
 - \`read\` — its output (\`cursor\` for new, or \`bytes\` for the last N; add
   \`strip: true\` for plain text with escape codes removed).
 - \`stop\` — terminate the agent \`id\`. The SAVED agent survives; \`start\` brings
