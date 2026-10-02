@@ -192,6 +192,17 @@ export class AgentInboxBroker {
     private agents = new Map<string, AgentInboxAgent>();
     private byTerminal = new Map<string, string>(); // terminalId → agentId
     private dmLogs = new Map<string, AgentInboxMessage[]>();
+    /**
+     * Who has ever SENT inside each DM pair — ids only, never trimmed.
+     *
+     * The fact that a private agent opened a thread is a permission, and a
+     * permission must not be stored in a cache that ages out. It used to be read
+     * off `dmLogs[pair][0]`, which is capped at LOG_CAP and rebuilt from partial
+     * history at boot, so replies to that agent started being refused in the
+     * middle of a working conversation. Two ids per pair costs nothing; being
+     * wrong about it cost a conversation.
+     */
+    private dmSenders = new Map<string, Set<string>>();
     private seq = 0;
     private emit: (ev: AgentInboxBrokerEvent) => void = () => {};
     /** Durability backstop (genie.db in production, no-op for tests). */
@@ -934,6 +945,7 @@ export class AgentInboxBroker {
         for (const msg of this.store.loadRecent(limit)) {
             if (msg.kind === 'dm' && msg.to) {
                 this.appendLog(this.dmLogs, pairKey(msg.from, msg.to), msg);
+                this.noteDmSender(msg.from, msg.to);
             }
         }
         for (const agent of this.agents.values()) {
@@ -1419,9 +1431,20 @@ export class AgentInboxBroker {
         // A private agent may initiate a conversation with a public peer. Once
         // that durable DM pair exists, the recipient can reply without making
         // the private initiator discoverable to the rest of its workspace.
-        const thread = this.dmLogs.get(pairKey(caller.agentId, target.agentId));
-        const opener = thread?.[0];
-        if (opener?.from === target.agentId && opener.to === caller.agentId) return true;
+        //
+        // ASK WHETHER THE TARGET EVER WROTE, not whether it wrote FIRST in what
+        // is still cached. This read `thread[0]`, the opening entry of an
+        // in-memory log that is trimmed at LOG_CAP and rebuilt at boot from
+        // `loadRecent` — so the permission decayed two ways: a long conversation
+        // evicted the opener, and a restart might never load it. Replies to a
+        // private agent then started being refused mid-conversation, silently.
+        // Visibility governs DISCOVERY; it must not decide whether an answer can
+        // be delivered.
+        if (this.dmSenders.get(pairKey(caller.agentId, target.agentId))?.has(target.agentId)) {
+            return true;
+        }
+        // The durable backstop, for a thread opened before this Genie started.
+        if (this.store.hasDmFrom(target.agentId, caller.agentId)) return true;
         return this.scopeAllows(caller, target);
     }
 
@@ -1480,6 +1503,14 @@ export class AgentInboxBroker {
             agent.inbox.splice(0, agent.inbox.length - INBOX_CAP);
         }
         this.settleWaiter(agent);
+    }
+
+    /** Remember that `from` has written to `to`, for the reply permission. */
+    private noteDmSender(from: string, to: string): void {
+        const key = pairKey(from, to);
+        const set = this.dmSenders.get(key) ?? new Set<string>();
+        set.add(from);
+        this.dmSenders.set(key, set);
     }
 
     private appendLog(map: Map<string, AgentInboxMessage[]>, key: string, msg: AgentInboxMessage): void {
@@ -1669,6 +1700,7 @@ export class AgentInboxBroker {
             // human's reply is not an agent behaviour and gets no marker.
             if (sender && msg.replyTo) this.emitLifecycle('replied', sender);
             this.appendLog(this.dmLogs, pairKey(from, target.agentId), msg);
+            this.noteDmSender(from, target.agentId);
             this.store.append(msg);
             this.emitMessage(msg);
             // Server-push: nudge the recipient's MCP GET stream (if it has one)
