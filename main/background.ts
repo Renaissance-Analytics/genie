@@ -339,6 +339,8 @@ import {
     logHostService,
 } from './terminal/host-service';
 import { shouldAttemptHostHeal } from './terminal/host-heal';
+import { applyRefreshedPath, osPathArgv } from './terminal/host-env-refresh';
+import { spawn as spawnChild } from 'node:child_process';
 import { runBackendSelection as runBackendSelectionCore } from './host-core/backend-selection';
 import {
     liveHostTerminals,
@@ -1304,11 +1306,83 @@ async function hostStart(): Promise<string> {
     }`;
 }
 
-/** `genie host restart` — stop the host, then re-init the backend. */
+/**
+ * Read PATH as the OS reports it NOW and apply it to Genie's own environment.
+ *
+ * This is what makes a host restart able to see a CLI installed since Genie
+ * started. The owner: *"we have to reboot the machine to make stuff like that
+ * apply"* — and they were right, because the host inherits `process.env`, an
+ * installer writes the registry, and nothing carries one into the other.
+ *
+ * Best-effort throughout. A refresh that cannot be read leaves the environment
+ * exactly as it was: `applyRefreshedPath` never writes an empty PATH, because an
+ * environment without one cannot spawn anything at all.
+ */
+async function refreshEnvironmentFromOs(): Promise<boolean> {
+    try {
+        const { command, args } = osPathArgv(
+            process.platform,
+            process.env.SHELL,
+        );
+        const osPath = await new Promise<string | null>((resolve) => {
+            let out = '';
+            const child = spawnChild(command, args, { windowsHide: true });
+            child.stdout?.on('data', (d: Buffer) => {
+                out += d.toString();
+            });
+            child.on('error', () => resolve(null));
+            child.on('close', (code: number | null) => resolve(code === 0 ? out.trim() : null));
+            // A shell profile that blocks on input would hang the restart.
+            setTimeout(() => {
+                try {
+                    child.kill();
+                } catch {
+                    /* already gone */
+                }
+                resolve(null);
+            }, 10_000).unref?.();
+        });
+        const changed = applyRefreshedPath(
+            process.env as Record<string, string | undefined>,
+            osPath,
+            process.platform,
+            process.platform === 'win32' ? ';' : ':',
+        );
+        logHostService(
+            changed
+                ? 'environment refreshed from the OS — PATH gained entries'
+                : 'environment refresh found nothing new on PATH',
+        );
+        return changed;
+    } catch (e) {
+        logHostService(
+            `environment refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return false;
+    }
+}
+
+/**
+ * `genie host restart` — stop the host, then re-init the backend.
+ *
+ * REFRESHES THE ENVIRONMENT FIRST. Without that this verb could not do the one
+ * thing people reach for it to do: make a newly-installed CLI visible in
+ * terminals. The host is spawned with `...process.env`, so respawning it from a
+ * stale environment produces a brand-new host that still cannot see `gh` — a
+ * restart that looks like a fix and changes nothing, which is why a reboot was
+ * the only thing that worked.
+ */
 async function hostRestart(): Promise<string> {
+    const refreshed = await refreshEnvironmentFromOs();
     const stopped = await hostStop().catch(() => 'stop skipped');
     const sel = await runBackendSelection();
-    return `${stopped}\nhost restart → backend: ${sel.kind}`;
+    return [
+        refreshed
+            ? 'environment refreshed from the OS (new PATH entries picked up)'
+            : 'environment unchanged (nothing new on PATH)',
+        stopped,
+        `host restart → backend: ${sel.kind}`,
+    ].join('\n');
 }
 
 // Last-resort process-level guards. Without them, a single unhandled exception

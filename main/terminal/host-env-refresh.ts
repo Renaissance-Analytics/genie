@@ -111,6 +111,37 @@ export function pathKeyOf(
 }
 
 /**
+ * Apply a freshly-read PATH to a live environment, in place. Returns whether
+ * anything actually changed.
+ *
+ * MUTATES rather than threading an override through `spawnDetached` →
+ * `standaloneEnv` → `spawn`, and that is deliberate: the stale PATH is GENIE'S
+ * OWN, so refreshing it here fixes the respawned host AND every terminal,
+ * supervised process and tool spawn that follows. An override parameter would
+ * have fixed exactly one caller and left the identical bug everywhere else —
+ * which is the shape of the original complaint, not a smaller version of it.
+ *
+ * The return value is what the caller reports. Saying "refreshed" when nothing
+ * moved would make a restart that fixed nothing look like it worked.
+ */
+export function applyRefreshedPath(
+    env: Record<string, string | undefined>,
+    osPath: string | null,
+    platform: string,
+    sep: string,
+): boolean {
+    const pathKey = pathKeyOf(env, platform);
+    const before = env[pathKey] ?? '';
+    const next = refreshedHostEnv({ inherited: env, osPath, pathKey, sep });
+    const after = next[pathKey] ?? '';
+    // Never write an empty PATH. An environment without one cannot spawn
+    // anything at all — far worse than a tool staying invisible for a while.
+    if (!after.trim() || after === before) return false;
+    env[pathKey] = after;
+    return true;
+}
+
+/**
  * The argv that asks the OS what PATH is NOW.
  *
  * Windows keeps the authoritative value in two registry hives — Machine then

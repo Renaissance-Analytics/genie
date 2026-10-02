@@ -165,3 +165,106 @@ describe('osPathArgv', () => {
         expect(osPathArgv('linux', undefined).command).toBe('/bin/sh');
     });
 });
+
+/**
+ * APPLYING the refresh to a live process environment.
+ *
+ * `refreshedHostEnv` says what the environment SHOULD be; this is the step that
+ * makes it so. It mutates the process environment in place rather than threading
+ * an override through `spawnDetached` → `standaloneEnv` → `spawn`, and that is a
+ * deliberate choice with a reason beyond convenience: the stale PATH is Genie's
+ * OWN, so refreshing it fixes the respawned host AND every terminal, process and
+ * tool spawn that follows. An override parameter would have fixed exactly one
+ * caller and left the same bug everywhere else.
+ */
+import { applyRefreshedPath } from '../host-env-refresh';
+
+describe('applyRefreshedPath', () => {
+    it('writes the merged PATH back into the environment', () => {
+        const env: Record<string, string | undefined> = { PATH: '/usr/bin' };
+        const changed = applyRefreshedPath(env, '/usr/bin:/opt/gh/bin', 'linux', ':');
+        expect(changed).toBe(true);
+        expect(env.PATH).toContain('/opt/gh/bin');
+    });
+
+    it('reports NO change when the OS path adds nothing', () => {
+        // The caller logs this. "Refreshed" when nothing moved would make a
+        // restart that fixed nothing look like it worked.
+        const env: Record<string, string | undefined> = { PATH: '/usr/bin' };
+        expect(applyRefreshedPath(env, '/usr/bin', 'linux', ':')).toBe(false);
+    });
+
+    it('leaves the environment untouched when the OS path cannot be read', () => {
+        const env: Record<string, string | undefined> = { PATH: '/usr/bin' };
+        expect(applyRefreshedPath(env, null, 'linux', ':')).toBe(false);
+        expect(env.PATH).toBe('/usr/bin');
+    });
+
+    it('writes to the key that already exists, not a second one', () => {
+        // Windows: adding `PATH` beside an existing `Path` yields two keys and
+        // the spawned process honours whichever the OS picks.
+        const env: Record<string, string | undefined> = { Path: 'C:\Windows' };
+        applyRefreshedPath(env, 'C:\Windows;C:\gh', 'win32', ';');
+        expect(Object.keys(env).filter((k) => k.toLowerCase() === 'path')).toHaveLength(1);
+        expect(env.Path).toContain('C:\gh');
+    });
+
+    it('never empties PATH, whatever it is handed', () => {
+        // The catastrophic case: an environment with no PATH cannot spawn
+        // anything at all, so no input may produce one.
+        const env: Record<string, string | undefined> = { PATH: '/usr/bin' };
+        for (const osPath of [null, '', '   ', ':::']) {
+            applyRefreshedPath(env, osPath, 'linux', ':');
+            expect(env.PATH, `osPath=${JSON.stringify(osPath)}`).toBeTruthy();
+        }
+    });
+});
+
+/**
+ * The refresh is useless unless the RESTART runs it. `hostRestart` lives in
+ * background.ts, which has no unit harness (it drags the Electron bootstrap in),
+ * so the wiring is guarded in source — and this is the one wire where a silent
+ * break is indistinguishable from the original bug: a restart that respawns the
+ * host from a stale environment still cannot see a newly-installed CLI, which is
+ * precisely the state the owner was rebooting to escape.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+
+const BG = fs.readFileSync(path.resolve(__dirname, '../../background.ts'), 'utf8');
+
+describe('host restart refreshes the environment first', () => {
+    it('calls the refresh inside hostRestart', () => {
+        const fn = BG.slice(BG.indexOf('async function hostRestart'));
+        const body = fn.slice(0, fn.indexOf('\n}'));
+        expect(body).toMatch(/refreshEnvironmentFromOs\(\)/);
+    });
+
+    it('refreshes BEFORE stopping the host', () => {
+        // Order matters: the respawn reads `process.env` as it is at that moment.
+        // Refreshing after the restart would apply to the NEXT one — a fix that
+        // works on the second try and looks flaky on the first.
+        const fn = BG.slice(BG.indexOf('async function hostRestart'));
+        const body = fn.slice(0, fn.indexOf('\n}'));
+        expect(body.indexOf('refreshEnvironmentFromOs')).toBeLessThan(body.indexOf('hostStop'));
+    });
+
+    it('reads the OS path through the tested argv rather than inline', () => {
+        expect(BG).toMatch(/osPathArgv\(/);
+        expect(BG).toMatch(/applyRefreshedPath\(/);
+    });
+
+    it('bounds the OS read so a blocking shell profile cannot hang the restart', () => {
+        // `-l` sources the user's profile. A profile that waits on input would
+        // otherwise leave the restart hung with the host already stopped.
+        const fn = BG.slice(BG.indexOf('async function refreshEnvironmentFromOs'));
+        expect(fn.slice(0, 2000)).toMatch(/setTimeout\(/);
+    });
+
+    it('says which of the two things happened', () => {
+        // "Restarted" with no word on whether the environment moved is how a
+        // restart that fixed nothing gets reported as a fix.
+        expect(BG).toMatch(/environment refreshed from the OS/);
+        expect(BG).toMatch(/environment unchanged/);
+    });
+});
