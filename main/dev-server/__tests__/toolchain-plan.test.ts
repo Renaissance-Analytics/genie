@@ -54,8 +54,9 @@ describe('planToolchainInstall — what to install', () => {
             os: 'win32',
             pmChoice: 'winget',
         });
-        // Only the agent TUIs and Docker were missing.
-        expect(toolsOf(steps)).toEqual(['claude-code', 'codex', 'docker']);
+        // `gh`, the agent TUIs and Docker were missing — this machine has git but
+        // not the GitHub CLI, which is the ordinary case.
+        expect(toolsOf(steps)).toEqual(['gh', 'claude-code', 'codex', 'docker']);
     });
 
     it('plans the full toolchain on an empty machine, dependency-ordered', () => {
@@ -482,9 +483,19 @@ describe('agent CLIs beyond the original two', () => {
         }
     });
 
-    it('keeps the first-run wizard installing the SAME small set as before', () => {
+    it('keeps the first-run wizard installing a small, DELIBERATE set', () => {
+        // The point of this guard is that the wizard must never balloon SILENTLY
+        // — a growing agent-CLI catalogue must not quietly turn first-run setup
+        // into a twenty-agent install. It is not a freeze: a tool is added here
+        // when someone decides it belongs, and the exact list is what makes that
+        // decision visible in review.
+        //
+        // `gh` was added on the owner's instruction: Genie's agents drive every
+        // PR, issue and release through it, so a machine that finishes setup
+        // without it has agents that silently cannot do their work.
         expect([...DEFAULT_TOOLCHAIN]).toEqual([
             'git',
+            'gh',
             'node',
             'npm',
             'php',

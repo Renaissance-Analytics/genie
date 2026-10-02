@@ -89,6 +89,10 @@ export interface InstallStep {
  */
 export const INSTALL_ORDER: readonly HostToolName[] = [
     'git',
+    // Straight after git: same package manager, no dependency on anything below,
+    // and the planner WALKS this list — a tool missing from it is not mis-ordered,
+    // it is a tool that silently cannot be installed at all.
+    'gh',
     'node',
     'npm',
     // php's Windows runtime prerequisite — before php, because php cannot start

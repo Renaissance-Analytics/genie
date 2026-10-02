@@ -365,7 +365,9 @@ describe('planner ↔ adapter consistency (single source of truth)', () => {
             detected: {
                 platform: 'win32',
                 probes: [],
-                present: ['git', 'node', 'npm', 'docker', 'claude-code', 'codex'],
+                // `gh` present too, so this stays a test about php/composer
+                // routing rather than quietly becoming one about gh.
+                present: ['git', 'gh', 'node', 'npm', 'docker', 'claude-code', 'codex'],
                 missing: ['php', 'composer'],
             },
             os: 'win32',

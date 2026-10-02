@@ -219,8 +219,11 @@ describe('summarizeInstallPlan', () => {
 
     it('does not flag elevation when nothing in the plan needs it', () => {
         // node present → only the npm-global TUIs remain, which never elevate.
+        // `gh` is present too, deliberately: an apt install of it DOES elevate,
+        // so leaving it missing would change what this test is about rather than
+        // just its fixture.
         const steps = planToolchainInstall({
-            detected: reportWith(['git', 'node', 'npm', 'php', 'composer', 'docker']),
+            detected: reportWith(['git', 'gh', 'node', 'npm', 'php', 'composer', 'docker']),
             os: 'linux',
             pmChoice: 'apt',
         });
