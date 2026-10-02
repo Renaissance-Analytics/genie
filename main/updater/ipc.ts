@@ -11,7 +11,8 @@ import { getAllSettings, setSettings, getTerminalSpec } from '../db';
 import { setUpdateAvailable } from '../tray';
 import { showSettingsWindow, showMasterWindow } from '../background';
 import { getChangelog, type Changelog } from './changelog';
-import { hostBackendKind, detachedHostPinsBinary } from '../terminal/host-service';
+import { hostBackendKind, detachedHostPinsBinary, hostVersionDrift } from '../terminal/host-service';
+import { hostDriftNotice } from '../terminal/host-drift';
 import { liveHostTerminals } from '../terminal/quit-confirm';
 import { mobileEmit } from '../mobile/bus';
 import { upgradeRosterPlan, type DrainSnapshot } from '../agents/drain';
@@ -457,8 +458,22 @@ export function mobileInstallUpdate(force = false): {
  */
 export function withHostFlag(
     status: UpdaterStatus | AutoUpdaterStatus,
-): (UpdaterStatus | AutoUpdaterStatus) & { willRestartPtyHost: boolean } {
+): (UpdaterStatus | AutoUpdaterStatus) & {
+    willRestartPtyHost: boolean;
+    hostDriftNote?: string;
+} {
     let willRestartPtyHost = false;
+    // The OTHER half of the same question, and the one nobody was asking. A host
+    // that does NOT restart on update keeps its old code — so on exactly the
+    // machines where `willRestartPtyHost` is false, a host-level fix in this
+    // update may not reach them. Silence there reads as "nothing to know".
+    let hostDriftNote: string | undefined;
+    try {
+        const drift = hostVersionDrift();
+        hostDriftNote = (drift && hostDriftNotice(drift)) || undefined;
+    } catch {
+        /* defensive: never let the drift probe break the status payload */
+    }
     try {
         // A detached host only restarts on update if it PINS Genie's binary —
         // i.e. it was launched as Genie's execPath child. A detached host on the
@@ -468,7 +483,7 @@ export function withHostFlag(
     } catch {
         /* defensive: never let the host probe break the status payload */
     }
-    return { ...status, willRestartPtyHost };
+    return { ...status, willRestartPtyHost, ...(hostDriftNote ? { hostDriftNote } : {}) };
 }
 
 /**

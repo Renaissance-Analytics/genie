@@ -3581,6 +3581,7 @@ function UpdatePill() {
                     changelog={changelog}
                     ready={ready}
                     willRestartPtyHost={!!status.willRestartPtyHost}
+                    hostDriftNote={status.hostDriftNote}
                     heldChats={heldChats}
                     heldTerminals={heldTerminals}
                 />
@@ -4034,6 +4035,7 @@ function UpdatePopover({
     changelog,
     ready,
     willRestartPtyHost,
+    hostDriftNote,
     heldChats = 0,
     heldTerminals = 0,
 }: {
@@ -4041,6 +4043,7 @@ function UpdatePopover({
     changelog: Changelog | null;
     ready: boolean;
     willRestartPtyHost: boolean;
+    hostDriftNote?: string;
     heldChats?: number;
     heldTerminals?: number;
 }) {
@@ -4077,6 +4080,15 @@ function UpdatePopover({
                     Running sessions will be restored from a snapshot (command
                     history is kept; live processes stop). Save or close anything
                     important first.
+                </div>
+            ) : hostDriftNote ? (
+                /* The opposite case, and the one that used to say nothing at all.
+                   This host does NOT restart on update — which is why the
+                   terminals survive — so it keeps running older code until
+                   somebody restarts it. Saying nothing here reads as "nothing to
+                   know", and a host-level fix in this update has not landed. */
+                <div className="up-warn" role="alert">
+                    {hostDriftNote}
                 </div>
             ) : null}
             {!changelog ? (
