@@ -602,8 +602,8 @@ export const PHP_VARIABLES_ORDER = 'EGPCS';
  *     makes php-cgi.exe die at startup on Windows, and php-cgi is the binary the
  *     PHP serve mode spawns. That exclusion is settled, not an oversight.
  *
- * `redis` is NOT here because it is not in the build at all — it is a PECL
- * extension, and fetching it is tracked separately.
+ * `redis` is NOT in the base PHP archive. The PECL installer in
+ * `php-extensions.ts` fetches and verifies its ABI-matched artifact separately.
  *
  * Built-ins are deliberately absent: `ctype`, `dom`, `filter`, `hash`, `pcre`,
  * `session`, `tokenizer`, `xml`, `json` and `bcmath` are compiled into the
@@ -664,7 +664,9 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
  * nothing — the module list is the only evidence that the config did anything.
  */
 /**
- * Extensions Genie will enable IF the machine has them, and never demand.
+ * Extensions enabled when their DLL is present. Fresh installs and the explicit
+ * repair action install Redis through `php-extensions.ts`; this list also keeps
+ * startup ini refresh from undoing that installation.
  *
  * `redis` is not in the official Windows PHP build at all — it is PECL, so a
  * `extension=redis` line on a machine without the DLL prints a loader warning on
@@ -757,7 +759,7 @@ export function phpIniContents(
         ...PHP_INI_EXTENSIONS.map((e) => `extension=${e}`),
         // Present-on-disk PECL extensions. Kept OUT of PHP_INI_EXTENSIONS because
         // that list is also PHP_REQUIRED_MODULES: a name there is a name the
-        // install gate demands, and redis ships with no official Windows build.
+        // base-archive gate demands. Redis has its own PECL install/load gate.
         ...PHP_OPTIONAL_EXTENSIONS.filter((e) => presentOptional.includes(e)).map(
             (e) => `extension=${e}`,
         ),

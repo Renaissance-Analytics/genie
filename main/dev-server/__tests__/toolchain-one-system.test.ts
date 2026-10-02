@@ -178,6 +178,7 @@ describe('an install Genie reports is an install a new terminal can run', () => 
     /** The effects an install needs, all succeeding, recording the PATH adds. */
     function effects(added: string[]) {
         return {
+            ensurePhpExtensions: async () => ({ ok: true as const }),
             download: async () => ({ ok: true as const, path: '/tmp/archive' }),
             unpack: async () => ({ ok: true as const }),
             runInstaller: async () => ({ ok: true as const }),
@@ -254,6 +255,7 @@ const PHP_MODULES = [...PHP_REQUIRED_MODULES];
 describe('installing a language installs what that language NEEDS', () => {
     function fx(log: string[], over: Record<string, unknown> = {}) {
         return {
+            ensurePhpExtensions: async () => ({ ok: true as const }),
             download: async () => {
                 log.push('download');
                 return { ok: true as const, path: '/tmp/a.zip' };

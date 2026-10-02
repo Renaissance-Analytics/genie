@@ -83,6 +83,7 @@ describe('phpThreadSafeDll — the library only a ZTS Windows build ships', () =
 
 function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffects {
     return {
+        ensurePhpExtensions: vi.fn(async () => ({ ok: true })),
         download: vi.fn(async () => ({ ok: true as const, path: 'C:\\tmp\\a.zip' })),
         unpack: vi.fn(async () => ({ ok: true as const })),
         runInstaller: vi.fn(async () => ({ ok: true as const })),

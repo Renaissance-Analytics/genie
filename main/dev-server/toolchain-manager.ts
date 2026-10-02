@@ -15,6 +15,8 @@ import {
     type ToolchainPathReport,
 } from './toolchain-primitives';
 import { writeCaBundle } from './toolchain-ca';
+import { installPhpExtensions, repairManagedPhpExtensions, type PhpExtensionResult } from './php-extensions';
+import { createPhpExtensionEffects } from './php-extension-effects';
 import type { ComposerPhp } from './composer-php';
 import { FRANKENPHP_VERSION } from './frankenphp';
 import { ensureFrankenphp, type FrankenphpInstallEffects, type FrankenphpResolution } from './frankenphp-install';
@@ -582,6 +584,7 @@ function versionInstallEffects(tool: LanguageTool, deps: ToolchainManagerDeps): 
         },
 
         verify: (exe) => probeEngine(tool, exe),
+        ensurePhpExtensions: ensureManagedPhpExtensions,
 
         async moveAside(dir) {
             if (!fsSync.existsSync(dir)) return { ok: true, previous: null };
@@ -860,6 +863,22 @@ async function extractArchive(
         : { ok: false, error: (res.stderr || res.stdout || `exited ${res.code}`).slice(-400) };
 }
 
+/** Used both by new PHP installs and the explicit Check and repair action. */
+export function ensureManagedPhpExtensions(dir: string, exe: string): Promise<PhpExtensionResult> {
+    return installPhpExtensions({ dir, exe, platform: process.platform }, createPhpExtensionEffects({
+        download,
+        // Windows ships bsdtar, which reads zip without PowerShell module policy
+        // or string interpolation. Only checksum-verified PECL archives reach it.
+        unzip: async (archive, dest) => {
+            const result = await defaultCommandRunner.run('tar', ['-xf', archive, '-C', dest], { timeoutMs: 60_000 });
+            return { ok: result.code === 0 };
+        },
+        run: (binary, args) => defaultCommandRunner.run(binary, args, {
+            timeoutMs: 10_000, env: { PHP_INI_SCAN_DIR: '' },
+        }),
+    }));
+}
+
 /**
  * PURE. The `php.ini` files Genie wrote that no longer say what Genie would
  * write today.
@@ -1005,6 +1024,7 @@ export async function repairToolchainPath(
     /** Genie-owned `php.ini` files rewritten because they no longer matched what
      *  Genie writes today. */
     inis: string[];
+    extensions: Array<PhpExtensionResult & { dir: string }>;
 }> {
     const sep = process.platform === 'win32' ? ';' : ':';
     const tools = opts.tools ?? ['php', 'node', 'npm', 'composer', 'python', 'git'];
@@ -1041,6 +1061,9 @@ export async function repairToolchainPath(
     const before = await diagnose();
     applyToolchainPrecedence(dirs);
     const inis = await refreshManagedInis();
+    const extensions = await repairManagedPhpExtensions(
+        await machineInstalls({ force: true }), process.platform, ensureManagedPhpExtensions,
+    );
     const after = await diagnose();
 
     // "Changed" means the machine's ANSWERS changed, not that the string moved.
@@ -1051,7 +1074,7 @@ export async function repairToolchainPath(
         before.toolsFirst !== after.toolsFirst ||
         before.shadowed.join(',') !== after.shadowed.join(',');
 
-    return { before, after, changed: changed || inis.length > 0, inis };
+    return { before, after, changed: changed || inis.length > 0 || extensions.some((r) => r.ok && r.changed), inis, extensions };
 }
 
 /**
