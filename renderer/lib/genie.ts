@@ -1907,6 +1907,9 @@ export interface UpdaterStatus {
      * running processes stop). The update pill warns the user when this is set.
      */
     willRestartPtyHost?: boolean;
+    /** Set when the RUNNING terminal host is an older build than this one ships —
+     *  it survives updates by design, so host-level fixes have not reached it. */
+    hostDriftNote?: string;
     /**
      * Set when auto-update can't apply on this platform (macOS, where an
      * unsigned/ad-hoc build fails Squirrel.Mac signature validation). The UI
