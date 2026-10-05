@@ -195,3 +195,55 @@ describe('honesty', () => {
         expect(item.kind).toBe('question');
     });
 });
+
+/**
+ * Naming the blocked agent.
+ *
+ * A question now carries the terminal of the agent parked on it. A row wants a
+ * NAME, and only the caller knows the spec list that maps one to the other — so it
+ * passes a resolver. The decisions worth pinning are both about refusing to guess.
+ */
+describe('agent attribution', () => {
+    it('names the agent parked on a question', () => {
+        const [item] = attentionItems(
+            sources({ questions: [Q({ askerTerminalId: 't-kai' })] }),
+            { agentNameFor: (id) => (id === 't-kai' ? 'kai' : null) },
+        );
+        expect(item.agentName).toBe('kai');
+    });
+
+    it('names nobody when no agent asked', () => {
+        // An internal approval gate. The resolver is never consulted, because there
+        // is nothing to consult it with — and falling back to "some agent in this
+        // workspace" would blame one that is working fine.
+        const calls: string[] = [];
+        const [item] = attentionItems(sources({ questions: [Q()] }), {
+            agentNameFor: (id) => {
+                calls.push(id);
+                return 'should-not-happen';
+            },
+        });
+        expect(item.agentName).toBeNull();
+        expect(calls).toEqual([]);
+    });
+
+    it('names nobody when the terminal no longer resolves', () => {
+        // The agent was deleted, or the spec list is from a different workspace.
+        // "We cannot name it" is the answer, not the raw terminal id — a row reading
+        // "term-7f3a is blocked" tells a human nothing they can act on.
+        const [item] = attentionItems(
+            sources({ questions: [Q({ askerTerminalId: 't-gone' })] }),
+            { agentNameFor: () => null },
+        );
+        expect(item.agentName).toBeNull();
+    });
+
+    it('names nobody when no resolver is given at all', () => {
+        expect(attentionItems(sources({ questions: [Q({ askerTerminalId: 't-kai' })] }))[0].agentName).toBeNull();
+    });
+
+    it('still carries the terminal id, so a click can reveal the agent', () => {
+        const [item] = attentionItems(sources({ questions: [Q({ askerTerminalId: 't-kai' })] }));
+        expect(item.askerTerminalId).toBe('t-kai');
+    });
+})

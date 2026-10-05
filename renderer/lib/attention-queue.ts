@@ -68,6 +68,21 @@ export interface AttentionItem {
     blocking: boolean;
     /** Why a question is not on the modal, when it is not. */
     deferralReason: PendingQuestionSpec['deferralReason'] | null;
+    /** The terminal of the agent parked on this, so a click can reveal it. Null
+     *  when nothing names one — an internal approval gate has no asker. */
+    askerTerminalId: string | null;
+}
+
+export interface AttentionOptions {
+    /**
+     * Turn an asking agent's terminal id into a display name.
+     *
+     * The caller supplies it because only the caller holds the spec list. Returning
+     * null is a legitimate answer — the agent may have been deleted — and the row
+     * then names nobody rather than printing a raw terminal id, which tells a human
+     * nothing they can act on.
+     */
+    agentNameFor?: (terminalId: string) => string | null;
 }
 
 export interface AttentionSources {
@@ -83,13 +98,16 @@ function questionTitle(q: PendingQuestionSpec): string {
     return first.header.trim() || first.question.trim() || 'A question is waiting';
 }
 
-function fromQuestion(q: PendingQuestionSpec): AttentionItem {
+function fromQuestion(q: PendingQuestionSpec, opts: AttentionOptions): AttentionItem {
+    const asker = q.askerTerminalId ?? null;
     return {
         key: `question:${q.id}`,
         kind: 'question',
         title: questionTitle(q),
         body: q.questions[0]?.question ?? null,
-        agentName: null,
+        // Only consulted when an agent actually asked. There is no fallback to
+        // "some agent in this workspace" — that would blame one that is working fine.
+        agentName: asker ? (opts.agentNameFor?.(asker) ?? null) : null,
         workspaceLabel: q.workspaceLabel ?? null,
         remoteHost: q.remoteHost ?? null,
         createdAt: q.createdAt ?? null,
@@ -97,6 +115,7 @@ function fromQuestion(q: PendingQuestionSpec): AttentionItem {
         // An agent is parked on this answer and will not move until it arrives.
         blocking: true,
         deferralReason: q.deferralReason ?? null,
+        askerTerminalId: asker,
     };
 }
 
@@ -117,6 +136,9 @@ function fromListItem(i: ListItemSpec): AttentionItem {
         // does something". Nothing is stopped behind this one.
         blocking: false,
         deferralReason: null,
+        // The list carries the agent NAME directly (it is what gets nudged), not a
+        // terminal, so there is nothing to reveal by id.
+        askerTerminalId: null,
     };
 }
 
@@ -134,8 +156,8 @@ function fromListItem(i: ListItemSpec): AttentionItem {
  * prevent. A status board has no such head, so borrowing that helper would pin
  * whichever row happened to arrive first and call it protection.
  */
-export function attentionItems(src: AttentionSources): AttentionItem[] {
-    const items = [...src.questions.map(fromQuestion), ...src.listItems.map(fromListItem)];
+export function attentionItems(src: AttentionSources, opts: AttentionOptions = {}): AttentionItem[] {
+    const items = [...src.questions.map((q) => fromQuestion(q, opts)), ...src.listItems.map(fromListItem)];
 
     return items.sort((a, b) => {
         if (a.blocking !== b.blocking) return a.blocking ? -1 : 1;
