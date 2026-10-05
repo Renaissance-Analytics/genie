@@ -240,7 +240,10 @@ describe('ForceTheQuestion FIFO queue', () => {
         expect.soft(modal.showInactive).toHaveBeenCalledOnce();
         expect.soft(modal.focus).not.toHaveBeenCalled();
         expect.soft(modal.show).not.toHaveBeenCalled();
-        modal.close();
+        // Teardown must CANCEL, not close: main now PARKS on close (see `drain`),
+        // so ending here with `modal.close()` left both questions in module state
+        // and the next test saw five pending instead of three.
+        drain();
         await Promise.all([first, second]);
     });
 
