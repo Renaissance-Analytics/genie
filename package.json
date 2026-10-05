@@ -53,8 +53,6 @@
         }
     },
     "dependencies": {
-        "@agentclientprotocol/claude-agent-acp": "^0.85.1",
-        "@agentclientprotocol/sdk": "^1.7.0",
         "@particle-academy/dark-slide": "^0.7.1",
         "@particle-academy/fancy-artboard": "^0.5.0",
         "@particle-academy/fancy-brand-icons": "^0.2.0",
