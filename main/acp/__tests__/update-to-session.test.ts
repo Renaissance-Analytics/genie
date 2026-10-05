@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import schema from '@agentclientprotocol/sdk/schema/schema.json';
 import { emptyAgentSession, type AgentSession } from '../../agentsession/model';
 import { HANDLED_UPDATE_KINDS, applySessionUpdate } from '../update-to-session';
 
@@ -182,37 +181,24 @@ describe('commands', () => {
     });
 });
 
+/*
+ * REMOVED: the cross-check that pinned HANDLED_UPDATE_KINDS against the protocol
+ * schema in both directions.
+ *
+ * It imported `@agentclientprotocol/sdk/schema/schema.json`, and the owner has ruled NO
+ * THIRD PARTY (2026-10-05) -- Prism is the source of all agentic solutions and owns this
+ * capability. So the dependency is gone from package.json.
+ *
+ * It is deliberately NOT replaced with a list declared in our own repo and compared
+ * against itself: that passes by construction, and a guard that cannot fail is worse than
+ * no guard because it reports coverage it does not have.
+ *
+ * RE-PIN THIS once Prism states the wire format it owns. What the check bought was real --
+ * a format bump adding a variant turned it red, instead of a `default:` branch quietly
+ * absorbing something nobody remembers the surface had. The per-kind behaviour tests above
+ * still stand; only the completeness claim is suspended.
+ */
 describe('every protocol variant is handled BY NAME', () => {
-    /** Pull the `sessionUpdate` discriminants out of the SDK's own shipped schema. */
-    const kindsInSchema = (): string[] => {
-        const defs = (schema as Record<string, any>).$defs ?? {};
-        const variants = defs.SessionUpdate?.oneOf ?? [];
-        return variants
-            .map((v: any) => v?.properties?.sessionUpdate?.const)
-            .filter((k: unknown): k is string => typeof k === 'string');
-    };
-
-    it('finds the schema, so this guard cannot pass vacuously', () => {
-        // Positive control. If the package moved the definition, the two assertions
-        // below would compare empty sets and agree.
-        expect(kindsInSchema().length).toBeGreaterThan(10);
-    });
-
-    it('handles every kind the shipped schema declares', () => {
-        // A protocol bump that adds a variant turns this red, which is the point of
-        // pinning against the package instead of a list I typed out. The alternative —
-        // a `default:` that absorbs the unknown — makes the surface quietly stop showing
-        // something nobody remembers it had.
-        const unhandled = kindsInSchema().filter((k) => !(HANDLED_UPDATE_KINDS as readonly string[]).includes(k));
-        expect(unhandled).toEqual([]);
-    });
-
-    it('handles nothing the schema does not declare', () => {
-        // The other direction: a kind we handle that the protocol dropped is dead code
-        // pretending to be coverage.
-        const inSchema = new Set(kindsInSchema());
-        expect((HANDLED_UPDATE_KINDS as readonly string[]).filter((k) => !inSchema.has(k))).toEqual([]);
-    });
 
     it('leaves the session untouched for a kind the model cannot store yet', () => {
         // Handled is not the same as stored. These are acknowledged explicitly so the
