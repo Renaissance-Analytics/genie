@@ -121,6 +121,8 @@ import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { acpRegistry, terminalIsLive } from '../acp/registry';
+import { startAcpForSpec } from '../acp/start';
+import { launchPlan } from '../agents/launch-plan';
 import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
 import { devChannelConsentReply } from './dev-channel-consent';
@@ -887,7 +889,32 @@ export function createAgentTerminal(opts: {
     // is left strictly alone — the launch line is never typed into a live TUI's
     // prompt, which is what that bug looks like from the user's side.
     if (reviving && !preparedCodex) maybeRelaunchAgent(id, result.existing);
-    else if (launchCommand && !result.existing && !preparedCodex) deliverAgentLaunch(id, launchCommand);
+    else if (!result.existing && !preparedCodex) {
+        // THE ONE BRANCH. `createAgentTerminal` is the chokepoint every launch path bottoms
+        // out in — a renderer click, `runAgent start`, mobile, revival — which is why the
+        // ACP engine belongs here and nowhere else. The decision itself is `launchPlan`,
+        // which is tested; this file is 115 KB, imports electron and the database, and has
+        // no test of its own, so it gets a branch and not a rule.
+        //
+        // DEFAULT IS THE PTY. `acp_engine` is absent until the owner turns it on, and a
+        // provider with no ACP mode stays on the pty regardless, so this is behaviour-
+        // identical for every existing agent.
+        const plan = launchPlan({
+            provider: opts.agentMeta?.agent ?? null,
+            command: launchCommand ?? null,
+            acpEnabled: dbSettingsProvider().acp_engine === 'on',
+        });
+        if (plan?.kind === 'acp') {
+            const started = startAcpForSpec({ specId: id, provider: plan.provider, cwd: opts.cwd });
+            if ('error' in started) {
+                // Named, and surfaced the same way a refused pty launch is: an agent that
+                // could not start must say why rather than sit there looking idle.
+                log.warn(`[acp] ${plan.provider} session for ${id} did not start: ${started.error}`);
+            }
+        } else if (plan?.kind === 'pty') {
+            deliverAgentLaunch(id, plan.command);
+        }
+    }
 
     // A panel was opened — record when (genie#585). The same event the
     // `terminal:create` handler records, reached from the MCP tools, a remote

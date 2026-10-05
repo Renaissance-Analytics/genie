@@ -3338,6 +3338,15 @@ export function setAgentAvatar(
 // Settings helpers ------------------------------------------------------
 
 export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
+    /**
+     * Run ACP-capable agents as structured sessions instead of TUIs in a pty.
+     *
+     * Absent or 'off' means the pty, which is the DEFAULT and stays the default until
+     * the owner moves it — Genie 2 is a parallel surface. `engineFor` reads this, and a
+     * provider with no ACP mode stays on the pty regardless, so turning it on is
+     * permission rather than a promise.
+     */
+    acp_engine?: 'on' | 'off';
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
