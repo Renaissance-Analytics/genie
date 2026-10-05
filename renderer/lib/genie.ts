@@ -14,6 +14,14 @@ import type {
 } from '../../main/terminal/agent-pulse';
 import type { AddWorkspacePlan } from '../../main/workspace/add-workspace-types';
 import type { DrainSnapshot } from '../../main/agents/drain';
+/**
+ * IMPORTED, not restated. `main/agentsession/model.ts` imports nothing, so the
+ * renderer can read it directly the way it already reads `agents/registry` and
+ * `agents/drain` — and a single definition is the only thing that stops this drifting
+ * from the host's. The phone client's own `PendingQuestion` is three fields behind the
+ * host's today for exactly the opposite choice.
+ */
+import type { AgentSession } from '../../main/agentsession/model';
 import type { AgentTuiId, TuiDef } from '../../main/agents/registry';
 import type { SoundSettingKeys } from '../../main/notify-sound-kinds';
 import type { RestartMode } from '../../main/agents/restart-options';
@@ -48,6 +56,9 @@ import type {
     PersonaEdit,
     SidecarAction,
 } from '../../main/agents/agent-manager-types';
+
+/** The host's `AgentSession`, under the `*Spec` name this file uses for wire types. */
+export type AgentSessionSpec = AgentSession;
 
 export type {
     TynnHealth,
@@ -4253,6 +4264,16 @@ export interface GenieApi {
         answer: (id: string, answers: ForceAnswerSpec[]) => Promise<boolean>;
     };
     /** AgentList + UserList for a workspace (genie#556) — local, never in Tynn. */
+    /**
+     * Every agent's SESSION — the host's view of each agent as a value.
+     *
+     * No push channel of its own: subscribe to the events that already announce the
+     * facts a session is built from (`questions:changed`, `agents:changed`,
+     * `agent-pulse`, `notify:imdone`) and re-read. No polling.
+     */
+    agentSession: {
+        list: () => Promise<AgentSessionSpec[]>;
+    };
     lists: {
         read: (workspaceId: string) => Promise<WorkspaceListsSpec>;
         resolveUser: (
