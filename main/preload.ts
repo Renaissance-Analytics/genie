@@ -1274,6 +1274,17 @@ const api = {
      * The workspace's AgentLists + UserList (genie#556). Local to this machine
      * and never synced to Tynn.
      */
+    /**
+     * Every agent's SESSION — what Genie can say about each agent, as a value.
+     *
+     * Read-only, and it has no push channel of its own: a caller subscribes to the
+     * events that already announce the facts a session is built from
+     * (`questions:changed`, `agents:changed`, `agent-pulse`, `notify:imdone`) and
+     * re-reads. No polling, and no sixth emitter to keep in step with five.
+     */
+    agentSession: {
+        list: () => ipcRenderer.invoke('agentsession:list'),
+    },
     lists: {
         /** Every agent's checklist in this workspace, plus the shared UserList. */
         read: (workspaceId: string) => ipcRenderer.invoke('lists:read', workspaceId),

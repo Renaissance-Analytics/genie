@@ -132,6 +132,7 @@ import { broadcastListsChanged } from './lists/announce';
 import { onListsChanged } from './lists/changed';
 import { type UserListAction } from './lists/service';
 import { readWorkspaceLists, resolveUserListItemOnHost } from './lists/wiring';
+import { agentSessions } from './agentsession/bindings';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import {
@@ -2286,6 +2287,16 @@ export function registerIpcHandlers(): void {
     // and resolve therefore run the SAME code as a local one — including the
     // nudge, which has to happen here because the authoring agent is here.
     ipcMain.handle('lists:read', (_e, workspaceId: string) => readWorkspaceLists(workspaceId));
+    // Every agent's session, for the Deck. One line on purpose: the reads, the
+    // attribution and the projection all live in `agentsession/`, which is tested —
+    // this file is not, so anything with a decision in it does not belong here.
+    //
+    // NO PUSH EVENT OF ITS OWN. Everything a session is built from already
+    // announces: `questions:changed`, `agents:changed`, `agent-pulse`,
+    // `notify:imdone`, `lists:changed`. A surface subscribes to those and re-reads,
+    // which is push-driven without a sixth emitter to keep in step with the other
+    // five.
+    ipcMain.handle('agentsession:list', () => agentSessions());
     // Every writer announces through the same emitter — an agent's MCP call, a
     // local resolve, and a remote one over the bridge — so an open panel
     // re-reads without polling any of them.
