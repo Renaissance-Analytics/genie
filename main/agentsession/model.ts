@@ -121,9 +121,25 @@ export type SessionFidelity =
     | 'unknown';
 
 export interface AgentSessionIdentity {
-    /** `terminal_specs.id` — the agent's pty id, reused across restarts because
-     *  that is what carries its AgentInbox identity and queued mail. */
-    specId: string;
+    /**
+     * `workspace_agents.id` — the DURABLE identity, and the key.
+     *
+     * Not the terminal. An agent is not its TUI (shipped beta.285): it can switch
+     * drivers, each with its own pty, and it exists while running none of them. The
+     * AMS grid already fixed this exact mistake once and wrote down what it cost —
+     * *"a registered agent that was not running was INVISIBLE, so every
+     * `role: 'workspace'` agent seeded since v50 has never been shown to anyone"* —
+     * and keying a session by its terminal would reintroduce it, because a dormant
+     * agent has no terminal to key on.
+     */
+    agentId: string;
+    /**
+     * The fronted runtime's `terminal_specs.id`, or **null when the agent is
+     * dormant**. Reused across restarts when it exists, because that is what carries
+     * the agent's AgentInbox identity and queued mail — but its absence is a normal
+     * state, not a missing value.
+     */
+    specId: string | null;
     /** The provider id from `main/agents/registry.ts`, or null when unresolvable. */
     provider: string | null;
     name: string;
@@ -132,7 +148,10 @@ export interface AgentSessionIdentity {
 }
 
 export interface AgentSession {
-    specId: string;
+    /** The durable agent identity — see {@link AgentSessionIdentity.agentId}. */
+    agentId: string;
+    /** Its current terminal, or null while dormant. */
+    specId: string | null;
     session: {
         provider: string | null;
         name: string;
@@ -168,6 +187,7 @@ export interface AgentSession {
  */
 export function emptyAgentSession(identity: AgentSessionIdentity, now = Date.now()): AgentSession {
     return {
+        agentId: identity.agentId,
         specId: identity.specId,
         session: {
             provider: identity.provider,

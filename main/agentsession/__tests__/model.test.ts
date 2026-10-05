@@ -20,19 +20,21 @@ import {
  */
 
 const session = (over: Partial<AgentSession> = {}): AgentSession => ({
-    ...emptyAgentSession({ specId: 's1', provider: 'claude', name: 'kai', cwd: '/w', workspaceId: 'w1' }),
+    ...emptyAgentSession({ agentId: 'a1', specId: 's1', provider: 'claude', name: 'kai', cwd: '/w', workspaceId: 'w1' }),
     ...over,
 });
 
 describe('emptyAgentSession', () => {
     it('starts at idle with nothing claimed', () => {
         const s = emptyAgentSession({
+            agentId: 'a1',
             specId: 's1',
             provider: 'claude',
             name: 'kai',
             cwd: '/w',
             workspaceId: 'w1',
         });
+        expect(s.agentId).toBe('a1');
         expect(s.specId).toBe('s1');
         expect(s.session).toEqual({
             provider: 'claude',
@@ -54,6 +56,7 @@ describe('emptyAgentSession', () => {
         // claim "it has spent nothing", both of which are assertions we have no
         // standing to make.
         const s = emptyAgentSession({
+            agentId: 'a1',
             specId: 's1',
             provider: 'aider',
             name: 'rook',
@@ -71,6 +74,7 @@ describe('emptyAgentSession', () => {
         // and its own pulse are the source, so "none pending" is a fact it can
         // state for any provider.
         const s = emptyAgentSession({
+            agentId: 'a1',
             specId: 's1',
             provider: 'aider',
             name: 'rook',
@@ -82,8 +86,8 @@ describe('emptyAgentSession', () => {
     });
 
     it('is a fresh object each time', () => {
-        const a = emptyAgentSession({ specId: 's1', provider: 'claude', name: 'k', cwd: '/w', workspaceId: null });
-        const b = emptyAgentSession({ specId: 's2', provider: 'claude', name: 'k', cwd: '/w', workspaceId: null });
+        const a = emptyAgentSession({ agentId: 'a1', specId: 's1', provider: 'claude', name: 'k', cwd: '/w', workspaceId: null });
+        const b = emptyAgentSession({ agentId: 'a2', specId: 's2', provider: 'claude', name: 'k', cwd: '/w', workspaceId: null });
         a.transcript.push({ id: 'm1', role: 'user', content: 'hi' });
         expect(b.transcript).toEqual([]);
     });

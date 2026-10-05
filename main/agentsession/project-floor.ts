@@ -114,7 +114,10 @@ export function projectFloorSession(inputs: FloorInputs): AgentSession {
     // is genuinely newer, and burying it would hide a reply somebody is waiting on.
     if (inputs.handoff && inputs.handoff.text.trim() !== '') {
         messages.push({
-            id: `handoff:${inputs.identity.specId}`,
+            // Keyed on the AGENT, not its terminal: a spec id is absent while
+            // dormant — exactly when the handoff matters most — and `handoff:null`
+            // would collide across every dormant agent.
+            id: `handoff:${inputs.identity.agentId}`,
             role: 'agent',
             author: null,
             content: inputs.handoff.text,

@@ -14,7 +14,7 @@ import { projectFloorSession, type FloorInputs } from '../project-floor';
  * state too little and the Deck is empty, state too much and it lies.
  */
 
-const IDENT = { specId: 's1', provider: 'aider', name: 'rook', cwd: '/w', workspaceId: 'w1' };
+const IDENT = { agentId: 'a1', specId: 's1', provider: 'aider', name: 'rook', cwd: '/w', workspaceId: 'w1' };
 const NOW = 1_700_000_000_000;
 
 const inputs = (over: Partial<FloorInputs> = {}): FloorInputs => ({
@@ -183,7 +183,7 @@ describe('the transcript', () => {
             }),
         );
         expect(s.transcript.at(-1)).toEqual({
-            id: 'handoff:s1',
+            id: 'handoff:a1',
             role: 'agent',
             author: null,
             content: 'Landed #770. The win32 test still fails.',
@@ -199,7 +199,7 @@ describe('the transcript', () => {
                 mail: [{ id: 'after', from: 'human', author: null, body: 'and this?', at: NOW - 100 }],
             }),
         );
-        expect(s.transcript.map((m) => m.id)).toEqual(['handoff:s1', 'after']);
+        expect(s.transcript.map((m) => m.id)).toEqual(['handoff:a1', 'after']);
     });
 
     it('ignores an empty handoff rather than adding a blank message', () => {
@@ -220,6 +220,7 @@ describe('error', () => {
 describe('identity', () => {
     it('carries the spec id and workspace through unchanged', () => {
         const s = projectFloorSession(inputs());
+        expect(s.agentId).toBe('a1');
         expect(s.specId).toBe('s1');
         expect(s.session).toEqual({
             provider: 'aider',
@@ -228,5 +229,44 @@ describe('identity', () => {
             workspaceId: 'w1',
             sessionId: null,
         });
+    });
+});
+
+describe('a DORMANT agent', () => {
+    it('still gets a session, with no terminal', () => {
+        // This is the bug the AMS grid already fixed once and wrote down: "a
+        // registered agent that was not running was INVISIBLE, so every
+        // role: 'workspace' agent seeded since v50 has never been shown to anyone."
+        // Keying a session by its terminal would reintroduce it here, because a
+        // dormant agent has no terminal to key on.
+        const s = projectFloorSession(inputs({ identity: { ...IDENT, specId: null } }));
+        expect(s.agentId).toBe('a1');
+        expect(s.specId).toBeNull();
+        expect(s.turn.state).toBe('idle');
+    });
+
+    it('still shows its last handoff, which is the whole point of a dormant row', () => {
+        // The agent finished and went away. What it LEFT is the reason to look at it.
+        const s = projectFloorSession(
+            inputs({
+                identity: { ...IDENT, specId: null },
+                handoff: { text: 'Landed #770.', at: NOW - 1000 },
+            }),
+        );
+        expect(s.transcript).toEqual([
+            { id: 'handoff:a1', role: 'agent', author: null, content: 'Landed #770.' },
+        ]);
+    });
+
+    it('keys the handoff message on the AGENT, so it survives a restart', () => {
+        // A terminal spec id is reused across restarts but is absent while dormant,
+        // so `handoff:<specId>` would be `handoff:null` for exactly the agent whose
+        // handoff matters most — and would change identity if the spec ever did.
+        const live = projectFloorSession(inputs({ handoff: { text: 'x', at: NOW } }));
+        const dormant = projectFloorSession(
+            inputs({ identity: { ...IDENT, specId: null }, handoff: { text: 'x', at: NOW } }),
+        );
+        expect(live.transcript[0]!.id).toBe('handoff:a1');
+        expect(dormant.transcript[0]!.id).toBe('handoff:a1');
     });
 });
