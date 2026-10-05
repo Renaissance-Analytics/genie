@@ -4,6 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { floorSurface } from '../floor-surface';
 
 describe('floorSurface', () => {
+    it('shows the grid for the DEFAULT view', () => {
+        // The default must not hide the grid. An earlier version defaulted the route to
+        // the Deck and every panel test on every platform failed.
+        expect(floorSurface({ kind: 'grid' })).toEqual({ showDeck: false, hideGrid: false });
+    });
+
     it('shows the Deck and hides the grid for the Deck view', () => {
         expect(floorSurface({ kind: 'deck' })).toEqual({ showDeck: true, hideGrid: true });
     });
@@ -28,6 +34,7 @@ describe('floorSurface', () => {
         // The flags are separate on purpose, and this pins it: there is no state in
         // which the surface says "the grid should not exist".
         for (const view of [
+            { kind: 'grid' } as const,
             { kind: 'deck' } as const,
             { kind: 'workbench', workspaceId: 'w' } as const,
             { kind: 'agent', agentId: 'a', tab: null } as const,

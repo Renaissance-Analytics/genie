@@ -26,6 +26,8 @@ export interface FloorSurface {
 
 export function floorSurface(view: GenieView): FloorSurface {
     switch (view.kind) {
+        case 'grid':
+            return { showDeck: false, hideGrid: false };
         case 'deck':
             return { showDeck: true, hideGrid: true };
         case 'workbench':

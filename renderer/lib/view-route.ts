@@ -28,7 +28,19 @@ const AGENT_TABS: readonly AgentTab[] = ['session', 'terminal', 'files', 'change
 
 /** The subject on screen. */
 export type GenieView =
-    /** Cross-workspace landing view: what needs you, every agent, what changed. */
+    /**
+     * Today's Floor — the panel grid for whatever workspace is active.
+     *
+     * THE DEFAULT, and deliberately so for now. The Deck becomes the landing view in a
+     * later phase; until then it is a parallel surface reached explicitly, because
+     * moving the default is the owner's call to make once the Deck is better than what
+     * it replaces. An earlier version of this module made the Deck the no-params
+     * default and E2E caught it on all three platforms: the grid was hidden on every
+     * window that opened without a query string, which is most of them.
+     */
+    | { kind: 'grid' }
+    /** Cross-workspace view: what needs you, every agent, what changed. Reached
+     *  EXPLICITLY with `?view=deck` until it becomes the default. */
     | { kind: 'deck' }
     /** One workspace's panels — today's Floor. */
     | { kind: 'workbench'; workspaceId: string }
@@ -60,6 +72,9 @@ function one(value: string | string[] | undefined): string | null {
  * on a blank screen.
  */
 export function parseViewRoute(query: RouteQuery): GenieView {
+    // Explicit opt-in, checked FIRST so `?view=deck` wins over a leftover `ws`.
+    if (one(query.view) === 'deck') return { kind: 'deck' };
+
     const agentId = one(query.agent);
     if (agentId) {
         // The agent WINS over a workspace. An agent is the more specific subject
@@ -76,7 +91,8 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     const workspaceId = one(query.ws);
     if (workspaceId) return { kind: 'workbench', workspaceId };
 
-    return { kind: 'deck' };
+    // No params: today's Floor. See the note on `kind: 'grid'`.
+    return { kind: 'grid' };
 }
 
 /**
@@ -89,8 +105,11 @@ export function parseViewRoute(query: RouteQuery): GenieView {
  */
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
-        case 'deck':
+        case 'grid':
+            // The default carries no params, so the url you sit on most stays clean.
             return {};
+        case 'deck':
+            return { view: 'deck' };
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':
