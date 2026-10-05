@@ -179,8 +179,8 @@ import {
 import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
-import Router, { useRouter } from 'next/router';
-import { mergeViewRoute, parseViewRoute, type GenieView } from '../lib/view-route';
+import { useRouter } from 'next/router';
+import { parseViewRoute, type GenieView } from '../lib/view-route';
 import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
 import { focusOwnerOf } from '../lib/master-shortcuts';
@@ -340,14 +340,6 @@ function MasterInner() {
     const router = useRouter();
     const view: GenieView = parseViewRoute(router.query ?? {});
     const surface = floorSurface(view);
-    const goTo = useCallback(
-        (next: GenieView) => {
-            void Router.replace({ query: mergeViewRoute(router.query ?? {}, next) }, undefined, {
-                shallow: true,
-            });
-        },
-        [router.query],
-    );
 
     /**
      * Every agent's session, for the Deck.
@@ -2476,22 +2468,28 @@ function MasterInner() {
                 api().app.showSettings(isRemoteWindow()).catch(() => {});
                 return;
             }
-            if (intent.kind === 'deck') {
-                // Escape goes UP a level, and the Deck is where it lands. The resolver
-                // has already withheld this inside a terminal and inside a text field,
-                // where Escape belongs to the TUI and to the field respectively.
-                e.preventDefault();
-                goTo({ kind: 'deck' });
-            }
+            // ESCAPE IS DELIBERATELY NOT WIRED TO THE DECK YET, and E2E is why.
+            //
+            // Wiring it navigated away from the grid on every Escape — and Escape already
+            // means something here: it closes a flyout, dismisses a panel, leaves a docked
+            // layout. preventDefault on top of that stole it from the app's own handling.
+            // Four specs failed IDENTICALLY on all three platforms (a dismissed panel that
+            // stayed, an "empty floor" holding one, a hibernated floor, a docked lists
+            // header) because the grid was hidden underneath them.
+            //
+            // Escape goes UP a level once the Deck IS the default surface — then there is a
+            // level to go up to. Until then the Deck is reached explicitly with
+            // `?view=deck`, which is what "parallel surface" means.
+            //
             // The remaining intents — palette, agent slots, take-over, queue movement,
-            // approvals — are resolved but not yet acted on. They need surfaces that do
-            // not exist yet, and acting on them now would be a silent no-op, which is
-            // the "silent success" this repo treats as a bug.
+            // approvals — are resolved and likewise not acted on. They need surfaces that
+            // do not exist yet, and acting now would be a silent no-op, which this repo
+            // treats as a bug.
         };
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [goTo]);
+    }, []);
 
     if (authChecked && !signedIn) {
         return (
