@@ -120,6 +120,7 @@ import { planInboxIncomingNotice } from '../attention/inbox-incoming-notice';
 import { getSnapshotStore, dbSettingsProvider } from './genie-adapter';
 import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
+import { acpRegistry, terminalIsLive } from '../acp/registry';
 import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
 import { devChannelConsentReply } from './dev-channel-consent';
@@ -399,7 +400,26 @@ function ptyIsLive(id: string): boolean {
     }
 }
 
-export { ptyIsLive as isTerminalLive };
+/**
+ * Is this agent terminal live — under EITHER engine?
+ *
+ * THE seam. This one function is imported by the roster, the agent cap, drain, triage,
+ * `savedAgentsOf` and `runAgent`, and an ACP session has no pty — so without the second
+ * half it would read as DEAD in all of them at once. That is not cosmetic: drain would
+ * let an upgrade proceed over a working agent, and triage would prescribe a restart for
+ * something running perfectly.
+ *
+ * Teaching one function about ACP is what lets the other seventy-odd call sites stay
+ * exactly as they are. The pty is asked first, so every existing agent costs nothing
+ * extra — and today `acpRegistry` holds nothing, so this is behaviour-identical until
+ * something registers a session.
+ */
+export function isTerminalLive(id: string): boolean {
+    return terminalIsLive(id, {
+        ptyLive: (specId) => ptyIsLive(specId),
+        acpLive: (specId) => acpRegistry.isLive(specId),
+    });
+}
 
 /**
  * Read recent output for a terminal (agent-control MCP).
