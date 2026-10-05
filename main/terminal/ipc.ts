@@ -902,14 +902,14 @@ export function createAgentTerminal(opts: {
         const plan = launchPlan({
             provider: opts.agentMeta?.agent ?? null,
             command: launchCommand ?? null,
-            acpEnabled: dbSettingsProvider().acp_engine === 'on',
+            acpEnabled: dbSettingsProvider().get('acp_engine') === 'on',
         });
         if (plan?.kind === 'acp') {
             const started = startAcpForSpec({ specId: id, provider: plan.provider, cwd: opts.cwd });
             if ('error' in started) {
                 // Named, and surfaced the same way a refused pty launch is: an agent that
                 // could not start must say why rather than sit there looking idle.
-                log.warn(`[acp] ${plan.provider} session for ${id} did not start: ${started.error}`);
+                console.warn(`[acp] ${plan.provider} session for ${id} did not start: ${started.error}`);
             }
         } else if (plan?.kind === 'pty') {
             deliverAgentLaunch(id, plan.command);
