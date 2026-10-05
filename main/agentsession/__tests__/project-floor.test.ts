@@ -270,3 +270,26 @@ describe('a DORMANT agent', () => {
         expect(dormant.transcript[0]!.id).toBe('handoff:a1');
     });
 });
+
+describe('a question with an unknown arrival time', () => {
+    it('does not date the wait to 1970', () => {
+        // The host does not stamp createdAt on a question forwarded from an older
+        // build. Counting that as epoch 0 would have the surface report an agent
+        // blocked for decades — a far more alarming lie than "we do not know".
+        const s = projectFloorSession(inputs({ questions: [{ id: 'q1', createdAt: null }] }));
+        expect(s.turn.state).toBe('awaiting-input');
+        expect(s.turn.since).toBe(NOW);
+    });
+
+    it('is ignored when a sibling question DOES have a time', () => {
+        const s = projectFloorSession(
+            inputs({
+                questions: [
+                    { id: 'unknown', createdAt: null },
+                    { id: 'known', createdAt: NOW - 120_000 },
+                ],
+            }),
+        );
+        expect(s.turn.since).toBe(NOW - 120_000);
+    });
+});
