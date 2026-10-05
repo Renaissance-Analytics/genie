@@ -51,6 +51,18 @@ export interface Message {
     id: string;
     role: MessageRole;
     content: string;
+    /**
+     * Who sent it, when `role` alone cannot say — null for the owner and for the
+     * agent's own voice.
+     *
+     * A host-side addition. The lifted protocol carries only a role, which is
+     * enough for a single-agent harness where every `user` message is the person
+     * sitting there. Genie's floor transcript is built partly from AgentInbox
+     * mail, which is MULTI-PARTY: a message from a sibling agent is neither this
+     * agent speaking nor the owner speaking. Encoding the sender into `content` as
+     * a prefix would be munging somebody's text, so it gets a field.
+     */
+    author?: string | null;
 }
 
 export interface ToolCall {
