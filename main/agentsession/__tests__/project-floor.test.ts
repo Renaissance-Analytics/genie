@@ -20,7 +20,7 @@ const NOW = 1_700_000_000_000;
 const inputs = (over: Partial<FloorInputs> = {}): FloorInputs => ({
     identity: IDENT,
     working: false,
-    byteActive: false,
+
     questions: [],
     handoff: null,
     mail: [],
@@ -38,27 +38,39 @@ describe('turn state', () => {
         expect(projectFloorSession(inputs({ working: true })).turn.state).toBe('thinking');
     });
 
-    it('is thinking when bytes are arriving', () => {
-        // Something is producing output. The floor cannot say WHAT, only that the
-        // terminal is not quiet.
-        expect(projectFloorSession(inputs({ byteActive: true })).turn.state).toBe('thinking');
-    });
-
-    it('NEVER claims tool, even mid-turn with bytes flowing', () => {
+    it('NEVER claims tool, even mid-turn', () => {
         // Telling a tool call apart from thinking needs the agent to say so — which
         // is exactly why TurnState separates them, and exactly what silence
         // heuristics get wrong when a test suite runs quietly for minutes. The floor
-        // has two signals and neither of them is "a tool is running".
-        for (const over of [{ working: true }, { byteActive: true }, { working: true, byteActive: true }]) {
-            expect(projectFloorSession(inputs(over)).turn.state).not.toBe('tool');
-        }
+        // has one turn signal and it is not "a tool is running".
+        expect(projectFloorSession(inputs({ working: true })).turn.state).not.toBe('tool');
     });
 
-    it('is awaiting-input when a question is pending, even while bytes flow', () => {
+    it('is thinking ONLY because of the per-agent working flag', () => {
+        // The positive control, then the thing that matters: nothing else in the
+        // inputs can make this agent look busy. Genie's byte activity is counted
+        // PER WORKSPACE (`agentPulse.note(workspaceId, bytes)` — feedTerminalData
+        // has the terminal id and does not pass it), so any byte-derived signal
+        // here would report a SIBLING agent's output as this one thinking. There is
+        // deliberately no input to carry it.
+        expect(projectFloorSession(inputs({ working: true })).turn.state).toBe('thinking');
+        expect(projectFloorSession(inputs({ working: false })).turn.state).toBe('idle');
+    });
+
+    it('ignores a workspace-level activity hint even if one is smuggled in', () => {
+        // Removing `byteActive` from FloorInputs is a TYPE guarantee, and typecheck
+        // is not a CI gate here — so on its own it would not stop someone re-adding
+        // the field and wiring it to the only available source, which is
+        // workspace-scoped. This is the test that goes red if they do.
+        const smuggled = { ...inputs({ working: false }), byteActive: true } as FloorInputs;
+        expect(projectFloorSession(smuggled).turn.state).toBe('idle');
+    });
+
+    it('is awaiting-input when a question is pending, even mid-turn', () => {
         // A pending ForceTheQuestion means the agent is parked on a human. That
-        // outranks activity: a TUI repainting its own prompt is still blocked.
+        // outranks activity: an agent that is "working" on waiting is still blocked.
         const s = projectFloorSession(
-            inputs({ working: true, byteActive: true, questions: [{ id: 'q1', createdAt: NOW - 60_000 }] }),
+            inputs({ working: true, questions: [{ id: 'q1', createdAt: NOW - 60_000 }] }),
         );
         expect(s.turn.state).toBe('awaiting-input');
     });
@@ -84,7 +96,7 @@ describe('turn state', () => {
 
 describe('what the floor refuses to claim', () => {
     it('leaves the composer, plan, usage and commands unseen', () => {
-        const s = projectFloorSession(inputs({ working: true, byteActive: true }));
+        const s = projectFloorSession(inputs({ working: true }));
         expect(s.composer).toBeNull();
         expect(s.plan).toBeNull();
         expect(s.usage).toBeNull();
