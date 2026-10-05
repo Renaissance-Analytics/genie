@@ -38,7 +38,15 @@ import { emptyAgentSession, type AgentSession, type AgentSessionIdentity, type M
 /** A ForceTheQuestion this agent is waiting on. Only the age is needed here. */
 export interface FloorQuestion {
     id: string;
-    createdAt: number;
+    /**
+     * ms epoch, or **null when the host did not say**.
+     *
+     * Absent for a question forwarded from a host on an older build; the host's own
+     * note is that consumers must "degrade (show nothing) rather than assume epoch
+     * 0". Assuming 0 would date the agent's wait to 1970 and render "blocked for 56
+     * years", which is a far more alarming lie than admitting we do not know.
+     */
+    createdAt: number | null;
 }
 
 /** The agent's last `imDone` handoff note. */
@@ -153,10 +161,18 @@ export function projectFloorSession(inputs: FloorInputs): AgentSession {
  */
 function turnOf(inputs: FloorInputs, now: number): AgentSession['turn'] {
     if (inputs.questions.length > 0) {
-        // Dated from the OLDEST question, so the surface can say how long this has
-        // been waiting. `since` means when the state began, not when we last looked.
-        const oldest = inputs.questions.reduce((a, q) => (q.createdAt < a ? q.createdAt : a), Infinity);
-        return { state: 'awaiting-input', since: Number.isFinite(oldest) ? oldest : now };
+        // Dated from the OLDEST question whose time we actually KNOW, so the surface
+        // can say how long this has been waiting. `since` means when the state began,
+        // not when we last looked.
+        //
+        // Questions with an unknown arrival time are skipped rather than counted as
+        // epoch 0 — one of those would otherwise drag `since` to 1970 and have the
+        // surface report an agent blocked for decades. When NONE of them is known,
+        // `now` is the honest answer: the state is real, its age is not knowable.
+        const known = inputs.questions
+            .map((q) => q.createdAt)
+            .filter((t): t is number => t !== null);
+        return { state: 'awaiting-input', since: known.length > 0 ? Math.min(...known) : now };
     }
     if (inputs.working) return { state: 'thinking', since: now };
     return { state: 'idle', since: now };
