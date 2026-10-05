@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
  * guarding is worse than none, because it still reads as covered.
  */
 
-const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+const ROOT = path.resolve(__dirname, '..', '..', '..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 
 const CHANNEL = 'agentsession:list';
