@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Action, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
+import { Button, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
 import { agentTuis, providerDef, type AgentTuiId } from '../../../main/agents/registry';
 import { agentCliToolByProvider } from '../../../main/agents/agent-cli-catalog';
 import { api, type BackendUser, type HostToolName, type WorkspaceRow } from '../../lib/genie';
@@ -129,7 +129,7 @@ export function FirstRunOnboarding({
                             title="A working agent workstation, one step at a time"
                             body="Genie will connect your model driver, Tynn account, optional GitHub access, and first managed workspace. You can change any of it later in Settings."
                         >
-                            <Action color="blue" onClick={() => setStep('drivers')}>Get started</Action>
+                            <Button color="blue" onClick={() => setStep('drivers')}>Get started</Button>
                         </OnboardingPage>
                     )}
 
@@ -164,17 +164,17 @@ export function FirstRunOnboarding({
                                                 </span>
                                             </label>
                                             {selected && (
-                                                <Action size="sm" variant={primary === id ? 'default' : 'ghost'} onClick={() => setPrimary(id)} style={{ marginTop: 8 }}>
+                                                <Button size="sm" variant={primary === id ? 'default' : 'ghost'} onClick={() => setPrimary(id)} style={{ marginTop: 8 }}>
                                                     {primary === id ? 'Default driver' : 'Make default'}
-                                                </Action>
+                                                </Button>
                                             )}
                                         </Card>
                                     );
                                 })}
                             </div>
-                            <Action color="blue" disabled={!drivers.length || !drivers.includes(primary)} onClick={() => void continueFromDrivers()}>
+                            <Button color="blue" disabled={!drivers.length || !drivers.includes(primary)} onClick={() => void continueFromDrivers()}>
                                 Check toolchain
-                            </Action>
+                            </Button>
                         </OnboardingPage>
                     )}
 
@@ -186,12 +186,12 @@ export function FirstRunOnboarding({
                             {tynnUser ? (
                                 <Text size="sm">✓ Connected as <strong>{tynnUser.name}</strong></Text>
                             ) : (
-                                <Action color="blue" disabled={signingIn} onClick={() => void startTynn()}>
+                                <Button color="blue" disabled={signingIn} onClick={() => void startTynn()}>
                                     {signingIn ? 'Waiting for browser sign-in…' : 'Sign in to Tynn…'}
-                                </Action>
+                                </Button>
                             )}
                             {error && <Text size="xs" className="text-rose-500">{error}</Text>}
-                            <Action color="blue" disabled={!tynnUser} onClick={() => setStep('github')}>Continue</Action>
+                            <Button color="blue" disabled={!tynnUser} onClick={() => setStep('github')}>Continue</Button>
                         </OnboardingPage>
                     )}
 
@@ -202,13 +202,13 @@ export function FirstRunOnboarding({
                         >
                             <GitHubConnect account={github} />
                             <div style={{ display: 'flex', gap: 8 }}>
-                                <Action color="blue" onClick={() => setStep('os')}>
+                                <Button color="blue" onClick={() => setStep('os')}>
                                     {github.connected ? 'Continue' : 'Skip for now'}
-                                </Action>
+                                </Button>
                                 {existingWorkspaceCount > 0 && (
-                                    <Action variant="ghost" onClick={() => setStep('workspace')}>
+                                    <Button variant="ghost" onClick={() => setStep('workspace')}>
                                         Add another workspace
-                                    </Action>
+                                    </Button>
                                 )}
                             </div>
                         </OnboardingPage>
@@ -223,7 +223,7 @@ export function FirstRunOnboarding({
                             {github.connected && !osSynced && (
                                 <>
                                     <OwnerSelect account={github} value={osOwner} onChange={setOsOwner} />
-                                    <Action variant="ghost" disabled={osSyncing} onClick={async () => {
+                                    <Button variant="ghost" disabled={osSyncing} onClick={async () => {
                                         setOsSyncing(true);
                                         setError(null);
                                         try {
@@ -239,15 +239,15 @@ export function FirstRunOnboarding({
                                         } finally {
                                             setOsSyncing(false);
                                         }
-                                    }}>{osSyncing ? 'Creating private backup…' : 'Back up Genie OS to GitHub'}</Action>
+                                    }}>{osSyncing ? 'Creating private backup…' : 'Back up Genie OS to GitHub'}</Button>
                                 </>
                             )}
                             {osSynced && <Text size="sm">✓ Genie OS workspace is synced.</Text>}
                             {error && <Text size="xs" className="text-rose-500">{error}</Text>}
-                            <Action color="blue" onClick={() => {
+                            <Button color="blue" onClick={() => {
                                 if (canFinishFirstRun({ existingWorkspaceCount, setupComplete: true })) finish();
                                 else setStep('workspace');
-                            }}>{existingWorkspaceCount > 0 ? 'Finish setup' : 'Add first workspace'}</Action>
+                            }}>{existingWorkspaceCount > 0 ? 'Finish setup' : 'Add first workspace'}</Button>
                         </OnboardingPage>
                     )}
                 </Modal.Body>

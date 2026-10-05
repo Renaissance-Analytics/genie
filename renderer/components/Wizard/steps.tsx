@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Action, Icon, Input, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Input, Select, Text } from '@particle-academy/react-fancy';
 import Terminal from '../Terminal/Terminal';
 import { api, ulid } from '../../lib/genie';
 import {
@@ -388,14 +388,14 @@ function TerminalStep({ step, engine, ctx, active, defaultCwd, onTerminalCreated
                 )}
             </div>
             {openUrl && active && (
-                <Action size="sm" variant="ghost" icon="external-link" onClick={() => void api().shell.openExternal(openUrl).catch(() => {})}>
+                <Button size="sm" variant="ghost" icon="external-link" onClick={() => void api().shell.openExternal(openUrl).catch(() => {})}>
                     Open the login page again
-                </Action>
+                </Button>
             )}
             {failed && (
-                <Action size="sm" variant="ghost" icon="refresh-cw" onClick={rerun}>
+                <Button size="sm" variant="ghost" icon="refresh-cw" onClick={rerun}>
                     Run again
-                </Action>
+                </Button>
             )}
         </div>
     );
@@ -465,9 +465,9 @@ function BrowserStep({ step, engine, ctx, active }: {
                 Opening <code>{resolveUrl()}</code> in your browser.
             </Text>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <Action size="sm" color="blue" icon="external-link" onClick={() => void open()}>
+                <Button size="sm" color="blue" icon="external-link" onClick={() => void open()}>
                     {opened ? 'Open again' : 'Open in browser'}
-                </Action>
+                </Button>
                 {waiting && (
                     <Text size="xs" className="text-zinc-500">
                         <Icon name="loader" size="sm" /> Waiting for you to finish…
@@ -520,9 +520,9 @@ function TaskStep({ step, engine, ctx, active }: {
                 </Text>
             )}
             {state === 'error' && (
-                <Action size="sm" variant="ghost" icon="refresh-cw" onClick={() => { ranRef.current = true; void run(); }}>
+                <Button size="sm" variant="ghost" icon="refresh-cw" onClick={() => { ranRef.current = true; void run(); }}>
                     Try again
-                </Action>
+                </Button>
             )}
         </div>
     );

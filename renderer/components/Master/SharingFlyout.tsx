@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Action, Input, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Input, Select, Text } from '@particle-academy/react-fancy';
 import { IconX } from './icons';
 import { api, hasGenieBridge, type WorkspaceRow, type WorkspaceShareLink } from '../../lib/genie';
 import { classifyConnectLink } from '../../../main/tynn/connect-link';
@@ -219,13 +219,13 @@ export default function SharingFlyout({
                                                     {workspace.project_name}
                                                 </span>
                                                 {onShareWorkspace && (
-                                                    <Action
+                                                    <Button
                                                         size="sm"
                                                         icon="link"
                                                         onClick={() => onShareWorkspace(workspace.id)}
                                                     >
                                                         New link
-                                                    </Action>
+                                                    </Button>
                                                 )}
                                             </div>
                                             {links.map((link) => (
@@ -241,14 +241,14 @@ export default function SharingFlyout({
                                                             : ''}
                                                     </Text>
                                                     <span style={{ marginLeft: 'auto' }}>
-                                                        <Action
+                                                        <Button
                                                             size="sm"
                                                             color="red"
                                                             icon="trash"
                                                             onClick={() => void revoke(link.id)}
                                                         >
                                                             Invalidate
-                                                        </Action>
+                                                        </Button>
                                                     </span>
                                                 </div>
                                             ))}
@@ -309,7 +309,7 @@ export default function SharingFlyout({
                                         list={EXPIRY_OPTIONS}
                                         aria-label="Link expiry"
                                     />
-                                    <Action
+                                    <Button
                                         size="sm"
                                         color="blue"
                                         icon="link"
@@ -317,7 +317,7 @@ export default function SharingFlyout({
                                         onClick={mintWorkstation}
                                     >
                                         {minting ? 'Creating…' : 'Create link'}
-                                    </Action>
+                                    </Button>
                                 </div>
                                 {fresh?.url && (
                                     <div className="ws-tools" data-testid="workstation-link">
@@ -329,14 +329,14 @@ export default function SharingFlyout({
                                             readOnly
                                             aria-label="Workstation link URL"
                                         />
-                                        <Action
+                                        <Button
                                             size="sm"
                                             color="blue"
                                             icon={copied ? 'check' : 'copy'}
                                             onClick={() => void copy(fresh.url as string)}
                                         >
                                             {copied ? 'Copied' : 'Copy link'}
-                                        </Action>
+                                        </Button>
                                     </div>
                                 )}
                             </section>
@@ -355,9 +355,9 @@ export default function SharingFlyout({
                                         placeholder="https://… or genie://…"
                                         aria-label="Genie link to connect to"
                                     />
-                                    <Action size="sm" color="blue" onClick={() => void connect()}>
+                                    <Button size="sm" color="blue" onClick={() => void connect()}>
                                         Connect
-                                    </Action>
+                                    </Button>
                                 </div>
                                 {connectNote && (
                                     <Text size="xs" style={{ color: 'var(--fg-3)' }}>

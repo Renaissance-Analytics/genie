@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Action, Carousel, Icon, Modal, Text, useCarousel } from '@particle-academy/react-fancy';
+import { Button, Carousel, Icon, Modal, Text, useCarousel } from '@particle-academy/react-fancy';
 import { api } from '../../lib/genie';
 import { RecipeEngine, type Recipe } from '../../lib/recipes';
 import { StepView } from './steps';
@@ -156,28 +156,28 @@ function WizardFooter({
 
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-            <Action variant="ghost" onClick={onCancel} disabled={finishing}>
+            <Button variant="ghost" onClick={onCancel} disabled={finishing}>
                 Cancel
-            </Action>
+            </Button>
             <span style={{ flex: 1 }} />
             {!isFirst && (
-                <Action variant="ghost" icon="arrow-left" onClick={prev} disabled={finishing}>
+                <Button variant="ghost" icon="arrow-left" onClick={prev} disabled={finishing}>
                     Back
-                </Action>
+                </Button>
             )}
             {optional && !isLast && (
-                <Action variant="ghost" onClick={onSkip} disabled={finishing}>
+                <Button variant="ghost" onClick={onSkip} disabled={finishing}>
                     Skip
-                </Action>
+                </Button>
             )}
             {isLast ? (
-                <Action color="blue" icon="check" onClick={onFinish} disabled={!canAdvance || finishing}>
+                <Button color="blue" icon="check" onClick={onFinish} disabled={!canAdvance || finishing}>
                     {finishing ? 'Finishing…' : 'Finish'}
-                </Action>
+                </Button>
             ) : (
-                <Action color="blue" iconTrailing="arrow-right" onClick={next} disabled={!canAdvance}>
+                <Button color="blue" iconTrailing="arrow-right" onClick={next} disabled={!canAdvance}>
                     Next
-                </Action>
+                </Button>
             )}
         </div>
     );

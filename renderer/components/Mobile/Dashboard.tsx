@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Icon, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Text } from '@particle-academy/react-fancy';
 import UploadToAi from './Upload';
 import type { ProcessListItem, ProcessStatus } from '../../lib/genie';
 import {
@@ -249,7 +249,7 @@ export default function Dashboard({
                                     <div className="m-proc-actions">
                                         {running ? (
                                             <>
-                                                <Action
+                                                <Button
                                                     size="sm"
                                                     variant="ghost"
                                                     icon="rotate-cw"
@@ -259,7 +259,7 @@ export default function Dashboard({
                                                     }
                                                     aria-label="Restart"
                                                 />
-                                                <Action
+                                                <Button
                                                     size="sm"
                                                     variant="ghost"
                                                     color="rose"
@@ -272,7 +272,7 @@ export default function Dashboard({
                                                 />
                                             </>
                                         ) : (
-                                            <Action
+                                            <Button
                                                 size="sm"
                                                 color="emerald"
                                                 icon="play"

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AgentRecordSpec, AgentRosterEntry } from '../../lib/ams-grid';
-import { Action, Badge, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import TynnProvisionPanel from '../TynnProvisionPanel';
 import type {
     AppCheckReport,
@@ -414,7 +414,7 @@ export default function WorkspaceSettingsModal({
                                 if (e.key === 'Enter') void saveName();
                             }}
                         />
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="check"
@@ -426,7 +426,7 @@ export default function WorkspaceSettingsModal({
                             onClick={saveName}
                         >
                             {savingName ? 'Saving…' : 'Rename'}
-                        </Action>
+                        </Button>
                     </div>
                 </Section>
 
@@ -821,9 +821,9 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
                         list={SHARE_EXPIRY_OPTIONS}
                         aria-label="Link expiry"
                     />
-                    <Action size="sm" color="blue" icon="link" disabled={minting} onClick={mint}>
+                    <Button size="sm" color="blue" icon="link" disabled={minting} onClick={mint}>
                         {minting ? 'Creating…' : 'Create link'}
-                    </Action>
+                    </Button>
                 </div>
             </Row>
 
@@ -834,17 +834,17 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
                     </Text>
                     <Input value={fresh.url} readOnly aria-label="Share link URL" />
                     <div style={{ display: 'flex', gap: 8 }}>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon={copied ? 'check' : 'copy'}
                             onClick={() => void copy(fresh.url as string)}
                         >
                             {copied ? 'Copied' : 'Copy link'}
-                        </Action>
-                        <Action size="sm" icon="x" onClick={() => setFresh(null)}>
+                        </Button>
+                        <Button size="sm" icon="x" onClick={() => setFresh(null)}>
                             Done
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -877,14 +877,14 @@ function WorkspaceSharePanel({ workspaceId }: { workspaceId: string }) {
                                     : 'No expiry'}
                             </Text>
                             <span style={{ marginLeft: 'auto' }}>
-                                <Action
+                                <Button
                                     size="sm"
                                     color="red"
                                     icon="trash"
                                     onClick={() => void revoke(link.id)}
                                 >
                                     Invalidate
-                                </Action>
+                                </Button>
                             </span>
                         </div>
                     ))
@@ -1023,7 +1023,7 @@ export function AgentRosterList({
                                         different verb with a different
                                         consequence (genie#474). */}
                                     {entry.running ? (
-                                        <Action
+                                        <Button
                                             size="sm"
                                             variant="ghost"
                                             disabled={busy !== null}
@@ -1032,9 +1032,9 @@ export function AgentRosterList({
                                             data-testid={`roster-stop-${entry.name}`}
                                         >
                                             {busy === entry.name ? 'Stopping…' : 'Stop'}
-                                        </Action>
+                                        </Button>
                                     ) : (
-                                        <Action
+                                        <Button
                                             size="sm"
                                             variant="ghost"
                                             disabled={busy !== null}
@@ -1042,7 +1042,7 @@ export function AgentRosterList({
                                             data-testid={`roster-start-${entry.name}`}
                                         >
                                             {busy === entry.name ? 'Starting…' : 'Start'}
-                                        </Action>
+                                        </Button>
                                     )}
                                 </div>
                             </div>
@@ -1086,14 +1086,14 @@ export function AgentRosterList({
                                             worse than none — the same rule the
                                             agent-CLI rows hold themselves to. */}
                                         {!entry.refusal && (
-                                            <Action
+                                            <Button
                                                 size="sm"
                                                 disabled={busy !== null}
                                                 onClick={() => onAdopt(entry.name)}
                                                 data-testid={`roster-adopt-${entry.name}`}
                                             >
                                                 {busy === entry.name ? 'Adopting…' : 'Adopt'}
-                                            </Action>
+                                            </Button>
                                         )}
                                     </div>
                                 </div>
@@ -1231,7 +1231,7 @@ function WorkspaceAgentRoster({
             title="Agents"
             sub="Every agent this workspace has — the ones Genie has registered, and the AGENT.md files in .agents/ it has not"
             action={
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="refresh-cw"
@@ -1240,7 +1240,7 @@ function WorkspaceAgentRoster({
                     title="Re-read this workspace's .agents/ folder and its registered agents."
                 >
                     Re-read
-                </Action>
+                </Button>
             }
         >
             {error && <div className="set-note bad">{error}</div>}
@@ -1552,7 +1552,7 @@ function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
             title="Workspace docs"
             sub="AGENTS.md (with the Genie MCP section) + CLAUDE.md"
             action={
-                <Action
+                <Button
                     variant="ghost"
                     size="sm"
                     icon="wrench"
@@ -1560,7 +1560,7 @@ function WorkspaceDocsPanel({ workspaceId }: { workspaceId: string }) {
                     disabled={repairing}
                 >
                     {repairing ? 'Repairing…' : 'Repair'}
-                </Action>
+                </Button>
             }
         >
             {(docHealth || repairMsg) && (
@@ -1689,14 +1689,14 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
             title="Repos"
             sub="Submodules under repos/, registered in project.json"
             action={
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="plus"
                     onClick={() => setShowAdd((s) => !s)}
                 >
                     Add repo
-                </Action>
+                </Button>
             }
         >
             {repos.length === 0 ? (
@@ -1742,7 +1742,7 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                                     {!r.inRegistry && ' · unregistered'}
                                 </Text>
                             </div>
-                            <Action
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 icon="folder-open"
@@ -1750,8 +1750,8 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                                 onClick={() => open(r)}
                             >
                                 Open
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 icon="trash-2"
@@ -1764,7 +1764,7 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                                 onClick={() => void remove(r)}
                             >
                                 {busy === r.name ? 'Removing…' : 'Remove'}
-                            </Action>
+                            </Button>
                         </div>
                     ))}
                 </div>
@@ -1800,15 +1800,15 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                         placeholder="web"
                     />
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             onClick={() => setShowAdd(false)}
                             disabled={busy === '__add__'}
                         >
                             Cancel
-                        </Action>
-                        <Action
+                        </Button>
+                        <Button
                             size="sm"
                             color="blue"
                             icon="download"
@@ -1816,7 +1816,7 @@ function EnvelopeReposPanel({ workspacePath }: { workspacePath: string }) {
                             onClick={add}
                         >
                             {busy === '__add__' ? 'Adding…' : 'Add repo'}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -1987,7 +1987,7 @@ function GappDevPanel({ workspace }: { workspace: WorkspaceRow }) {
                 label="Check this app"
                 sub="Runs the full check suite over this folder: manifest, files, agents, services and the front end."
             >
-                <Action
+                <Button
                     size="sm"
                     color="blue"
                     icon="check"
@@ -1995,7 +1995,7 @@ function GappDevPanel({ workspace }: { workspace: WorkspaceRow }) {
                     onClick={check}
                 >
                     {busy === 'check' ? 'Checking…' : 'Check'}
-                </Action>
+                </Button>
             </Row>
             {report && (
                 <div className={`set-note${report.ok ? '' : ' warn'}`}>
@@ -2026,9 +2026,9 @@ function GappDevPanel({ workspace }: { workspace: WorkspaceRow }) {
                 label="Preview it"
                 sub="Opens the app in a throwaway window on the live source — its own identity and address, so it cannot collide with an installed copy."
             >
-                <Action size="sm" icon="eye" disabled={busy !== null} onClick={preview}>
+                <Button size="sm" icon="eye" disabled={busy !== null} onClick={preview}>
                     {busy === 'preview' ? 'Opening…' : 'Preview'}
-                </Action>
+                </Button>
             </Row>
             {msg && (
                 <Text
@@ -2112,9 +2112,9 @@ function OpsReposPanel({ workspacePath }: { workspacePath: string }) {
                         </Text>
                     ))}
                     <div style={{ marginTop: 4 }}>
-                        <Action size="sm" color="blue" icon="git-merge" disabled={busy} onClick={apply}>
+                        <Button size="sm" color="blue" icon="git-merge" disabled={busy} onClick={apply}>
                             {busy ? 'Applying…' : 'Apply changes'}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -2252,7 +2252,7 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
                         </Text>
                     ))}
                     <div style={{ marginTop: 4 }}>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="download"
@@ -2264,7 +2264,7 @@ function OpsWorkspacesPanel({ workspacePath }: { workspacePath: string }) {
                                 : `Provision ${missing.length} workspace${
                                       missing.length === 1 ? '' : 's'
                                   }`}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}

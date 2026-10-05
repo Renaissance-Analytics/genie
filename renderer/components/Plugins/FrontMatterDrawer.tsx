@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-    Action,
-    Badge,
-    Callout,
-    Drawer,
-    Input,
-    Pillbox,
-    Select,
-    Switch,
-    Text,
-    Textarea,
-} from '@particle-academy/react-fancy';
+import { Badge, Button, Callout, Drawer, Input, Pillbox, Select, Switch, Text, Textarea } from '@particle-academy/react-fancy';
 import {
     convertFmValue,
     normalizeFrontMatter,
@@ -191,7 +180,7 @@ export default function FrontMatterDrawer({ open, onClose, value, onChange }: Pr
                                         onWrite={(v) => write(setFrontMatterField(yaml, f.key, v))}
                                     />
                                 </span>
-                                <Action
+                                <Button
                                     size="sm"
                                     variant="ghost"
                                     color="red"
@@ -218,14 +207,14 @@ export default function FrontMatterDrawer({ open, onClose, value, onChange }: Pr
                             onValueChange={setNewKey}
                             onKeyDown={(e) => e.key === 'Enter' && addKey()}
                         />
-                        <Action size="sm" icon="plus" disabled={!newKey.trim()} onClick={addKey}>
+                        <Button size="sm" icon="plus" disabled={!newKey.trim()} onClick={addKey}>
                             Add key
-                        </Action>
+                        </Button>
                     </span>
                 )}
                 <span className="grow" />
                 {value !== null && (
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         color="red"
@@ -233,9 +222,9 @@ export default function FrontMatterDrawer({ open, onClose, value, onChange }: Pr
                         onClick={() => onChange(null)}
                     >
                         Remove block
-                    </Action>
+                    </Button>
                 )}
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon={raw ? 'list' : 'code'}
@@ -251,7 +240,7 @@ export default function FrontMatterDrawer({ open, onClose, value, onChange }: Pr
                     }}
                 >
                     {raw ? 'Fields' : 'YAML'}
-                </Action>
+                </Button>
             </Drawer.Footer>
         </Drawer>
     );
