@@ -8108,7 +8108,7 @@ body.gutter-dragging .grid-gutter {
 .deck-row-provider,
 .deck-row-since,
 .deck-row-cost {
-    color: var(--text-2, #9b9bab);
+    color: var(--fg-3);
 }
 
 .deck-row-since,
@@ -8129,11 +8129,17 @@ body.gutter-dragging .grid-gutter {
 /* A stalled agent is the one state the product could not see before, so the row
    carries it rather than relying on the badge alone being noticed. */
 .deck-row[data-state='stalled'] {
-    background: var(--danger-bg, rgba(220, 38, 38, 0.07));
+    /* Literal rgba, matching this file's existing convention for a state tint
+       (see the amber attention rules around line 1360) rather than inventing
+       palette tokens. The palette lives in globals.css with light AND dark
+       variants, so a new colour token there is a change to the shared theme — too
+       much blast radius for two row tints, and `theme-tokens.test.ts` rightly
+       fails a `var(--x)` nothing defines. */
+    background: rgba(220, 38, 38, 0.09);
 }
 
 .deck-row[data-state='awaiting-you'] {
-    background: var(--warn-bg, rgba(217, 119, 6, 0.08));
+    background: rgba(251, 191, 36, 0.08);
 }
 
 .deck-empty {
@@ -8141,5 +8147,5 @@ body.gutter-dragging .grid-gutter {
     flex-direction: column;
     gap: 4px;
     padding: 16px 4px;
-    color: var(--text-2, #9b9bab);
+    color: var(--fg-3);
 }

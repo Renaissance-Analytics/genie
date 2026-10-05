@@ -69,13 +69,27 @@ export interface FloorState {
      *  not mounted — nothing in it may start — so the floor says so and offers
      *  the way back. */
     hibernated?: { name: string; waking: boolean; onWake: () => void };
+    /** A cross-workspace surface mounted ABOVE the grid (the Deck). */
+    deck?: React.ReactNode;
+    /** Conceal the grid with CSS while `deck` is showing. NEVER unmount it — see the
+     *  comment at the render site and the source guard in `lib/floor-surface.ts`. */
+    hideGrid?: boolean;
 }
 
 export default function Floor(state: FloorState) {
-    const { projectCount, activeCount, hibernated, ...grid } = state;
+    const { projectCount, activeCount, hibernated, deck, hideGrid, ...grid } = state;
     return (
         <>
-            <div className="gbody">
+            {deck}
+            {/* HIDDEN, never unmounted. Every panel in here owns a live xterm bound to
+                a pty; unmounting the grid to show another surface would remount all of
+                them on the way back and reset the terminals. TerminalGrid already keeps
+                off-workspace panels mounted-hidden for exactly this reason — a panel
+                that changed child-slot "got a different effective key … → XTerm
+                remounted → PTY reset". Opening the Deck is the same hazard in a new
+                hat, so it conceals rather than replaces. `renderer/lib/floor-surface.ts`
+                carries a source guard that fails if this ever becomes conditional. */}
+            <div className="gbody" style={hideGrid ? { display: 'none' } : undefined}>
                 <TerminalGrid
                     {...grid}
                     // In place of the empty workspace's Add tiles, so the OTHER

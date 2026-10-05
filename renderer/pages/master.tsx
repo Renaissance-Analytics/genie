@@ -179,6 +179,12 @@ import {
 import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
+import Router, { useRouter } from 'next/router';
+import { mergeViewRoute, parseViewRoute, type GenieView } from '../lib/view-route';
+import { floorSurface } from '../lib/floor-surface';
+import { Deck } from '../components/Master/Deck';
+import { focusOwnerOf } from '../lib/master-shortcuts';
+import type { AgentSessionSpec } from '../lib/genie';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -321,6 +327,55 @@ function MasterInner() {
     });
     const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
     const [specs, setSpecs] = useState<TerminalSpec[]>([]);
+
+    /**
+     * WHICH SURFACE IS ON SCREEN, read from the url.
+     *
+     * The route is the navigational truth (`lib/view-route.ts`); this only reads it.
+     * `mergeViewRoute` is what navigation goes through, because the window does not
+     * start on a clean url — it is loaded with `?stage=<workspaceId>` or
+     * `?host=<connKey>`, and `host` decides whether this renderer points at a remote
+     * host at all. Replacing the whole query would silently turn a remote window local.
+     */
+    const router = useRouter();
+    const view: GenieView = parseViewRoute(router.query ?? {});
+    const surface = floorSurface(view);
+    const goTo = useCallback(
+        (next: GenieView) => {
+            void Router.replace({ query: mergeViewRoute(router.query ?? {}, next) }, undefined, {
+                shallow: true,
+            });
+        },
+        [router.query],
+    );
+
+    /**
+     * Every agent's session, for the Deck.
+     *
+     * NO POLLING: it re-reads on the events that already announce the facts a session
+     * is built from. There is deliberately no `sessions:changed` emitter — a sixth one
+     * would have to be kept in step with the five that already fire.
+     */
+    const [sessions, setSessions] = useState<AgentSessionSpec[]>([]);
+    const loadSessions = useCallback(() => {
+        api()
+            .agentSession.list()
+            .then(setSessions)
+            // A failed read leaves the previous answer standing rather than blanking the
+            // board: "nothing needs you" is the one thing this surface must not say by
+            // accident.
+            .catch(() => {});
+    }, []);
+    useEffect(() => {
+        if (!surface.showDeck) return;
+        loadSessions();
+        const offQ = api().on.questionsChanged?.(loadSessions);
+        const offA = api().on.agentsChanged?.(loadSessions);
+        return () => {
+            offQ?.();
+            offA?.();
+        };
+    }, [surface.showDeck, loadSessions]);
     // The agent RECORD for whichever agent's settings are open. Loaded on
     // demand rather than kept for every workspace: this is the only surface in
     // master.tsx that needs it, and the sidebar keeps its own copy.
@@ -2395,39 +2450,48 @@ function MasterInner() {
     // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
     // that one is exempt so ⌘, still opens Settings from a focused terminal.
     useEffect(() => {
-        const isTextEntry = (el: Element | null): boolean => {
-            if (!el || !(el instanceof HTMLElement)) return false;
-            // xterm's hidden input is a textarea but is NOT a real text field for
-            // our purposes — ⌘, should still open Settings from a focused terminal.
-            if (
-                el.classList.contains('xterm-helper-textarea') ||
-                el.closest('.xterm')
-            ) {
-                return false;
-            }
-            const tag = el.tagName;
-            return (
-                tag === 'INPUT' ||
-                tag === 'TEXTAREA' ||
-                el.isContentEditable
-            );
+        /**
+         * Classify focus, then let `resolveShortcut` decide — the policy lives in
+         * `lib/master-shortcuts.ts` where it is tested, rather than here.
+         *
+         * The three owners matter because xterm focuses a hidden
+         * `.xterm-helper-textarea`: calling that a text field disables every shortcut
+         * inside a terminal, and ignoring it lets an unmodified letter fire while the
+         * owner types into a TUI. It is neither.
+         */
+        const ownerOf = (el: Element | null) => {
+            if (!el || !(el instanceof HTMLElement)) return focusOwnerOf(null);
+            return focusOwnerOf({
+                tagName: el.tagName,
+                isContentEditable: el.isContentEditable,
+                inXterm: el.classList.contains('xterm-helper-textarea') || !!el.closest('.xterm'),
+            });
         };
 
         const onKeyDown = (e: KeyboardEvent) => {
-            // Never steal the keystroke from a real text field (the in-app prompt,
-            // the editor, any input). The xterm helper textarea is exempt.
-            if (isTextEntry(document.activeElement)) return;
-
-            const intent = resolveShortcut(e);
-            if (intent?.kind === 'settings') {
+            const intent = resolveShortcut(e, ownerOf(document.activeElement));
+            if (!intent) return;
+            if (intent.kind === 'settings') {
                 e.preventDefault();
                 api().app.showSettings(isRemoteWindow()).catch(() => {});
+                return;
             }
+            if (intent.kind === 'deck') {
+                // Escape goes UP a level, and the Deck is where it lands. The resolver
+                // has already withheld this inside a terminal and inside a text field,
+                // where Escape belongs to the TUI and to the field respectively.
+                e.preventDefault();
+                goTo({ kind: 'deck' });
+            }
+            // The remaining intents — palette, agent slots, take-over, queue movement,
+            // approvals — are resolved but not yet acted on. They need surfaces that do
+            // not exist yet, and acting on them now would be a silent no-op, which is
+            // the "silent success" this repo treats as a bug.
         };
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
+    }, [goTo]);
 
     if (authChecked && !signedIn) {
         return (
@@ -2683,6 +2747,8 @@ function MasterInner() {
                         window is a single workspace and derives the same shape
                         from far less. */}
                     <Floor
+                        deck={surface.showDeck ? <Deck sessions={sessions} /> : undefined}
+                        hideGrid={surface.hideGrid}
                         agentRecord={activeAgentRecord ?? undefined}
                         onRuntimesChanged={reloadActiveAgents}
                         specs={selectedSpecs}

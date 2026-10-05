@@ -111,9 +111,14 @@ export function Deck({
                 <div className="deck-band-head">
                     {/* `as`, not `level` — Heading has no `level` prop, and because it
                         spreads HTMLAttributes a `level` would have type-checked and
-                        rendered nothing. That is genie#320 exactly (`<Modal title=…>`
-                        swallowed, no header drawn), so the prop was read off the real
-                        signature rather than assumed. */}
+                        rendered nothing at all. Same shape as genie#320, where an
+                        unsupported prop was swallowed and no header was drawn. The prop
+                        was read off the real signature rather than assumed.
+
+                        (The earlier version of this comment QUOTED that issue's offending
+                        JSX, and `modal-header-composition.test.ts` flagged this file as an
+                        offender — its comment stripper does not handle a JSX block comment.
+                        The guard is right to be blunt; the citation is reworded instead.) */}
                     <Heading as="h3" size="sm">
                         Agents
                     </Heading>
