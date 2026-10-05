@@ -11,7 +11,7 @@
  *
  * | source | gives |
  * |---|---|
- * | `terminal/agent-pulse` | declared mid-turn, and whether bytes are arriving |
+ * | `terminal/agent-pulse` | declared mid-turn, per agent (`workingAgentTerminals`) |
  * | `ask/force-question` | questions this agent is parked on |
  * | `agentinbox` | mail the agent has exchanged |
  * | `agents/handoff` | the last `imDone` note — the agent's own prose |
@@ -60,10 +60,24 @@ export interface FloorMessage {
 
 export interface FloorInputs {
     identity: AgentSessionIdentity;
-    /** The agent DECLARED itself mid-turn (`noteAgentWorking`, cleared by `imDone`). */
+    /**
+     * The agent DECLARED itself mid-turn — `noteAgentWorking`, cleared by `imDone`,
+     * with a backstop decay. Read from `agentPulse.workingAgentTerminals()`, which
+     * is per-TERMINAL and therefore per-agent.
+     *
+     * **There is deliberately no byte-activity input beside it.** Genie counts pty
+     * bytes per WORKSPACE (`agentPulse.note(workspaceId, bytes)`; `feedTerminalData`
+     * has the terminal id and does not pass it), so a byte-derived signal here
+     * would report a SIBLING agent's output as this agent thinking — a confident
+     * claim about the wrong agent, which is the exact failure this model exists to
+     * prevent. An earlier draft of this interface carried `byteActive`, and a caller
+     * wiring it to the only available source would have been wrong without anything
+     * saying so.
+     *
+     * If per-agent activity is wanted later it has to be MEASURED per agent first,
+     * in `agent-pulse` at the call site that already knows the id.
+     */
     working: boolean;
-    /** pty bytes arrived inside the pulse's active window. */
-    byteActive: boolean;
     /** Pending questions asked BY this agent, in any order. */
     questions: readonly FloorQuestion[];
     handoff: FloorHandoff | null;
@@ -126,13 +140,13 @@ export function projectFloorSession(inputs: FloorInputs): AgentSession {
 }
 
 /**
- * The turn state, from two signals and a queue.
+ * The turn state, from one per-agent signal and a queue.
  *
- * Precedence matters: a pending question OUTRANKS activity, because an agent
- * parked on a human is blocked whether or not its TUI is repainting. And `tool` is
- * never produced — distinguishing a tool call from thinking requires the agent to
- * say so, which is precisely why the two are separate states and precisely what a
- * silence heuristic gets wrong about a test suite that runs quietly for minutes.
+ * Precedence matters: a pending question OUTRANKS being mid-turn, because an agent
+ * parked on a human is blocked whether or not it believes it is working. And `tool`
+ * is never produced — distinguishing a tool call from thinking requires the agent
+ * to say so, which is precisely why the two are separate states and precisely what
+ * a silence heuristic gets wrong about a test suite that runs quietly for minutes.
  */
 function turnOf(inputs: FloorInputs, now: number): AgentSession['turn'] {
     if (inputs.questions.length > 0) {
@@ -141,6 +155,6 @@ function turnOf(inputs: FloorInputs, now: number): AgentSession['turn'] {
         const oldest = inputs.questions.reduce((a, q) => (q.createdAt < a ? q.createdAt : a), Infinity);
         return { state: 'awaiting-input', since: Number.isFinite(oldest) ? oldest : now };
     }
-    if (inputs.working || inputs.byteActive) return { state: 'thinking', since: now };
+    if (inputs.working) return { state: 'thinking', since: now };
     return { state: 'idle', since: now };
 }
