@@ -396,6 +396,11 @@ export interface PendingQuestionSpec {
      *  it as "came in 5m ago". Absent when it was forwarded from a host running an
      *  older build, so render nothing rather than assuming a time. */
     createdAt?: number;
+    /** The terminal of the agent parked on this answer, so a row can say WHOSE
+     *  question it is. Absent for an internal approval gate (no MCP asker) and for
+     *  a forwarded question — and absent must not be resolved to whichever agent
+     *  shares the workspace. */
+    askerTerminalId?: string;
 }
 
 /** One line of an AgentList or the UserList (genie#556). */

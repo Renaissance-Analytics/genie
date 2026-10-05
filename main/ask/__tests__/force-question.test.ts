@@ -1017,3 +1017,72 @@ describe('dismissing parks a question instead of killing it', () => {
         await Promise.all([a, b]);
     });
 });
+
+/**
+ * Attribution: WHICH AGENT is parked on this answer.
+ *
+ * `forceQuestion` has always taken the asking agent's terminal id — it routes a
+ * DND-deferred answer back to that agent's inbox — but `listPendingQuestions`
+ * never reported it. So every consumer could say a question exists and none could
+ * say whose it is, which is the difference between "something is waiting" and
+ * "kai is blocked".
+ *
+ * It stays OPTIONAL, and that is load-bearing: an internal approval gate has no
+ * MCP asker and a forwarded question is answered on its host. A consumer must be
+ * able to tell "no agent asked this" from "an agent asked and we lost track",
+ * and must never attribute an unowned question to whichever agent happens to
+ * share its workspace.
+ */
+describe('ForceTheQuestion attribution', () => {
+    beforeEach(() => {
+        // Mirror the main suite's reset, and DRAIN first: a question left pending by
+        // a previous test is module state, so without this the multi-asker case saw
+        // a third row it never created.
+        drain();
+        state.windows = [];
+        state.nextWcId = 1;
+        registerForceQuestionIpc({
+            isDev: false,
+            preloadPath: '/preload.js',
+            getMasterWindow: () => null,
+        });
+    });
+
+    it('reports the terminal of the agent that asked', async () => {
+        const p = forceQuestion(Q('Mine'), 'ws-a', undefined, undefined, 'term-kai');
+        expect(listPendingQuestions()[0]!.askerTerminalId).toBe('term-kai');
+        drain();
+        await p;
+    });
+
+    it('reports nothing for a question no agent asked', async () => {
+        // An internal approval gate. Undefined, not a guess — a consumer that fell
+        // back to "some agent in this workspace" would blame the wrong one.
+        const p = forceQuestion(Q('Gate'), 'ws-a');
+        expect(listPendingQuestions()[0]!.askerTerminalId).toBeUndefined();
+        drain();
+        await p;
+    });
+
+    it('keeps the asker on a question that has been parked', async () => {
+        // The parked row is exactly where attribution matters most: the modal is
+        // gone, so the only way to know who is still blocked is this field.
+        const p = forceQuestion(Q('Parked'), 'ws-a', undefined, undefined, 'term-vale');
+        win().close();
+
+        const parked = listPendingQuestions();
+        expect(parked).toHaveLength(1);
+        expect(parked[0]!.askerTerminalId).toBe('term-vale');
+        drain();
+        await p;
+    });
+
+    it('keeps each asker distinct across several waiting agents', async () => {
+        const a = forceQuestion(Q('A'), 'ws-a', undefined, undefined, 'term-a');
+        const b = forceQuestion(Q('B'), 'ws-b', undefined, undefined, 'term-b');
+
+        expect(listPendingQuestions().map((q) => q.askerTerminalId)).toEqual(['term-a', 'term-b']);
+        drain();
+        await Promise.all([a, b]);
+    });
+});

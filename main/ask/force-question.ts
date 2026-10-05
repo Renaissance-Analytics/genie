@@ -639,6 +639,21 @@ export interface PendingQuestion {
      * none, so consumers must degrade (show nothing) rather than assume epoch 0.
      */
     createdAt?: number;
+    /**
+     * WHICH AGENT is parked on this answer — its terminal id.
+     *
+     * The queue has always carried it (it is how a DND-deferred answer finds its
+     * way back to the asking agent's inbox); it was simply never reported out. So
+     * every consumer could say a question exists and none could say whose it is,
+     * which is the difference between "something is waiting" and "kai is blocked".
+     *
+     * **Optional, and that matters.** An internal approval gate has no MCP asker,
+     * and a forwarded question is answered on its own host. A consumer must be able
+     * to tell "no agent asked this" from "an agent asked and we lost track", and
+     * must never attribute an unowned question to whichever agent happens to share
+     * its workspace.
+     */
+    askerTerminalId?: string;
 }
 
 /**
@@ -656,6 +671,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         priority: item.priority,
         remoteHost: item.forward?.hostLabel,
         createdAt: item.createdAt,
+        askerTerminalId: item.askerTerminalId,
     }));
     const dnd: PendingQuestion[] = deferred.map((d, i) => ({
         id: d.id,
@@ -668,6 +684,7 @@ export function listPendingQuestions(): PendingQuestion[] {
         deferred: true,
         deferralReason: d.deferralReason,
         createdAt: d.createdAt,
+        askerTerminalId: d.askerTerminalId,
     }));
     return [...active, ...dnd];
 }
