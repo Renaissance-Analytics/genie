@@ -2686,6 +2686,7 @@ export async function runAgentForMcp(
                 if (!approved) {
                     return { ok: false, error: 'Denied by user — nothing was sent.' };
                 }
+                const submitRequested = req.key !== undefined ? req.key === 'enter' : req.submit !== false;
                 const wrote = await deliverTerminalInput(req.id!, built);
                 if (!wrote.delivered) {
                     return {
@@ -2693,6 +2694,7 @@ export async function runAgentForMcp(
                         error: `Nothing was sent — agent terminal "${req.id}" has no running pty (its TUI exited, or the terminal backend dropped it). Restart the agent before sending again.`,
                         delivered: false,
                         submitted: false,
+                        submitKeyDelivered: false,
                         id: req.id,
                     };
                 }
@@ -2700,8 +2702,15 @@ export async function runAgentForMcp(
                     ok: true,
                     id: req.id,
                     delivered: true,
-                    submitted: wrote.submitted,
-                    ...(wrote.submitted ? {} : { note: UNSUBMITTED_NOTE }),
+                    // PTY write success is not an acknowledgement from the TUI.
+                    // Even Enter can be consumed by paste handling or a modal.
+                    submitted: submitRequested && wrote.submitted ? null : false,
+                    submitKeyDelivered: submitRequested && wrote.submitted,
+                    note: !submitRequested
+                        ? 'Input delivered; submission was not requested.'
+                        : wrote.submitted
+                          ? 'Input and Enter delivered to the PTY; TUI acceptance is unverified. Read the terminal before sending more input or retrying; a retry could duplicate an accepted prompt.'
+                          : UNSUBMITTED_NOTE,
                 };
             }
             case 'read': {
