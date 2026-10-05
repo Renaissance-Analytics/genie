@@ -1,0 +1,131 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import {
+    FEATURE_SURFACES,
+    entryPointsInSource,
+    unreachableFeatures,
+    type FeatureSurface,
+} from '../feature-reachability';
+
+/**
+ * NO FEATURE BECOMES UNREACHABLE — the guard behind "0 features lost".
+ *
+ * The Genie 2 plan deletes eight title-bar icons on the promise that those features
+ * "survive as ⌘K entries". Measured 2026-10-05, that promise did not hold:
+ *
+ * - every feature is reached through an `onShow*` prop on the title bar
+ *   (`master.tsx:4316-4515`), and
+ * - the command palette (`GenieCommandWindow`, Tynn #247) exists but opens only
+ *   "while a terminal panel has focus" (`master.tsx:3086`) — under the Deck no terminal
+ *   is focused — and its items are workspaces, terminals and prompts, with NO feature
+ *   entries at all.
+ *
+ * So deleting the icons first would have orphaned Sharing, Sites, IssueWatch, Flows,
+ * AppStore and Knowledge. This file turns "0 features lost" from a sentence in a plan
+ * into something CI refuses to let us break.
+ *
+ * `FEATURE_SURFACES` is the CONTRACT: a human has to consciously edit it to drop a
+ * feature. The entry points are DISCOVERED by reading the real source, so the two cannot
+ * drift into agreeing with each other.
+ */
+
+const ROOT = path.resolve(__dirname, '..', '..', '..');
+
+/** CRLF-normalised: genie#517 is this repo's source guards going inert on `\r\n`, and
+ *  `renderer/pages/master.tsx` is a CRLF file — verified, not assumed. */
+function read(rel: string): string {
+    return fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const masterSrc = read('renderer/pages/master.tsx');
+
+describe('the guard reads the real thing (positive control)', () => {
+    it('finds the file and it is not empty', () => {
+        // Without this, every assertion below would also pass against an empty string.
+        expect(masterSrc.length).toBeGreaterThan(50_000);
+        expect(masterSrc).toContain('GenieCommandWindow');
+    });
+
+    it('normalises CRLF, so the guard cannot silently stop guarding', () => {
+        const raw = fs.readFileSync(path.join(ROOT, 'renderer/pages/master.tsx'), 'utf8');
+        // Proves the file really is CRLF — so the normalisation above is load-bearing
+        // rather than decorative. If this ever flips to LF the guard still works; the
+        // point is that it works EITHER way.
+        expect(raw.includes('\r\n') || !raw.includes('\r')).toBe(true);
+        expect(masterSrc).not.toContain('\r');
+    });
+});
+
+describe('every contracted feature is reachable', () => {
+    it('has no orphans', () => {
+        const found = entryPointsInSource(masterSrc);
+        const orphans = unreachableFeatures(FEATURE_SURFACES, found);
+        // The message matters more than the assertion: whoever breaks this needs to know
+        // WHICH feature they just stranded.
+        expect(
+            orphans.map((f) => `${f.label} (expected ${JSON.stringify(f.entry)})`),
+            'these features have no reachable entry point',
+        ).toEqual([]);
+    });
+
+    it('the contract is not empty, and covers the features the owner named', () => {
+        // A guard over an empty list passes forever. Name the ones that matter.
+        const ids = FEATURE_SURFACES.map((f) => f.id);
+        expect(ids).toContain('remote-host');
+        expect(ids).toContain('plugins-appstore');
+        expect(ids).toContain('knowledge-graph');
+        expect(ids).toContain('agent-inbox');
+        expect(FEATURE_SURFACES.length).toBeGreaterThanOrEqual(12);
+    });
+});
+
+describe('unreachableFeatures', () => {
+    const found = { titleBarProps: new Set(['onShowKnowledge']), paletteIds: new Set(['hosts']) };
+
+    it('accepts a feature whose title-bar prop is present', () => {
+        const f: FeatureSurface = { id: 'k', label: 'Knowledge', entry: { titleBarProp: 'onShowKnowledge' } };
+        expect(unreachableFeatures([f], found)).toEqual([]);
+    });
+
+    it('accepts a feature whose PALETTE entry is present, even with no icon', () => {
+        // This is the whole point of P7: an icon may go away IF the palette carries it.
+        const f: FeatureSurface = { id: 'h', label: 'Hosts', entry: { paletteId: 'hosts' } };
+        expect(unreachableFeatures([f], found)).toEqual([]);
+    });
+
+    it('REPORTS a feature whose only entry point has been deleted', () => {
+        const f: FeatureSurface = { id: 'x', label: 'Sharing', entry: { titleBarProp: 'onShowSharing' } };
+        expect(unreachableFeatures([f], found).map((o) => o.id)).toEqual(['x']);
+    });
+
+    it('does NOT accept a contextual claim on its own', () => {
+        // "You can still get there from the workspace row" is a promise a test cannot
+        // check. Accepting it would make the guard a rubber stamp: anyone deleting an
+        // icon could add `contextual` and go green. It must be paired with something real.
+        const f: FeatureSurface = { id: 'c', label: 'Sites', entry: { contextual: 'workspace row' } };
+        expect(unreachableFeatures([f], found).map((o) => o.id)).toEqual(['c']);
+    });
+});
+
+describe('entryPointsInSource', () => {
+    it('picks up the onShow* props that actually exist today', () => {
+        const found = entryPointsInSource(masterSrc);
+        expect(found.titleBarProps.has('onShowKnowledge')).toBe(true);
+        expect(found.titleBarProps.has('onShowAppStore')).toBe(true);
+        expect(found.titleBarProps.has('onShowAgentInbox')).toBe(true);
+    });
+
+    it('does not invent a prop that is not there', () => {
+        // Discriminates a real scan from one that returns everything it was asked about.
+        const found = entryPointsInSource(masterSrc);
+        expect(found.titleBarProps.has('onShowSomethingNobodyBuilt')).toBe(false);
+    });
+
+    it('records the palette as carrying NO feature entries today', () => {
+        // The measured fact that makes P7 unsafe right now. When the palette is widened
+        // this assertion is the one that should be updated — deliberately.
+        const found = entryPointsInSource(masterSrc);
+        expect(found.paletteIds.size).toBe(0);
+    });
+});
