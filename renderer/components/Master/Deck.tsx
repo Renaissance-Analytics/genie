@@ -1,6 +1,8 @@
 import { Badge, Card, Heading, Progress, Text } from '@particle-academy/react-fancy';
-import type { AgentSessionSpec } from '../../lib/genie';
+import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../../lib/genie';
 import { deckView, type RosterRow, type RosterState } from '../../lib/deck-view';
+import { attentionItems } from '../../lib/attention-queue';
+import { NeedsYou } from './NeedsYou';
 
 /**
  * The DECK — a cross-workspace answer to "does anything need me".
@@ -95,18 +97,49 @@ function RosterLine({ row, now }: { row: RosterRow; now: number }): React.JSX.El
     );
 }
 
+export interface DeckProps {
+    sessions: readonly AgentSessionSpec[];
+    /** Pending questions, already flattened across workspaces and hosts. */
+    questions?: readonly PendingQuestionSpec[];
+    /** UserList items across every workspace. */
+    listItems?: readonly ListItemSpec[];
+    now?: number;
+    onAnswerOption?: (questionId: string, label: string) => void;
+    onOpenQuestion?: (questionId: string) => void;
+    onResolveListItem?: (todoId: string, action: 'done' | 'thrown_back' | 'refused') => void;
+}
+
 export function Deck({
     sessions,
+    questions = [],
+    listItems = [],
     now = Date.now(),
-}: {
-    sessions: readonly AgentSessionSpec[];
-    now?: number;
-}): React.JSX.Element {
+    onAnswerOption,
+    onOpenQuestion,
+    onResolveListItem,
+}: DeckProps): React.JSX.Element {
     const view = deckView(sessions, now);
     const f = view.figures;
 
+    // Resolve an agent NAME for a question from the sessions already on the board, so a
+    // row can say "kai is blocked" rather than printing a terminal id. Null when nothing
+    // names one — an internal approval gate has no asker, and attributing it to whichever
+    // agent shares the workspace would blame one that is working fine.
+    const nameForTerminal = (terminalId: string): string | null =>
+        sessions.find((s) => s.specId === terminalId)?.session.name ?? null;
+
+    const attention = attentionItems({ questions, listItems }, { agentNameFor: nameForTerminal });
+
     return (
         <div className="deck">
+            <NeedsYou
+                items={attention}
+                questionsById={new Map(questions.map((q) => [q.id, q]))}
+                now={now}
+                onAnswerOption={onAnswerOption ?? (() => {})}
+                onOpenQuestion={onOpenQuestion ?? (() => {})}
+                onResolveListItem={onResolveListItem ?? (() => {})}
+            />
             <Card className="deck-band">
                 <div className="deck-band-head">
                     {/* `as`, not `level` — Heading has no `level` prop, and because it

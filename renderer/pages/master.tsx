@@ -181,10 +181,11 @@ import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
 import { useRouter } from 'next/router';
 import { parseViewRoute, type GenieView } from '../lib/view-route';
+import { answerForOption } from '../lib/attention-actions';
 import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
 import { focusOwnerOf } from '../lib/master-shortcuts';
-import type { AgentSessionSpec } from '../lib/genie';
+import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -358,16 +359,50 @@ function MasterInner() {
             // accident.
             .catch(() => {});
     }, []);
+    /**
+     * The two things the Needs-You band is built from.
+     *
+     * Questions come in one call. UserList items are per-workspace, so this asks each — the
+     * Deck is cross-workspace by definition, and reading only the active one would
+     * UNDER-REPORT, which on a surface whose job is "does anything need me" is the worst
+     * direction to be wrong in. A failed read leaves the previous answer standing rather
+     * than emptying the board.
+     */
+    const [deckQuestions, setDeckQuestions] = useState<PendingQuestionSpec[]>([]);
+    const [deckListItems, setDeckListItems] = useState<ListItemSpec[]>([]);
+    const loadAttention = useCallback(() => {
+        api()
+            .questions.list()
+            .then((r) => setDeckQuestions(r.groups.flatMap((g) => g.questions)))
+            .catch(() => {});
+        Promise.all(
+            workspaces.map((w) =>
+                api()
+                    .lists.read(w.id)
+                    .then((r) => r.user)
+                    .catch(() => [] as ListItemSpec[]),
+            ),
+        )
+            .then((all) => setDeckListItems(all.flat()))
+            .catch(() => {});
+    }, [workspaces]);
+
     useEffect(() => {
         if (!surface.showDeck) return;
         loadSessions();
-        const offQ = api().on.questionsChanged?.(loadSessions);
+        loadAttention();
+        const offQ = api().on.questionsChanged?.(() => {
+            loadSessions();
+            loadAttention();
+        });
         const offA = api().on.agentsChanged?.(loadSessions);
+        const offL = api().on.listsChanged?.(() => loadAttention());
         return () => {
             offQ?.();
             offA?.();
+            offL?.();
         };
-    }, [surface.showDeck, loadSessions]);
+    }, [surface.showDeck, loadSessions, loadAttention]);
     // The agent RECORD for whichever agent's settings are open. Loaded on
     // demand rather than kept for every workspace: this is the only surface in
     // master.tsx that needs it, and the sidebar keeps its own copy.
@@ -2745,7 +2780,33 @@ function MasterInner() {
                         window is a single workspace and derives the same shape
                         from far less. */}
                     <Floor
-                        deck={surface.showDeck ? <Deck sessions={sessions} /> : undefined}
+                        deck={
+                            surface.showDeck ? (
+                                <Deck
+                                    sessions={sessions}
+                                    questions={deckQuestions}
+                                    listItems={deckListItems}
+                                    onAnswerOption={(questionId, label) => {
+                                        const q = deckQuestions.find((x) => x.id === questionId);
+                                        const answers = q ? answerForOption(q, label) : null;
+                                        // answerForOption refuses a partial or invented answer.
+                                        // Silence here is correct: nothing was submitted.
+                                        if (!answers) return;
+                                        void api()
+                                            .questions.answer(questionId, answers)
+                                            .then(() => loadAttention())
+                                            .catch(() => {});
+                                    }}
+                                    onOpenQuestion={() => setQuestionsOpen(true)}
+                                    onResolveListItem={(todoId, action) => {
+                                        void api()
+                                            .lists.resolveUser(todoId, action, '')
+                                            .then(() => loadAttention())
+                                            .catch(() => {});
+                                    }}
+                                />
+                            ) : undefined
+                        }
                         hideGrid={surface.hideGrid}
                         agentRecord={activeAgentRecord ?? undefined}
                         onRuntimesChanged={reloadActiveAgents}

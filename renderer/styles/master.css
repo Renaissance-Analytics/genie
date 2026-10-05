@@ -8149,3 +8149,46 @@ body.gutter-dragging .grid-gutter {
     padding: 16px 4px;
     color: var(--fg-3);
 }
+
+/* Needs-You rows. Layout only, like the rest of the Deck: the surface is a Fancy
+   Card, so nothing here paints a background and nothing enters the z-index ladder. */
+.needs-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--border-1, #26262e);
+}
+
+.needs-row:last-child {
+    border-bottom: none;
+}
+
+.needs-row-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.needs-row-title {
+    font-weight: 600;
+}
+
+.needs-row-meta {
+    color: var(--fg-3);
+}
+
+/* Wraps rather than scrolling: a question can offer up to four options and an action a
+   person cannot see is an action they will not take. */
+.needs-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* A blocking row is tinted the same amber the roster uses for "awaiting you", so the two
+   surfaces agree about what the colour means. */
+.needs-row[data-kind='question'] {
+    background: rgba(251, 191, 36, 0.06);
+}
