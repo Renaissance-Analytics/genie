@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Action, Icon, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Text } from '@particle-academy/react-fancy';
 import PairScreen from '../components/Mobile/PairScreen';
 import Dashboard from '../components/Mobile/Dashboard';
 import Questions from '../components/Mobile/Questions';
@@ -205,16 +205,16 @@ export default function MobilePage() {
                     {bootError}
                 </Text>
                 <div className="m-center-actions">
-                    <Action
+                    <Button
                         color="blue"
                         icon="refresh-cw"
                         onClick={() => setTokenState((t) => (t ? `${t}` : t))}
                     >
                         Retry
-                    </Action>
-                    <Action variant="ghost" icon="log-out" onClick={signOut}>
+                    </Button>
+                    <Button variant="ghost" icon="log-out" onClick={signOut}>
                         Re-pair
-                    </Action>
+                    </Button>
                 </div>
             </div>
         );
@@ -417,16 +417,16 @@ function TerminalTab({
         return (
             <div className="m-term-wrap">
                 <div className="m-term-head">
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon="chevron-left"
                         onClick={() => setActiveId(null)}
                     >
                         Terminals
-                    </Action>
+                    </Button>
                     <div style={{ flex: 1 }} />
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         color="rose"

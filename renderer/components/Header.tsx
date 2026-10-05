@@ -1,5 +1,5 @@
 import React from 'react';
-import { Action, Heading, Text } from '@particle-academy/react-fancy';
+import { Button, Heading, Text } from '@particle-academy/react-fancy';
 
 interface Props {
     title: string;
@@ -27,7 +27,7 @@ export default function Header({ title, subtitle, onOpenSettings }: Props) {
                 )}
             </div>
             {onOpenSettings && (
-                <Action
+                <Button
                     variant="ghost"
                     size="sm"
                     icon="settings"

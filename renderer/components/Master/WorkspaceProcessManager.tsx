@@ -1,20 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
-    Action,
-    Badge,
-    Callout,
-    Card,
-    CodeView,
-    Heading,
-    Icon,
-    Input,
-    Modal,
-    Select,
-    Switch,
-    Tabs,
-    Text,
-    Textarea,
-} from '@particle-academy/react-fancy';
+import { Badge, Button, Callout, Card, CodeView, Heading, Icon, Input, Modal, Select, Switch, Tabs, Text, Textarea } from '@particle-academy/react-fancy';
 import {
     api,
     detectedShells,
@@ -258,7 +243,7 @@ export default function WorkspaceProcessManager({
                             files are untouched.
                         </Text>
                         <div className="set-actions">
-                            <Action
+                            <Button
                                 size="sm"
                                 color="red"
                                 icon="trash-2"
@@ -269,10 +254,10 @@ export default function WorkspaceProcessManager({
                                 }}
                             >
                                 Delete process
-                            </Action>
-                            <Action size="sm" variant="ghost" onClick={() => setDeleting(null)}>
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setDeleting(null)}>
                                 Cancel
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -360,9 +345,9 @@ function ProcessList({
                 </div>
             )}
             <div className="set-actions">
-                <Action size="sm" variant="ghost" icon="plus" onClick={onAdd}>
+                <Button size="sm" variant="ghost" icon="plus" onClick={onAdd}>
                     Add a process…
-                </Action>
+                </Button>
             </div>
         </section>
     );
@@ -476,7 +461,7 @@ function ProcessCard({
 
             <div className="set-actions">
                 {card.actions.map((action) => (
-                    <Action
+                    <Button
                         key={action}
                         size="sm"
                         variant={action === 'start' || action === 'run-now' ? undefined : 'ghost'}
@@ -490,7 +475,7 @@ function ProcessCard({
                             : action === 'start' && card.tone === 'crashed'
                               ? 'Start again'
                               : ACTION_BUTTON[action].label}
-                    </Action>
+                    </Button>
                 ))}
             </div>
         </Card>
@@ -520,20 +505,20 @@ function OutputPanel({ id, label, text }: { id: string; label: string; text: str
             <span className="svc-env-label">Output — the last {LOG_TAIL_LINES} lines, live</span>
             <CodeView value={text || 'Nothing output yet.'} readOnly minHeight={0} maxHeight={260} />
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="copy"
                     onClick={() => void navigator.clipboard.writeText(tail(text, 100)).catch(() => {})}
                 >
                     Copy last 100 lines
-                </Action>
-                <Action size="sm" variant="ghost" icon="download" onClick={download}>
+                </Button>
+                <Button size="sm" variant="ghost" icon="download" onClick={download}>
                     Save full output…
-                </Action>
-                <Action size="sm" variant="ghost" icon="eraser" onClick={() => void api().process.clearLog(id).catch(() => {})}>
+                </Button>
+                <Button size="sm" variant="ghost" icon="eraser" onClick={() => void api().process.clearLog(id).catch(() => {})}>
                     Clear
-                </Action>
+                </Button>
             </div>
         </div>
     );
@@ -631,7 +616,7 @@ function ProcessForm({
                         {system ? (
                             <div className="site-docroot">
                                 <Input value={draft.dir} readOnly disabled placeholder="Choose a directory" />
-                                <Action
+                                <Button
                                     size="sm"
                                     variant="ghost"
                                     icon="folder-open"
@@ -648,7 +633,7 @@ function ProcessForm({
                                     }
                                 >
                                     Choose…
-                                </Action>
+                                </Button>
                             </div>
                         ) : (
                             <Select
@@ -746,12 +731,12 @@ function ProcessForm({
                 )}
 
                 <div className="set-actions">
-                    <Action size="sm" color="blue" icon="check" disabled={saving} onClick={() => void submit()}>
+                    <Button size="sm" color="blue" icon="check" disabled={saving} onClick={() => void submit()}>
                         {saving ? 'Saving…' : spec ? 'Save changes' : 'Add process'}
-                    </Action>
-                    <Action size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
                         Cancel
-                    </Action>
+                    </Button>
                 </div>
             </div>
         </Modal>

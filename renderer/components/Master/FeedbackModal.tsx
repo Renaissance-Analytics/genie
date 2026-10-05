@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Modal, Select, Text, Textarea } from '@particle-academy/react-fancy';
+import { Button, Modal, Select, Text, Textarea } from '@particle-academy/react-fancy';
 import { api, type TynnProject, type WorkspaceRow } from '../../lib/genie';
 import { feedbackProjectFor, feedbackProjectOptions } from '../../lib/feedback-target';
 
@@ -134,26 +134,26 @@ export default function FeedbackModal({
             <Modal.Footer>
                 {sentTo !== null ? (
                     <>
-                        <Action size="sm" onClick={() => setSentTo(null)}>
+                        <Button size="sm" onClick={() => setSentTo(null)}>
                             Send another
-                        </Action>
-                        <Action size="sm" variant="ghost" onClick={close}>
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={close}>
                             Done
-                        </Action>
+                        </Button>
                     </>
                 ) : (
                     <>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             disabled={sending || !projectId || message.trim().length === 0}
                             onClick={() => void send()}
                         >
                             {sending ? 'Sending…' : 'Send feedback'}
-                        </Action>
-                        <Action size="sm" variant="ghost" onClick={close}>
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={close}>
                             Cancel
-                        </Action>
+                        </Button>
                     </>
                 )}
             </Modal.Footer>

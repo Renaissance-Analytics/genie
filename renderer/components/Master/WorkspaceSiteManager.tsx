@@ -1,20 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-    Action,
-    Badge,
-    Callout,
-    Card,
-    CodeView,
-    Heading,
-    Icon,
-    Input,
-    Modal,
-    Select,
-    Switch,
-    Tabs,
-    Text,
-    Textarea,
-} from '@particle-academy/react-fancy';
+import { Badge, Button, Callout, Card, CodeView, Heading, Icon, Input, Modal, Select, Switch, Tabs, Text, Textarea } from '@particle-academy/react-fancy';
 import {
     api,
     type DevRuntimeInfo,
@@ -373,9 +358,9 @@ function SitesTab({
                     Your repo&apos;s dev server, on the host at a stable <code>.gen</code> address.
                 </span>
                 <span style={{ marginLeft: 'auto' }}>
-                    <Action size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
+                    <Button size="sm" variant="ghost" icon="refresh-cw" onClick={onRefresh}>
                         Refresh
-                    </Action>
+                    </Button>
                 </span>
             </div>
 
@@ -407,14 +392,14 @@ function SitesTab({
             )}
 
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="plus"
                     onClick={() => onAddingChange(!adding)}
                 >
                     {adding ? 'Cancel' : 'Add a site…'}
-                </Action>
+                </Button>
             </div>
 
             {/* A framework that checks the Host header answers a "Blocked
@@ -590,7 +575,7 @@ function SiteCard({
             )}
 
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     color="blue"
                     icon="external-link"
@@ -598,10 +583,10 @@ function SiteCard({
                     onClick={() => onAction({ action: 'open' })}
                 >
                     Open in Genie Browser
-                </Action>
+                </Button>
                 {siteCardActions(view).map((action) =>
                     action === 'restart' ? (
-                        <Action
+                        <Button
                             key={action}
                             size="sm"
                             variant="ghost"
@@ -610,10 +595,10 @@ function SiteCard({
                             onClick={() => onAction({ action: 'restart' })}
                         >
                             Restart
-                        </Action>
+                        </Button>
                     ) : action === 'stop' ? (
                         // Offered while a start is in flight too — see siteCardActions.
-                        <Action
+                        <Button
                             key={action}
                             size="sm"
                             variant="ghost"
@@ -622,9 +607,9 @@ function SiteCard({
                             onClick={() => onAction({ action: 'stop' })}
                         >
                             Stop
-                        </Action>
+                        </Button>
                     ) : (
-                        <Action
+                        <Button
                             key={action}
                             size="sm"
                             variant="ghost"
@@ -633,10 +618,10 @@ function SiteCard({
                             onClick={() => onAction({ action: 'start' })}
                         >
                             {action === 'retry' ? 'Retry' : 'Start'}
-                        </Action>
+                        </Button>
                     ),
                 )}
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="pencil"
@@ -645,11 +630,11 @@ function SiteCard({
                     title="Change this site's name, URL, port, environment, build or serve, and more."
                 >
                     Edit
-                </Action>
-                <Action size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
+                </Button>
+                <Button size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
                     {log !== null ? 'Hide log' : 'Log'}
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="trash-2"
@@ -658,7 +643,7 @@ function SiteCard({
                     title="Stops the container and forgets the definition. Your files are untouched."
                 >
                     Remove
-                </Action>
+                </Button>
             </div>
 
             {editing && (
@@ -950,7 +935,7 @@ function EditSiteForm({
                     </div>
                 )}
                 <div className="set-actions">
-                    <Action
+                    <Button
                         size="sm"
                         color="blue"
                         icon="check"
@@ -973,10 +958,10 @@ function EditSiteForm({
                         }}
                     >
                         {saving ? 'Applying…' : 'Save changes'}
-                    </Action>
-                    <Action size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
                         Cancel
-                    </Action>
+                    </Button>
                 </div>
             </div>
         </Modal>
@@ -1279,7 +1264,7 @@ function AddSiteForm({
             {serveMode === 'proxy' && (
                 <>
                     <div className="set-actions">
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="search"
@@ -1287,7 +1272,7 @@ function AddSiteForm({
                             onClick={() => void detect()}
                         >
                             {detecting ? 'Reading the repo…' : 'Advanced — pick how it runs'}
-                        </Action>
+                        </Button>
                     </div>
 
                     {options !== null && (
@@ -1338,7 +1323,7 @@ function AddSiteForm({
             )}
 
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     color="blue"
                     icon="check"
@@ -1373,10 +1358,10 @@ function AddSiteForm({
                     }}
                 >
                     {saving ? 'Starting…' : 'Add & start'}
-                </Action>
-                <Action size="sm" variant="ghost" onClick={onCancel}>
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onCancel}>
                     Cancel
-                </Action>
+                </Button>
             </div>
         </Card>
     );
@@ -1450,7 +1435,7 @@ function ServicesTab({
                 {available.length > 0 && (
                     <div className="set-actions">
                         {available.map((entry) => (
-                            <Action
+                            <Button
                                 key={entry.engine}
                                 size="sm"
                                 variant="ghost"
@@ -1462,7 +1447,7 @@ function ServicesTab({
                                 }
                             >
                                 {entry.label}
-                            </Action>
+                            </Button>
                         ))}
                     </div>
                 )}
@@ -1601,7 +1586,7 @@ function ServiceCard({
 
             <div className="set-actions">
                 {row.state === 'running' ? (
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon="square"
@@ -1610,9 +1595,9 @@ function ServiceCard({
                         title="Releases this workspace's hold. The engine stops only if nobody else is using it."
                     >
                         Release
-                    </Action>
+                    </Button>
                 ) : (
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon="play"
@@ -1620,9 +1605,9 @@ function ServiceCard({
                         onClick={() => onAction({ action: 'start' })}
                     >
                         {row.state === 'failed' ? 'Retry' : 'Start'}
-                    </Action>
+                    </Button>
                 )}
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="plug"
@@ -1630,13 +1615,13 @@ function ServiceCard({
                     onClick={() => onAction({ action: 'connection' })}
                 >
                     Connection
-                </Action>
+                </Button>
                 {/* Only when the workspace holds TWO majors of this engine: then
                     DATABASE_URL can point at just one of them, and which one has
                     to be visible AND changeable. Absent for the ordinary
                     one-version workspace, which has no choice to make. */}
                 {choice.contested && !choice.isActive && (
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon="check"
@@ -1649,10 +1634,10 @@ function ServiceCard({
                         }
                     >
                         Use this version
-                    </Action>
+                    </Button>
                 )}
                 {entry?.shared && (
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon={row.dedicated ? 'users' : 'user'}
@@ -1665,12 +1650,12 @@ function ServiceCard({
                         }
                     >
                         {row.dedicated ? 'Use the shared engine' : 'Give it a dedicated one'}
-                    </Action>
+                    </Button>
                 )}
-                <Action size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
+                <Button size="sm" variant="ghost" icon="file-text" disabled={busy} onClick={onToggleLog}>
                     {log !== null ? 'Hide log' : 'Log'}
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="trash-2"
@@ -1679,7 +1664,7 @@ function ServiceCard({
                     title="Releases this workspace's hold and forgets the definition. The engine's data is left alone."
                 >
                     Remove
-                </Action>
+                </Button>
             </div>
         </Card>
     );

@@ -1,14 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-    Action,
-    Carousel,
-    Heading,
-    Icon,
-    Input,
-    Select,
-    Text,
-    useCarousel,
-} from '@particle-academy/react-fancy';
+import { Button, Carousel, Heading, Icon, Input, Select, Text, useCarousel } from '@particle-academy/react-fancy';
 import { pickPath } from './FilePickerModal';
 import { projectPickerOptions } from '../lib/project-picker';
 import { scannedWorkspaceAction } from '../lib/workspace-onboarding';
@@ -933,28 +924,28 @@ function WizardFooter({
                 marginTop: 12,
             }}
         >
-            <Action variant="ghost" onClick={onCancel} disabled={busy}>
+            <Button variant="ghost" onClick={onCancel} disabled={busy}>
                 Cancel
-            </Action>
+            </Button>
             <span style={{ flex: 1 }} />
             {!isFirst && (
-                <Action variant="ghost" icon="arrow-left" onClick={prev} disabled={busy}>
+                <Button variant="ghost" icon="arrow-left" onClick={prev} disabled={busy}>
                     Back
-                </Action>
+                </Button>
             )}
             {isLast ? (
-                <Action color="blue" icon="check" onClick={onFinish} disabled={!finishEnabled}>
+                <Button color="blue" icon="check" onClick={onFinish} disabled={!finishEnabled}>
                     {busy ? busyStep ?? 'Building the workspace…' : finishLabel}
-                </Action>
+                </Button>
             ) : (
-                <Action
+                <Button
                     color="blue"
                     iconTrailing="arrow-right"
                     onClick={next}
                     disabled={!canNext}
                 >
                     Next
-                </Action>
+                </Button>
             )}
         </div>
     );
@@ -1024,7 +1015,7 @@ function SourceStep({
             </Text>
             <div style={{ display: 'flex', gap: 8 }}>
                 {(['local', 'remote'] as const).map((m) => (
-                    <Action
+                    <Button
                         key={m}
                         size="sm"
                         variant={sourceMode === m ? 'default' : 'ghost'}
@@ -1033,7 +1024,7 @@ function SourceStep({
                         disabled={scanning || cloning}
                     >
                         {m === 'local' ? 'Local folder' : 'Remote repo'}
-                    </Action>
+                    </Button>
                 ))}
             </div>
 
@@ -1042,18 +1033,18 @@ function SourceStep({
                     <div style={{ flex: 1 }}>
                         <Input value={folder} readOnly placeholder="No folder chosen" />
                     </div>
-                    <Action variant="ghost" onClick={onPick} icon="folder" disabled={scanning}>
+                    <Button variant="ghost" onClick={onPick} icon="folder" disabled={scanning}>
                         Browse
-                    </Action>
+                    </Button>
                     {folder && (
-                        <Action
+                        <Button
                             variant="ghost"
                             onClick={onRescan}
                             icon="refresh-cw"
                             disabled={scanning}
                         >
                             {scanning ? 'Scanning…' : 'Re-scan'}
-                        </Action>
+                        </Button>
                     )}
                 </div>
             ) : (
@@ -1070,9 +1061,9 @@ function SourceStep({
                                     aria-label="Accessible GitHub repository"
                                 />
                             </div>
-                            <Action variant="ghost" icon="refresh-cw" disabled={repositoriesLoading} onClick={() => void refreshRepositories()}>
+                            <Button variant="ghost" icon="refresh-cw" disabled={repositoriesLoading} onClick={() => void refreshRepositories()}>
                                 Refresh
-                            </Action>
+                            </Button>
                         </div>
                     )}
                     {repositoriesError && <Text size="xs" className="text-rose-500">{repositoriesError}</Text>}
@@ -1091,14 +1082,14 @@ function SourceStep({
                             <div style={{ flex: 1 }}>
                                 <Input value={cloneParent} readOnly placeholder="No folder chosen" />
                             </div>
-                            <Action
+                            <Button
                                 variant="ghost"
                                 onClick={onChooseCloneParent}
                                 icon="folder"
                                 disabled={cloning}
                             >
                                 Browse
-                            </Action>
+                            </Button>
                         </div>
                         <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
                             {primaryWorkspace
@@ -1107,7 +1098,7 @@ function SourceStep({
                         </Text>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="download"
@@ -1115,16 +1106,16 @@ function SourceStep({
                             onClick={onClone}
                         >
                             {cloning ? 'Cloning…' : scanning ? 'Scanning…' : 'Clone & scan'}
-                        </Action>
+                        </Button>
                         {folder && !cloning && (
                             <Text size="xs" className="text-zinc-500">
                                 Cloned to {folder}
                             </Text>
                         )}
                         {folder && !cloning && !scanning && (
-                            <Action variant="ghost" onClick={onRescan} icon="refresh-cw">
+                            <Button variant="ghost" onClick={onRescan} icon="refresh-cw">
                                 Re-scan
-                            </Action>
+                            </Button>
                         )}
                     </div>
                 </div>
@@ -1205,7 +1196,7 @@ function ReposStep({
                     { value: 'explode', label: `Explode into ${submoduleCount} submodule${submoduleCount === 1 ? '' : 's'}` },
                     { value: 'wrap', label: 'Wrap whole (one submodule)' },
                 ] as const).map((opt) => (
-                    <Action
+                    <Button
                         key={opt.value}
                         size="sm"
                         variant={monorepoMode === opt.value ? 'default' : 'ghost'}
@@ -1213,7 +1204,7 @@ function ReposStep({
                         onClick={() => onMonorepoModeChange(opt.value)}
                     >
                         {opt.label}
-                    </Action>
+                    </Button>
                 ))}
             </div>
             <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>
@@ -1422,7 +1413,7 @@ function DispositionStep({
                     Set all:
                 </Text>
                 {(['codebase', 'knowledge', 'root', 'ignore'] as const).map((d) => (
-                    <Action key={d} size="sm" variant="ghost" onClick={() => setAll(d)}>
+                    <Button key={d} size="sm" variant="ghost" onClick={() => setAll(d)}>
                         {d === 'codebase'
                             ? 'Codebase'
                             : d === 'knowledge'
@@ -1430,7 +1421,7 @@ function DispositionStep({
                                 : d === 'root'
                                     ? 'Root'
                                     : 'Ignore'}
-                    </Action>
+                    </Button>
                 ))}
             </div>
             <table className="upgrade-tbl">
@@ -1714,9 +1705,9 @@ function EnvelopeStep({
                     <div style={{ flex: 1 }}>
                         <Input value={parentFolder} readOnly placeholder="No folder chosen" />
                     </div>
-                    <Action variant="ghost" onClick={onPickParent} icon="folder">
+                    <Button variant="ghost" onClick={onPickParent} icon="folder">
                         Browse
-                    </Action>
+                    </Button>
                 </div>
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
                     {primaryWorkspace
@@ -1731,7 +1722,7 @@ function EnvelopeStep({
                 </Text>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {(['none', 'github', 'paste'] as const).map((m) => (
-                        <Action
+                        <Button
                             key={m}
                             size="sm"
                             variant={remoteMode === m ? 'default' : 'ghost'}
@@ -1743,7 +1734,7 @@ function EnvelopeStep({
                                 : m === 'github'
                                   ? 'GitHub (auto-create)'
                                   : 'Paste URL'}
-                        </Action>
+                        </Button>
                     ))}
                 </div>
                 {remoteMode === 'paste' && (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Icon, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Text } from '@particle-academy/react-fancy';
 import type { ForceAnswerSpec } from '../../lib/genie';
 import {
     answer as submitAnswer,
@@ -212,14 +212,14 @@ function QuestionCard({
             )}
 
             <div className="m-question-foot">
-                <Action
+                <Button
                     color="blue"
                     icon="check"
                     onClick={() => void submit()}
                     disabled={!ready || submitting}
                 >
                     {submitting ? 'Sending…' : 'Submit'}
-                </Action>
+                </Button>
             </div>
         </div>
     );

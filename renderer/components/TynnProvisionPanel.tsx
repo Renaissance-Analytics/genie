@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Action, Icon, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
 import { shouldAutoProvisionOnOpen } from '../lib/tynn-autoprovision';
 import { nudgeGappDevSync } from '../lib/gapp-dev';
@@ -184,7 +184,7 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                             })),
                         ]}
                     />
-                    <Action
+                    <Button
                         size="sm"
                         color="blue"
                         icon="link"
@@ -192,7 +192,7 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                         onClick={linkAndProvision}
                     >
                         {busy ? 'Provisioning…' : 'Link & provision'}
-                    </Action>
+                    </Button>
                 </div>
             ) : (
                 <div
@@ -218,12 +218,12 @@ export default function TynnProvisionPanel({ workspaceId }: { workspaceId?: stri
                         {status === 'already' ? ' — token in .mcp.json' : ''}
                     </Text>
                     <span style={{ flex: 1 }} />
-                    <Action size="sm" variant="ghost" icon="refresh-cw" disabled={busy} onClick={reprovision}>
+                    <Button size="sm" variant="ghost" icon="refresh-cw" disabled={busy} onClick={reprovision}>
                         {busy ? 'Re-provisioning…' : 'Re-provision'}
-                    </Action>
-                    <Action size="sm" variant="ghost" icon="unlink" disabled={busy} onClick={unlink}>
+                    </Button>
+                    <Button size="sm" variant="ghost" icon="unlink" disabled={busy} onClick={unlink}>
                         Unlink
-                    </Action>
+                    </Button>
                 </div>
             )}
 

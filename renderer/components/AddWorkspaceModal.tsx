@@ -1,15 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { projectPickerOptions } from '../lib/project-picker';
-import {
-    Action,
-    Card,
-    Heading,
-    Icon,
-    Input,
-    Modal,
-    Select,
-    Text,
-} from '@particle-academy/react-fancy';
+import { Button, Card, Heading, Icon, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import { api, ulid } from '../lib/genie';
 import { pickPath } from './FilePickerModal';
 import type {
@@ -614,9 +605,9 @@ function Summary({
                 <code>{folder && parentPath ? workspacePathPreview(parentPath, folder) : parentPath}</code>
             </Text>
             <div>
-                <Action variant="ghost" size="sm" icon="pencil" onClick={onExpand}>
+                <Button variant="ghost" size="sm" icon="pencil" onClick={onExpand}>
                     Change details
-                </Action>
+                </Button>
             </div>
         </Card>
     );
@@ -660,9 +651,9 @@ export function WorkspaceBroughtAgents({
                 it is the only confirmation the act worked. */}
             <ImportedAgents workspaceId={workspace.id} roster={roster} keepOpen />
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-                <Action color="blue" onClick={onOpen} icon="check">
+                <Button color="blue" onClick={onOpen} icon="check">
                     Open workspace
-                </Action>
+                </Button>
             </div>
         </div>
     );
@@ -898,9 +889,9 @@ function FolderRow({
                 <div style={{ flex: 1 }}>
                     <Input value={folder} readOnly placeholder="No folder chosen" />
                 </div>
-                <Action variant="ghost" onClick={onChoose} icon="folder">
+                <Button variant="ghost" onClick={onChoose} icon="folder">
                     Browse
-                </Action>
+                </Button>
             </div>
             {description && (
                 <Text size="xs" className="text-zinc-500" style={{ display: 'block', marginTop: 4 }}>
@@ -961,14 +952,14 @@ function ProjectPicker({
                     Project <span style={{ fontWeight: 400, color: 'var(--fg-3)' }}>(optional)</span>
                 </Text>
                 {onProjectCreated && (
-                    <Action
+                    <Button
                         variant="ghost"
                         size="sm"
                         icon="plus"
                         onClick={() => setMode('create')}
                     >
                         New project
-                    </Action>
+                    </Button>
                 )}
             </div>
             <Select
@@ -1066,9 +1057,9 @@ function CreateProjectForm({
                 <Text size="sm" style={{ fontWeight: 600 }}>
                     {isGapp ? 'Create GApp project' : 'Create new project'}
                 </Text>
-                <Action variant="ghost" size="sm" icon="arrow-left" onClick={onCancel}>
+                <Button variant="ghost" size="sm" icon="arrow-left" onClick={onCancel}>
                     Select existing
-                </Action>
+                </Button>
             </div>
             <Input
                 label="Name"
@@ -1105,10 +1096,10 @@ function CreateProjectForm({
                 </Text>
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <Action variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
+                <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
                     Cancel
-                </Action>
-                <Action
+                </Button>
+                <Button
                     color="blue"
                     size="sm"
                     icon="check"
@@ -1116,7 +1107,7 @@ function CreateProjectForm({
                     disabled={submitting || !name.trim()}
                 >
                     {submitting ? 'Creating…' : 'Create project'}
-                </Action>
+                </Button>
             </div>
         </Card>
     );
@@ -1137,12 +1128,12 @@ function Footer({
 }) {
     return (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-            <Action variant="ghost" onClick={onCancel} disabled={submitting}>
+            <Button variant="ghost" onClick={onCancel} disabled={submitting}>
                 Cancel
-            </Action>
-            <Action color="blue" onClick={onSubmit} disabled={submitting || disabled} icon="check">
+            </Button>
+            <Button color="blue" onClick={onSubmit} disabled={submitting || disabled} icon="check">
                 {submitting ? 'Working…' : label}
-            </Action>
+            </Button>
         </div>
     );
 }

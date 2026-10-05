@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Action, Badge, Button, Switch, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Switch, Text } from '@particle-academy/react-fancy';
 import { IconAlert, IconChevronDown, IconFlow, IconPlus, IconTrash, IconX } from './icons';
 import {
     api,
@@ -672,7 +672,7 @@ function FlowRow({
                 </div>
 
                 <div className="flowmgr-actions">
-                    <Action
+                    <Button
                         variant="ghost"
                         size="xs"
                         icon="pencil"
@@ -681,7 +681,7 @@ function FlowRow({
                         title="Edit"
                         aria-label={`Edit ${flow.title}`}
                     />
-                    <Action
+                    <Button
                         variant="ghost"
                         size="xs"
                         icon="trash"
@@ -691,7 +691,7 @@ function FlowRow({
                         aria-label={`Delete ${flow.title}`}
                     />
                     {flow.readable && (
-                        <Action
+                        <Button
                             variant="ghost"
                             size="xs"
                             icon="play"

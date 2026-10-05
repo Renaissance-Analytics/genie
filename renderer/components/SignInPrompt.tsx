@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Action, Badge, Card, Heading, Icon, Input, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Card, Heading, Icon, Input, Text } from '@particle-academy/react-fancy';
 import { api, type BackendUser } from '../lib/genie';
 
 interface Props {
@@ -205,9 +205,9 @@ function BackendCard({
                     {host}
                 </Text>
                 {onEditHost && (
-                    <Action variant="ghost" color="blue" size="xs" onClick={onEditHost}>
+                    <Button variant="ghost" color="blue" size="xs" onClick={onEditHost}>
                         Change
-                    </Action>
+                    </Button>
                 )}
             </div>
 
@@ -216,15 +216,15 @@ function BackendCard({
                     <Text size="xs" className="flex-1">
                         Signed in as <strong>{user.name}</strong>
                     </Text>
-                    <Action variant="ghost" size="sm" onClick={onSignOut}>
+                    <Button variant="ghost" size="sm" onClick={onSignOut}>
                         Sign out
-                    </Action>
+                    </Button>
                 </div>
             ) : (
                 <>
-                    <Action color="blue" size="sm" onClick={onSignIn} disabled={busy}>
+                    <Button color="blue" size="sm" onClick={onSignIn} disabled={busy}>
                         {busy ? 'Waiting…' : cta}
-                    </Action>
+                    </Button>
 
                     {signInUrl && (
                         <div className="flex flex-col gap-1.5 rounded-md border border-blue-500/20 bg-blue-500/5 p-2.5">
@@ -240,7 +240,7 @@ function BackendCard({
                                 >
                                     {signInUrl}
                                 </Text>
-                                <Action
+                                <Button
                                     variant="ghost"
                                     color="blue"
                                     size="xs"
@@ -252,14 +252,14 @@ function BackendCard({
                                     }}
                                 >
                                     {copied ? 'Copied' : 'Copy'}
-                                </Action>
+                                </Button>
                             </div>
                         </div>
                     )}
 
                     {showCodeFallback && onRedeemCode && (
                         <div className="flex flex-col gap-2">
-                            <Action
+                            <Button
                                 variant="ghost"
                                 size="xs"
                                 color="blue"
@@ -267,7 +267,7 @@ function BackendCard({
                                 icon={codeOpen ? 'chevron-up' : 'chevron-down'}
                             >
                                 {codeOpen ? 'Hide code entry' : 'I have a code'}
-                            </Action>
+                            </Button>
 
                             {codeOpen && (
                                 <div className="flex flex-col gap-2">
@@ -279,7 +279,7 @@ function BackendCard({
                                         disabled={redeeming}
                                     />
                                     <div className="flex gap-2">
-                                        <Action
+                                        <Button
                                             color="blue"
                                             size="sm"
                                             onClick={submitCode}
@@ -287,7 +287,7 @@ function BackendCard({
                                             icon={redeeming ? 'loader' : 'check'}
                                         >
                                             {redeeming ? 'Signing in…' : 'Sign in'}
-                                        </Action>
+                                        </Button>
                                     </div>
                                     {redeemError && (
                                         <Text size="xs" className="text-rose-500">

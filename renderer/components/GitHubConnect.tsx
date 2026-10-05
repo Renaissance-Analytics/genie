@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Action, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Select, Text } from '@particle-academy/react-fancy';
 import { api } from '../lib/genie';
 import { installationLoadState, isGitHubAuthenticationFailure } from '../lib/github-installations';
 
@@ -497,9 +497,9 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                         <Text size="xs" className="text-rose-500" style={{ display: 'block' }}>
                             Genie could not refresh the GitHub App installations: {installationsError}
                         </Text>
-                        <Action size="sm" variant="ghost" icon="refresh-cw" onClick={() => void account.refresh()}>
+                        <Button size="sm" variant="ghost" icon="refresh-cw" onClick={() => void account.refresh()}>
                             Retry installation discovery
-                        </Action>
+                        </Button>
                     </div>
                 )}
                 {!installationsError && noInstallations ? (
@@ -520,22 +520,22 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                             lets Genie create and fork repos there.
                         </Text>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <Action
+                            <Button
                                 size="sm"
                                 color="blue"
                                 icon="github"
                                 onClick={openChooser}
                             >
                                 Choose where to install Genie…
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 icon="refresh-cw"
                                 onClick={() => void account.refresh()}
                             >
                                 I've installed it
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 ) : !installationsError ? (
@@ -546,22 +546,22 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                                 <strong>{installations.map((i) => i.login).join(', ')}</strong>.
                             </Text>
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                <Action
+                                <Button
                                     size="sm"
                                     variant="ghost"
                                     icon="github"
                                     onClick={openChooser}
                                 >
                                     Install on another org…
-                                </Action>
-                                <Action
+                                </Button>
+                                <Button
                                     size="sm"
                                     variant="ghost"
                                     icon="refresh-cw"
                                     onClick={() => void account.refresh()}
                                 >
                                     Refresh
-                                </Action>
+                                </Button>
                             </div>
                         </div>
                     )
@@ -591,7 +591,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
 
             {(flow.kind === 'idle' || flow.kind === 'error') && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Action
+                    <Button
                         color="blue"
                         size="sm"
                         icon="github"
@@ -599,7 +599,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                         disabled={!storageOk || !clientIdSet}
                     >
                         Connect GitHub…
-                    </Action>
+                    </Button>
                     <Text size="xs" className="text-zinc-500">
                         Needed to create or fork repositories. Genie can only
                         act on accounts where the GitHub App is installed.
@@ -622,7 +622,7 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                     </Text>
                     <CodeChip code={flow.userCode} />
                     <div style={{ display: 'flex', gap: 8 }}>
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="external-link"
@@ -631,10 +631,10 @@ export function GitHubConnect({ account }: { account: GitHubAccount }) {
                             }
                         >
                             Reopen GitHub
-                        </Action>
-                        <Action size="sm" variant="ghost" onClick={() => void account.cancel()}>
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => void account.cancel()}>
                             Cancel
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -674,7 +674,7 @@ export function GitHubErrorNotice({ message }: { message: string }) {
                 {message}
             </Text>
             {notInstalled && (
-                <Action
+                <Button
                     size="sm"
                     color="blue"
                     icon="external-link"
@@ -683,7 +683,7 @@ export function GitHubErrorNotice({ message }: { message: string }) {
                     }
                 >
                     Install Genie on this account…
-                </Action>
+                </Button>
             )}
         </div>
     );
@@ -750,7 +750,7 @@ export function OwnerSelect({
                         Genie isn't installed on <strong>{chosenLabel}</strong> — install
                         it there to create/fork under this account.
                     </Text>
-                    <Action
+                    <Button
                         size="sm"
                         variant="ghost"
                         icon="external-link"
@@ -760,7 +760,7 @@ export function OwnerSelect({
                         }}
                     >
                         Install here…
-                    </Action>
+                    </Button>
                 </div>
             )}
             <InstallOnOrgLink account={account} />

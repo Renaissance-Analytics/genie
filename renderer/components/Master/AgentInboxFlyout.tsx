@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Action, Badge, Modal, Popover, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Modal, Popover, Text } from '@particle-academy/react-fancy';
 import {
     IconCheckCheck,
     IconClock,
@@ -1433,7 +1433,7 @@ export default function AgentInboxFlyout({
                                                         e.target.value = '';
                                                     }}
                                                 />
-                                                <Action
+                                                <Button
                                                     variant="ghost"
                                                     size="sm"
                                                     onClick={() => fileInputRef.current?.click()}
@@ -1442,7 +1442,7 @@ export default function AgentInboxFlyout({
                                                     aria-label="Attach files"
                                                 >
                                                     <IconPaperclip size={14} />
-                                                </Action>
+                                                </Button>
                                                 <button
                                                     type="button"
                                                     className="agentinbox-primary"
@@ -1506,20 +1506,20 @@ export default function AgentInboxFlyout({
                                 marginTop: 14,
                             }}
                         >
-                            <Action
+                            <Button
                                 variant="ghost"
                                 onClick={() => setPendingWipe(null)}
                                 disabled={wiping}
                             >
                                 Cancel
-                            </Action>
-                            <Action color="red" onClick={() => void confirmWipe()} disabled={wiping}>
+                            </Button>
+                            <Button color="red" onClick={() => void confirmWipe()} disabled={wiping}>
                                 {wiping
                                     ? 'Deleting…'
                                     : pendingWipe.kind === 'dm'
                                         ? 'Delete thread'
                                         : `Delete ${pendingWipe.threads}`}
-                            </Action>
+                            </Button>
                         </div>
                     </Modal.Body>
                 </Modal>

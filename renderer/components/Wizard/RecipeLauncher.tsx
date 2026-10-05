@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Action, Icon, Modal, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Modal, Text } from '@particle-academy/react-fancy';
 import { listLaunchableRecipes, type LaunchableRecipe } from '../../lib/recipes';
 import WizardModal from './WizardModal';
 
@@ -87,7 +87,7 @@ export default function RecipeLauncher({ workspaceId, workstationId, defaultCwd,
                     </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-                    <Action variant="ghost" onClick={onClose}>Close</Action>
+                    <Button variant="ghost" onClick={onClose}>Close</Button>
                 </div>
             </Modal.Body>
         </Modal>

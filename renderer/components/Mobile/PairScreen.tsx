@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Action, Icon, Text } from '@particle-academy/react-fancy';
+import { Button, Icon, Text } from '@particle-academy/react-fancy';
 import { pair } from '../../lib/mobile-client';
 
 /**
@@ -88,14 +88,14 @@ export default function PairScreen({ onPaired }: { onPaired: () => void }) {
                         </Text>
                     </div>
                 ) : (
-                    <Action
+                    <Button
                         color="blue"
                         icon="smartphone"
                         onClick={() => void submit()}
                         disabled={pin.length < 6}
                     >
                         Pair this device
-                    </Action>
+                    </Button>
                 )}
 
                 {error && (

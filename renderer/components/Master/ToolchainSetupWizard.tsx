@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Action, Heading, Icon, Modal, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Heading, Icon, Modal, Select, Text } from '@particle-academy/react-fancy';
 import {
     api,
     type HostToolName,
@@ -196,9 +196,9 @@ export function ToolchainSetupWizard({
                     <div className="set-note bad">
                         Couldn’t inspect the toolchain: {error}
                         <div style={{ marginTop: 8 }}>
-                            <Action size="sm" variant="ghost" icon="refresh" onClick={() => void inspect(pmChoice)}>
+                            <Button size="sm" variant="ghost" icon="refresh" onClick={() => void inspect(pmChoice)}>
                                 Try again
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 )}
@@ -366,18 +366,18 @@ export function ToolchainSetupWizard({
 
                 <div className="set-actions">
                     {step === 'review' && insp && !nothingToDo && (
-                        <Action size="sm" color="blue" icon="download" onClick={() => void runInstall()}>
+                        <Button size="sm" color="blue" icon="download" onClick={() => void runInstall()}>
                             Install {insp.plan.length} tool{insp.plan.length === 1 ? '' : 's'}
-                        </Action>
+                        </Button>
                     )}
                     {step === 'done' && result && !result.ok && (
-                        <Action size="sm" variant="ghost" icon="refresh" onClick={() => void inspect(pmChoice)}>
+                        <Button size="sm" variant="ghost" icon="refresh" onClick={() => void inspect(pmChoice)}>
                             Re-check
-                        </Action>
+                        </Button>
                     )}
-                    <Action size="sm" variant="ghost" onClick={onClose} disabled={step === 'installing'}>
+                    <Button size="sm" variant="ghost" onClick={onClose} disabled={step === 'installing'}>
                         {step === 'done' || nothingToDo ? 'Done' : 'Close'}
-                    </Action>
+                    </Button>
                 </div>
             </div>
         </Modal>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Action, Heading, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
+import { Button, Heading, Input, Modal, Select, Text } from '@particle-academy/react-fancy';
 import { api, type BatonParticipant, type MobilePeer, type WorkspaceShareLink } from '../../lib/genie';
 import { hostSessionRoster, type HostSessionRosterEntry } from '../../lib/host-session-roster';
 import { shareInviteNote, shareInviteState } from '../../lib/share-invite-state';
@@ -170,9 +170,9 @@ export default function ShareWorkspaceModal({
                         {availability.reason}
                     </Text>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-                        <Action size="sm" onClick={onClose}>
+                        <Button size="sm" onClick={onClose}>
                             Close
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             </Modal>
@@ -215,7 +215,7 @@ export default function ShareWorkspaceModal({
                             list={EXPIRY_OPTIONS}
                             aria-label="Link expiry"
                         />
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="link"
@@ -223,7 +223,7 @@ export default function ShareWorkspaceModal({
                             onClick={mint}
                         >
                             {minting ? 'Creating…' : 'Create link'}
-                        </Action>
+                        </Button>
                     </div>
                 )}
 
@@ -234,14 +234,14 @@ export default function ShareWorkspaceModal({
                         </Text>
                         <Input value={link.url} readOnly aria-label="Share link URL" />
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <Action
+                            <Button
                                 size="sm"
                                 color="blue"
                                 icon={copied ? 'check' : 'copy'}
                                 onClick={() => void copy(link.url as string)}
                             >
                                 {copied ? 'Copied' : 'Copy link'}
-                            </Action>
+                            </Button>
                             {note && (
                                 <Text size="xs" style={{ color: 'var(--fg-3)' }}>
                                     {note}
@@ -266,13 +266,13 @@ export default function ShareWorkspaceModal({
                     }}
                 >
                     {onManageLinks && (
-                        <Action size="sm" onClick={onManageLinks}>
+                        <Button size="sm" onClick={onManageLinks}>
                             Manage links…
-                        </Action>
+                        </Button>
                     )}
-                    <Action size="sm" onClick={onClose}>
+                    <Button size="sm" onClick={onClose}>
                         Done
-                    </Action>
+                    </Button>
                 </div>
             </div>
         </Modal>

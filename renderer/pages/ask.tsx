@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Action, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Heading, Icon, Text } from '@particle-academy/react-fancy';
 import AskFilePreview, { isMarkdownPath } from '../components/Ask/AskFilePreview';
 import { api, hasGenieBridge, type ForceQuestionSpec } from '../lib/genie';
 import { extractFileRefs, splitByExistence, type AskFileRef } from '../lib/ask-file-refs';
@@ -530,10 +530,10 @@ export default function AskPage() {
                         dismiss
                     </Text>
                     <div style={{ flex: 1 }} />
-                    <Action variant="ghost" size="sm" onClick={cancelActive}>
+                    <Button variant="ghost" size="sm" onClick={cancelActive}>
                         Cancel
-                    </Action>
-                    <Action
+                    </Button>
+                    <Button
                         color="blue"
                         size="sm"
                         icon="check"
@@ -541,7 +541,7 @@ export default function AskPage() {
                         disabled={!ready || submitting}
                     >
                         {submitting ? 'Sending…' : 'Submit'}
-                    </Action>
+                    </Button>
                 </div>
             </div>
 

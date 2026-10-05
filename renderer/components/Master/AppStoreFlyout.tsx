@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Action, Badge, Input, Switch, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Input, Switch, Text } from '@particle-academy/react-fancy';
 import { IconX } from './icons';
 import {
     api,
@@ -257,9 +257,9 @@ export default function AppStoreFlyout({
                                 onValueChange={setRepoUrl}
                                 placeholder="https://github.com/owner/some-genie-app"
                             />
-                            <Action icon="download" disabled={busy || !repoUrl.trim()} onClick={fetchReview}>
+                            <Button icon="download" disabled={busy || !repoUrl.trim()} onClick={fetchReview}>
                                 Fetch and review
-                            </Action>
+                            </Button>
                         </div>
 
                         {review && (
@@ -322,7 +322,7 @@ export default function AppStoreFlyout({
                                         onValueChange={setTyped}
                                         placeholder={review.confirmPhrase}
                                     />
-                                    <Action
+                                    <Button
                                         color="red"
                                         icon="download"
                                         // Typing is the deliberate act; a button
@@ -332,10 +332,10 @@ export default function AppStoreFlyout({
                                         onClick={confirmGithub}
                                     >
                                         Install {review.name}
-                                    </Action>
-                                    <Action variant="ghost" disabled={busy} onClick={() => setReview(null)}>
+                                    </Button>
+                                    <Button variant="ghost" disabled={busy} onClick={() => setReview(null)}>
                                         Cancel
-                                    </Action>
+                                    </Button>
                                 </div>
                             </div>
                         )}
@@ -351,15 +351,15 @@ export default function AppStoreFlyout({
                                 usually wants to look at their app, not to put it
                                 on the machine, and the reversible action being
                                 first is what makes that the easy choice. */}
-                            <Action variant="ghost" icon="eye" disabled={busy} onClick={() => void previewFolder()}>
+                            <Button variant="ghost" icon="eye" disabled={busy} onClick={() => void previewFolder()}>
                                 Preview an app…
-                            </Action>
-                            <Action variant="ghost" icon="folder" disabled={busy} onClick={() => void installFolder(false)}>
+                            </Button>
+                            <Button variant="ghost" icon="folder" disabled={busy} onClick={() => void installFolder(false)}>
                                 Install an app…
-                            </Action>
-                            <Action variant="ghost" icon="hammer" disabled={busy} onClick={() => void installFolder(true)}>
+                            </Button>
+                            <Button variant="ghost" icon="hammer" disabled={busy} onClick={() => void installFolder(true)}>
                                 Install for development…
-                            </Action>
+                            </Button>
                         </div>
                         <Text size="xs" className="text-zinc-500">
                             A preview opens the real app window — the real tab strip, the real Agent tab
@@ -393,7 +393,7 @@ export default function AppStoreFlyout({
                                             </span>
                                             <span className="set-row-desc">{live.folder}</span>
                                         </span>
-                                        <Action
+                                        <Button
                                             variant="ghost"
                                             disabled={busy}
                                             onClick={() =>
@@ -404,7 +404,7 @@ export default function AppStoreFlyout({
                                             }
                                         >
                                             Close
-                                        </Action>
+                                        </Button>
                                     </div>
                                     {live.warnings.map((w) => (
                                         <Text key={w} size="xs" className="text-amber-400">
@@ -465,14 +465,14 @@ export default function AppStoreFlyout({
                                                     </span>
                                                 </span>
                                                 <div className="set-actions">
-                                                    <Action
+                                                    <Button
                                                         variant="ghost"
                                                         icon="wand"
                                                         disabled={!onLaunchGapp || launching}
                                                         onClick={() => onLaunchGapp?.(entry.target.id)}
                                                     >
                                                         {launching ? 'Opening…' : 'Launch'}
-                                                    </Action>
+                                                    </Button>
                                                 </div>
                                             </div>
                                         </div>
@@ -510,7 +510,7 @@ export default function AppStoreFlyout({
                                                         )
                                                     }
                                                 />
-                                                <Action
+                                                <Button
                                                     variant="ghost"
                                                     icon="external-link"
                                                     disabled={busy || app.revoked}
@@ -519,8 +519,8 @@ export default function AppStoreFlyout({
                                                     }
                                                 >
                                                     Open
-                                                </Action>
-                                                <Action
+                                                </Button>
+                                                <Button
                                                     variant="ghost"
                                                     color="red"
                                                     icon="trash-2"
@@ -533,7 +533,7 @@ export default function AppStoreFlyout({
                                                     }
                                                 >
                                                     Uninstall
-                                                </Action>
+                                                </Button>
                                             </div>
                                         </div>
                                         {note && <div className="set-note">{note}</div>}

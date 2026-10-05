@@ -1,5 +1,5 @@
 import React from 'react';
-import { Action, Badge, Card, Heading, Icon, Text } from '@particle-academy/react-fancy';
+import { Badge, Button, Card, Heading, Icon, Text } from '@particle-academy/react-fancy';
 import {
     hasProjectAssociation,
     workspaceDisplayName,
@@ -20,9 +20,9 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                 <Heading as="h2" size="sm" style={{ margin: 0, flex: 1 }}>
                     Workspaces
                 </Heading>
-                <Action color="blue" size="sm" icon="plus" onClick={onAdd}>
+                <Button color="blue" size="sm" icon="plus" onClick={onAdd}>
                     Add workspace
-                </Action>
+                </Button>
             </div>
 
             {rows.length === 0 ? (
@@ -122,7 +122,7 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                     {w.path}
                                 </Text>
                             </div>
-                            <Action
+                            <Button
                                 color="blue"
                                 size="sm"
                                 icon="arrow-right"
@@ -130,8 +130,8 @@ export default function WorkspaceList({ rows, onOpen, onRemove, onAdd }: Props) 
                                 title="Open files + terminal"
                             >
                                 Open
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 variant="ghost"
                                 size="sm"
                                 icon="trash-2"

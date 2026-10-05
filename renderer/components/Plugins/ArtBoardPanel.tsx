@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Action, Badge, Card, Heading, Text, Textarea } from '@particle-academy/react-fancy';
+import { Badge, Button, Card, Heading, Text, Textarea } from '@particle-academy/react-fancy';
 import {
     ArtBoard as FancyArtBoard,
     type ArtBoardValue,
@@ -18,7 +18,7 @@ import {
  * `ArtBoardPanel` export resolves to through the compile-time registry.
  *
  * Built only from vetted, Genie-bundled react-fancy primitives (Card, Heading,
- * Text, Badge, Textarea, Action). The plugin ships no UI code; this is the seam.
+ * Text, Badge, Textarea, Button). The plugin ships no UI code; this is the seam.
  *
  * WHY THE PREVIEW IS AN IFRAME AND NOT A COMPONENT: a post's HTML is written by
  * an agent, so it is third-party content inside Genie's renderer. It renders in
@@ -236,20 +236,20 @@ function ArtBoardArtifact({
                                         onComment(e.target.value)
                                     }
                                 />
-                                <Action
+                                <Button
                                     icon="check"
                                     disabled={busy}
                                     onClick={() => onDecide('approved')}
                                 >
                                     Approve
-                                </Action>
-                                <Action
+                                </Button>
+                                <Button
                                     icon="x"
                                     disabled={busy}
                                     onClick={() => onDecide('rejected')}
                                 >
                                     Reject
-                                </Action>
+                                </Button>
                             </>
                         )}
                     </Card>

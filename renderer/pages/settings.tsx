@@ -6,22 +6,7 @@ import React, {
     useState,
     type ReactNode,
 } from 'react';
-import {
-    Accordion,
-    Action,
-    Badge,
-    Callout,
-    CodeView,
-    Heading,
-    Icon,
-    Input,
-    Modal,
-    Select,
-    Switch,
-    Tabs,
-    Text,
-    Textarea,
-} from '@particle-academy/react-fancy';
+import { Accordion, Badge, Button, Callout, CodeView, Heading, Icon, Input, Modal, Select, Switch, Tabs, Text, Textarea } from '@particle-academy/react-fancy';
 import { RepositoryBrowser } from '@particle-academy/fancy-git-ui';
 import {
     api,
@@ -295,9 +280,9 @@ export default function SettingsPage() {
                                 placeholder="No primary workspace chosen"
                             />
                         </div>
-                        <Action variant="ghost" icon="folder" onClick={pickPrimary}>
+                        <Button variant="ghost" icon="folder" onClick={pickPrimary}>
                             Browse
-                        </Action>
+                        </Button>
                     </div>
                 </SettingRow>
 
@@ -336,7 +321,7 @@ export default function SettingsPage() {
                                     placeholder="pwsh -NoLogo"
                                 />
                             </div>
-                            <Action
+                            <Button
                                 variant="ghost"
                                 icon="folder"
                                 onClick={async () => {
@@ -353,7 +338,7 @@ export default function SettingsPage() {
                                 }}
                             >
                                 Browse
-                            </Action>
+                            </Button>
                         </div>
                     )}
                 </SettingRow>
@@ -685,17 +670,17 @@ export default function SettingsPage() {
                                 spellCheck={false}
                                 placeholder="Run the full test suite and report only what fails."
                             />
-                            <Action
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 icon="trash-2"
                                 onClick={() => savePrompts(removePrompt(promptLibrary, prompt.id))}
                             >
                                 Remove
-                            </Action>
+                            </Button>
                         </SettingRow>
                     ))}
-                    <Action
+                    <Button
                         size="sm"
                         onClick={() =>
                             savePrompts([
@@ -709,7 +694,7 @@ export default function SettingsPage() {
                         }
                     >
                         Add a prompt
-                    </Action>
+                    </Button>
                 </SetSection>
             )}
 
@@ -937,9 +922,9 @@ export default function SettingsPage() {
                                 <Icon name="check" size="xs" /> Saved
                             </Text>
                         )}
-                        <Action color="blue" icon="check" onClick={save} disabled={saving}>
+                        <Button color="blue" icon="check" onClick={save} disabled={saving}>
                             {saving ? 'Saving…' : 'Save'}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -951,7 +936,7 @@ export default function SettingsPage() {
  *  Reimagined Settings shell — sidebar IA, dense rows, filter context.
  *  Layout primitives are bespoke (for density); every value control inside
  *  a row is a reused react-fancy primitive (Switch / Select / Input /
- *  Action / Icon).
+ *  Button / Icon).
  * ===================================================================== */
 
 /**
@@ -1234,20 +1219,20 @@ function AlertSoundRow({
                         list={[...SOUND_CHOICES]}
                     />
                 </div>
-                <Action
+                <Button
                     variant="ghost"
                     icon="play"
                     onClick={() => void previewSound(choice, customPath, motif)}
                     disabled={choice === 'off' || (choice === 'custom' && !customPath)}
                 >
                     Preview
-                </Action>
+                </Button>
             </div>
             {choice === 'custom' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Action variant="ghost" icon="folder" onClick={pickCustom}>
+                    <Button variant="ghost" icon="folder" onClick={pickCustom}>
                         Choose file…
-                    </Action>
+                    </Button>
                     <Text size="xs" className="text-zinc-500">
                         {customPath ? baseName(customPath) : 'No file chosen'}
                     </Text>
@@ -1408,27 +1393,27 @@ function TynnSection({
                     }}
                 >
                     {!user && (
-                        <Action color="blue" size="sm" onClick={signIn} disabled={busy}>
+                        <Button color="blue" size="sm" onClick={signIn} disabled={busy}>
                             {busy ? 'Opening…' : `Sign in at ${hostLabel || 'tynn.ai'}…`}
-                        </Action>
+                        </Button>
                     )}
                     {user && (
-                        <Action variant="ghost" size="sm" onClick={signOut} disabled={busy}>
+                        <Button variant="ghost" size="sm" onClick={signOut} disabled={busy}>
                             Sign out
-                        </Action>
+                        </Button>
                     )}
                     {/* Dev/staging-only escape hatch. Tynn is SaaS-only (not
                         self-hostable), so end users never need a host override —
                         compile it out of the packaged app. process.env.NODE_ENV
                         is inlined by Next at build time. */}
                     {process.env.NODE_ENV !== 'production' && (
-                        <Action
+                        <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => setShowAdvanced((s) => !s)}
                         >
                             {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                        </Action>
+                        </Button>
                     )}
                 </div>
             </SettingRow>
@@ -1698,9 +1683,9 @@ function GitHubSection() {
                         instead of the one bundled with Genie. If sign-in fails,
                         this is the likely cause.
                     </Text>
-                    <Action size="sm" variant="ghost" onClick={resetClientId}>
+                    <Button size="sm" variant="ghost" onClick={resetClientId}>
                         Use bundled default
-                    </Action>
+                    </Button>
                 </div>
             )}
 
@@ -1720,22 +1705,22 @@ function GitHubSection() {
                     }}
                 >
                     {!connected && (
-                        <Action
+                        <Button
                             color="blue"
                             size="sm"
                             onClick={start}
                             disabled={!clientIdSet || flow.kind === 'pending' || flow.kind === 'starting' || !storageOk}
                         >
                             Connect GitHub…
-                        </Action>
+                        </Button>
                     )}
                     {connected && (
-                        <Action variant="ghost" size="sm" onClick={disconnect}>
+                        <Button variant="ghost" size="sm" onClick={disconnect}>
                             Disconnect
-                        </Action>
+                        </Button>
                     )}
                     {connected && (
-                        <Action
+                        <Button
                             variant="ghost"
                             size="sm"
                             icon="external-link"
@@ -1745,10 +1730,10 @@ function GitHubSection() {
                             }}
                         >
                             Add account/org…
-                        </Action>
+                        </Button>
                     )}
                     {connected && (
-                        <Action
+                        <Button
                             variant="ghost"
                             size="sm"
                             icon="refresh-cw"
@@ -1756,15 +1741,15 @@ function GitHubSection() {
                             onClick={() => void refresh()}
                         >
                             Refresh
-                        </Action>
+                        </Button>
                     )}
-                    <Action
+                    <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => setShowAdvanced((s) => !s)}
                     >
                         {showAdvanced ? 'Hide Advanced' : 'Advanced'}
-                    </Action>
+                    </Button>
                 </div>
             </SettingRow>
 
@@ -1798,7 +1783,7 @@ function GitHubSection() {
                         </Text>
                     )}
                     <div>
-                        <Action
+                        <Button
                             color="blue"
                             size="sm"
                             icon="github"
@@ -1806,7 +1791,7 @@ function GitHubSection() {
                             disabled={flow.kind === 'pending' || flow.kind === 'starting'}
                         >
                             Reconnect GitHub…
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -1834,7 +1819,7 @@ function GitHubSection() {
                         choose which of your accounts/orgs Genie can act on.
                     </Text>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <Action
+                        <Button
                             color="blue"
                             size="sm"
                             icon="github"
@@ -1844,15 +1829,15 @@ function GitHubSection() {
                             }}
                         >
                             Install Genie on your accounts/orgs…
-                        </Action>
-                        <Action
+                        </Button>
+                        <Button
                             variant="ghost"
                             size="sm"
                             icon="refresh-cw"
                             onClick={refresh}
                         >
                             I've installed it
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -1917,9 +1902,9 @@ function GitHubSection() {
                         placeholder="e.g. Iv23liXXXXXXXXXXXXXX"
                     />
                     <div>
-                        <Action color="blue" size="sm" onClick={saveClientId}>
+                        <Button color="blue" size="sm" onClick={saveClientId}>
                             Save client ID
-                        </Action>
+                        </Button>
                     </div>
                 </SettingRow>
             )}
@@ -2001,12 +1986,12 @@ function DeviceFlowPanel({
                         {flow.userCode}
                     </button>
                     <div style={{ display: 'flex', gap: 8 }}>
-                        <Action color="blue" size="sm" onClick={open}>
+                        <Button color="blue" size="sm" onClick={open}>
                             Open {flow.verificationUri}
-                        </Action>
-                        <Action variant="ghost" size="sm" onClick={onCancel}>
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={onCancel}>
                             Cancel
-                        </Action>
+                        </Button>
                     </div>
                 </>
             )}
@@ -2115,9 +2100,9 @@ function UpdaterSection() {
                             }
                             placeholder="6"
                         />
-                        <Action color="blue" size="sm" onClick={saveConfig}>
+                        <Button color="blue" size="sm" onClick={saveConfig}>
                             Save
-                        </Action>
+                        </Button>
                     </SettingRow>
                 </>
             )}
@@ -2168,7 +2153,7 @@ function UpdaterSection() {
             </SettingRow>
 
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     onClick={check}
@@ -2180,18 +2165,18 @@ function UpdaterSection() {
                     }
                 >
                     Check for updates
-                </Action>
+                </Button>
                 {status?.state === 'available' && (
-                    <Action color="blue" size="sm" onClick={apply} disabled={busy}>
+                    <Button color="blue" size="sm" onClick={apply} disabled={busy}>
                         {mode === 'phase2'
                             ? `Update to v${status.latestVersion}`
                             : `Update now (v${status.latestVersion})`}
-                    </Action>
+                    </Button>
                 )}
                 {status?.state === 'ready-to-restart' && (
-                    <Action color="blue" size="sm" onClick={restart}>
+                    <Button color="blue" size="sm" onClick={restart}>
                         Restart Genie now
-                    </Action>
+                    </Button>
                 )}
                 {status?.state === 'downloading' && status.progress != null && (
                     <Text size="xs" className="text-zinc-500">
@@ -2209,7 +2194,7 @@ function UpdaterSection() {
                         drag it into Applications to update.
                     </Text>
                     <div>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="download"
@@ -2219,7 +2204,7 @@ function UpdaterSection() {
                             }}
                         >
                             Download {status.latestVersion ? `v${status.latestVersion}` : 'the latest'} for macOS
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             ) : status?.error ? (
@@ -2470,7 +2455,7 @@ function AgentMcpSection({
                 </Text>
             ) : (
                 <div className="set-actions">
-                    <Action
+                    <Button
                         color={needsRestart ? 'blue' : undefined}
                         variant={needsRestart ? 'default' : 'ghost'}
                         icon="refresh-cw"
@@ -2478,7 +2463,7 @@ function AgentMcpSection({
                         disabled={busy}
                     >
                         {busy ? 'Restarting…' : 'Restart MCP server'}
-                    </Action>
+                    </Button>
                     <Text size="xs" className="text-zinc-500">
                         Save the page first if you changed the port, then restart to
                         rebind and rewrite workspace configs.
@@ -2571,9 +2556,9 @@ function AgentMcpSection({
                         />
                     </SettingRow>
                     <div className="set-actions">
-                        <Action variant="ghost" icon="refresh-cw" onClick={() => void refresh()}>
+                        <Button variant="ghost" icon="refresh-cw" onClick={() => void refresh()}>
                             Refresh
-                        </Action>
+                        </Button>
                     </div>
                 </>
             )}
@@ -2593,9 +2578,9 @@ function MaintenanceSection() {
                     workstation state, then restart as a new installation. Genie's managed
                     toolchain and every tool installed in it are preserved.
                 </Text>
-                <Action color="red" icon="rotate-ccw" onClick={() => setConfirming(true)}>
+                <Button color="red" icon="rotate-ccw" onClick={() => setConfirming(true)}>
                     Reset Workstation
-                </Action>
+                </Button>
             </div>
             <Modal open={confirming} onClose={() => !resetting && setConfirming(false)}>
                 <div className="set-section">
@@ -2606,8 +2591,8 @@ function MaintenanceSection() {
                         in Genie. This cannot be undone from Genie.
                     </Text>
                     <div className="set-actions">
-                        <Action onClick={() => setConfirming(false)} disabled={resetting}>Cancel</Action>
-                        <Action
+                        <Button onClick={() => setConfirming(false)} disabled={resetting}>Cancel</Button>
+                        <Button
                             color="red"
                             disabled={resetting}
                             onClick={async () => {
@@ -2620,7 +2605,7 @@ function MaintenanceSection() {
                             }}
                         >
                             {resetting ? 'Resetting…' : 'Reset and restart'}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             </Modal>
@@ -2676,9 +2661,9 @@ function GenieOsaSection({
                 </SettingRow>
                 <SettingRow label="Backup repository" desc="Private GitHub HTTPS repository for the Genie OS workspace and memory." keywords="genie osa backup github repository memory sync" vertical>
                     <Input value={backupRepo} onValueChange={onBackupRepoChange} placeholder="https://github.com/owner/genie-os.git" />
-                    <Action icon="refresh-cw" disabled={!backupRepo.trim() || syncing} onClick={() => void sync()}>
+                    <Button icon="refresh-cw" disabled={!backupRepo.trim() || syncing} onClick={() => void sync()}>
                         {syncing ? 'Syncing…' : 'Sync backup repository'}
-                    </Action>
+                    </Button>
                     {message && <Text size="sm">{message}</Text>}
                 </SettingRow>
             </SetSection>
@@ -2842,7 +2827,7 @@ function PluginsSection() {
                             onValueChange={setRepoUrl}
                             placeholder="https://github.com/owner/my-genie-plugin.git"
                         />
-                        <Action
+                        <Button
                             icon="download"
                             disabled={busy || !repoUrl.trim()}
                             onClick={() =>
@@ -2852,15 +2837,15 @@ function PluginsSection() {
                             }
                         >
                             Install
-                        </Action>
-                        <Action
+                        </Button>
+                        <Button
                             variant="ghost"
                             icon="folder"
                             disabled={busy}
                             onClick={() => run(() => api().plugins.installFolder(), 'Plugin installed from folder.')}
                         >
                             From folder…
-                        </Action>
+                        </Button>
                     </div>
                 </SettingRow>
 
@@ -2945,13 +2930,13 @@ function PluginsSection() {
                                     <span className="set-row-label">{c.name}</span>
                                     <span className="set-row-desc">{c.description}</span>
                                 </div>
-                                <Action
+                                <Button
                                     icon="download"
                                     disabled={busy}
                                     onClick={() => run(() => api().plugins.installRepo(c.repo), `Installing ${c.name}…`)}
                                 >
                                     Install
-                                </Action>
+                                </Button>
                             </div>
                         ))}
                         {bundledAvailable.length > 0 && (
@@ -2965,7 +2950,7 @@ function PluginsSection() {
                                     <span className="set-row-label">{b.name}</span>
                                     <span className="set-row-desc">{b.description}</span>
                                 </div>
-                                <Action
+                                <Button
                                     variant="ghost"
                                     icon="download"
                                     disabled={busy}
@@ -2974,7 +2959,7 @@ function PluginsSection() {
                                     }
                                 >
                                     Install
-                                </Action>
+                                </Button>
                             </div>
                         ))}
                     </div>
@@ -2992,7 +2977,7 @@ function PluginsSection() {
                                     onValueChange={setMarketUrl}
                                     placeholder="https://github.com/owner/my-genie-marketplace.git"
                                 />
-                                <Action
+                                <Button
                                     icon="plus"
                                     disabled={busy || !marketUrl.trim()}
                                     onClick={() =>
@@ -3002,7 +2987,7 @@ function PluginsSection() {
                                     }
                                 >
                                     Add
-                                </Action>
+                                </Button>
                             </div>
                         </SettingRow>
 
@@ -3012,14 +2997,14 @@ function PluginsSection() {
                             </Text>
                         ) : (
                             <div className="set-actions">
-                                <Action
+                                <Button
                                     variant="ghost"
                                     icon="refresh-cw"
                                     disabled={busy || checking}
                                     onClick={() => void checkMarketplaces(0)}
                                 >
                                     {checking ? 'Checking…' : 'Check for new plugins'}
-                                </Action>
+                                </Button>
                                 <Text size="xs" className="text-zinc-500">
                                     Genie re-reads each index when you open this tab; this checks them all again now.
                                 </Text>
@@ -3032,15 +3017,15 @@ function PluginsSection() {
                                     <span className="set-row-desc">{m.url}</span>
                                     <span className="set-row-desc">{checkedAgoLabel(m.checkedAt, Date.now())}</span>
                                     <div className="set-actions">
-                                        <Action
+                                        <Button
                                             variant="ghost"
                                             icon="refresh-cw"
                                             disabled={busy || checking}
                                             onClick={() => run(() => api().plugins.refreshMarketplace(m.id), 'Refreshed.')}
                                         >
                                             Refresh
-                                        </Action>
-                                        <Action
+                                        </Button>
+                                        <Button
                                             variant="ghost"
                                             color="red"
                                             icon="trash-2"
@@ -3048,7 +3033,7 @@ function PluginsSection() {
                                             onClick={() => run(() => api().plugins.removeMarketplace(m.id), 'Marketplace removed.')}
                                         >
                                             Remove
-                                        </Action>
+                                        </Button>
                                     </div>
                                 </div>
                                 {/* A member Genie can't read is REPORTED, never just missing — otherwise a
@@ -3086,7 +3071,7 @@ function PluginsSection() {
                                                     <span className="set-row-label">{mp.name}</span>
                                                     {mp.description && <span className="set-row-desc">{mp.description}</span>}
                                                 </div>
-                                                <Action
+                                                <Button
                                                     icon="download"
                                                     disabled={busy}
                                                     onClick={() =>
@@ -3097,7 +3082,7 @@ function PluginsSection() {
                                                     }
                                                 >
                                                     Install
-                                                </Action>
+                                                </Button>
                                             </div>
                                         ))
                                 )}
@@ -3140,7 +3125,7 @@ function PluginsSection() {
                                             <code>{k.keyId}</code>
                                         </span>
                                     </div>
-                                    <Action
+                                    <Button
                                         variant="ghost"
                                         color="red"
                                         icon="trash-2"
@@ -3148,7 +3133,7 @@ function PluginsSection() {
                                         onClick={() => run(() => api().plugins.removeTrustedKey(k.keyId), 'Key removed — plugins re-checked.')}
                                     >
                                         Remove
-                                    </Action>
+                                    </Button>
                                 </div>
                             ))
                         )}
@@ -3169,7 +3154,7 @@ function PluginsSection() {
                                 />
                                 <div className="set-actions" style={{ width: '100%' }}>
                                     <Input value={keyLabel} onValueChange={setKeyLabel} placeholder="Label (e.g. My dev key)" />
-                                    <Action
+                                    <Button
                                         icon="plus"
                                         disabled={busy || !pubKey.trim()}
                                         onClick={() =>
@@ -3183,7 +3168,7 @@ function PluginsSection() {
                                         }
                                     >
                                         Trust key
-                                    </Action>
+                                    </Button>
                                 </div>
                             </div>
                         </SettingRow>
@@ -3509,9 +3494,9 @@ function AppsSection() {
                 desc="Choose a folder containing a gapp.json. Genie validates it, asks what to allow, then creates its workspace and serves it."
                 keywords="install genie app gapp folder gapp.json"
             >
-                <Action icon="folder" disabled={busy} onClick={() => void install(false)}>
+                <Button icon="folder" disabled={busy} onClick={() => void install(false)}>
                     Install an app…
-                </Action>
+                </Button>
             </SettingRow>
 
             <SettingRow
@@ -3526,13 +3511,13 @@ function AppsSection() {
                         onValueChange={setRepoUrl}
                         placeholder="https://github.com/owner/some-genie-app"
                     />
-                    <Action
+                    <Button
                         icon="download"
                         disabled={busy || !repoUrl.trim()}
                         onClick={fetchReview}
                     >
                         Fetch and review
-                    </Action>
+                    </Button>
                 </div>
             </SettingRow>
 
@@ -3605,7 +3590,7 @@ function AppsSection() {
                             onValueChange={setTyped}
                             placeholder={review.confirmPhrase}
                         />
-                        <Action
+                        <Button
                             color="red"
                             icon="download"
                             // Typing is a deliberate act; a button alone is a thing
@@ -3616,10 +3601,10 @@ function AppsSection() {
                             onClick={confirmGithubInstall}
                         >
                             Install {review.name}
-                        </Action>
-                        <Action variant="ghost" disabled={busy} onClick={walkAway}>
+                        </Button>
+                        <Button variant="ghost" disabled={busy} onClick={walkAway}>
                             Cancel
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -3633,9 +3618,9 @@ function AppsSection() {
             >
                 <div className="set-actions" style={{ width: '100%' }}>
                     <Input value={newName} onValueChange={setNewName} placeholder="My Thing" />
-                    <Action icon="plus" disabled={busy || !newName.trim()} onClick={scaffold}>
+                    <Button icon="plus" disabled={busy || !newName.trim()} onClick={scaffold}>
                         Create
-                    </Action>
+                    </Button>
                 </div>
             </SettingRow>
 
@@ -3644,9 +3629,9 @@ function AppsSection() {
                 desc="Runs the whole Genie App suite without installing anything: the manifest, every file it points at, the agents against the panels that can run them, the front end against the API it actually has — and, separately, what will work and is worth a second thought."
                 keywords="check validate genie app lint gapp test suite"
             >
-                <Action variant="ghost" icon="circle-check" disabled={busy} onClick={check}>
+                <Button variant="ghost" icon="circle-check" disabled={busy} onClick={check}>
                     Check an app…
-                </Action>
+                </Button>
             </SettingRow>
 
             <SettingRow
@@ -3654,9 +3639,9 @@ function AppsSection() {
                 desc="Installs from your folder WITHOUT copying it, so an edit shows up on reload instead of needing a reinstall — and opens its window with dev tools. It still asks what to allow."
                 keywords="develop genie app dev mode devtools in place gapp"
             >
-                <Action variant="ghost" icon="hammer" disabled={busy} onClick={() => void install(true)}>
+                <Button variant="ghost" icon="hammer" disabled={busy} onClick={() => void install(true)}>
                     Install for development…
-                </Action>
+                </Button>
             </SettingRow>
 
             {report && <AppCheckReportView report={report} />}
@@ -3754,17 +3739,17 @@ function AppCard({
                     {/* The switch means the app is ON, not "revoked": a switch
                         labelled by a negative gets read backwards half the time. */}
                     <Switch checked={!app.revoked} disabled={busy} onCheckedChange={onToggleOn} />
-                    <Action
+                    <Button
                         variant="ghost"
                         icon="external-link"
                         disabled={busy || app.revoked}
                         onClick={onOpen}
                     >
                         Open
-                    </Action>
-                    <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
+                    </Button>
+                    <Button variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
                         Uninstall
-                    </Action>
+                    </Button>
                 </div>
             </div>
 
@@ -3873,9 +3858,9 @@ function PluginCard({
                 </Accordion.Trigger>
                 <div className="set-actions">
                     <Switch checked={plugin.enabled} onCheckedChange={onEnable} />
-                    <Action variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
+                    <Button variant="ghost" color="red" icon="trash-2" disabled={busy} onClick={onUninstall}>
                         Uninstall
-                    </Action>
+                    </Button>
                 </div>
             </div>
 
@@ -4063,7 +4048,7 @@ function TailscaleSection() {
                     Offering it for a stopped daemon or a missing operator grant
                     sends the user to reinstall software that is already there. */}
                 {view.showInstall && (
-                    <Action
+                    <Button
                         size="sm"
                         color="blue"
                         icon="download"
@@ -4071,10 +4056,10 @@ function TailscaleSection() {
                         onClick={() => void install()}
                     >
                         Install
-                    </Action>
+                    </Button>
                 )}
                 {view.showBringOnline && (
-                    <Action
+                    <Button
                         size="sm"
                         color="blue"
                         icon="zap"
@@ -4082,9 +4067,9 @@ function TailscaleSection() {
                         onClick={() => void connect()}
                     >
                         Bring online
-                    </Action>
+                    </Button>
                 )}
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="refresh-cw"
@@ -4092,7 +4077,7 @@ function TailscaleSection() {
                     onClick={() => void refresh()}
                 >
                     Refresh
-                </Action>
+                </Button>
             </SettingRow>
 
             {running && (
@@ -4240,7 +4225,7 @@ function RemoteHostCard() {
                 keywords="remote host discover scan tailnet connect pair"
                 desc="Drive another Genie's workspaces, terminals, editor and processes over Tailscale. The FIRST connect pairs with the PIN shown on the host; after that, Connect reconnects with no PIN."
             >
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="refresh-cw"
@@ -4248,7 +4233,7 @@ function RemoteHostCard() {
                     onClick={() => void scan()}
                 >
                     {scanning ? 'Scanning…' : 'Rescan'}
-                </Action>
+                </Button>
             </SettingRow>
 
             {hosts === null ? (
@@ -4283,7 +4268,7 @@ function RemoteHostCard() {
                                         />
                                     </div>
                                 )}
-                                <Action
+                                <Button
                                     size="sm"
                                     color="blue"
                                     icon="link"
@@ -4302,9 +4287,9 @@ function RemoteHostCard() {
                                         : pinNeeded[key]
                                             ? 'Pair'
                                             : 'Connect'}
-                                </Action>
+                                </Button>
                                 {connKeys[key] && (
-                                    <Action
+                                    <Button
                                         size="sm"
                                         color="green"
                                         icon="globe"
@@ -4317,7 +4302,7 @@ function RemoteHostCard() {
                                         }
                                     >
                                         Testing Browser
-                                    </Action>
+                                    </Button>
                                 )}
                             </div>
                         );
@@ -4351,7 +4336,7 @@ function RemoteHostCard() {
                         placeholder="123456"
                     />
                 </div>
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="link"
@@ -4359,7 +4344,7 @@ function RemoteHostCard() {
                     onClick={connectManual}
                 >
                     Connect
-                </Action>
+                </Button>
             </div>
 
             {msg && <div className="set-note">{msg}</div>}
@@ -4510,7 +4495,7 @@ export function ToolUpdateList({
                                     because "Update" on something absent reads as
                                     a bug. */}
                                 {(row.action === 'install' || row.action === 'update') && (
-                                    <Action
+                                    <Button
                                         size="sm"
                                         variant={row.action === 'install' ? 'default' : 'ghost'}
                                         disabled={busy !== null}
@@ -4524,7 +4509,7 @@ export function ToolUpdateList({
                                             : row.action === 'install'
                                               ? 'Install'
                                               : 'Update'}
-                                    </Action>
+                                    </Button>
                                 )}
                             </div>
                         </div>
@@ -4612,7 +4597,7 @@ function LanguagesTab({
                         )}
                         <div className="ws-engine-actions">
                             {section.canAdd && (
-                                <Action
+                                <Button
                                     size="sm"
                                     variant="ghost"
                                     icon="plus"
@@ -4628,7 +4613,7 @@ function LanguagesTab({
                                     title={`Download and install a ${section.label} version into Genie's own toolchain directory.`}
                                 >
                                     Add a version
-                                </Action>
+                                </Button>
                             )}
                         </div>
                     </div>
@@ -4668,7 +4653,7 @@ function LanguagesTab({
                                         )}
                                         <div className="ws-engine-actions">
                                             {row.canReinstall && (
-                                                <Action
+                                                <Button
                                                     size="sm"
                                                     variant="ghost"
                                                     icon="refresh-cw"
@@ -4691,10 +4676,10 @@ function LanguagesTab({
                                                     }}
                                                 >
                                                     Reinstall
-                                                </Action>
+                                                </Button>
                                             )}
                                             {row.canSetDefault && (
-                                                <Action
+                                                <Button
                                                     size="sm"
                                                     variant="ghost"
                                                     disabled={busy !== null}
@@ -4703,10 +4688,10 @@ function LanguagesTab({
                                                     }
                                                 >
                                                     Set default
-                                                </Action>
+                                                </Button>
                                             )}
                                             {row.canRemove && (
-                                                <Action
+                                                <Button
                                                     size="sm"
                                                     variant="ghost"
                                                     icon="trash-2"
@@ -4730,7 +4715,7 @@ function LanguagesTab({
                                                     }}
                                                 >
                                                     Remove
-                                                </Action>
+                                                </Button>
                                             )}
                                         </div>
                                     </div>
@@ -5059,14 +5044,14 @@ export function ToolchainSection() {
                                     Genie never deletes an entry it did not create.
                                 </span>
                             </div>
-                            <Action
+                            <Button
                                 icon="wrench"
                                 disabled={busy !== null}
                                 data-testid="toolchain-repair"
                                 onClick={() => void repairPath()}
                             >
                                 {busy === 'path' ? 'Checking…' : 'Check and repair'}
-                            </Action>
+                            </Button>
                         </div>
                         <LanguagesTab
                             info={info}
@@ -5121,7 +5106,7 @@ export function ToolchainSection() {
                 the first-run wizard, which is otherwise offered once and its
                 dismissal remembered forever. */}
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="refresh-cw"
@@ -5133,8 +5118,8 @@ export function ToolchainSection() {
                     title="Re-read this machine's toolchain and re-query the package managers now, instead of reusing the last answer."
                 >
                     Check again
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="sparkles"
@@ -5143,7 +5128,7 @@ export function ToolchainSection() {
                     title="Re-run the guided setup: re-detect what this machine has and install anything still missing."
                 >
                     Set up toolchain
-                </Action>
+                </Button>
             </div>
 
             <ToolchainSetupWizard
@@ -5176,15 +5161,15 @@ export function ToolchainSection() {
                             removing it later is deleting that one folder.
                         </Text>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                            <Button variant="ghost" onClick={() => setAsk(null)}>
                                 Cancel
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 disabled={!addVersion}
                                 onClick={() => void addVersionNow(ask.tool, ask.label, addVersion)}
                             >
                                 Install
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5202,15 +5187,15 @@ export function ToolchainSection() {
                             <span data-testid="toolchain-remove-risk">{ask.message}</span>
                         </Callout>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                            <Button variant="ghost" onClick={() => setAsk(null)}>
                                 Keep it
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 color="amber"
                                 onClick={() => void removeVersionNow(ask.install, ask.label)}
                             >
                                 Remove
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5227,16 +5212,16 @@ export function ToolchainSection() {
                             {ask.message}
                         </Text>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setAsk(null)}>
+                            <Button variant="ghost" onClick={() => setAsk(null)}>
                                 Cancel
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 onClick={() =>
                                     void addVersionNow(ask.install.tool, ask.label, ask.install.version)
                                 }
                             >
                                 Reinstall
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5254,10 +5239,10 @@ export function ToolchainSection() {
                             <span data-testid="update-risk">{confirmUpdate.reason}</span>
                         </Callout>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setConfirmUpdate(null)}>
+                            <Button variant="ghost" onClick={() => setConfirmUpdate(null)}>
                                 Not now
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 color="amber"
                                 onClick={() => {
                                     const tool = confirmUpdate.tool;
@@ -5266,7 +5251,7 @@ export function ToolchainSection() {
                                 }}
                             >
                                 Update anyway
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5592,10 +5577,10 @@ export function DevServerSection({
                             again the next time a workspace asks for it.
                         </Text>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setConfirmStop(null)}>
+                            <Button variant="ghost" onClick={() => setConfirmStop(null)}>
                                 Cancel
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 color="rose"
                                 icon="square"
                                 onClick={() => {
@@ -5605,7 +5590,7 @@ export function DevServerSection({
                                 }}
                             >
                                 Stop it for everyone
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5630,10 +5615,10 @@ export function DevServerSection({
                             replaces it with {confirmRecreate.image}.
                         </Text>
                         <div className="ws-confirm-actions">
-                            <Action variant="ghost" onClick={() => setConfirmRecreate(null)}>
+                            <Button variant="ghost" onClick={() => setConfirmRecreate(null)}>
                                 Cancel
-                            </Action>
-                            <Action
+                            </Button>
+                            <Button
                                 color="amber"
                                 icon="refresh-cw"
                                 onClick={() => {
@@ -5643,7 +5628,7 @@ export function DevServerSection({
                                 }}
                             >
                                 Recreate it
-                            </Action>
+                            </Button>
                         </div>
                     </div>
                 </Modal>
@@ -5763,7 +5748,7 @@ function EngineRow({
                         consumer on purpose: holding 17 ready while 16 serves is
                         the point of multi-version. Pulls only — never starts. */}
                     {actions.canInstall && (
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="download"
@@ -5773,10 +5758,10 @@ function EngineRow({
                             {/* A pull is hundreds of megabytes — a button that just
                                 goes quiet for a minute reads as broken. */}
                             {busy ? 'Downloading…' : 'Install'}
-                        </Action>
+                        </Button>
                     )}
                     {actions.canRecreate && (
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="refresh-cw"
@@ -5784,10 +5769,10 @@ function EngineRow({
                             onClick={() => onRecreate(engine)}
                         >
                             {busy ? 'Recreating…' : 'Recreate'}
-                        </Action>
+                        </Button>
                     )}
                     {actions.canStart && (
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="play"
@@ -5795,10 +5780,10 @@ function EngineRow({
                             onClick={() => onStart(engine)}
                         >
                             Start
-                        </Action>
+                        </Button>
                     )}
                     {actions.canStop && (
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="square"
@@ -5806,10 +5791,10 @@ function EngineRow({
                             onClick={() => onStop(engine)}
                         >
                             Stop
-                        </Action>
+                        </Button>
                     )}
                     {actions.canLogs && (
-                        <Action
+                        <Button
                             size="sm"
                             variant="ghost"
                             icon="scroll-text"
@@ -5817,7 +5802,7 @@ function EngineRow({
                             onClick={() => onToggleLog(engine)}
                         >
                             {log === null ? 'Log' : 'Hide log'}
-                        </Action>
+                        </Button>
                     )}
                 </div>
             </div>
@@ -6178,7 +6163,7 @@ function MobileSection({
                     Windows Firewall is blocking the mobile port — your phone can&apos;t
                     connect until you allow it (scoped to your Tailscale network only).
                     <div style={{ marginTop: 8 }}>
-                        <Action
+                        <Button
                             size="sm"
                             color="blue"
                             icon="shield"
@@ -6186,7 +6171,7 @@ function MobileSection({
                             disabled={busy}
                         >
                             {busy ? 'Working…' : 'Allow through Windows Firewall'}
-                        </Action>
+                        </Button>
                     </div>
                 </div>
             )}
@@ -6270,7 +6255,7 @@ function MobileSection({
             )}
 
             <div className="set-actions">
-                <Action
+                <Button
                     size="sm"
                     color="blue"
                     icon="refresh-cw"
@@ -6278,8 +6263,8 @@ function MobileSection({
                     disabled={busy}
                 >
                     {busy ? 'Working…' : 'Restart'}
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="key-round"
@@ -6287,8 +6272,8 @@ function MobileSection({
                     disabled={busy || !status?.running}
                 >
                     Regenerate PIN
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     variant="ghost"
                     icon="unplug"
@@ -6296,8 +6281,8 @@ function MobileSection({
                     disabled={busy || !status?.running}
                 >
                     Disconnect all devices
-                </Action>
-                <Action
+                </Button>
+                <Button
                     size="sm"
                     color={status?.locked ? 'red' : undefined}
                     variant={status?.locked ? 'default' : 'ghost'}
@@ -6307,7 +6292,7 @@ function MobileSection({
                     title="Freeze remote control without disconnecting paired devices"
                 >
                     {status?.locked ? 'Unlock' : 'Lock'}
-                </Action>
+                </Button>
                 {msg && (
                     <Text size="xs" className="text-zinc-500">
                         {msg}
@@ -6395,7 +6380,7 @@ function DevicesSection() {
                             ).toLocaleString()}`}
                             keywords={`device paired ${d.label} ${d.ip} mobile phone remote revoke unpair`}
                         >
-                            <Action
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 color="rose"
@@ -6404,11 +6389,11 @@ function DevicesSection() {
                                 onClick={() => void unpair(d.id)}
                             >
                                 {busy === d.id ? 'Unpairing…' : 'Unpair'}
-                            </Action>
+                            </Button>
                         </SettingRow>
                     ))}
                     <div className="set-actions">
-                        <Action
+                        <Button
                             size="sm"
                             color="rose"
                             icon="unplug"
@@ -6416,7 +6401,7 @@ function DevicesSection() {
                             onClick={() => void disconnectAll()}
                         >
                             {busy === '__all__' ? 'Disconnecting…' : 'Disconnect all'}
-                        </Action>
+                        </Button>
                     </div>
                 </>
             )}
