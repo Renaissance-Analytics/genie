@@ -21,6 +21,10 @@ export default defineConfig({
     test: {
         environment: 'node',
         include: ['main/**/__tests__/**/*.real.test.ts'],
+        // `main/acp` has its own real lane (`npm run test:acp`, vitest.acp.config.mts):
+        // it needs a Claude subscription login rather than Caddy/php-cgi/Docker, so the
+        // two have different preconditions and must not share a job.
+        exclude: ['main/acp/**'],
         // A real Caddy/php-cgi/Docker spin-up is slower than a unit test but should
         // never HANG; a generous ceiling that still surfaces a wedged server.
         testTimeout: 60_000,

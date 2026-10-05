@@ -10,33 +10,51 @@ import { ACP_PROVIDERS, acpEnv, acpLaunch, nodeMajorOk } from '../agent-spec';
  * says "subscription", which is the quietest possible way to be wrong about money.
  */
 
+const ctx = (over: Partial<{ nodeExec: string; adapterScript: (p: string) => string | null }> = {}) => ({
+    nodeExec: '/usr/bin/node',
+    adapterScript: (pkg: string) => `/n/${pkg}/dist/index.js`,
+    ...over,
+});
+
 describe('acpLaunch', () => {
-    it('spawns Claude through the published ACP bin with BARE argv', () => {
-        // `claude-agent-acp` takes no flags. Everything — model, config dir, auth —
-        // travels in the environment.
-        expect(acpLaunch('claude', { binDir: '/n/.bin' })).toEqual({
-            command: '/n/.bin/claude-agent-acp',
-            args: [],
+    it('runs the Claude adapter AS A SCRIPT under the chosen Node', () => {
+        // Never through the `bin` shim: it is `claude-agent-acp.cmd` on Windows, so the
+        // bare name does not exist there (found by a real spawn failing ENOENT), and a
+        // shim re-enters whatever `node` is first on PATH, defeating the runtime choice.
+        expect(acpLaunch('claude', ctx())).toEqual({
+            ok: true,
+            launch: {
+                command: '/usr/bin/node',
+                args: ['/n/@agentclientprotocol/claude-agent-acp/dist/index.js'],
+            },
         });
     });
 
-    it('spawns Codex through its own bin', () => {
-        expect(acpLaunch('codex', { binDir: '/n/.bin' })).toEqual({
-            command: '/n/.bin/codex-acp',
-            args: [],
+    it('runs the Codex adapter the same way', () => {
+        expect(acpLaunch('codex', ctx())).toMatchObject({
+            ok: true,
+            launch: { args: ['/n/@agentclientprotocol/codex-acp/dist/index.js'] },
         });
     });
 
     it('uses the NATIVE mode for gemini and kimi, which need no adapter', () => {
-        // A flag for one, a subcommand for the other. Shipping an adapter for either
-        // would be a second thing to keep in step with upstream for no gain.
-        expect(acpLaunch('gemini', { binDir: '/n/.bin' })).toEqual({ command: 'gemini', args: ['--acp'] });
-        expect(acpLaunch('kimi', { binDir: '/n/.bin' })).toEqual({ command: 'kimi', args: ['acp'] });
+        expect(acpLaunch('gemini', ctx())).toEqual({ ok: true, launch: { command: 'gemini', args: ['--acp'] } });
+        expect(acpLaunch('kimi', ctx())).toEqual({ ok: true, launch: { command: 'kimi', args: ['acp'] } });
     });
 
-    it('refuses a provider with no ACP mode rather than guessing one', () => {
-        expect(acpLaunch('aider', { binDir: '/n/.bin' })).toBeNull();
-        expect(acpLaunch('goose', { binDir: '/n/.bin' })).toBeNull();
+    it('refuses a provider with no ACP mode, and says WHICH', () => {
+        expect(acpLaunch('aider', ctx())).toEqual({ ok: false, reason: 'no-acp-mode', provider: 'aider' });
+    });
+
+    it('distinguishes "not installed" from "no ACP mode"', () => {
+        // Two different sentences in front of a human: one is "this provider does not do
+        // that", the other is "the thing that would do it is missing" — and only the
+        // second has a fix.
+        expect(acpLaunch('claude', ctx({ adapterScript: () => null }))).toEqual({
+            ok: false,
+            reason: 'adapter-missing',
+            pkg: '@agentclientprotocol/claude-agent-acp',
+        });
     });
 
     it('lists exactly the providers that have an ACP mode', () => {

@@ -39,27 +39,59 @@ export interface AcpLaunch {
     args: string[];
 }
 
-/** Where the published adapter bins live (resolved by the caller). */
 export interface LaunchContext {
-    binDir: string;
+    /**
+     * The Node executable an adapter is run WITH.
+     *
+     * Adapters are launched as `<node> <script>`, never through their `bin` shim. The
+     * shim is `claude-agent-acp.cmd` on Windows — so the bare name does not even exist
+     * there, which is how this was found — and more importantly a shim re-enters
+     * whatever `node` is first on PATH, which silently defeats choosing the runtime at
+     * all. Measured: the bare-name spawn failed ENOENT against a real install.
+     */
+    nodeExec: string;
+    /**
+     * Resolve a package's CLI entry to an absolute script path, or null when it is not
+     * installed.
+     *
+     * It has to come from the package's `bin` field. `require.resolve` of the package
+     * root answers with the LIBRARY entry — `@agentclientprotocol/claude-agent-acp`
+     * exports `dist/lib.js` there while its bin is `dist/index.js` — so resolving the
+     * root and spawning it would start the wrong file and then hang in the handshake.
+     */
+    adapterScript: (pkg: string) => string | null;
 }
 
-export function acpLaunch(provider: string, ctx: LaunchContext): AcpLaunch | null {
-    switch (provider) {
-        case 'claude':
-            return { command: `${ctx.binDir}/claude-agent-acp`, args: [] };
-        case 'codex':
-            return { command: `${ctx.binDir}/codex-acp`, args: [] };
-        case 'gemini':
-            return { command: 'gemini', args: ['--acp'] };
-        case 'kimi':
-            return { command: 'kimi', args: ['acp'] };
-        default:
-            // No ACP mode. Null, not a guess — a wrong spawn starts something that is
-            // not an ACP server and then times out in the handshake, which reads as a
-            // hung agent rather than an unsupported provider.
-            return null;
-    }
+/** Why a provider cannot run over ACP, when it cannot. The two reasons need different
+ *  words in front of a human: one is "this provider does not do that", the other is
+ *  "the thing that would do it is not installed". */
+export type LaunchRefusal = { reason: 'no-acp-mode'; provider: string } | { reason: 'adapter-missing'; pkg: string };
+
+export type LaunchResult = { ok: true; launch: AcpLaunch } | { ok: false } & LaunchRefusal;
+
+const ADAPTER_PACKAGE: Partial<Record<string, string>> = {
+    claude: '@agentclientprotocol/claude-agent-acp',
+    codex: '@agentclientprotocol/codex-acp',
+};
+
+export function acpLaunch(provider: string, ctx: LaunchContext): LaunchResult {
+    // Native ACP modes: a flag for one, a subcommand for the other. No adapter to
+    // install and nothing of ours to keep in step with upstream.
+    if (provider === 'gemini') return { ok: true, launch: { command: 'gemini', args: ['--acp'] } };
+    if (provider === 'kimi') return { ok: true, launch: { command: 'kimi', args: ['acp'] } };
+
+    const pkg = ADAPTER_PACKAGE[provider];
+    // No ACP mode at all. Not a guess — a wrong spawn starts something that is not an
+    // ACP server and then times out in the handshake, which reads as a hung agent
+    // rather than an unsupported provider.
+    if (!pkg) return { ok: false, reason: 'no-acp-mode', provider };
+
+    const script = ctx.adapterScript(pkg);
+    if (!script) return { ok: false, reason: 'adapter-missing', pkg };
+
+    // `<node> <script>`, bare argv. The adapters take no flags; everything travels in
+    // the environment.
+    return { ok: true, launch: { command: ctx.nodeExec, args: [script] } };
 }
 
 /** Host variables the child needs in order to run and to find its login. */

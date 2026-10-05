@@ -23,6 +23,7 @@
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "test:hosting": "vitest run --config vitest.hosting.config.mts",
+        "test:acp": "vitest run --config vitest.acp.config.mts",
         "test:contract": "vitest run --config vitest.contract.config.mts",
         "build:e2e": "nextron build --no-pack",
         "pretest:e2e": "node scripts/prepare-e2e-natives.mjs",
@@ -52,6 +53,7 @@
         }
     },
     "dependencies": {
+        "@agentclientprotocol/claude-agent-acp": "^0.85.1",
         "@agentclientprotocol/sdk": "^1.7.0",
         "@particle-academy/dark-slide": "^0.7.1",
         "@particle-academy/fancy-artboard": "^0.5.0",
