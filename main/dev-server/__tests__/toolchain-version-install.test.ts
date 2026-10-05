@@ -26,6 +26,7 @@ const WIN = { os: 'win32', arch: 'x64' };
 
 function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffects {
     return {
+        ensurePhpExtensions: vi.fn(async () => ({ ok: true })),
         download: vi.fn(async () => ({ ok: true as const, path: 'C:\\tmp\\a.zip' })),
         unpack: vi.fn(async () => ({ ok: true as const })),
         runInstaller: vi.fn(async () => ({ ok: true as const })),
@@ -44,6 +45,26 @@ function effects(over: Partial<VersionInstallEffects> = {}): VersionInstallEffec
 }
 
 describe('planning an install', () => {
+    it('installs and verifies PECL extensions before a PHP install is published', async () => {
+        const ensurePhpExtensions = vi.fn(async () => ({ ok: true }));
+        const e = { ...effects(), ensurePhpExtensions };
+        const plan = planVersionInstall('php', '8.4.24', WIN, ROOT);
+        if (!plan.ok) throw new Error('expected PHP plan');
+        expect((await installEngineVersion(plan, e)).ok).toBe(true);
+        expect(ensurePhpExtensions).toHaveBeenCalledWith(plan.dir, plan.exe);
+        expect(ensurePhpExtensions.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(e.addToPath).mock.invocationCallOrder[0]);
+    });
+
+    it('restores the previous PHP if required PECL extensions cannot be installed', async () => {
+        const ensurePhpExtensions = vi.fn(async () => ({ ok: false, error: 'Redis DLL failed ABI verification' }));
+        const e = { ...effects({ moveAside: vi.fn(async () => ({ ok: true as const, previous: 'previous-php' })) }), ensurePhpExtensions };
+        const plan = planVersionInstall('php', '8.4.24', WIN, ROOT);
+        if (!plan.ok) throw new Error('expected PHP plan');
+        expect(await installEngineVersion(plan, e)).toEqual({ ok: false, error: 'Redis DLL failed ABI verification' });
+        expect(e.restoreAside).toHaveBeenCalledWith('previous-php', plan.dir);
+        expect(e.addToPath).not.toHaveBeenCalled();
+    });
+
     it('refuses a version Genie has no recipe for — no free-text versions', () => {
         const plan = planVersionInstall('php', '8.9.9', WIN, ROOT);
         expect(plan.ok).toBe(false);
