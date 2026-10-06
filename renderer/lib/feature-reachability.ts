@@ -82,10 +82,22 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
     { id: 'issuewatch', label: 'IssueWatch', entry: { titleBarProp: 'onShowIssueWatch' } },
     { id: 'flows', label: 'Flows', entry: { titleBarProp: 'onShowFlows' } },
     { id: 'lists', label: 'Lists', entry: { titleBarProp: 'onShowLists' } },
-    { id: 'questions', label: 'Question inbox', entry: { titleBarProp: 'onShowQuestions' } },
+    {
+        id: 'questions',
+        label: 'Question inbox',
+        // P7: title-bar icon REMOVED. The Deck owns this queue now -- it is the only place
+        // badges exist -- and the palette is how you reach the flyout.
+        entry: { paletteId: 'questions', contextual: 'Deck → Needs you' },
+    },
     { id: 'docs', label: 'Docs', entry: { titleBarProp: 'onShowDocs' } },
     { id: 'processes', label: 'Process manager', entry: { titleBarProp: 'onShowProcessManager' } },
-    { id: 'tasks', label: 'Task manager', entry: { titleBarProp: 'onShowTaskManager' } },
+    {
+        id: 'tasks',
+        label: 'Task manager',
+        // P7: title-bar icon REMOVED. WorkspaceProcessManager already owns processes; the
+        // palette is how you reach this view.
+        entry: { paletteId: 'tasks', contextual: 'Workspace → processes' },
+    },
     { id: 'github-caps', label: 'GitHub capabilities', entry: { titleBarProp: 'onShowGithubCaps' } },
     { id: 'genie-os', label: 'Genie OS', entry: { titleBarProp: 'onShowGenieOs' } },
 ];

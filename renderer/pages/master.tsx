@@ -2727,13 +2727,11 @@ function MasterInner() {
                                 : undefined
                         }
                         onShowDocs={() => setDocsOpen((o) => !o)}
-                        onShowTaskManager={() => setTaskManagerOpen((o) => !o)}
                         onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
                         agentInboxLag={agentInboxLag}
                         {...(isRemoteWindow()
                             ? {}
                             : { onShowSharing: () => setSharingOpen((o) => !o) })}
-                        onShowQuestions={() => setQuestionsOpen((o) => !o)}
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
                         questionCount={questionCount}
                         onShowLists={() => setListsOpen((o) => !o)}
@@ -4425,11 +4423,9 @@ function TitleBar({
     isStage,
     stageWorkspaceName,
     onShowDocs,
-    onShowTaskManager,
     onShowAgentInbox,
     agentInboxLag = 0,
     onShowSharing,
-    onShowQuestions,
     questionCount = 0,
     onShowLists,
     listsUserCount = 0,
@@ -4451,14 +4447,12 @@ function TitleBar({
     isStage: boolean;
     stageWorkspaceName?: string;
     onShowDocs?: () => void;
-    onShowTaskManager?: () => void;
     onShowAgentInbox?: () => void;
     /** Messages the AGENTS haven't received/ACKed — see the master's lag effect. */
     agentInboxLag?: number;
     /** Open the Sharing flyout. Absent in a remote window — the links belong to
      *  the workstation that OWNS the workspaces, not the one driving it. */
     onShowSharing?: () => void;
-    onShowQuestions?: () => void;
     questionCount?: number;
     onShowLists?: () => void;
     /** Items on the workspace UserList waiting on the PERSON. An agent's own
@@ -4640,20 +4634,6 @@ function TitleBar({
             )}
             <button
                 type="button"
-                className="gicon questions-btn"
-                title="Questions — pending agent questions (answer at your leisure)"
-                aria-label="Questions"
-                onClick={() => onShowQuestions?.()}
-            >
-                <IconMailQuestion size={16} />
-                {questionCount > 0 && (
-                    <span className="iw-btn-badge">
-                        {questionCount > 99 ? '99+' : questionCount}
-                    </span>
-                )}
-            </button>
-            <button
-                type="button"
                 /* NOT `lists-btn` — that is the Lists FLYOUT's Done/Refuse
                    action-button class (border, filled background, 4px 9px
                    padding), and wearing it by name collision drew a bordered
@@ -4673,14 +4653,6 @@ function TitleBar({
                         {listsUserCount > 99 ? '99+' : listsUserCount}
                     </span>
                 )}
-            </button>
-            <button
-                type="button"
-                className="gicon"
-                title="Task Manager — every background process"
-                onClick={() => onShowTaskManager?.()}
-            >
-                <IconCpu size={16} />
             </button>
             <button
                 type="button"

@@ -56,9 +56,14 @@ describe('header icon badges', () => {
             .slice(1)
             .map((seg) => seg.slice(0, seg.indexOf('</button>')))
             .filter((seg) => seg.includes('iw-btn-badge'));
-        // Four today: AgentInbox, Questions, Lists, IssueWatch. The floor guards
-        // against a selector that quietly matches nothing and passes vacuously.
-        expect(withBadge.length).toBeGreaterThanOrEqual(4);
+        // THREE today: AgentInbox, Lists, IssueWatch. It was four until P7 removed the
+        // Questions icon — the Deck owns that queue now, and the Deck is meant to be the
+        // ONLY place badges exist. So this number going DOWN is the design working; if a
+        // badge ever reappears elsewhere, that is the failure to look for.
+        //
+        // The floor still guards against a selector that quietly matches nothing and passes
+        // vacuously, which is why it is a floor rather than an exact count.
+        expect(withBadge.length).toBeGreaterThanOrEqual(3);
         for (const block of withBadge) {
             expect(block).toMatch(/className=[^\n]*gicon/);
         }
