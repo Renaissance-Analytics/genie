@@ -181,6 +181,7 @@ import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
 import { useRouter } from 'next/router';
 import { parseViewRoute, type GenieView } from '../lib/view-route';
+import { AgentView } from '../components/Master/AgentView';
 import { answerForOption } from '../lib/attention-actions';
 import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
@@ -388,7 +389,7 @@ function MasterInner() {
     }, [workspaces]);
 
     useEffect(() => {
-        if (!surface.showDeck) return;
+        if (!surface.showDeck && !surface.showAgent) return;
         loadSessions();
         loadAttention();
         const offQ = api().on.questionsChanged?.(() => {
@@ -402,7 +403,7 @@ function MasterInner() {
             offA?.();
             offL?.();
         };
-    }, [surface.showDeck, loadSessions, loadAttention]);
+    }, [surface.showDeck, surface.showAgent, loadSessions, loadAttention]);
     // The agent RECORD for whichever agent's settings are open. Loaded on
     // demand rather than kept for every workspace: this is the only surface in
     // master.tsx that needs it, and the sidebar keeps its own copy.
@@ -2806,7 +2807,33 @@ function MasterInner() {
                         from far less. */}
                     <Floor
                         deck={
-                            surface.showDeck ? (
+                            surface.showAgent ? (
+                                (() => {
+                                    const found = sessions.find((x) => x.agentId === surface.showAgent);
+                                    // A route naming an agent that no longer exists resolves
+                                    // to a SENTENCE, not a blank surface: an empty view would
+                                    // read as Genie breaking rather than as a stale link.
+                                    return found ? (
+                                        <AgentView
+                                            session={found}
+                                            {...(view.kind === 'agent' && view.tab ? { tab: view.tab } : {})}
+                                            onTab={(t) => {
+                                                // The tab lives in the URL, so refresh, back
+                                                // and a shared link all land in the same place.
+                                                void router.push(
+                                                    { query: { ...router.query, agent: surface.showAgent, tab: t } },
+                                                    undefined,
+                                                    { shallow: true },
+                                                );
+                                            }}
+                                        />
+                                    ) : (
+                                        <div className="agent-view-missing">
+                                            That agent is no longer here.
+                                        </div>
+                                    );
+                                })()
+                            ) : surface.showDeck ? (
                                 <Deck
                                     sessions={sessions}
                                     questions={deckQuestions}
