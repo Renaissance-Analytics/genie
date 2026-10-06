@@ -350,6 +350,8 @@ import {
     pickDialogWindow,
 } from './terminal/quit-confirm';
 import { workspaceIdOfTerminal } from './terminal/workspace-of-terminal';
+import { openTerminalWindow } from './terminal/window-open';
+import type { TerminalWindowRequest } from './terminal/window-plan';
 import { planImDoneNotice } from './attention/imdone-notice';
 import { terminalNoticeFacts } from './attention/terminal-facts';
 import { registerOpenFile } from './editor/open-file';
@@ -799,13 +801,67 @@ export function showHostWindow(host: RemoteHost, connKey: string): void {
  * terminal" entry and (later) by the workspace UI. The window loads the
  * `/terminal` route, which mounts an XTerm bound to a fresh pty.
  */
-export function showTerminalWindow(): void {
+/**
+ * Open a standalone terminal window.
+ *
+ * With no argument this is the tray's SCRATCH terminal, unchanged: a bare pty at the user's
+ * home with no workspace and no spec. That is a pre-existing feature and deliberately left
+ * alone.
+ *
+ * With a request it is Tynn #447: a workspace's terminal, or an agent in TUI MODE, opened
+ * as its own window so TheFloor stays clean under the Genie 2 UX. Those are SPEC-BACKED --
+ * the decision and the refusals live in `terminal/window-open.ts`, which is tested, because
+ * this file is not.
+ */
+export function showTerminalWindow(req?: TerminalWindowRequest): { ok: boolean; error?: string } {
+    if (!req) {
+        openTerminalBrowserWindow('', 'Genie · Terminal');
+        return { ok: true };
+    }
+
+    const result = openTerminalWindow(req, {
+        createTerminal: ({ workspaceId, cwd }) => {
+            const ws = getWorkspace(workspaceId);
+            if (!ws) return { ok: false, error: 'Workspace not found.' };
+            const spec = createTerminalSpec({
+                id: crypto.randomUUID(),
+                workspace_id: workspaceId,
+                label: 'terminal',
+                type: 'terminal',
+                cwd: cwd ?? ws.path,
+            });
+            return spec ? { ok: true, specId: spec.id } : { ok: false, error: 'Could not create the terminal.' };
+        },
+        createAgent: ({ workspaceId, agent, command }) => {
+            const made = createSpecializedAgentTerminal({
+                workspace_id: workspaceId,
+                agent,
+                ...(command ? { command } : {}),
+                purpose: 'A terminal-mode agent opened in its own window.',
+                scope: 'self',
+            });
+            return made.ok && made.spec
+                ? { ok: true, specId: made.spec.id }
+                : { ok: false, error: made.error ?? 'Could not start the agent.' };
+        },
+        openWindow: (route, title) => openTerminalBrowserWindow(route, title),
+        workspaceName: (id) => getWorkspace(id)?.project_name ?? null,
+    });
+
+    if (result.ok) return { ok: true };
+    // The underlying message is the only thing that explains the failure, so it is passed
+    // through rather than replaced with a generic one.
+    return { ok: false, error: 'error' in result ? result.error : 'No workspace was given.' };
+}
+
+/** The Electron half: a window on the `/terminal` route. No decisions here. */
+function openTerminalBrowserWindow(route: string, title: string): void {
     const win = new BrowserWindow({
         width: 880,
         height: 560,
         show: false,
         frame: true,
-        title: 'Genie · Terminal',
+        title,
         backgroundColor: '#09090b',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -816,9 +872,9 @@ export function showTerminalWindow(): void {
     });
 
     if (isDev) {
-        win.loadURL('http://localhost:8888/terminal');
+        win.loadURL(`http://localhost:8888/terminal${route}`);
     } else {
-        win.loadFile(path.join(__dirname, 'terminal.html'));
+        win.loadFile(path.join(__dirname, 'terminal.html'), route ? { search: route.slice(1) } : {});
     }
 
     win.once('ready-to-show', () => win.show());

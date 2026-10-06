@@ -4588,6 +4588,19 @@ export interface GenieApi {
         list: () => Promise<Array<{ id: string; pid: number; shell: string }>>;
         /** Agent-integration MCP: clear a terminal's attention glow (imDone). */
         clearAttention: (id: string) => Promise<void>;
+        /**
+         * Open a terminal, or an agent in TUI mode, in its OWN WINDOW (Tynn #447).
+         *
+         * `error` carries the underlying message verbatim — "No command configured for
+         * agent X" is the only thing that tells someone what to fix.
+         */
+        openWindow: (req: {
+            kind: 'terminal' | 'agent';
+            workspaceId: string;
+            cwd?: string;
+            agent?: string;
+            command?: string;
+        }) => Promise<{ ok: boolean; error?: string }>;
     };
     /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */
     /** The AGENT RECORD — what the AMS grid draws, instead of agent-stamped

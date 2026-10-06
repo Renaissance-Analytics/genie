@@ -38,9 +38,15 @@ export type TerminalWindowPlan =
     | {
           ok: true;
           create: SpecCreate;
-          /** The window's query, once the spec exists. Takes the id as an argument because
-           *  the id does not exist until creation has happened. */
-          routeFor: (specId: string) => string;
+          /**
+           * The window's query, once the spec exists. Takes the id as an argument because
+           * the id does not exist until creation has happened.
+           *
+           * `cwd` and `ws` ride along because the window has to ATTACH to the spec's pty,
+           * and the renderer would otherwise need a round trip to learn where it lives.
+           * The spec id is what makes it attach; these two only save the lookup.
+           */
+          routeFor: (specId: string, ctx?: { cwd?: string; workspaceId?: string }) => string;
       }
     | { ok: false; reason: 'no-workspace' };
 
@@ -66,7 +72,13 @@ export function planTerminalWindow(req: TerminalWindowRequest): TerminalWindowPl
         // The spec id, not the workspace. If the route carried only a workspace the
         // renderer would create its own terminal — two ptys for one window, and the agent
         // in whichever one the race favoured.
-        routeFor: (specId: string) => `?spec=${encodeURIComponent(specId)}`,
+        routeFor: (specId: string, ctx?: { cwd?: string; workspaceId?: string }) => {
+            const q = [`spec=${encodeURIComponent(specId)}`];
+            // Encoded, because a Windows cwd carries backslashes and spaces.
+            if (ctx?.cwd) q.push(`cwd=${encodeURIComponent(ctx.cwd)}`);
+            if (ctx?.workspaceId) q.push(`ws=${encodeURIComponent(ctx.workspaceId)}`);
+            return `?${q.join('&')}`;
+        },
     };
 }
 

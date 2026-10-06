@@ -3186,12 +3186,43 @@ function MasterInner() {
                 // builds — previously reachable only two clicks into Workspace
                 // Settings, in a section that appears for some workspaces and
                 // not others.
-                actions={gappLaunchTargets(workspaces).map((t) => ({
-                    id: `gapp-launch:${t.id}`,
-                    label: gappLaunchLabel({ project_name: t.name }),
-                    hint: t.path,
-                    run: () => launchGapp(t.id),
-                }))}
+                actions={[
+                    ...gappLaunchTargets(workspaces).map((t) => ({
+                        id: `gapp-launch:${t.id}`,
+                        label: gappLaunchLabel({ project_name: t.name }),
+                        hint: t.path,
+                        run: () => launchGapp(t.id),
+                    })),
+                    /**
+                     * Tynn #447 -- every workspace can open a terminal, or start an agent
+                     * in TUI MODE, in its OWN WINDOW so TheFloor stays clean.
+                     *
+                     * Offered here rather than as another title-bar glyph: the palette is
+                     * where Genie 2 puts verbs, and these are workspace-scoped, so they
+                     * only appear when there IS an active workspace to open them against.
+                     * Offering them with none would be a row that silently does nothing.
+                     */
+                    ...(activeWorkspaceId
+                        ? [
+                              {
+                                  id: 'terminal-window:open',
+                                  label: 'Open a terminal in a new window',
+                                  hint: workspacesById.get(activeWorkspaceId)?.project_name,
+                                  run: () => {
+                                      void api()
+                                          .terminal.openWindow({ kind: 'terminal', workspaceId: activeWorkspaceId })
+                                          .then((r) => {
+                                              // The underlying message is the only thing
+                                              // that says what to fix, so it is surfaced
+                                              // rather than swallowed.
+                                              if (!r?.ok && r?.error) console.warn(`[terminal window] ${r.error}`);
+                                          })
+                                          .catch(() => {});
+                                  },
+                              },
+                          ]
+                        : []),
+                ]}
                 onActivateWorkspace={activateWorkspace}
                 onFocusTerminal={toggleSpec}
                 onSendPrompt={(terminalId, text) => {

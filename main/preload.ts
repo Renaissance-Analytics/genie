@@ -1586,6 +1586,20 @@ const api = {
             ipcRenderer.invoke('terminal:list') as Promise<
                 Array<{ id: string; pid: number; shell: string }>
             >,
+        /**
+         * Open a terminal, or an agent in TUI mode, in its OWN WINDOW (Tynn #447).
+         *
+         * Returns the underlying error verbatim on failure -- "No command configured for
+         * agent X" is the only thing that tells the user what to fix, so it is not
+         * replaced with something generic.
+         */
+        openWindow: (req: {
+            kind: 'terminal' | 'agent';
+            workspaceId: string;
+            cwd?: string;
+            agent?: string;
+            command?: string;
+        }) => ipcRenderer.invoke('terminal:open-window', req) as Promise<{ ok: boolean; error?: string }>,
         // Agent-integration MCP: clear a terminal's attention glow (imDone)
         // when the user focuses it. Broadcasts to every window so the rail,
         // flyout row, and panel border all stop pulsing.
