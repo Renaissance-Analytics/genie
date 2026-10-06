@@ -21,6 +21,10 @@ files:
       # <asar>/docs (main/docs/docs.ts resolveDocsDir). Ship the docs/ folder
       # so docs:list / docs:read have something to serve in the packaged app.
       - docs/**/*
+      # The ACP host script is spawned as PLAIN NODE, so it must exist as a real
+      # file. It is not a .ts, so nothing emits it into app/ -- ship it from source
+      # or a packaged install has no ACP transport at all.
+      - main/acp/prism-host.mjs
       - package.json
 
 asar: true
@@ -49,6 +53,11 @@ asarUnpack:
   # The MCP shuttle (genie#346) runs on the standalone Node runtime, which cannot
   # read inside app.asar — packed, it would never start for anyone.
   - app/mcp-shuttle.js
+  # The ACP host (genie 2) runs as plain Node under ELECTRON_RUN_AS_NODE, so neither
+  # it NOR the ESM library it imports can be resolved from inside app.asar. Both are
+  # needed on disk; unpacking only the script would fail at its first import.
+  - main/acp/prism-host.mjs
+  - node_modules/@particle-academy/prism-acp/**
 
 # Tier 3+ — per-user OS-service pty-host runtime (fancy-term-host@0.2.0 /service).
 #

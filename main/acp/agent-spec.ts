@@ -51,46 +51,56 @@ export interface LaunchContext {
      */
     nodeExec: string;
     /**
-     * Resolve a package's CLI entry to an absolute script path, or null when it is not
-     * installed.
+     * Absolute path to our ACP host script, or null when it is not where it should be.
      *
-     * It has to come from the package's `bin` field. `require.resolve` of the package
-     * root answers with the LIBRARY entry — `@agentclientprotocol/claude-agent-acp`
-     * exports `dist/lib.js` there while its bin is `dist/index.js` — so resolving the
-     * root and spawning it would start the wrong file and then hang in the handshake.
+     * Ours rather than a package's `bin`, because prism-acp ships no bin -- and because a
+     * published bin on Windows is a `.cmd` shim that re-enters whatever `node` is first on
+     * PATH, silently defeating the choice of runtime. Measured: a bare-name spawn failed
+     * ENOENT against a real install.
      */
-    adapterScript: (pkg: string) => string | null;
+    hostScript: () => string | null;
 }
 
 /** Why a provider cannot run over ACP, when it cannot. The two reasons need different
  *  words in front of a human: one is "this provider does not do that", the other is
  *  "the thing that would do it is not installed". */
-export type LaunchRefusal = { reason: 'no-acp-mode'; provider: string } | { reason: 'adapter-missing'; pkg: string };
+export type LaunchRefusal =
+    | { reason: 'no-acp-mode'; provider: string }
+    /** Our host script is not on disk -- a packaging fault, not a user one. */
+    | { reason: 'host-missing' };
 
 export type LaunchResult = { ok: true; launch: AcpLaunch } | { ok: false } & LaunchRefusal;
 
-const ADAPTER_PACKAGE: Partial<Record<string, string>> = {
-    claude: '@agentclientprotocol/claude-agent-acp',
-    codex: '@agentclientprotocol/codex-acp',
-};
+/**
+ * Our own ESM host over `@particle-academy/prism-acp`.
+ *
+ * Prism owns the agentic transport (owner ruling), and prism-acp is a LIBRARY with no
+ * `bin` -- so Genie supplies the entry rather than spawning a package's shim. `.mjs`
+ * because prism-acp is ESM-only and this tree is CommonJS.
+ */
+export const PRISM_HOST_FILENAME = 'prism-host.mjs';
+
+/** Providers prism-acp can actually drive today. Measured in the published package:
+ *  `dist/claude/` is the only driver it ships. */
+const PRISM_DRIVES = new Set(['claude']);
 
 export function acpLaunch(provider: string, ctx: LaunchContext): LaunchResult {
     // Native ACP modes: a flag for one, a subcommand for the other. No adapter to
-    // install and nothing of ours to keep in step with upstream.
+    // install, nothing of ours to keep in step, and no third party at all.
     if (provider === 'gemini') return { ok: true, launch: { command: 'gemini', args: ['--acp'] } };
     if (provider === 'kimi') return { ok: true, launch: { command: 'kimi', args: ['acp'] } };
 
-    const pkg = ADAPTER_PACKAGE[provider];
-    // No ACP mode at all. Not a guess — a wrong spawn starts something that is not an
-    // ACP server and then times out in the handshake, which reads as a hung agent
-    // rather than an unsupported provider.
-    if (!pkg) return { ok: false, reason: 'no-acp-mode', provider };
+    // Anything prism cannot drive is refused BY NAME rather than pointed at the claude
+    // host. A wrong spawn starts something that cannot drive the provider and then times
+    // out in the handshake, which reads as a hung agent instead of an unsupported one.
+    // codex lands here until prism ships its driver.
+    if (!PRISM_DRIVES.has(provider)) return { ok: false, reason: 'no-acp-mode', provider };
 
-    const script = ctx.adapterScript(pkg);
-    if (!script) return { ok: false, reason: 'adapter-missing', pkg };
+    const script = ctx.hostScript();
+    // A missing host is a PACKAGING fault. Spawning `node` with no script opens a REPL
+    // that never answers the handshake -- a hang rather than a named failure.
+    if (!script) return { ok: false, reason: 'host-missing' };
 
-    // `<node> <script>`, bare argv. The adapters take no flags; everything travels in
-    // the environment.
     return { ok: true, launch: { command: ctx.nodeExec, args: [script] } };
 }
 

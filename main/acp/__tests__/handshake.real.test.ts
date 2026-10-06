@@ -32,21 +32,19 @@ import { startAcpAgent, type ChildLike } from '../spawn';
  */
 
 /**
- * A package's CLI entry, read from its own `bin` field.
+ * OUR ACP host on disk.
  *
- * NOT `require.resolve` of the package root: that answers with the LIBRARY entry —
- * claude-agent-acp exports `dist/lib.js` there while its bin is `dist/index.js` — so
- * resolving the root would start the wrong file and hang in the handshake.
+ * prism-acp ships NO `bin` -- it is an ESM library -- so there is no package entry to
+ * resolve. Genie owns the entry, which is also what removes the `.cmd`-shim hazard: a
+ * published shim re-enters whatever `node` is first on PATH and defeats the runtime choice.
  */
-export function adapterScriptOf(pkg: string): string | null {
+export function hostScriptOf(): string | null {
     try {
-        const manifestPath = path.join(process.cwd(), 'node_modules', pkg, 'package.json');
-        if (!fs.existsSync(manifestPath)) return null;
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { bin?: Record<string, string> | string };
-        const bin = typeof manifest.bin === 'string' ? manifest.bin : Object.values(manifest.bin ?? {})[0];
-        if (!bin) return null;
-        const script = path.join(path.dirname(manifestPath), bin);
-        return fs.existsSync(script) ? script : null;
+        const script = path.join(process.cwd(), 'main', 'acp', 'prism-host.mjs');
+        if (!fs.existsSync(script)) return null;
+        // The library it imports must be installed too, or the host dies on its first line.
+        const lib = path.join(process.cwd(), 'node_modules', '@particle-academy', 'prism-acp', 'package.json');
+        return fs.existsSync(lib) ? script : null;
     } catch {
         return null;
     }
@@ -61,8 +59,8 @@ interface Preconditions {
 function preconditions(): Preconditions {
     // From the package's `bin`, not from `node_modules/.bin`. The shim there is
     // `.cmd` on Windows, and running it would re-enter whatever `node` is on PATH.
-    const adapter = adapterScriptOf('@agentclientprotocol/claude-agent-acp');
-    const adapterPath = adapter ?? '@agentclientprotocol/claude-agent-acp (bin entry)';
+    const adapter = hostScriptOf();
+    const adapterPath = adapter ?? 'main/acp/prism-host.mjs + @particle-academy/prism-acp';
 
     const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude');
     const credFile = [path.join(configDir, '.credentials.json'), path.join(configDir, 'credentials.json')].find((f) =>
@@ -73,7 +71,7 @@ function preconditions(): Preconditions {
     const credentials = credFile ?? (process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'env:CLAUDE_CODE_OAUTH_TOKEN' : null);
 
     const missing: string[] = [];
-    if (!adapter) missing.push(`@agentclientprotocol/claude-agent-acp not installed (looked for ${adapterPath})`);
+    if (!adapter) missing.push(`ACP host or prism-acp not present (looked for ${adapterPath})`);
     if (!credentials) missing.push(`no Claude subscription login found under ${configDir}`);
     return { adapter, credentials, missing };
 }
@@ -115,7 +113,7 @@ describe.skipIf(pre.missing.length > 0)('a real ACP handshake on the stored subs
                 },
                 nodeVersion: () => process.version,
                 nodeExec: () => process.execPath,
-                adapterScript: adapterScriptOf,
+                hostScript: hostScriptOf,
                 hostEnv: () => process.env as Record<string, string | undefined>,
                 onStderr: (line) => {
                     // Kept, because a child that cannot authenticate says so here and the
@@ -149,4 +147,70 @@ describe.skipIf(pre.missing.length > 0)('a real ACP handshake on the stored subs
             killed?.();
         }
     }, 60_000);
+
+    /**
+     * A REAL TURN, not just a handshake.
+     *
+     * `initialize` is answered by the ACP agent itself and never starts the provider -- it
+     * returned in 96 ms, which is the tell. So the handshake alone proves the transport
+     * speaks, NOT that the subscription drives a turn. Only a prompt does that, and the
+     * subscription claim is the one thing in this design the owner named as non-negotiable.
+     *
+     * Deliberately tiny: one word back, to spend as little of the owner's quota as proving
+     * it requires.
+     */
+    it('completes a real turn on the subscription, with no api key anywhere', async () => {
+        const seenEnv: Array<Record<string, string>> = [];
+        const started = startAcpAgent(
+            { provider: 'claude', cwd: process.cwd(), auth: 'subscription' },
+            {
+                spawn: (command, args, env, cwd) => {
+                    seenEnv.push(env);
+                    return spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as unknown as ChildLike;
+                },
+                nodeVersion: () => process.version,
+                nodeExec: () => process.execPath,
+                hostScript: hostScriptOf,
+                hostEnv: () => process.env as Record<string, string | undefined>,
+                onStderr: (line) => {
+                    if (/error|denied|unauthor/i.test(line)) console.log(`[acp stderr] ${line.trim()}`);
+                },
+            },
+        );
+        if ('error' in started) throw new Error(`could not start: ${started.error}`);
+
+        const updates: string[] = [];
+        try {
+            expect('ANTHROPIC_API_KEY' in seenEnv[0]!).toBe(false);
+
+            await started.client.request('initialize', {
+                protocolVersion: 1,
+                clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+                clientInfo: { name: 'genie', version: '0.0.0-test' },
+            });
+
+            const session = (await started.client.request('session/new', {
+                cwd: process.cwd(),
+                mcpServers: [],
+            })) as { sessionId?: string };
+            expect(typeof session.sessionId).toBe('string');
+
+            started.client.onNotification?.('session/update', (p: unknown) => {
+                updates.push(JSON.stringify(p));
+            });
+
+            const turn = (await started.client.request('session/prompt', {
+                sessionId: session.sessionId,
+                prompt: [{ type: 'text', text: 'Reply with the single word: ready' }],
+            })) as { stopReason?: string };
+
+            // The turn FINISHED, and said how. `stopReason` is the field Genie currently
+            // discards -- asserting it here is what makes that gap visible rather than
+            // theoretical.
+            expect(turn).toBeTruthy();
+            expect(typeof turn.stopReason === 'string' || updates.length > 0).toBe(true);
+        } finally {
+            started.kill();
+        }
+    }, 180_000);
 });

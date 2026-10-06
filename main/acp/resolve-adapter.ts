@@ -1,35 +1,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { PRISM_HOST_FILENAME } from './agent-spec';
 
 /**
- * A package's CLI entry, read from its own `bin` field.
+ * Find our ACP host script on disk — `main/acp/prism-host.mjs`.
  *
- * **Not `require.resolve` of the package root.** That answers with the LIBRARY entry —
- * `@agentclientprotocol/claude-agent-acp` exports `dist/lib.js` there while its bin is
- * `dist/index.js` — so resolving the root would start the wrong file and then hang in the
- * handshake, which reads as a wedged agent.
+ * It is spawned as **plain Node** (Electron with `ELECTRON_RUN_AS_NODE=1`), whose module
+ * resolution is **not asar-aware**. So in a packaged install the script cannot be read from
+ * inside `app.asar` and neither can the ESM library it imports — both are listed in
+ * `asarUnpack`, and the unpacked copy is what this must find. That is the same constraint
+ * `app/mcp-shuttle.js` and `@particle-academy/fancy-term-host` already carry, for the same
+ * reason: *"packed, it would never start for anyone."*
  *
- * **And not `node_modules/.bin`.** The shim there is `claude-agent-acp.cmd` on Windows, so
- * the bare name does not exist (a real spawn failed ENOENT on exactly that), and running a
- * shim re-enters whatever `node` is first on PATH — which silently defeats choosing the
- * runtime at all.
- *
- * Both of those were found by running it rather than by reading about it.
+ * Candidates are tried in packaged-first order and each is checked with `existsSync` rather
+ * than assumed, so a layout change surfaces as a NAMED refusal (`host-missing`) instead of
+ * `node` opening a REPL that never answers the handshake.
  */
-export function adapterScriptOf(pkg: string, root = process.cwd()): string | null {
-    try {
-        const manifestPath = path.join(root, 'node_modules', pkg, 'package.json');
-        if (!fs.existsSync(manifestPath)) return null;
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
-            bin?: Record<string, string> | string;
-        };
-        const bin = typeof manifest.bin === 'string' ? manifest.bin : Object.values(manifest.bin ?? {})[0];
-        if (!bin) return null;
-        const script = path.join(path.dirname(manifestPath), bin);
-        return fs.existsSync(script) ? script : null;
-    } catch {
-        // An unreadable or malformed manifest means "not installed" as far as a caller is
-        // concerned, and the caller already has a named refusal for that.
-        return null;
+export function prismHostPath(root = process.cwd()): string | null {
+    const rel = path.join('main', 'acp', PRISM_HOST_FILENAME);
+
+    const candidates = [
+        // Packaged: unpacked beside the asar, which is the only copy plain Node can read.
+        path.join(root.replace(/app\.asar(?![.])/, 'app.asar.unpacked'), rel),
+        // Dev and unpacked-dir builds: straight off the source tree.
+        path.join(root, rel),
+    ];
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
     }
+    return null;
 }

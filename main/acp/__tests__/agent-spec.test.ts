@@ -10,31 +10,28 @@ import { ACP_PROVIDERS, acpEnv, acpLaunch, nodeMajorOk } from '../agent-spec';
  * says "subscription", which is the quietest possible way to be wrong about money.
  */
 
-const ctx = (over: Partial<{ nodeExec: string; adapterScript: (p: string) => string | null }> = {}) => ({
+const ctx = (over: Partial<{ nodeExec: string; hostScript: () => string | null }> = {}) => ({
     nodeExec: '/usr/bin/node',
-    adapterScript: (pkg: string) => `/n/${pkg}/dist/index.js`,
+    hostScript: () => '/app/main/acp/prism-host.mjs',
     ...over,
 });
 
 describe('acpLaunch', () => {
-    it('runs the Claude adapter AS A SCRIPT under the chosen Node', () => {
-        // Never through the `bin` shim: it is `claude-agent-acp.cmd` on Windows, so the
-        // bare name does not exist there (found by a real spawn failing ENOENT), and a
-        // shim re-enters whatever `node` is first on PATH, defeating the runtime choice.
+    it('runs OUR prism host as a script under the chosen Node', () => {
+        // Not a package `bin`: prism-acp ships none, and a published bin on Windows is a
+        // `.cmd` shim that re-enters whatever `node` is first on PATH, defeating the
+        // runtime choice. Owning the entry removes the shim from the picture.
         expect(acpLaunch('claude', ctx())).toEqual({
             ok: true,
-            launch: {
-                command: '/usr/bin/node',
-                args: ['/n/@agentclientprotocol/claude-agent-acp/dist/index.js'],
-            },
+            launch: { command: '/usr/bin/node', args: ['/app/main/acp/prism-host.mjs'] },
         });
     });
 
-    it('runs the Codex adapter the same way', () => {
-        expect(acpLaunch('codex', ctx())).toMatchObject({
-            ok: true,
-            launch: { args: ['/n/@agentclientprotocol/codex-acp/dist/index.js'] },
-        });
+    it('REFUSES codex, because prism-acp ships a claude driver only', () => {
+        // Pointing codex at the claude host would start something that cannot drive it and
+        // then time out in the handshake -- a hang, not a named refusal. Revisit when
+        // prism ships a codex driver.
+        expect(acpLaunch('codex', ctx())).toEqual({ ok: false, reason: 'no-acp-mode', provider: 'codex' });
     });
 
     it('uses the NATIVE mode for gemini and kimi, which need no adapter', () => {
@@ -46,14 +43,13 @@ describe('acpLaunch', () => {
         expect(acpLaunch('aider', ctx())).toEqual({ ok: false, reason: 'no-acp-mode', provider: 'aider' });
     });
 
-    it('distinguishes "not installed" from "no ACP mode"', () => {
+    it('distinguishes a MISSING HOST from "no ACP mode"', () => {
         // Two different sentences in front of a human: one is "this provider does not do
-        // that", the other is "the thing that would do it is missing" — and only the
-        // second has a fix.
-        expect(acpLaunch('claude', ctx({ adapterScript: () => null }))).toEqual({
+        // that", the other is "the thing that would do it is missing" -- and only the
+        // second is a packaging fault we can fix.
+        expect(acpLaunch('claude', ctx({ hostScript: () => null }))).toEqual({
             ok: false,
-            reason: 'adapter-missing',
-            pkg: '@agentclientprotocol/claude-agent-acp',
+            reason: 'host-missing',
         });
     });
 
