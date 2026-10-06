@@ -11,6 +11,8 @@
  * decision inside a component is a decision nobody checks.
  */
 
+import type { FeatureSurface } from './feature-reachability';
+
 /**
  * `action` is a VERB the palette can run, as opposed to a thing it navigates to.
  * It exists because a verb reachable only from a settings panel is not reachable
@@ -26,6 +28,13 @@ export interface CommandItem {
     /** Secondary text (a path, a workspace name). Not matched — a hint that
      *  silently changed the results would be worse than no hint. */
     hint?: string;
+    /**
+     * Set on a FEATURE entry, matching `FEATURE_SURFACES[].id`.
+     *
+     * It is how `feature-reachability` sees that the palette carries a feature, which is
+     * what lets P7 delete a title-bar icon without stranding it.
+     */
+    featureId?: string;
 }
 
 export interface CommandQuery {
@@ -109,4 +118,45 @@ export function groupCommandItems(
             items: items.filter((i) => i.category === category),
         }))
         .filter((group) => group.items.length > 0);
+}
+
+/**
+ * Every contracted feature, as palette entries.
+ *
+ * Built FROM `FEATURE_SURFACES` rather than hand-listed, so a feature cannot be added to
+ * the reachability contract and then forgotten here. One source of truth: the contract
+ * says what must stay reachable, and this makes the palette the thing that reaches it.
+ *
+ * Filed under `panel` — which already means "a place it navigates to" and already has the
+ * `s>` type-ahead prefix. A new category with no prefix would not be reachable in a
+ * keyboard-first palette, so inventing one would be a downgrade.
+ */
+export function featureCommandItems(features: readonly FeatureSurface[]): CommandItem[] {
+    return features.map((f) => ({
+        id: `feature:${f.id}`,
+        category: 'panel' as const,
+        label: f.label,
+        featureId: f.id,
+        ...(f.entry.contextual ? { hint: f.entry.contextual } : {}),
+    }));
+}
+
+/**
+ * Drop entries that cannot act in the current context.
+ *
+ * Unscoping the palette from terminal focus is what lets it open on the Deck — and it
+ * introduces one defect if done naively. A `prompt` is SENT TO a terminal, and a
+ * `terminal` entry is something to FOCUS; with none available both become rows that look
+ * live and silently do nothing. A dead row is worse than an absent one, the same reason a
+ * disabled control is an accusation while a different shape is a fact.
+ *
+ * Workspaces, features and actions are unaffected: none of them needs a shell, and the
+ * Deck is exactly where someone reaches for Hosts, Knowledge or the App Store.
+ */
+export function dropUndeliverable(
+    items: readonly CommandItem[],
+    ctx: { hasTerminal: boolean },
+): CommandItem[] {
+    if (ctx.hasTerminal) return [...items];
+    return items.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
 }

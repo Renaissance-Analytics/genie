@@ -1,11 +1,14 @@
 import { useMemo } from 'react';
 import { Command, Text, useCommand } from '@particle-academy/react-fancy';
 import {
+    dropUndeliverable,
+    featureCommandItems,
     filterCommandItems,
     groupCommandItems,
     parseCommandQuery,
     type CommandItem,
 } from '../../lib/command-window';
+import { FEATURE_SURFACES } from '../../lib/feature-reachability';
 
 /**
  * Genie's Command Window — Ctrl+K (Tynn story #247).
@@ -59,6 +62,9 @@ export interface GenieCommandWindowProps {
     onActivateWorkspace: (workspaceId: string) => void;
     onFocusTerminal: (terminalId: string) => void;
     onSendPrompt: (terminalId: string, text: string) => void;
+    /** Open one of Genie's features. The palette is where they live once the
+     *  title bar stops carrying an icon for each. */
+    onActivateFeature: (featureId: string) => void;
 }
 
 export default function GenieCommandWindow({
@@ -72,25 +78,38 @@ export default function GenieCommandWindow({
     onActivateWorkspace,
     onFocusTerminal,
     onSendPrompt,
+    onActivateFeature,
 }: GenieCommandWindowProps) {
     const items = useMemo<CommandItem[]>(
-        () => [
-            ...prompts.map((p) => ({ id: p.id, category: 'prompt' as const, label: p.label })),
-            ...actions.map((a) => ({
-                id: a.id,
-                category: 'action' as const,
-                label: a.label,
-                ...(a.hint ? { hint: a.hint } : {}),
-            })),
-            ...workspaces.map((w) => ({ id: w.id, category: 'workspace' as const, label: w.name })),
-            ...terminals.map((t) => ({
-                id: t.id,
-                category: 'terminal' as const,
-                label: t.label,
-                ...(t.hint ? { hint: t.hint } : {}),
-            })),
-        ],
-        [prompts, actions, workspaces, terminals],
+        () =>
+            // Everything undeliverable in the CURRENT context is dropped rather than shown
+            // dead. With no terminal focused a prompt has nowhere to be sent and a terminal
+            // entry has nothing to focus, and a row that looks live and silently does
+            // nothing is worse than an absent one.
+            dropUndeliverable(
+                [
+                    ...prompts.map((p) => ({ id: p.id, category: 'prompt' as const, label: p.label })),
+                    ...actions.map((a) => ({
+                        id: a.id,
+                        category: 'action' as const,
+                        label: a.label,
+                        ...(a.hint ? { hint: a.hint } : {}),
+                    })),
+                    // Genie's own features. Built FROM the reachability contract, so a
+                    // feature cannot be added there and forgotten here — which is what lets
+                    // a title-bar icon be deleted without stranding what it opened.
+                    ...featureCommandItems(FEATURE_SURFACES),
+                    ...workspaces.map((w) => ({ id: w.id, category: 'workspace' as const, label: w.name })),
+                    ...terminals.map((t) => ({
+                        id: t.id,
+                        category: 'terminal' as const,
+                        label: t.label,
+                        ...(t.hint ? { hint: t.hint } : {}),
+                    })),
+                ],
+                { hasTerminal: terminalId !== null },
+            ),
+        [prompts, actions, workspaces, terminals, terminalId],
     );
 
     if (!open) return null;
@@ -107,6 +126,7 @@ export default function GenieCommandWindow({
                 onActivateWorkspace={onActivateWorkspace}
                 onFocusTerminal={onFocusTerminal}
                 onSendPrompt={onSendPrompt}
+                onActivateFeature={onActivateFeature}
             />
         </Command>
     );
@@ -125,6 +145,7 @@ function CommandBody({
     onActivateWorkspace,
     onFocusTerminal,
     onSendPrompt,
+    onActivateFeature,
 }: {
     items: CommandItem[];
     prompts: SavedPrompt[];
@@ -134,6 +155,7 @@ function CommandBody({
     onActivateWorkspace: (id: string) => void;
     onFocusTerminal: (id: string) => void;
     onSendPrompt: (terminalId: string, text: string) => void;
+    onActivateFeature: (featureId: string) => void;
 }) {
     const { query } = useCommand();
     const groups = useMemo(
@@ -153,6 +175,10 @@ function CommandBody({
             onFocusTerminal(item.id);
         } else if (item.category === 'action') {
             actions.find((a) => a.id === item.id)?.run();
+        } else if (item.category === 'panel' && item.featureId) {
+            // A feature. Dispatched by featureId, never by the row's own id, which is
+            // prefixed (`feature:<id>`) to keep it distinct from a workspace or terminal id.
+            onActivateFeature(item.featureId);
         }
         onClose();
     };

@@ -505,6 +505,16 @@ function MasterInner() {
     }, []);
 
     const [commandWindowFor, setCommandWindowFor] = useState<string | null>(null);
+    /**
+     * Whether the palette is OPEN — separate from which terminal is focused.
+     *
+     * The open flag used to be derived from a non-null terminal id — one value doubling as
+     * two facts — which made the palette structurally unopenable without a focused
+     * terminal. The Deck focuses none, so under Genie 2 Ctrl+K would never have opened
+     * at all -- and P7 deletes eight title-bar icons on the promise that their features
+     * "survive as Ctrl+K entries". Two states, because they are two facts.
+     */
+    const [paletteOpen, setPaletteOpen] = useState(false);
     const [feedbackWsId, setFeedbackWsId] = useState<string | null>(null);
     // The global Feedback hotkey / tray item asked for Feedback (genie#675). Held
     // until the launch restore has settled which workspace is active, so a
@@ -545,7 +555,13 @@ function MasterInner() {
                         await api().terminal.write(terminalId, plan.submit);
                     })();
                 },
-                onCommandWindow: (terminalId: string) => setCommandWindowFor(terminalId),
+                onCommandWindow: (terminalId: string) => {
+                    // The terminal-scoped layer still exists for a reason (Tynn #247):
+                    // inside a terminal the keypress must never reach the shell. It now
+                    // records the terminal AND opens, instead of conflating the two.
+                    setCommandWindowFor(terminalId);
+                    setPaletteOpen(true);
+                },
             }),
             [],
         ),
@@ -2503,6 +2519,14 @@ function MasterInner() {
                 api().app.showSettings(isRemoteWindow()).catch(() => {});
                 return;
             }
+            if (intent.kind === 'palette') {
+                // Global now: no terminal required. `commandWindowFor` stays null, which
+                // the palette reads as "no terminal" and uses to drop entries that would
+                // have nowhere to act.
+                e.preventDefault();
+                setPaletteOpen(true);
+                return;
+            }
             // ESCAPE IS DELIBERATELY NOT WIRED TO THE DECK YET, and E2E is why.
             //
             // Wiring it navigated away from the grid on every Escape — and Escape already
@@ -2516,10 +2540,11 @@ function MasterInner() {
             // level to go up to. Until then the Deck is reached explicitly with
             // `?view=deck`, which is what "parallel surface" means.
             //
-            // The remaining intents — palette, agent slots, take-over, queue movement,
-            // approvals — are resolved and likewise not acted on. They need surfaces that
-            // do not exist yet, and acting now would be a silent no-op, which this repo
-            // treats as a bug.
+            // The remaining intents — agent slots, take-over, queue movement, approvals —
+            // are resolved and likewise not acted on. They need surfaces that do not exist
+            // yet, and acting now would be a silent no-op, which this repo treats as a bug.
+            // `palette` is no longer in that list: its surface DOES exist, and is wired
+            // above.
         };
 
         window.addEventListener('keydown', onKeyDown);
@@ -3088,9 +3113,68 @@ function MasterInner() {
                 only while a terminal panel has focus and the keypress never
                 reaches the shell (Tynn #247). */}
             <GenieCommandWindow
-                open={commandWindowFor !== null}
-                onClose={() => setCommandWindowFor(null)}
+                open={paletteOpen}
+                onClose={() => {
+                    setPaletteOpen(false);
+                    setCommandWindowFor(null);
+                }}
                 terminalId={commandWindowFor}
+                onActivateFeature={(featureId) => {
+                    // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
+                    // reachability guard also reads -- so a feature cannot be contracted
+                    // there and silently unreachable here.
+                    const ws = activeWorkspaceId;
+                    switch (featureId) {
+                        case 'remote-host':
+                        case 'sharing':
+                            setSharingOpen(true);
+                            break;
+                        case 'plugins-appstore':
+                            setAppStoreOpen(true);
+                            break;
+                        case 'knowledge-graph':
+                            // A main-owned window, not a flyout. Guarded so it no-ops if
+                            // the preload bridge is not wired yet.
+                            if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
+                            break;
+                        case 'agent-inbox':
+                            setAgentInboxOpen(true);
+                            break;
+                        case 'issuewatch':
+                            setIssueWatchOpen(true);
+                            break;
+                        case 'flows':
+                            setFlowsOpen(true);
+                            break;
+                        case 'lists':
+                            setListsOpen(true);
+                            break;
+                        case 'questions':
+                            setQuestionsOpen(true);
+                            break;
+                        case 'docs':
+                            setDocsOpen(true);
+                            break;
+                        case 'tasks':
+                            setTaskManagerOpen(true);
+                            break;
+                        case 'github-caps':
+                            setGithubCapsOpen(true);
+                            break;
+                        case 'genie-os':
+                            setGenieOsOpen(true);
+                            break;
+                        // Workspace-SCOPED: these take a workspace, not a toggle. With no
+                        // active workspace there is nothing to open them against, so they
+                        // no-op rather than opening against a guess.
+                        case 'sites':
+                            if (ws) setSiteManagerWsId(ws);
+                            break;
+                        case 'processes':
+                            if (ws) setProcessManagerWsId(ws);
+                            break;
+                    }
+                }}
                 workspaces={workspaces.map((w) => ({ id: w.id, name: w.project_name }))}
                 terminals={specs.map((sp) => ({
                     id: sp.id,
