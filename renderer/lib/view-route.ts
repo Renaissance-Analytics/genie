@@ -72,8 +72,11 @@ function one(value: string | string[] | undefined): string | null {
  * on a blank screen.
  */
 export function parseViewRoute(query: RouteQuery): GenieView {
-    // Explicit opt-in, checked FIRST so `?view=deck` wins over a leftover `ws`.
-    if (one(query.view) === 'deck') return { kind: 'deck' };
+    // Explicit, checked FIRST so a named view wins over a leftover `ws`. `grid` is now the
+    // one that must be asked for -- the Deck is the default (Genie 2).
+    const named = one(query.view);
+    if (named === 'deck') return { kind: 'deck' };
+    if (named === 'grid') return { kind: 'grid' };
 
     const agentId = one(query.agent);
     if (agentId) {
@@ -91,8 +94,19 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     const workspaceId = one(query.ws);
     if (workspaceId) return { kind: 'workbench', workspaceId };
 
-    // No params: today's Floor. See the note on `kind: 'grid'`.
-    return { kind: 'grid' };
+    /**
+     * No params: THE DECK.
+     *
+     * This is the Genie 2 flip. The grid was the default while the Deck was a parallel
+     * surface; now the Deck is what opens and the grid is reached with `?view=grid`, which
+     * is also what `floorSurface` conceals rather than unmounts -- every terminal panel owns
+     * a live xterm bound to a pty, so the grid must never be destroyed to show something
+     * else.
+     *
+     * A 2x2 of transcripts is maximum pixels and near-zero information; the Deck answers
+     * "what needs me" instead. The grid is one query away and loses nothing.
+     */
+    return { kind: 'deck' };
 }
 
 /**
@@ -106,10 +120,12 @@ export function parseViewRoute(query: RouteQuery): GenieView {
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
         case 'grid':
-            // The default carries no params, so the url you sit on most stays clean.
-            return {};
+            // The grid is now the one you ask for. It must be NAMED, or parsing its own url
+            // would hand back the Deck and the two halves would disagree.
+            return { view: 'grid' };
         case 'deck':
-            return { view: 'deck' };
+            // The DEFAULT carries no params, so the url you sit on most stays clean.
+            return {};
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':

@@ -8,13 +8,20 @@ import { mergeViewRoute, parseViewRoute, viewRouteQuery, type GenieView } from '
  * decisions that make it addressable before any surface is built on it.
  */
 describe('parseViewRoute', () => {
-    it('defaults to TODAY’S FLOOR when nothing is in the url', () => {
-        // THE CONTRACT CHANGED HERE, and E2E is why. This used to default to the Deck,
-        // which hid the panel grid on every window that opened without a query string —
-        // most of them — and failed on all three platforms. Moving the default surface
-        // is a later phase and the owner's call; until then the Deck is a parallel
-        // surface reached explicitly.
-        expect(parseViewRoute({})).toEqual({ kind: 'grid' });
+    it('defaults to THE DECK when nothing is in the url', () => {
+        // THE GENIE 2 FLIP. It defaulted to the grid while the Deck was a parallel surface.
+        // The Deck now opens, and the grid is reached with `?view=grid`.
+        //
+        // The earlier attempt at this failed on all three platforms because the grid was
+        // HIDDEN under the Deck on every window that opened without a query string. That is
+        // survivable now for one reason: `floorSurface` CONCEALS the grid rather than
+        // unmounting it, so no live xterm is destroyed, and the E2E specs that need the grid
+        // now ask for it by name.
+        expect(parseViewRoute({})).toEqual({ kind: 'deck' });
+    });
+
+    it('still reaches the grid, by name', () => {
+        expect(parseViewRoute({ view: 'grid' })).toEqual({ kind: 'grid' });
     });
 
     it('reaches the Deck explicitly', () => {
@@ -72,27 +79,29 @@ describe('parseViewRoute', () => {
 
     it('falls back to the default for a blank id', () => {
         // `?ws=` must not open a Workbench for the workspace named "".
-        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'deck' });
     });
 
     it('falls back to the default for a view it cannot satisfy', () => {
         // A Workbench with no workspace is not a thing. Never a blank screen.
-        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'deck' });
     });
 });
 
 describe('viewRouteQuery', () => {
-    it('gives the DEFAULT a clean url', () => {
-        // The view you sit on most carries no params. That is the grid for now; when the
-        // Deck becomes the default this moves with it.
-        expect(viewRouteQuery({ kind: 'grid' })).toEqual({});
+    it('gives the DEFAULT a clean url — and that is now the Deck', () => {
+        // The view you sit on most carries no params. This moved with the default, exactly
+        // as the previous version of this test said it would.
+        expect(viewRouteQuery({ kind: 'deck' })).toEqual({});
     });
 
-    it('names the Deck explicitly, because it is not the default yet', () => {
-        expect(viewRouteQuery({ kind: 'deck' })).toEqual({ view: 'deck' });
+    it('names the GRID explicitly, because it is no longer the default', () => {
+        // It must be named, or parsing its own url would hand back the Deck and the two
+        // halves of this module would disagree.
+        expect(viewRouteQuery({ kind: 'grid' })).toEqual({ view: 'grid' });
     });
 
     it('omits a tab that has not been chosen', () => {
@@ -126,8 +135,11 @@ describe('viewRouteQuery', () => {
  */
 describe('mergeViewRoute', () => {
     it('keeps a remote window remote', () => {
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1' });
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1', view: 'deck' });
+        // The DEFAULT (now the Deck) adds nothing; the grid names itself. Either way `host`
+        // survives, which is the point — it is bound before load and decides whether the
+        // renderer talks to a remote machine.
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1', view: 'grid' });
     });
 
     it('keeps a stage window staged', () => {
@@ -151,16 +163,16 @@ describe('mergeViewRoute', () => {
             { ws: 'w1' },
         );
         // And a stale `view=deck` is dropped when navigating away from it.
-        expect(mergeViewRoute({ view: 'deck' }, { kind: 'grid' })).toEqual({});
+        expect(mergeViewRoute({ view: 'deck' }, { kind: 'deck' })).toEqual({});
     });
 
     it('preserves a param it has never heard of', () => {
         // Route ownership is a CLOSED list; everything else belongs to whoever put
         // it there, including params added after this module was written.
-        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'grid' })).toEqual({ somethingNew: 'x' });
+        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'deck' })).toEqual({ somethingNew: 'x' });
     });
 
     it('preserves a repeated non-route param verbatim', () => {
-        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'grid' })).toEqual({ tags: ['a', 'b'] });
+        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'deck' })).toEqual({ tags: ['a', 'b'] });
     });
 });
