@@ -74,6 +74,7 @@ export type E2EHarnessPage =
     | 'tynn-import'
     | 'workspace-create'
     | 'agent-pulse'
+    | 'deck'
     | 'ask'
     | 'master';
 
@@ -90,6 +91,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'tynn-import': 'e2e-tynn-import',
     'workspace-create': 'e2e-workspace-create',
     'agent-pulse': 'e2e-agent-pulse',
+    deck: 'e2e-deck',
     ask: 'ask',
     master: 'master',
 };
