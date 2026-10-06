@@ -3587,12 +3587,31 @@ function showE2EWindow(): void {
         'e2e-tynn-import',
         'e2e-workspace-create',
         'e2e-agent-pulse',
+        'e2e-deck',
         // The product page, not a harness (genie#228). See the doc comment.
         'master',
     ] as const;
-    const page = (ALLOWED as readonly string[]).includes(requested)
-        ? requested
-        : 'e2e-issuewatch';
+    /**
+     * An UNKNOWN page that was explicitly asked for is a MISTAKE, and must not be
+     * substituted quietly.
+     *
+     * This used to fall back to `e2e-issuewatch` for any unrecognised value. A new harness
+     * added to `e2e/helpers/launch.ts` but not to this second list therefore ran its specs
+     * against a DIFFERENT page, and every assertion failed as "element not found" -- which
+     * points at the component under test rather than at this allowlist. Cost a full CI
+     * round trip to find.
+     *
+     * The default (nothing requested) still falls back, because that is back-compat rather
+     * than a mistake.
+     */
+    if (process.env.GENIE_E2E_PAGE && !(ALLOWED as readonly string[]).includes(requested)) {
+        throw new Error(
+            `GENIE_E2E_PAGE="${requested}" is not in showE2EWindow's ALLOWED list. ` +
+                'Add it there as well as to HARNESS_ROUTE in e2e/helpers/launch.ts — otherwise ' +
+                'the specs silently run against a different page.',
+        );
+    }
+    const page = (ALLOWED as readonly string[]).includes(requested) ? requested : 'e2e-issuewatch';
     if (page === 'e2e-agent-access') {
         // Seed the fixture workspaces BEFORE the window loads — the harness page
         // resolves its target by listing on mount, so the rows must already exist.
