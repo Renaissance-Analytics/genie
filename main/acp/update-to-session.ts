@@ -23,6 +23,7 @@
  * actually said.
  */
 
+import { applyPlanTool, isUnrecognisedPlanTool } from './plan-synthesis';
 import type { AgentSession, Message, PlanEntry, SlashCommand, ToolCall } from '../agentsession/model';
 
 /** Every `sessionUpdate` discriminant in the ACP stable schema. Compared against the
@@ -65,6 +66,8 @@ export interface AcpSessionUpdate {
     title?: string;
     name?: string;
     status?: string;
+    /** A tool call's arguments, straight off the wire. Untrusted. */
+    rawInput?: unknown;
     /** PlanEntry also carries `priority`, which the model has no field for — accepted
      *  and ignored rather than making a real payload fail to type. */
     entries?: Array<{ content?: string; status?: string; [extra: string]: unknown }>;
@@ -149,6 +152,30 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
 
         case 'tool_call': {
             if (!u.toolCallId) return s;
+            // The RAW name decides plan-ness. `title` is a DISPLAY string and may be
+            // humanised or localised; matching on it would be matching on prose.
+            const rawName = u.name ?? '';
+            const synthesised = applyPlanTool(s.plan ?? [], { name: rawName, input: u.rawInput });
+            if (synthesised) {
+                // SUPPRESSED as a tool call and surfaced as the plan instead. The adapter
+                // did exactly this; emitting both shows the plan twice -- once as the rail
+                // and once as tool rows -- which reads as a rendering bug in Genie.
+                return { ...s, plan: synthesised, turn: { state: 'tool', since: now } };
+            }
+            if (isUnrecognisedPlanTool(rawName)) {
+                // THE CANARY FIRING. A plan-shaped tool we do not know -- i.e. the rename
+                // happened again. Say so loudly: the alternative is the plan rail quietly
+                // going dark, which is the specific risk accepted when choosing synthesis.
+                // Worded to blame Genie, not the agent, and never overwrites a real error.
+                return {
+                    ...s,
+                    error:
+                        s.error ??
+                        `Genie does not recognise the plan tool "${rawName}", so the plan rail may be incomplete. Its name has probably changed.`,
+                    tools: [...s.tools, { id: u.toolCallId, name: u.title ?? rawName ?? u.toolCallId, status: toolStatus(u.status) }],
+                    turn: { state: 'tool', since: now },
+                };
+            }
             const call: ToolCall = {
                 id: u.toolCallId,
                 name: u.title ?? u.name ?? u.toolCallId,
