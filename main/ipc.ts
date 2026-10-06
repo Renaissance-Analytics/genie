@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { TerminalWindowRequest } from './terminal/window-plan';
 import { dispatchConnectLink } from './tynn/connect-dispatch';
 import {
     listWorkspaceShareLinks,
@@ -368,6 +369,7 @@ import {
     showMainWindow,
     showStageWindow,
     showHostWindow,
+    showTerminalWindow,
 } from './background';
 import {
     allConfiguredBackends,
@@ -2404,6 +2406,15 @@ export function registerIpcHandlers(): void {
         showKnowledgeWindow();
         return { ok: true };
     });
+
+    /**
+     * Open a terminal, or an agent in TUI MODE, in its own window (Tynn #447).
+     *
+     * A one-liner on purpose: every decision and refusal lives in
+     * `terminal/window-open.ts`, which is tested. This file has no test harness, so logic
+     * placed here is logic nobody checks.
+     */
+    ipcMain.handle('terminal:open-window', (_event, req: TerminalWindowRequest) => showTerminalWindow(req));
 
     // --- Flows ------------------------------------------------------------
     // Registered in `flows/ipc.ts`, not here. There is ONE flow system now, so

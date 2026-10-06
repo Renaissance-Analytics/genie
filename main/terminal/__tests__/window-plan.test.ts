@@ -62,6 +62,12 @@ describe('the window route', () => {
         expect(plan.ok).toBe(true);
         if (!plan.ok) return;
         expect(plan.routeFor('spec-abc')).toBe('?spec=spec-abc');
+        // cwd and ws ride along so the window can attach without a round trip, and a
+        // Windows path must survive the trip -- backslashes and spaces and all.
+        const windowsPath = ['C:', 'a b', 'c'].join(String.fromCharCode(92));
+        expect(plan.routeFor('s1', { cwd: windowsPath, workspaceId: 'ws1' })).toBe(
+            '?spec=s1&cwd=C%3A%5Ca%20b%5Cc&ws=ws1',
+        );
     });
 });
 
