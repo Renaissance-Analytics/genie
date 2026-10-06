@@ -39,8 +39,8 @@ export interface SpawnPorts {
     /** The Node an adapter is run WITH — never its `bin` shim, which on Windows does
      *  not exist under the bare name and which re-enters whatever `node` is on PATH. */
     nodeExec: () => string;
-    /** A package's CLI entry, from its `bin` field, or null when not installed. */
-    adapterScript: (pkg: string) => string | null;
+    /** Our ACP host script on disk, or null when it is not where it should be. */
+    hostScript: () => string | null;
     hostEnv: () => HostEnv;
     /** Stderr, line by line. An ACP child that cannot authenticate says so here and
      *  then exits; dropping it discards the only evidence of why. */
@@ -60,7 +60,7 @@ export type StartResult = { client: AcpClient; pid: number | undefined; kill: ()
 export function startAcpAgent(req: StartRequest, ports: SpawnPorts): StartResult {
     const resolved = acpLaunch(req.provider, {
         nodeExec: ports.nodeExec(),
-        adapterScript: ports.adapterScript,
+        hostScript: ports.hostScript,
     });
     if (!resolved.ok) {
         // Two different sentences, because only one of them has a fix.
@@ -68,7 +68,7 @@ export function startAcpAgent(req: StartRequest, ports: SpawnPorts): StartResult
             error:
                 resolved.reason === 'no-acp-mode'
                     ? `${resolved.provider} has no ACP mode, so it cannot run as a structured session. It stays on the terminal.`
-                    : `${resolved.pkg} is not installed, so this provider cannot run as a structured session yet.`,
+                    : 'The ACP host script is missing from this install, so no agent can run as a structured session. This is a packaging fault, not a setting.',
         };
     }
     const launch = resolved.launch;

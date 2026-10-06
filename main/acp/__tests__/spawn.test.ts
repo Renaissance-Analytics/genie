@@ -44,7 +44,7 @@ const ports = (over: Partial<SpawnPorts> = {}) => {
         },
         nodeVersion: () => 'v22.13.0',
         nodeExec: () => '/usr/bin/node',
-        adapterScript: (pkg: string) => `/n/${pkg}/dist/index.js`,
+        hostScript: () => '/app/main/acp/prism-host.mjs',
         hostEnv: () => ({ PATH: '/usr/bin', HOME: '/home/me' }),
         onStderr: (line) => stderrLines.push(line),
         ...over,
@@ -62,13 +62,14 @@ describe('refusals', () => {
         expect(spawned).toEqual([]);
     });
 
-    it('refuses when the adapter is not installed, and says so differently', () => {
-        // Distinct from "no ACP mode": this one has a fix, and the message has to point
-        // at it rather than telling somebody their provider is unsupported.
-        const { ports: p, spawned } = ports({ adapterScript: () => null });
+    it('refuses when OUR host script is missing, and says so differently', () => {
+        // Distinct from "no ACP mode": that one tells somebody their provider is
+        // unsupported, this one says the install is broken. Only the second is our fault,
+        // and conflating them sends the reader to the wrong place.
+        const { ports: p, spawned } = ports({ hostScript: () => null });
         const r = startAcpAgent({ provider: 'claude', cwd: '/w', auth: 'subscription' }, p);
-        expect('error' in r && r.error).toMatch(/not installed/);
-        expect('error' in r && r.error).toMatch(/claude-agent-acp/);
+        expect('error' in r && r.error).toMatch(/host script is missing/);
+        expect('error' in r && r.error).toMatch(/packaging fault/);
         expect(spawned).toEqual([]);
     });
 
@@ -89,12 +90,12 @@ describe('refusals', () => {
 });
 
 describe('the spawn itself', () => {
-    it('runs the published adapter bin with bare argv, in the agent cwd', () => {
+    it('runs OUR prism host with bare argv, in the agent cwd', () => {
         const { ports: p, spawned } = ports();
         startAcpAgent({ provider: 'claude', cwd: '/repo', auth: 'subscription' }, p);
         expect(spawned[0]).toMatchObject({
             command: '/usr/bin/node',
-            args: ['/n/@agentclientprotocol/claude-agent-acp/dist/index.js'],
+            args: ['/app/main/acp/prism-host.mjs'],
             cwd: '/repo',
         });
     });

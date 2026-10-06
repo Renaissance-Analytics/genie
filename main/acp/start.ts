@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { adapterScriptOf } from './resolve-adapter';
+import { prismHostPath } from './resolve-adapter';
 import { acpRegistry } from './registry';
 import { AcpSessionDriver } from './session';
 import { startAcpAgent, type ChildLike } from './spawn';
@@ -50,7 +50,7 @@ export function startAcpForSpec(input: {
             // ABI-matched node-pty prebuild.
             nodeVersion: () => process.version,
             nodeExec: () => process.execPath,
-            adapterScript: (pkg) => adapterScriptOf(pkg),
+            hostScript: () => prismHostPath(),
             hostEnv: () => process.env as Record<string, string | undefined>,
             onStderr: input.onStderr,
         },
