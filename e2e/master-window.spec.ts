@@ -44,7 +44,7 @@ let page: Page;
 let seed: MasterSeed;
 
 test.beforeAll(async () => {
-    ({ app, page } = await launchGenieE2E('master'));
+    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' }));
 
     // Two first-run overlays used to be dismissed here, each behind a 20s
     // `waitFor(...).catch(() => {})`. Neither can render on this route any more,
@@ -653,7 +653,7 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * ## Why these tests are HERE rather than in their own spec
  *
  * They started in `e2e/flow-manager.spec.ts`, which called
- * `launchGenieE2E('master')` a second time. Every spec shares one
+ * `launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' })` a second time. Every spec shares one
  * `--user-data-dir`, and a dozen of them launch and close apps against it
  * happily — but `master` is the heavy one, the real product window with ptys and
  * a terminal host behind it, and a SECOND master app in the same run left this

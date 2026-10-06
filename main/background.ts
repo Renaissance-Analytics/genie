@@ -3714,10 +3714,23 @@ function showE2EWindow(): void {
             sandbox: false,
         },
     });
+    /**
+     * `GENIE_E2E_VIEW` lets a spec ask for a specific surface.
+     *
+     * The DEFAULT is deliberately left alone, so the E2E harness opens whatever the product
+     * opens -- if the default surface ever fails to render, a spec catches it. Specs that are
+     * about the PANEL GRID ask for it by name (`view=grid`) rather than relying on it being
+     * the default, which it no longer is.
+     */
+    const e2eView = process.env.GENIE_E2E_VIEW?.trim();
+    const viewQuery = e2eView ? `?view=${encodeURIComponent(e2eView)}` : '';
     if (isDev) {
-        win.loadURL(`http://localhost:8888/${page}`);
+        win.loadURL(`http://localhost:8888/${page}${viewQuery}`);
     } else {
-        win.loadFile(path.join(__dirname, `${page}.html`));
+        win.loadFile(
+            path.join(__dirname, `${page}.html`),
+            viewQuery ? { search: viewQuery.slice(1) } : {},
+        );
     }
 }
 

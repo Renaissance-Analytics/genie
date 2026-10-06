@@ -66,7 +66,7 @@ async function shoot(name: string): Promise<void> {
 }
 
 test.beforeAll(async () => {
-    ({ app, page } = await launchGenieE2E('master'));
+    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' }));
 
     const whatsNew = page.locator('.whats-new-backdrop');
     await whatsNew.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
