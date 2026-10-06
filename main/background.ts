@@ -3588,6 +3588,7 @@ function showE2EWindow(): void {
         'e2e-workspace-create',
         'e2e-agent-pulse',
         'e2e-deck',
+        'e2e-agent-view',
         // The product page, not a harness (genie#228). See the doc comment.
         'master',
     ] as const;

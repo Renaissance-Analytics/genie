@@ -75,6 +75,7 @@ export type E2EHarnessPage =
     | 'workspace-create'
     | 'agent-pulse'
     | 'deck'
+    | 'agent-view'
     | 'ask'
     | 'master';
 
@@ -92,6 +93,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     'workspace-create': 'e2e-workspace-create',
     'agent-pulse': 'e2e-agent-pulse',
     deck: 'e2e-deck',
+    'agent-view': 'e2e-agent-view',
     ask: 'ask',
     master: 'master',
 };
