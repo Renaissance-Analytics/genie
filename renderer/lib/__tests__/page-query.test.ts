@@ -67,3 +67,16 @@ describe('pageQueryString', () => {
         expect(readPageQuery(pageQueryString(q))).toEqual(q);
     });
 });
+
+describe('pageQueryString with repeats', () => {
+    it('emits an ARRAY as repeated keys, not a flattened value', () => {
+        // `mergeViewRoute` is tested to preserve a repeated non-route param verbatim.
+        // Flattening here would break that quietly, and the params at risk — `host`,
+        // `stage` — decide whether the renderer points at a remote machine.
+        expect(pageQueryString({ host: ['h1', 'h2'] })).toBe('?host=h1&host=h2');
+    });
+
+    it('round-trips a repeat through readPageQuery', () => {
+        expect(readPageQuery(pageQueryString({ spec: ['a', 'b'] }))).toEqual({ spec: ['a', 'b'] });
+    });
+});

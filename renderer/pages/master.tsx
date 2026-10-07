@@ -179,8 +179,8 @@ import {
 import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
-import { usePageQuery } from '../lib/page-query';
-import { parseViewRoute, type GenieView } from '../lib/view-route';
+import { replacePageQuery, usePageQuery } from '../lib/page-query';
+import { mergeViewRoute, parseViewRoute, type GenieView } from '../lib/view-route';
 import { AgentView } from '../components/Master/AgentView';
 import { answerForOption } from '../lib/attention-actions';
 import { floorSurface } from '../lib/floor-surface';
@@ -2816,12 +2816,20 @@ function MasterInner() {
                                             session={found}
                                             {...(view.kind === 'agent' && view.tab ? { tab: view.tab } : {})}
                                             onTab={(t) => {
-                                                // The tab lives in the URL, so refresh, back
-                                                // and a shared link all land in the same place.
-                                                void router.push(
-                                                    { query: { ...router.query, agent: surface.showAgent, tab: t } },
-                                                    undefined,
-                                                    { shallow: true },
+                                                // The tab lives in the URL, so refresh, back and a
+                                                // shared link all land in the same place.
+                                                //
+                                                // `mergeViewRoute` rather than replacing the query:
+                                                // `host` and `stage` are bound before load and decide
+                                                // whether this renderer points at a REMOTE machine, so
+                                                // dropping them would silently make a remote window
+                                                // local.
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId: surface.showAgent!,
+                                                        tab: t,
+                                                    }),
                                                 );
                                             }}
                                         />

@@ -40,11 +40,21 @@ export function readPageQuery(search: string): PageQuery {
     return out;
 }
 
-/** Serialise back, dropping empty values so the url you sit on most stays clean. */
-export function pageQueryString(query: Record<string, string | undefined>): string {
+/**
+ * Serialise back, dropping empty values so the url you sit on most stays clean.
+ *
+ * An ARRAY becomes repeated keys. `mergeViewRoute` is tested to preserve a repeated
+ * non-route param verbatim, so flattening or dropping one here would break that guarantee
+ * silently -- and the params at risk are `host` and `stage`, which decide whether this
+ * renderer points at a remote machine.
+ */
+export function pageQueryString(query: Record<string, string | string[] | undefined>): string {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
-        if (value !== undefined && value !== '') params.append(key, value);
+        if (value === undefined) continue;
+        for (const v of Array.isArray(value) ? value : [value]) {
+            if (v !== '') params.append(key, v);
+        }
     }
     const s = params.toString();
     return s ? `?${s}` : '';
@@ -61,7 +71,7 @@ const QUERY_EVENT = 'genie:pagequery';
  * window whose Back button walked through every tab you looked at would be a worse Back
  * button than none. The route is still in the url, so refresh and bookmarking work.
  */
-export function replacePageQuery(query: Record<string, string | undefined>): void {
+export function replacePageQuery(query: Record<string, string | string[] | undefined>): void {
     if (typeof window === 'undefined') return;
     const next = `${window.location.pathname}${pageQueryString(query)}`;
     window.history.replaceState(null, '', next);
