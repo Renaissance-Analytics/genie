@@ -1,14 +1,19 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "outDir": "../app",
-    // The main tree's tests import renderer, test and packages sources. TS 6+
-    // defaults rootDir to this file's folder once outDir is set, so it is named.
-    "rootDir": "..",
+    // TYPECHECK ONLY. The main-process bundles are built by `scripts/build-main.mjs`
+    // (Vite/rolldown), not by tsc — see `npm run build:main`.
+    //
+    // `outDir` used to be `../app` here, and that is a trap worth naming rather than
+    // leaving for the next person to find: with `rootDir: '..'`, tsc mirrors the source
+    // tree, so `tsc -p main/tsconfig.json` emits `app/main/background.js` while
+    // `package.json#main` loads `app/background.js`. Nothing loads, and Electron's only
+    // complaint is a bare "Cannot find module". That cost this branch four red CI jobs.
+    // No `outDir` means no emit to get wrong.
+    "noEmit": true,
     "module": "commonjs",
     "target": "ES2022",
     "jsx": "react-jsx",
-    "noEmit": false,
     "paths": {
       "@main/*": ["../main/*"],
       "@renderer/*": ["../renderer/*"],

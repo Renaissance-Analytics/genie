@@ -106,18 +106,18 @@ jobs:
           # No signing in the test build; explicitly opt out of auto-discovery so
           # electron-builder doesn't treat an empty CSC_LINK as a cert path.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx nextron build --win --publish never
+        run: npm run build:main && npm run build:renderer && npx electron-builder --win --publish never
 
       - name: Build installers (macOS) — NO publish
         if: runner.os == 'macOS'
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx nextron build --mac --publish never
+        run: npm run build:main && npm run build:renderer && npx electron-builder --mac --publish never
 
       - name: Build installers (Linux) — NO publish
         if: runner.os == 'Linux'
-        run: npx nextron build --linux --publish never
+        run: npm run build:main && npm run build:renderer && npx electron-builder --linux --publish never
 
       - name: Assert runtime is INSIDE the packaged app (extraResources shipped it)
         # Proof the runtime actually ships in the installer, not just in the

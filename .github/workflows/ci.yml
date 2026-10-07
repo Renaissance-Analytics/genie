@@ -43,7 +43,7 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
-      # Through the npm scripts, which name the project's own TypeScript: nextron
+      # Through the npm scripts, which name the project's own TypeScript: the renderer
       # ships a TypeScript 6 `tsc` bin too, and a bare `tsc` is whichever npm
       # linked last (scripts/__tests__/typecheck-uses-project-typescript.test.ts).
       - name: Typecheck (main)
@@ -59,8 +59,10 @@ jobs:
         run: npm run typecheck:e2e
       - name: Vitest
         run: npm test
-      - name: Build renderer (static export)
-        run: npx next build renderer
+      # Proves the renderer BUILDS on every PR, cheaply, before the per-OS E2E
+      # workflow spends minutes packaging it. Vite, not Next (Tynn #449).
+      - name: Build renderer
+        run: npm run build:renderer
 
   # REAL hosting tests (`*.real.test.ts`) — launch the ACTUAL bundled Caddy /
   # php-cgi and curl them, so a broken serve mode fails CI instead of shipping

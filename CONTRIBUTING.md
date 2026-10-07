@@ -18,7 +18,7 @@ changing it — read the section that applies to you, then the shared rules at t
 git clone git@github.com:Renaissance-Analytics/genie.git
 cd genie
 npm install
-npm run dev        # nextron launches Electron + Next.js dev server
+npm run dev        # Vite + tsc --watch, then Electron (scripts/dev.mjs)
 ```
 
 Other scripts you'll want:

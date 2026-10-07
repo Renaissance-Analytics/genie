@@ -10,11 +10,16 @@ const executable = (source: string) =>
         .replace(/^\s*\/\/.*$/gm, '');
 
 describe('light-theme surface guard', () => {
-    it('puts the token-bearing root around every Next page and portal', () => {
-        const document = read('renderer/pages/_document.tsx');
+    it('puts the token-bearing root around every page and portal', () => {
+        // RETARGETED when the renderer moved off Next (Tynn #449). `pages/_document.tsx` is
+        // gone; the page shell is now the HTML template in `renderer/vite.config.mts`, which
+        // emits one `<page>.html` per entry — so the class is asserted at its new source.
+        // The invariant is unchanged: tokens hang off this root, and without it the light
+        // theme resolves to nothing (genie#114).
+        const shell = read('renderer/vite.config.mts');
         const globals = read('renderer/styles/globals.css');
 
-        expect(document).toContain('<Html className="genie-theme-root">');
+        expect(shell).toContain('<html class="genie-theme-root">');
         expect(globals).toMatch(/:root\s*\{[\s\S]*--bg-0:/);
         expect(globals).toMatch(/\.dark\s*\{[\s\S]*--bg-0:/);
     });

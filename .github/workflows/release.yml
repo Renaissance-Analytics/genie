@@ -143,7 +143,7 @@ jobs:
         # Standalone Node + ABI-matched node-pty for THIS os/arch, shipped via
         # electron-builder extraResources → <resources>/runtime. Without it the
         # per-user OS-service host can't activate (Genie falls back to the
-        # detached host). Must run BEFORE nextron build so packaging includes it.
+        # detached host). Must run BEFORE the renderer/packaging build so it is included.
         # The script self-verifies node-pty loads under the standalone Node.
         # REQUIRE_HOST_CADDY makes a missing Go / xcaddy build FAIL the release
         # (story #238) rather than silently ship without the host Caddy.
@@ -172,7 +172,9 @@ jobs:
           else
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
-          npx nextron build --win
+          npm run build:main
+          npm run build:renderer
+          npx electron-builder --win
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
@@ -192,7 +194,9 @@ jobs:
           else
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
-          npx nextron build --mac
+          npm run build:main
+          npm run build:renderer
+          npx electron-builder --mac
 
       # Say whether the app is ACTUALLY signed. electron-builder prints one
       # `skipped macOS application code signing` line among thousands and the
@@ -211,7 +215,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-        run: npx nextron build --linux
+        run: npm run build:main && npm run build:renderer && npx electron-builder --linux
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

@@ -5,9 +5,10 @@ name: E2E (per-OS, isolated)
 # (app/background.js) via Playwright's Electron support without colliding with
 # anything — which is exactly what catches BOOT-time regressions (e.g. a CJS
 # `module.exports` core bundled into the ESM main output throwing at launch)
-# that a webpack-compile-only check (`build:e2e`) sails straight past.
+# that a compile-only check (`build:e2e`) sails straight past.
 #
-# This is a TEST gate only. It builds the app with `nextron build --no-pack`
+# This is a TEST gate only. It builds the app with `npm run build:e2e` (vite --mode e2e,
+# which is the ONLY build that includes the e2e-* harness pages)
 # (webpack compile, no installer) and never packages, publishes, tags, or
 # touches the auto-update feed. The RELEASE build stays SEPARATE — see
 # release.yml (publishing) and test-build.yml (non-publishing installer smoke).

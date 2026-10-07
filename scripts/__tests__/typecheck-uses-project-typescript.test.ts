@@ -6,13 +6,18 @@ import { describe, expect, it } from 'vitest';
  * The typecheck runs the TypeScript this project declares — not whichever `tsc`
  * npm happened to link last.
  *
- * nextron 10 depends on TypeScript 6 (as `typescript6` → `@typescript/old`) for its
- * own build, and that package also ships a `tsc` bin. With both hoisted, the bare
- * `tsc` in `node_modules/.bin` is whichever npm linked last: on the machine where
- * this was found it was TypeScript 6, while `package.json` asked for 7. A typecheck
- * on the wrong major passes or fails for reasons unrelated to the code, and nothing
- * says which compiler ran. So the scripts name the project's own entry point, and
- * CI runs the scripts rather than restating them.
+ * How this was found: nextron 10 depended on TypeScript 6 (as `typescript6` →
+ * `@typescript/old`) for its own build, and that package also ships a `tsc` bin. With
+ * both hoisted, the bare `tsc` in `node_modules/.bin` was whichever npm linked last —
+ * on the machine where this surfaced, TypeScript 6, while `package.json` asked for 7.
+ * A typecheck on the wrong major passes or fails for reasons unrelated to the code,
+ * and nothing says which compiler ran.
+ *
+ * **That particular second compiler is gone** — nextron went with the move off Next
+ * (Tynn #449), and `typescript6` left the lockfile with it. The guard stays because the
+ * hazard is structural, not nextron's: any dependency may ship a `tsc`, and `.bin`
+ * resolution is link order, which no error message mentions. Naming the compiler by
+ * path costs nothing and the failure it prevents is invisible.
  */
 
 const REPO = path.resolve(__dirname, '../..');
