@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { discoverPages } from '../../page-discovery';
+import os from 'node:os';
+import { discoverPages, pruneStaleHarnessPages } from '../../page-discovery';
 
 /**
  * The main process and the renderer build must agree on which pages exist.
@@ -85,6 +86,50 @@ describe('the page contract between main and the renderer build', () => {
         const harnessOnly = targets.filter((t) => !production.has(t.page) && withHarnesses.has(t.page));
         expect(harnessOnly.map((h) => `${h.page} (in ${h.file})`)).toEqual([]);
         for (const t of targets) expect(t.page.startsWith('e2e-')).toBe(false);
+    });
+
+    /**
+     * The leak `emptyOutDir: false` opens.
+     *
+     * `build:main` writes four bundles into the same `app/` and the renderer build runs
+     * second, so it may not empty the directory. The consequence is that a production
+     * build writes its 12 pages over whatever is there and leaves the 14 a previous
+     * `--mode e2e` build wrote — and `electron-builder.yml` packages `app/**` wholesale.
+     * `npm run test:e2e` then `npm run build` shipped every harness page.
+     *
+     * Invisible on CI, which checks out fresh every run. That is the reason it is tested
+     * rather than trusted.
+     */
+    it('removes harness pages a previous e2e build left in the out dir', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-prune-'));
+        try {
+            for (const f of ['master.html', 'e2e-deck.html', 'e2e-agent-view.html']) {
+                fs.writeFileSync(path.join(dir, f), '<!doctype html>');
+            }
+            // Non-page files share the directory — the four main bundles land here too, and
+            // deleting one of those is how this "fix" would become a worse bug than the leak.
+            fs.writeFileSync(path.join(dir, 'background.js'), '// main');
+
+            const removed = pruneStaleHarnessPages(dir);
+
+            expect(removed).toEqual(['e2e-agent-view.html', 'e2e-deck.html']);
+            expect(fs.readdirSync(dir).sort()).toEqual(['background.js', 'master.html']);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('prunes nothing when there is nothing stale, and tolerates a missing dir', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-prune-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'master.html'), '<!doctype html>');
+            expect(pruneStaleHarnessPages(dir)).toEqual([]);
+            expect(fs.readdirSync(dir)).toEqual(['master.html']);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+        // First build on a clean checkout: `app/` does not exist yet.
+        expect(pruneStaleHarnessPages(path.join(dir, 'does-not-exist'))).toEqual([]);
     });
 
     it('keeps every harness page out of the production set', () => {

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { THEME_BOOT_SCRIPT } from './lib/theme-boot';
-import { discoverPages } from './page-discovery';
+import { discoverPages, pruneStaleHarnessPages } from './page-discovery';
 
 /**
  * The renderer build — Vite, not Next (owner directive, Tynn #449).
@@ -71,9 +71,28 @@ const VIRTUAL = 'virtual:genie-page/';
  * be boilerplate that can drift, and a page whose wrapper was subtly different from the rest
  * is exactly the kind of difference nobody notices.
  */
-function geniePages(pages: string[]): Plugin {
+function geniePages(pages: string[], includeHarnesses: boolean): Plugin {
     return {
         name: 'genie-pages',
+
+        /**
+         * A production build REMOVES harness pages an earlier `--mode e2e` build left here.
+         *
+         * `emptyOutDir` is false by necessity (the four main-process bundles live in this
+         * same directory and are written first), so without this a production build writes
+         * 12 pages beside the 14 a test build wrote, and `electron-builder.yml` packages
+         * `app/**` wholesale. `npm run test:e2e && npm run build` shipped every harness.
+         *
+         * In `buildStart`, so the removal happens before anything is emitted and a failed
+         * build cannot leave a half-pruned directory that looks correct.
+         */
+        buildStart() {
+            if (includeHarnesses) return;
+            const removed = pruneStaleHarnessPages(path.join(here, '..', 'app'));
+            if (removed.length) {
+                this.info(`removed ${removed.length} stale harness page(s) from a previous e2e build`);
+            }
+        },
 
         resolveId(id) {
             return id.startsWith(VIRTUAL) ? `\0${id}` : null;
@@ -155,7 +174,7 @@ export default defineConfig(({ mode }) => {
         // RELATIVE asset urls. See the note above — absolute paths 404 under file:// and the
         // window hangs with no error.
         base: './',
-        plugins: [react(), geniePages(pages)],
+        plugins: [react(), geniePages(pages, includeHarnesses)],
         build: {
             // Where main/tsconfig.json also emits, so `loadFile(__dirname/master.html)` finds
             // its page beside the compiled main process.

@@ -37,3 +37,28 @@ export function discoverPages(includeHarnesses: boolean): string[] {
         .filter((name) => includeHarnesses || !name.startsWith('e2e-'))
         .sort();
 }
+
+/**
+ * Delete harness pages left in `outDir` by an earlier `--mode e2e` build.
+ *
+ * `build.emptyOutDir` is false and has to be: `build:main` writes the four main-process
+ * bundles into the same `app/`, and the renderer build runs second, so emptying it would
+ * delete them. The cost of that is this — a production build writes 12 pages but does not
+ * REMOVE the 14 a previous test build wrote, and `electron-builder.yml` ships `app/**\/*`.
+ *
+ * So after `npm run test:e2e`, a plain `npm run build` would package every harness page.
+ * CI never sees it (fresh checkout each run), which is exactly what makes it worth a
+ * function and a test rather than a convention: the one place it happens is a developer's
+ * machine, where nobody is looking at the page list.
+ *
+ * Returns what it removed, so the build can say so instead of deleting files silently.
+ */
+export function pruneStaleHarnessPages(outDir: string): string[] {
+    if (!fs.existsSync(outDir)) return [];
+    const stale = fs
+        .readdirSync(outDir)
+        .filter((f) => f.startsWith('e2e-') && f.endsWith('.html'))
+        .sort();
+    for (const f of stale) fs.rmSync(path.join(outDir, f));
+    return stale;
+}
