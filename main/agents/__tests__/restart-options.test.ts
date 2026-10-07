@@ -97,3 +97,68 @@ describe('restartOptionsFor', () => {
         }
     });
 });
+
+/**
+ * An ACP agent resumes through `session/load`, not through a resume FLAG.
+ *
+ * `canResumeTui` asks whether a provider's CLI has a resume GRAMMAR — `claude --resume <id>`
+ * typed into a pty. That is the wrong question for a structured session: there is no command
+ * line, and the capability is the protocol's `session/load` plus a stored provider id.
+ *
+ * Getting this wrong is not cosmetic. `canResume: false` hides "Restart (resume)" and leaves
+ * only the fresh restart, so the control that preserves the conversation disappears for
+ * exactly the agents that now have one — and the menu would be telling the truth about a
+ * capability Genie had and did not know it had.
+ */
+describe('an ACP session', () => {
+    const acpSpec = (over: Record<string, unknown> = {}) =>
+        ({ meta: { agent: 'claude', engine: 'acp', ...over } }) as never;
+
+    it('can resume when Genie holds the provider’s session id', () => {
+        const o = restartOptionsFor(acpSpec({ chat_session_id: 'cli-uuid' }));
+        expect(o).toMatchObject({ isAgent: true, canResume: true, losesConversation: true });
+    });
+
+    /**
+     * THE CASE THAT DISTINGUISHES, and the reason the claude tests above are not enough.
+     *
+     * `canResumeTui` is true for claude, so an ACP claude session reports `canResume: true`
+     * whether or not anything is engine-aware — right answer, wrong reason, and a test that
+     * cannot fail is not a test.
+     *
+     * Measured: `canResumeTui` is true for claude and codex, FALSE for gemini and kimi. All
+     * four are ACP-capable. So a gemini ACP session has a resumable conversation (the
+     * protocol's `session/load` plus a stored provider id) while its CLI has no `--resume`
+     * flag at all — and keying on the pty grammar hides the control that preserves it.
+     */
+    it('can resume a provider with NO pty resume flag, because ACP does not use one', () => {
+        const o = restartOptionsFor({
+            meta: { agent: 'gemini', engine: 'acp', chat_session_id: 'cli-uuid' },
+        } as never);
+        expect(o.canResume).toBe(true);
+    });
+
+    it('cannot resume when no id was ever captured', () => {
+        // A first launch, or a provider that reported none. Honest: there is nothing to
+        // continue, and offering the control would produce a refusal.
+        expect(restartOptionsFor(acpSpec()).canResume).toBe(false);
+    });
+
+    it('can always restart FRESH, which needs no id', () => {
+        expect(restartOptionsFor(acpSpec()).canRestartFresh).toBe(true);
+    });
+});
+
+describe('a PTY agent is unaffected', () => {
+    it('still needs a resume grammar, not just an id', () => {
+        // The inverse must keep working: aider has no `--resume`, so a captured id does not
+        // make it resumable, and claiming otherwise would type a flag the CLI rejects.
+        const noGrammar = { meta: { agent: 'aider', chat_session_id: 'x' } } as never;
+        expect(restartOptionsFor(noGrammar).canResume).toBe(false);
+    });
+
+    it('resumes with a grammar AND an id, exactly as before', () => {
+        const withBoth = { meta: { agent: 'claude', chat_session_id: 'x' } } as never;
+        expect(restartOptionsFor(withBoth).canResume).toBe(true);
+    });
+});

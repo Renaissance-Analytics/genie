@@ -52,6 +52,14 @@ export function startAcpForSpec(input: {
      * is still running.
      */
     onTurnEnded?: () => void;
+    /**
+     * Continue THIS conversation instead of opening a new one.
+     *
+     * The provider's own session id, from `meta.chat_session_id` — captured out of
+     * `META_CLI_SESSION_ID` on an earlier run. Absent means there is nothing to continue
+     * (a first launch, or a provider that never reported one), and the session starts fresh.
+     */
+    resumeSessionId?: string | null;
 }): StartedAcpAgent | { error: string } {
     const started = startAcpAgent(
         { provider: input.provider, cwd: input.cwd, auth: input.auth ?? 'subscription' },
@@ -131,7 +139,24 @@ export function startAcpForSpec(input: {
     // Fire and forget: the handshake's failure belongs on the agent's own surface, not in
     // the caller's control flow — `createAgentTerminal` has already returned a terminal by
     // the time this settles, exactly as the pty path has.
-    void driver.start({ cwd: input.cwd }).catch(() => {
+    const resumeId = input.resumeSessionId?.trim();
+    const begin = resumeId
+        ? driver.resume({ cwd: input.cwd, sessionId: resumeId })
+        : driver.start({ cwd: input.cwd });
+
+    void begin.catch((err) => {
+        // A REFUSED RESUME IS NOT A DEAD AGENT. prism-acp refuses a load for a session that
+        // is still running, and refuses an ACP id with a message naming the right key —
+        // neither is a reason to leave the agent with no session at all. Falling back to a
+        // fresh start keeps it usable and says so, rather than leaving a window that accepts
+        // prompts into nothing.
+        if (resumeId) {
+            console.warn(
+                `[acp] could not resume ${input.specId} (${String(err)}) — starting a fresh ` +
+                    'conversation instead; the previous one is not lost, only not continued.',
+            );
+            void driver.start({ cwd: input.cwd }).catch(() => {});
+        }
         // The channel will report closed through the registry, which is what the roster
         // and triage read. Swallowing here keeps an unhandled rejection out of the main
         // process; it does not hide the failure from anything that looks.

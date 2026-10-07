@@ -37,6 +37,12 @@ export interface AgentSpecLike {
         agent?: string;
         agent_command?: string;
         chat_session_id?: string;
+        /**
+         * `'acp'` for a structured session, written by `createAgentTerminal` once
+         * `launchPlan` has decided — see the note in {@link restartOptionsFor} for why the
+         * engine and not the provider decides whether a conversation can be resumed.
+         */
+        engine?: string;
     } | null;
 }
 
@@ -113,9 +119,24 @@ export function restartOptionsFor(spec: AgentSpecLike | null | undefined): Resta
     // a chat Genie never bound to — only that there is nothing here that a
     // restart could carry across, and therefore nothing to promise the user.
     const captured = !!capturedSessionId(spec ?? null);
+    /**
+     * AN ACP SESSION RESUMES THROUGH THE PROTOCOL, NOT THROUGH A FLAG.
+     *
+     * `canResumeTui` asks whether a provider's CLI has a resume GRAMMAR — `claude --resume
+     * <id>` typed into a pty. For a structured session there is no command line: the
+     * capability is `session/load` plus a stored provider id, and prism-acp 0.3.0 provides
+     * the first.
+     *
+     * This is not cosmetic, and claude hides it. `canResumeTui` is true for claude and codex
+     * and FALSE for gemini and kimi, all four of which are ACP-capable — so a gemini ACP
+     * session has a resumable conversation while its CLI has no `--resume` at all. Keying on
+     * the grammar would hide "Restart (resume)" for exactly those agents and leave only the
+     * restart that discards the conversation.
+     */
+    const isAcp = spec?.meta?.engine === 'acp';
     return {
         isAgent: true,
-        canResume: canResumeTui(agent) && captured,
+        canResume: (isAcp || canResumeTui(agent)) && captured,
         canRestartFresh: true,
         losesConversation: captured,
     };

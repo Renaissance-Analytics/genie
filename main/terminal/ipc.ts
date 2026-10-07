@@ -122,6 +122,7 @@ import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { acpRegistry, terminalIsLive } from '../acp/registry';
 import { startAcpForSpec } from '../acp/start';
+import { capturedSessionId } from '../agents/restart-options';
 import { declaredSessions } from '../agentsession/bindings';
 import { launchPlan } from '../agents/launch-plan';
 import { agentPulse } from './agent-pulse';
@@ -907,6 +908,23 @@ export function createAgentTerminal(opts: {
             acpEnabled: dbSettingsProvider().get('acp_engine') === 'on',
         });
         if (plan?.kind === 'acp') {
+            /**
+             * RECORD THE ENGINE ON THE SPEC.
+             *
+             * `restartOptionsFor` reads `meta.engine === 'acp'` to decide that a session
+             * resumes through `session/load` rather than through a pty resume FLAG — which
+             * matters because `canResumeTui` is false for gemini and kimi even though both
+             * are ACP-capable, so keying on the grammar hides the control that preserves
+             * their conversation.
+             *
+             * Written here rather than in the `meta` literal above because the engine is not
+             * known until `launchPlan` has decided, and that happens after the spec exists.
+             * Without this line the engine check is dead code that reads as a feature.
+             */
+            const current = getTerminalSpec(id);
+            if (current && current.meta?.engine !== 'acp') {
+                updateTerminalSpec(id, { meta: { ...current.meta, engine: 'acp' } });
+            }
             const started = startAcpForSpec({
                 specId: id,
                 provider: plan.provider,
@@ -929,6 +947,16 @@ export function createAgentTerminal(opts: {
                 // Without this, telemetry records turns that start and never finish: no
                 // duration, no cost, and every agent looks permanently busy.
                 onTurnEnded: () => declaredSessions.endTurnForSpec(id),
+                // CONTINUE the conversation when Genie holds the provider's own id.
+                //
+                // `capturedSessionId` reads `meta.chat_session_id` — the SAME field the pty
+                // path writes from `captureSessionByDetect`, and the field the ACP id is
+                // persisted into. So a restart resumes through machinery that already exists
+                // rather than a parallel one, and an agent whose pty died in a Genie restart
+                // comes back to its conversation instead of a blank one.
+                //
+                // Absent on a first launch, which is the normal case and starts fresh.
+                resumeSessionId: capturedSessionId(getTerminalSpec(id) ?? null),
             });
             if ('error' in started) {
                 // Named, and surfaced the same way a refused pty launch is: an agent that
