@@ -14,7 +14,7 @@
     "dev:main": "node scripts/build-main.mjs --watch",
     "build:runtime": "node scripts/build-service-runtime.mjs",
     "build:renderer": "vite build --config renderer/vite.config.mts",
-    "build:main": "node scripts/build-main.mjs",
+    "build:main": "node scripts/build-main.mjs && node scripts/assert-no-e2e-in-bundle.mjs app",
     "build": "npm run build:runtime && npm run build:main && npm run build:renderer && electron-builder",
     "build:win": "npm run build:runtime && npm run build:main && npm run build:renderer && electron-builder --win",
     "build:mac": "npm run build:runtime && npm run build:main && npm run build:renderer && electron-builder --mac",
@@ -29,7 +29,7 @@
     "test:hosting": "vitest run --config vitest.hosting.config.mts",
     "test:acp": "vitest run --config vitest.acp.config.mts",
     "test:contract": "vitest run --config vitest.contract.config.mts",
-    "build:e2e": "npm run build:main && vite build --config renderer/vite.config.mts --mode e2e",
+    "build:e2e": "node scripts/build-main.mjs --e2e && vite build --config renderer/vite.config.mts --mode e2e",
     "pretest:e2e": "node scripts/prepare-e2e-natives.mjs",
     "test:e2e": "npm run build:e2e && playwright test",
     "build:icons": "node resources/build-icons.cjs"

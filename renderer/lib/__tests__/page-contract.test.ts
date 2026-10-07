@@ -46,8 +46,9 @@ function loadFileTargets(): { page: string; file: string }[] {
             }
             if (!entry.name.endsWith('.ts')) continue;
             const src = fs.readFileSync(full, 'utf8');
-            // `loadFile(path.join(__dirname, 'master.html'))` and the few that interpolate a
-            // computed page name are both matched; the latter are asserted separately below.
+            // Literal page names only — `loadFile(path.join(__dirname, 'master.html'))`.
+            // A COMPUTED name cannot be checked here, which is why it is forbidden outright
+            // by the test below rather than waved at in this comment.
             for (const m of src.matchAll(/loadFile\([^)]*?['"`]([A-Za-z0-9-]+)\.html['"`]/g)) {
                 found.push({ page: m[1]!, file: path.relative(REPO, full).replace(/\\/g, '/') });
             }
@@ -130,6 +131,45 @@ describe('the page contract between main and the renderer build', () => {
         }
         // First build on a clean checkout: `app/` does not exist yet.
         expect(pruneStaleHarnessPages(path.join(dir, 'does-not-exist'))).toEqual([]);
+    });
+
+    /**
+     * No production code may load a page by COMPUTED name.
+     *
+     * This closes a hole in the scan above, which only sees literal filenames. When this
+     * file was first written it carried a comment claiming interpolated names were "asserted
+     * separately below" — and nothing asserted them. The one place that interpolated was
+     * `showE2EWindow`, `loadFile(path.join(__dirname, \`${page}.html\`))`, which was compiled
+     * into the shipped binary: the exact case the guard was for, invisible to it.
+     *
+     * The rig now lives behind `__GENIE_E2E_BUILD__` in `main/e2e/`, excluded from production
+     * builds and verified by `scripts/assert-no-e2e-in-bundle.mjs`, so every surviving
+     * `loadFile` outside that directory names its page literally. Keeping it that way is what
+     * makes the scan above complete rather than best-effort.
+     */
+    it('never loads a page by computed name outside the E2E rig', () => {
+        const offenders: string[] = [];
+        const walk = (dir: string) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    // The rig may interpolate: it is not in a production build.
+                    if (['__tests__', 'node_modules', 'e2e'].includes(entry.name)) continue;
+                    walk(full);
+                    continue;
+                }
+                if (!entry.name.endsWith('.ts')) continue;
+                const src = fs.readFileSync(full, 'utf8');
+                for (const m of src.matchAll(/loadFile\([^;]*?\$\{[^;]*?\.html/g)) {
+                    offenders.push(`${path.relative(REPO, full).replace(/\\/g, '/')}: ${m[0].slice(0, 60)}`);
+                }
+            }
+        };
+        walk(MAIN_DIR);
+        expect(
+            offenders,
+            'a computed page name cannot be checked against the build, so it must not exist',
+        ).toEqual([]);
     });
 
     it('keeps every harness page out of the production set', () => {

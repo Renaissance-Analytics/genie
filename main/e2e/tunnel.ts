@@ -49,14 +49,10 @@ const READY_DEADLINE_MS = 40_000;
 /** Floor between re-run kicks, so a fast-failing leg cannot spin the page. */
 const RERUN_INTERVAL_MS = 250;
 
-export function isE2ETunnel(): boolean {
-    return process.env.GENIE_E2E === '1' && process.env.GENIE_E2E_TUNNEL === '1';
-}
-
-/** Optional real-tailnet rung: set to this workstation's Tailscale IP. */
-export function isE2ETailscaleTunnel(): boolean {
-    return isE2ETunnel() && !!process.env.GENIE_E2E_TAILSCALE_IP;
-}
+// Defined in `./flags`, which imports nothing — see the note in `mock.ts`. Production code
+// may ask these questions without shipping the rig that answers them.
+import { isE2ETailscaleTunnel, isE2ETunnel } from './flags';
+export { isE2ETailscaleTunnel, isE2ETunnel } from './flags';
 
 function fixtureHtml(): string {
     return `<!doctype html>

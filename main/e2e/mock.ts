@@ -57,29 +57,21 @@ import {
     registerWorkspaceCreateE2EMocks,
 } from './workspace-create';
 
-/** True only in E2E test mode. Everything in this module no-ops otherwise. */
-export function isE2E(): boolean {
-    return process.env.GENIE_E2E === '1';
-}
-
-/** True when the mobile-server E2E harness is requested (GENIE_E2E_MOBILE=1). */
-export function isE2EMobile(): boolean {
-    return isE2E() && process.env.GENIE_E2E_MOBILE === '1';
-}
-
 /**
- * True when the harness window is the REAL master page (genie#228).
+ * The E2E predicates live in `./flags`, which imports NOTHING.
  *
- * Derived from the page itself rather than from a flag of its own — unlike the
- * hosting harness, whose containers a spec might want on a page other than its
- * own. The one thing this gates is the sign-in read, and that is needed by
- * exactly one page: `master.html` is the only route that refuses to render
- * without a session. Reading `GENIE_E2E_PAGE` makes a flag/page mismatch
- * impossible, so no other spec can end up running against a faked identity.
+ * They used to be defined here, and that is why a shipped Genie contained this module: a
+ * production file asking `isE2E()` had to import `mock.ts`, which pulls in the whole rig.
+ * `flags.ts` is dependency-free and gated on a compile-time constant, so production can
+ * reference it without shipping any of this — and cannot enter E2E mode at all.
+ *
+ * Re-exported rather than relocated silently, because `GENIE_E2E_PAGE` deciding
+ * `isE2EMaster` is the reason a flag/page mismatch is impossible (genie#228): the sign-in
+ * read it gates is needed by exactly one page, `master.html`, the only route that refuses
+ * to render without a session. That reasoning now lives beside the predicate in `flags.ts`.
  */
-export function isE2EMaster(): boolean {
-    return isE2E() && process.env.GENIE_E2E_PAGE === 'master';
-}
+import { isE2E, isE2EMaster, isE2EMobile } from './flags';
+export { isE2E, isE2EMaster, isE2EMobile } from './flags';
 
 /**
  * The signed-in identity the master harness sees. ONE backend connected and the
