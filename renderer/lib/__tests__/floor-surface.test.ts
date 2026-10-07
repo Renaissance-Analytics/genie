@@ -7,26 +7,28 @@ describe('floorSurface', () => {
     it('shows the grid for the DEFAULT view', () => {
         // The default must not hide the grid. An earlier version defaulted the route to
         // the Deck and every panel test on every platform failed.
-        expect(floorSurface({ kind: 'grid' })).toEqual({ showDeck: false, hideGrid: false });
+        expect(floorSurface({ kind: 'grid' })).toEqual({ showDeck: false, hideGrid: false, showAgent: null });
     });
 
     it('shows the Deck and hides the grid for the Deck view', () => {
-        expect(floorSurface({ kind: 'deck' })).toEqual({ showDeck: true, hideGrid: true });
+        expect(floorSurface({ kind: 'deck' })).toEqual({ showDeck: true, hideGrid: true, showAgent: null });
     });
 
     it('shows the grid for the Workbench', () => {
         expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' })).toEqual({
             showDeck: false,
             hideGrid: false,
+            showAgent: null,
         });
     });
 
-    it('falls back to the grid for an agent route, not to a blank surface', () => {
-        // The Agent view is a later phase. A link that resolves to nothing is worse
-        // than one that resolves to the old thing.
+    it('resolves an agent route to that AGENT, no longer falling back to the grid', () => {
+        // It used to fall back because the Agent view did not exist -- this file said so.
+        // It exists now, so the link resolves to what it names.
         expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
             showDeck: false,
-            hideGrid: false,
+            hideGrid: true,
+            showAgent: 'a1',
         });
     });
 
@@ -40,7 +42,7 @@ describe('floorSurface', () => {
             { kind: 'agent', agentId: 'a', tab: null } as const,
         ]) {
             const s = floorSurface(view);
-            expect(Object.keys(s).sort()).toEqual(['hideGrid', 'showDeck']);
+            expect(Object.keys(s).sort()).toEqual(['hideGrid', 'showAgent', 'showDeck']);
         }
     });
 });
@@ -79,5 +81,29 @@ describe('Floor keeps the grid mounted', () => {
     it('positive control: the guard reads the real file', () => {
         // Without this, every assertion above would also pass against an empty string.
         expect(floor).toContain('export default function Floor');
+    });
+});
+
+describe('the agent route now RENDERS the agent view', () => {
+    it('reports the agent to show, and conceals the grid', () => {
+        // It used to fall back to the grid because the Agent view did not exist. It does
+        // now, so a link to an agent resolves to that agent.
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
+            showDeck: false,
+            hideGrid: true,
+            showAgent: 'a1',
+        });
+    });
+
+    it('CONCEALS the grid rather than unmounting it', () => {
+        // Same hazard as the Deck: every terminal panel owns a live xterm bound to a pty,
+        // and unmounting the grid would remount them all and reset the terminals.
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null }).hideGrid).toBe(true);
+    });
+
+    it('shows no agent for any other route', () => {
+        expect(floorSurface({ kind: 'grid' }).showAgent).toBeNull();
+        expect(floorSurface({ kind: 'deck' }).showAgent).toBeNull();
+        expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showAgent).toBeNull();
     });
 });

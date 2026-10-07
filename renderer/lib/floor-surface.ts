@@ -22,20 +22,28 @@ export interface FloorSurface {
     showDeck: boolean;
     /** Conceal the grid with CSS. NOT a licence to unmount it. */
     hideGrid: boolean;
+    /**
+     * The agent whose view to mount above the grid, or null.
+     *
+     * An id rather than a boolean, because the surface IS the subject: the rail selects an
+     * agent and that agent is the view. A separate piece of state holding "which agent"
+     * would be a second truth that could disagree with the route.
+     */
+    showAgent: string | null;
 }
 
 export function floorSurface(view: GenieView): FloorSurface {
     switch (view.kind) {
         case 'grid':
-            return { showDeck: false, hideGrid: false };
+            return { showDeck: false, hideGrid: false, showAgent: null };
         case 'deck':
-            return { showDeck: true, hideGrid: true };
+            return { showDeck: true, hideGrid: true, showAgent: null };
         case 'workbench':
-            return { showDeck: false, hideGrid: false };
+            return { showDeck: false, hideGrid: false, showAgent: null };
         case 'agent':
-            // The Agent view is a later phase. Until it exists an agent route falls
-            // back to the grid rather than to a blank surface — a link that resolves
-            // to nothing is worse than one that resolves to the old thing.
-            return { showDeck: false, hideGrid: false };
+            // The Agent view EXISTS now, so an agent route resolves to that agent instead
+            // of falling back to the grid. The grid is concealed, never unmounted -- the
+            // same live-xterm hazard the Deck carries.
+            return { showDeck: false, hideGrid: true, showAgent: view.agentId };
     }
 }
