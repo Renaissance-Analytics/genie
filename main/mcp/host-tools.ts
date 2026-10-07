@@ -2517,6 +2517,9 @@ function observeWorkspaceAgents(
                 runtimeTerminalId,
                 terminalSpecExists: !!spec,
                 ptyLive: !!terminalId && isTerminalLive(terminalId),
+                // Only changes the WORDING of a dead-transport finding — an ACP session has
+                // no pty, so "read the exit tail" would send an operator to look at nothing.
+                engine: spec?.meta?.engine === 'acp' ? 'acp' : 'pty',
                 requiredTransport: required,
                 transportVerifiedAt: agent.transport_verified_at,
                 transportError: agent.transport_error,

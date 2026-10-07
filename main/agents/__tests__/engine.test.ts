@@ -28,10 +28,17 @@ describe('engineFor', () => {
         expect(engineFor({ provider: 'goose', acpEnabled: true })).toBe('pty');
     });
 
-    it('covers every provider that has an ACP mode', () => {
-        for (const p of ['claude', 'codex', 'gemini', 'kimi']) {
+    it('covers every provider that can actually run on ACP', () => {
+        for (const p of ['claude', 'gemini', 'kimi']) {
             expect(engineFor({ provider: p, acpEnabled: true })).toBe('acp');
         }
+    });
+
+    it('keeps CODEX on the pty, because ACP cannot launch it yet', () => {
+        // This asserted `acp` and was wrong in the way that matters: `acpLaunch` refuses
+        // codex `no-acp-mode`, so routing it to ACP produced an agent that never started.
+        // `main/acp/__tests__/engine-launch-agree.test.ts` holds the two halves together.
+        expect(engineFor({ provider: 'codex', acpEnabled: true })).toBe('pty');
     });
 
     it('stays on the pty when the provider is unknown', () => {

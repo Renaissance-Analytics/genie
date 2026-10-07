@@ -31,7 +31,23 @@
  */
 
 /** Providers with an ACP mode. The rest stay on the pty. */
-export const ACP_PROVIDERS = ['claude', 'codex', 'gemini', 'kimi'] as const;
+/**
+ * Providers that can ACTUALLY run on ACP today.
+ *
+ * `engineFor` reads this to route an agent to the ACP engine, and `acpLaunch` below decides
+ * what to spawn. **The two must agree.** When they do not, the agent is routed to an engine
+ * that then refuses it, and the only symptom is one console line (`[acp] … did not start`)
+ * and an agent that sits in the roster doing nothing — no exception, no failing test, no UI.
+ *
+ * **codex is deliberately absent.** It was here, and `acpLaunch` refuses it `no-acp-mode`
+ * "until prism ships its driver" — so with `acp_engine` on, every codex agent was routed to
+ * ACP and never started. Held by `__tests__/engine-launch-agree.test.ts`, which walks this
+ * list and asserts each entry can launch.
+ *
+ * It returns the moment prism can drive it. The third-party `codex-acp` adapter is not an
+ * option (owner: NO 3RD PARTY), which is why this waits on prism rather than on npm.
+ */
+export const ACP_PROVIDERS = ['claude', 'gemini', 'kimi'] as const;
 export type AcpProvider = (typeof ACP_PROVIDERS)[number];
 
 export interface AcpLaunch {
@@ -93,7 +109,8 @@ export function acpLaunch(provider: string, ctx: LaunchContext): LaunchResult {
     // Anything prism cannot drive is refused BY NAME rather than pointed at the claude
     // host. A wrong spawn starts something that cannot drive the provider and then times
     // out in the handshake, which reads as a hung agent instead of an unsupported one.
-    // codex lands here until prism ships its driver.
+    // codex lands here until prism ships its driver — and is absent from ACP_PROVIDERS
+    // for that reason, so `engineFor` keeps it on the pty rather than routing it here.
     if (!PRISM_DRIVES.has(provider)) return { ok: false, reason: 'no-acp-mode', provider };
 
     const script = ctx.hostScript();
