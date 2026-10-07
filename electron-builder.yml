@@ -82,7 +82,7 @@ asarUnpack:
 # doesn't activate until CI ships the runtime.
 #
 # ====================================================================
-# CI MUST PRODUCE `resources/runtime/` BEFORE `nextron build` (per OS×arch):
+# CI MUST PRODUCE `resources/runtime/` BEFORE `electron-builder` (per OS×arch):
 #   1. Download a PINNED standalone Node for the target OS+arch (e.g. the
 #      official node-vX.Y.Z-win-x64 / -darwin-arm64 / -linux-x64 dist), and
 #      place its `node`/`node.exe` at resources/runtime/node[.exe].

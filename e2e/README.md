@@ -14,10 +14,16 @@ this suite does.
 npm run test:e2e
 ```
 
-That runs `build:e2e` (a `nextron build --no-pack`: builds the renderer static
-export + compiles the main bundle into `app/`, **without** electron-builder
-packaging) and then `playwright test`. No dev server is needed — the app loads
-the exported renderer from `app/*.html` over `file://`.
+That runs `build:e2e` — `build:main` (the four main-process bundles) plus
+`vite build --mode e2e` (the renderer, **including** the `e2e-*` harness pages),
+both into `app/`, **without** electron-builder packaging — and then
+`playwright test`. No dev server is needed: the app loads the built renderer from
+`app/*.html` over `file://`.
+
+`--mode e2e` is the whole reason the harness pages exist in a test run and not in
+an installer. A production `build:renderer` discovers the same `renderer/pages/`
+tree and filters `e2e-*` out, so the shipped app has 12 pages and none of them is
+a harness.
 
 To skip the rebuild when `app/` is already current:
 

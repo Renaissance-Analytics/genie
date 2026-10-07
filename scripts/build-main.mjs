@@ -1,0 +1,178 @@
+/**
+ * The main-process build — what nextron's webpack did, as code we own (Tynn #449).
+ *
+ * Vite, not a new bundler: it is already this project's renderer bundler and a direct
+ * devDependency, so the project has ONE bundler rather than two opaque ones.
+ *
+ * ## What this has to reproduce, and why each part is load-bearing
+ *
+ * Measured from `node_modules/nextron/bin/webpack.config.cjs` plus the repo's own
+ * `nextron.config.js` override, both read before removal:
+ *
+ * - **Four flat files in `app/`**, one per entry, `splitChunks: false`. Not an
+ *   optimisation choice. webpack 5 started extracting hashed vendor chunks once the main
+ *   import graph grew, `require()`d them from `background.js`, and nextron had no step
+ *   that copied them into `app/` — so Electron booted into "Cannot find module
+ *   './vendors-…'", no IPC handler ever registered, and the renderer reported every
+ *   terminal call as "No handler registered for 'terminal:resize'".
+ * - **Only `main/**` is bundled; every production dependency stays external.** nextron's
+ *   `externals` was literally `Object.keys(pkg.dependencies)`. Inlining them instead
+ *   would bundle `better-sqlite3` and `node-pty`, whose `.node` bindings cannot be
+ *   bundled at all, and would double-load packages that electron-builder unpacks out of
+ *   the asar on purpose.
+ * - **CommonJS.** `package.json` has no `"type": "module"`, so Electron parses
+ *   `app/background.js` as CJS; an ESM output throws on its first `import`.
+ * - **`.mjs` in `resolve.extensions`.** `main/plugins/signing.ts` imports
+ *   `./signing-core` with no extension and the file is `signing-core.mjs`. Those cores
+ *   are shared VERBATIM with the plain-Node CI signer and vitest, so they must stay
+ *   native ESM. Without this the build cannot resolve them.
+ * - **No typecheck.** nextron ran ts-loader with `transpileOnly: true`; typechecking is
+ *   `npm run typecheck:main`, which CI runs as its own step. Keeping those separate is
+ *   why a type error fails with a type error instead of a bundling error.
+ *
+ * Asserted by `scripts/__tests__/main-build-entries.test.ts`, which replaced a test that
+ * had been passing against `nextron.config.js` for as long as that dead file sat in the
+ * tree.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import module from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * The four main-process bundles, entry name → source path relative to the repo root.
+ *
+ * The entry NAME is the emitted filename (`background` → `app/background.js`), so these
+ * keys are a contract with `package.json#main`, `electron-builder.yml`, the E2E harness
+ * and every `webPreferences.preload` path in the main tree.
+ */
+export const MAIN_BUILD_ENTRIES = {
+    background: 'main/background.ts',
+    preload: 'main/preload.ts',
+    // A SECOND preload bundle (Tynn #250), loaded into a third-party app's sandboxed
+    // window. Its own entry so the file landing there holds only the two-call bridge.
+    'app-preload': 'main/apps/app-preload.ts',
+    // Runs as its own process on the shipped standalone Node and outlives the Electron
+    // process (genie#346). Its import graph is held to Node built-ins by
+    // main/mcp-shuttle/__tests__/entry.test.ts.
+    'mcp-shuttle': 'main/mcp-shuttle/main.ts',
+};
+
+/**
+ * Everything the bundle `require()`s at runtime instead of inlining.
+ *
+ * `electron` and the Node built-ins are provided by the runtime. The production
+ * dependencies are resolved from the packaged `node_modules`, which is what
+ * electron-builder ships and what `asarUnpack` deliberately leaves on disk.
+ */
+export function mainBuildExternals() {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+    return [
+        'electron',
+        ...Object.keys(pkg.dependencies ?? {}),
+        ...module.builtinModules,
+        ...module.builtinModules.map((m) => `node:${m}`),
+    ];
+}
+
+/**
+ * The Vite config for one main-process entry.
+ *
+ * One Vite build PER ENTRY, not one build with four inputs. `inlineDynamicImports` is
+ * what guarantees a single flat file with no shared chunk, and rolldown only permits it
+ * when the build has exactly one input — which is the same constraint, reached from the
+ * other side, that `splitChunks: false` was solving for webpack.
+ */
+export function mainBuildConfig(entry = 'background') {
+    const input = MAIN_BUILD_ENTRIES[entry];
+    if (!input) throw new Error(`build-main: unknown entry '${entry}'`);
+    return {
+        root: REPO,
+        // No `.env` loading and no renderer plugins: this is a Node/Electron target.
+        configFile: false,
+        envDir: false,
+        logLevel: 'warn',
+        resolve: {
+            // `.mjs` LAST, a pure fallback that only fires when no .ts/.js match exists —
+            // the same ordering the webpack override used.
+            extensions: ['.ts', '.tsx', '.js', '.json', '.mjs'],
+            // The `paths` from main/tsconfig.json that main sources actually import
+            // through. nextron got these from tsconfig-paths-webpack-plugin.
+            alias: {
+                '@main': path.join(REPO, 'main'),
+                '@renderer': path.join(REPO, 'renderer'),
+            },
+        },
+        build: {
+            outDir: path.join(REPO, 'app'),
+            // The renderer writes its assets into the same `app/`, and `build:main` runs
+            // first. Emptying here would delete whichever half built last.
+            emptyOutDir: false,
+            // Electron 44's Chromium/Node pair. Transpiling further is pointless work and
+            // loses the stack frames that make a boot crash legible.
+            target: 'node22',
+            sourcemap: true,
+            // The main process loads from disk once at boot and never streams it, so the
+            // readable stack is worth more than the bytes.
+            minify: false,
+            ssr: true,
+            rollupOptions: {
+                // A NAMED input, `{ background: '…/background.ts' }`, not a bare path.
+                // rolldown derives a chunk's name from the input FILE otherwise, so
+                // `mcp-shuttle/main.ts` emits `main.js` — and the shuttle has to be
+                // `mcp-shuttle.js` beside `background.js` for `resolveShuttleScript()` to
+                // find it. The key makes the entry name the filename by contract instead
+                // of by basename coincidence.
+                input: { [entry]: path.join(REPO, input) },
+                external: mainBuildExternals(),
+                output: {
+                    format: 'cjs',
+                    entryFileNames: '[name].js',
+                    // One file. See the splitChunks note in the header. rolldown's name for
+                    // what webpack called `splitChunks: false`.
+                    codeSplitting: false,
+                },
+            },
+        },
+        define: {
+            'process.env.NODE_ENV': JSON.stringify('production'),
+        },
+    };
+}
+
+/**
+ * Build all four bundles. With `--watch`, rebuild each on change and never resolve —
+ * which is what `scripts/dev.mjs` runs in place of nextron's dev main compiler.
+ */
+async function main({ watch = false } = {}) {
+    const { build } = await import('vite');
+    for (const entry of Object.keys(MAIN_BUILD_ENTRIES)) {
+        const config = mainBuildConfig(entry);
+        if (watch) config.build.watch = {};
+        await build(config);
+        // Checked rather than assumed. The emitted filename comes from the input KEY, and
+        // if that ever stops being true the failure is `package.json#main` pointing at a
+        // file that is not there — which surfaces as Electron's bare "Cannot find module",
+        // the exact error this build already produced once by emitting `app/main/*`
+        // instead of `app/*`.
+        const want = path.join(REPO, 'app', `${entry}.js`);
+        if (!fs.existsSync(want)) {
+            throw new Error(
+                `build-main: expected ${path.relative(REPO, want).replace(/\\/g, '/')} and it is ` +
+                    `not there — the entry name and the emitted filename have diverged`,
+            );
+        }
+        console.log(`[build:main] app/${entry}.js${watch ? ' (watching)' : ''}`);
+    }
+}
+
+// Only build when run as a script; importing this for its config must not build.
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+    main({ watch: process.argv.includes('--watch') }).catch((err) => {
+        console.error(err);
+        process.exit(1);
+    });
+}

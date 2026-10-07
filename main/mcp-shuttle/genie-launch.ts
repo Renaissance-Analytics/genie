@@ -50,10 +50,14 @@ const BUNDLE = 'mcp-shuttle.js';
 /**
  * The shuttle bundle to run, or null when this build has none.
  *
- * Located beside the main bundle that is running — webpack emits
+ * Located beside the main bundle that is running — `scripts/build-main.mjs` emits
  * `mcp-shuttle.js` next to `background.js` — rather than from `app.getAppPath()`,
- * which names the project root under nextron's dev runner and the `app` folder
- * when Electron is started on `app/background.js` directly.
+ * which names the project root under the dev runner and the `app` folder when
+ * Electron is started on `app/background.js` directly.
+ *
+ * That the two land in the SAME directory is a contract, not a coincidence: it is why
+ * both are flat entries in `app/` rather than a compiled source tree
+ * (scripts/__tests__/main-build-entries.test.ts).
  *
  * Packaged: `app.asar` cannot be read by plain Node, so the source is the unpacked
  * copy beside it, and what runs is the user-data copy of that.
