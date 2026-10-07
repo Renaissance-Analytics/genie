@@ -177,3 +177,38 @@ describe('the palette is reachable without a terminal (the P7 precondition)', ()
         expect(paletteSrc.length).toBeGreaterThan(3_000);
     });
 });
+
+/**
+ * A PALETTE ROW THAT DOES NOTHING IS WORSE THAN NO ROW.
+ *
+ * `featureCommandItems(FEATURE_SURFACES)` generates a row for every contracted feature,
+ * and `onActivateFeature` dispatches on `featureId` through a `switch` in master.tsx. A
+ * `switch` with no matching `case` falls through SILENTLY — so adding a feature to the
+ * contract makes a row appear whether or not anything happens when it is chosen.
+ *
+ * That is the failure the palette-coverage check above cannot see: it asks whether the
+ * palette is wired to the contract, which is true for every id at once. This asks the
+ * per-id question — does choosing this row DO anything — and the module's own reasoning
+ * demands it: *"a dead row is worse than an absent one, the same reason a disabled control
+ * is an accusation while a different shape is a fact."*
+ *
+ * Found while checking why `?view=grid` was the only route back to the Floor grid.
+ */
+describe('every contracted feature actually does something when chosen', () => {
+    it('has a `case` in the onActivateFeature switch for every id', () => {
+        const unhandled = FEATURE_SURFACES.filter(
+            (f) => !new RegExp(`case '${f.id}':`).test(masterSrc),
+        ).map((f) => `${f.id} (${f.label})`);
+        expect(
+            unhandled,
+            'contracted features whose palette row would silently no-op',
+        ).toEqual([]);
+    });
+
+    it('positive control: the case-scan really matches this file’s style', () => {
+        // Without this, a change to how the switch is written (a map, an if-chain) would
+        // make the assertion above vacuously green for EVERY feature at once.
+        expect(masterSrc).toMatch(/case 'knowledge-graph':/);
+        expect(masterSrc).toMatch(/onActivateFeature=\{/);
+    });
+});
