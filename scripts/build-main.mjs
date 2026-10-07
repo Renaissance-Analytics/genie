@@ -86,7 +86,7 @@ export function mainBuildExternals() {
  * when the build has exactly one input — which is the same constraint, reached from the
  * other side, that `splitChunks: false` was solving for webpack.
  */
-export function mainBuildConfig(entry = 'background') {
+export function mainBuildConfig(entry = 'background', { dev = false } = {}) {
     const input = MAIN_BUILD_ENTRIES[entry];
     if (!input) throw new Error(`build-main: unknown entry '${entry}'`);
     return {
@@ -137,9 +137,21 @@ export function mainBuildConfig(entry = 'background') {
                 },
             },
         },
-        define: {
-            'process.env.NODE_ENV': JSON.stringify('production'),
-        },
+        /**
+         * Baked for a build, left alone for a watch.
+         *
+         * A packaged app has no `NODE_ENV` set, and `main/background.ts` reads
+         * `process.env.NODE_ENV === 'production'` to decide whether a window loads
+         * `app/*.html` over `file://` or `http://localhost:8888`. So a build must carry
+         * the answer — nextron's `EnvironmentPlugin({NODE_ENV:'production'})` did exactly
+         * this.
+         *
+         * Baking it into the DEV build inverts the one thing dev needs: every window would
+         * load the last BUILT html instead of the dev server, so Vite would serve nobody,
+         * there would be no HMR, and no edit would ever appear. Asserted both ways in
+         * scripts/__tests__/main-build-entries.test.ts.
+         */
+        define: dev ? {} : { 'process.env.NODE_ENV': JSON.stringify('production') },
     };
 }
 
@@ -150,7 +162,7 @@ export function mainBuildConfig(entry = 'background') {
 async function main({ watch = false } = {}) {
     const { build } = await import('vite');
     for (const entry of Object.keys(MAIN_BUILD_ENTRIES)) {
-        const config = mainBuildConfig(entry);
+        const config = mainBuildConfig(entry, { dev: watch });
         if (watch) config.build.watch = {};
         await build(config);
         // Checked rather than assumed. The emitted filename comes from the input KEY, and

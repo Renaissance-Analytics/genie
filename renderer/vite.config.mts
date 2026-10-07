@@ -1,9 +1,9 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { THEME_BOOT_SCRIPT } from './lib/theme-boot';
+import { discoverPages } from './page-discovery';
 
 /**
  * The renderer build — Vite, not Next (owner directive, Tynn #449).
@@ -34,17 +34,10 @@ import { THEME_BOOT_SCRIPT } from './lib/theme-boot';
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const PAGES_DIR = path.join(here, 'pages');
 
-/** `renderer/pages/<name>.tsx` → page name, minus Next's underscore files. */
-function discoverPages(includeHarnesses: boolean): string[] {
-    return fs
-        .readdirSync(PAGES_DIR)
-        .filter((f) => f.endsWith('.tsx') && !f.startsWith('_'))
-        .map((f) => f.replace(/\.tsx$/, ''))
-        .filter((name) => includeHarnesses || !name.startsWith('e2e-'))
-        .sort();
-}
+// `discoverPages` lives in `./page-discovery` so the tests that assert what ships can
+// import the SAME function this build uses — a test cannot import a `.mts` config, and a
+// test that re-implements the rule is a test that drifts from it.
 
 /**
  * The page shell.
