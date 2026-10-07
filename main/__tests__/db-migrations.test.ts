@@ -2784,3 +2784,87 @@ describe('db migration v77 (Aionima retired) against a legacy CHECK', () => {
         ).toBe(before);
     });
 });
+
+/**
+ * v79 — agent telemetry and per-agent budgets.
+ *
+ * Owner ask: *"make sure we have telemetry and budgets for agents in this. I need to be
+ * able to immediately measure any gains or losses in this new infrastructure."*
+ *
+ * Nothing in the schema recorded agent usage at all before this: `SessionUsage` lived only
+ * in memory, so tokens, context and cost evaporated when a session ended and no comparison
+ * between the ACP path and the pty path was possible after the fact.
+ *
+ * Two shapes, and the `engine` column is the point of both: a total that mixes engines
+ * answers nothing about either.
+ */
+describe('db migration v79 (agent telemetry + budgets)', () => {
+    it('creates agent_usage_events with the engine tag the comparison needs', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'agent_usage_events');
+        for (const col of ['agent_id', 'workspace_id', 'engine', 'kind', 'at', 'day', 'duration_ms', 'cost_usd', 'tokens_in', 'tokens_out']) {
+            expect(c.has(col), `agent_usage_events.${col}`).toBe(true);
+        }
+    });
+
+    it('indexes the daily per-agent lookup a budget check makes on every turn', () => {
+        // The check runs at every turn boundary, so it must not table-scan a growing
+        // append-only log.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const idx = db
+            .prepare<[], { name: string }>("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='agent_usage_events'")
+            .all()
+            .map((r) => r.name);
+        expect(idx.some((n) => n.includes('agent_day'))).toBe(true);
+    });
+
+    it('adds the per-agent budget columns to workspace_agents', () => {
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const c = cols(db, 'workspace_agents');
+        expect(c.has('budget_cost_usd_per_day')).toBe(true);
+        expect(c.has('budget_turns_per_day')).toBe(true);
+        expect(c.has('budget_action')).toBe(true);
+    });
+
+    it('leaves every existing agent with NO budget, so nothing starts enforcing on upgrade', () => {
+        // A changed default cannot reach existing installs, and here it must not: an
+        // upgrade that silently began parking agents would read as Genie breaking.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        db.prepare(
+            `INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path)
+             VALUES ('ws-1', 'p', 'P', 'simple', '/tmp')`,
+        ).run();
+        db.prepare(
+            `INSERT INTO workspace_agents (id, workspace_id, name, created_at, updated_at)
+             VALUES ('ag-1', 'ws-1', 'kai', 0, 0)`,
+        ).run();
+        const row = db
+            .prepare<[string], { budget_cost_usd_per_day: number | null; budget_turns_per_day: number | null; budget_action: string | null }>(
+                'SELECT budget_cost_usd_per_day, budget_turns_per_day, budget_action FROM workspace_agents WHERE id = ?',
+            )
+            .get('ag-1');
+        expect(row?.budget_cost_usd_per_day).toBeNull();
+        expect(row?.budget_turns_per_day).toBeNull();
+        // The ACTION has a default, because an agent given a cap later needs one; the caps
+        // themselves staying null is what makes it inert.
+        expect(row?.budget_action).toBe('stop-and-ask');
+    });
+
+    it('does NOT put a CHECK on the added action column', () => {
+        // Deliberate. genie#763/v77 is this repo's record of a CHECK constraint added to an
+        // existing table taking migrations down and leaving sign-in stuck. `budget_action`
+        // is validated in code instead, where a bad value is a caught error rather than a
+        // database that will not open.
+        const db = new Database(':memory:');
+        runMigrations(db);
+        const sql = db
+            .prepare<[], { sql: string }>("SELECT sql FROM sqlite_master WHERE type='table' AND name='workspace_agents'")
+            .get()?.sql ?? '';
+        expect(sql).toContain('budget_action');
+        expect(sql).not.toMatch(/budget_action[^,]*CHECK/i);
+    });
+});

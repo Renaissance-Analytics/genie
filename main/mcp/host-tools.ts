@@ -34,6 +34,7 @@ import {
     type TerminalSpecMeta,
     type TerminalSpecRow,
     getDb,
+    workspaceAgentBySpecId,
     markWorkspaceAgentTransportState,
 } from '../db';
 import { agentInboxBroker } from '../agentinbox/broker';
@@ -164,6 +165,9 @@ import {
 } from '../tynn/ops-provision';
 import { createRepo, getViewer } from '../github/api';
 import { broadcastAgentsChanged, broadcastWorkspacesChanged } from '../ipc';
+import { acpRegistry } from '../acp/registry';
+import { checkBudgetBeforeTurn } from '../agents/budget-gate';
+import { budgetGatePorts } from '../agentsession/bindings';
 import type {
     WorkspaceMap,
     WorkspaceRepoInfo,
@@ -647,6 +651,41 @@ async function deliverTerminalInput(
     // — which on a freshly-restarted Codex meant the Enter arrived at a TUI that
     // was not listening, the prompt sat unsubmitted in the composer, and the call
     // said it had been sent.
+    /**
+     * AN ACP SESSION TAKES A PROMPT, NOT KEYSTROKES.
+     *
+     * The chokepoint the plan named, and the reason it is one line here: `promptFor` returns
+     * null for every pty agent, so their path below is untouched.
+     *
+     * Both flags are EARNED on this branch, and this is the first time Genie can say so. The
+     * pty path writes bytes, waits, and watches for a reaction — its own comment is *"Genie
+     * cannot see inside a TUI; it sees bytes"* — so `submitted` there is an inference. An ACP
+     * agent acknowledges the call.
+     */
+    const prompt = acpRegistry.promptFor(id);
+    if (prompt) {
+        /**
+         * THE BUDGET GATE, at the turn boundary.
+         *
+         * In front of the prompt and never inside a turn: a turn killed halfway can lose work
+         * that is not recoverable, so the strongest safe intervention is declining to start
+         * the NEXT one. It fails OPEN — a database that cannot be read must not become
+         * "Genie has stopped running agents".
+         */
+        const agent = workspaceAgentBySpecId(getDb(), id);
+        if (agent) {
+            const gate = checkBudgetBeforeTurn(agent.id, budgetGatePorts());
+            if (!gate.allow) {
+                // Honest flags: nothing was delivered, so neither is claimed. The owner has
+                // been asked; the agent is parked rather than broken.
+                return { delivered: false, submitted: false };
+            }
+        }
+        // The BODY, without the submit bytes: a prompt is a message, and `submitAfter` is a
+        // keystroke that only means anything to a TUI.
+        return prompt(built.bytes);
+    }
+
     return deliverInput(id, built, {
         write: (terminalId, data) => writeToTerminal(terminalId, data),
         lastOutputAt: (terminalId) => terminalLastOutputAt(terminalId),

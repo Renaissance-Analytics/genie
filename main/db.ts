@@ -2995,6 +2995,89 @@ export function runMigrations(
                 }
             },
         },
+        {
+            /**
+             * v79 — AGENT TELEMETRY AND PER-AGENT BUDGETS.
+             *
+             * Owner ask: *"make sure we have telemetry and budgets for agents in this. I
+             * need to be able to immediately measure any gains or losses in this new
+             * infrastructure."*
+             *
+             * Nothing recorded agent usage before this. `SessionUsage` lived only in
+             * memory, so tokens, context and cost evaporated when a session ended — which
+             * is exactly why no comparison between the ACP path and the pty path was
+             * possible after the fact.
+             *
+             * `engine` is the point of the table. The question is whether the new transport
+             * is better than the old one, and a total that mixes them answers nothing about
+             * either. `day` is stored at WRITE time, workstation-local: SQLite has no
+             * timezone, so grouping by a value derived from epoch cuts the day at the wrong
+             * hour for every zone but one, and "today" on the Deck would not mean what the
+             * owner means.
+             *
+             * `cost_usd` is NULLABLE on purpose. A pty agent reports no cost at all, and
+             * null ("cannot see") must never collapse into 0 ("spent nothing") — that would
+             * make the old path look free and the new one expensive.
+             */
+            version: 79,
+            runner: (db) => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS agent_usage_events (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_id     TEXT NOT NULL,
+                        workspace_id TEXT,
+                        engine       TEXT NOT NULL CHECK (engine IN ('acp','pty')),
+                        kind         TEXT NOT NULL,
+                        at           INTEGER NOT NULL,
+                        day          TEXT NOT NULL,
+                        duration_ms  INTEGER,
+                        cost_usd     REAL,
+                        tokens_in    INTEGER,
+                        tokens_out   INTEGER,
+                        context_used INTEGER,
+                        context_max  INTEGER,
+                        detail       TEXT
+                    );
+                    -- The budget check runs at EVERY turn boundary against one agent's
+                    -- current day, so it must not scan an append-only log that only grows.
+                    CREATE INDEX IF NOT EXISTS idx_agent_usage_agent_day
+                        ON agent_usage_events(agent_id, day);
+                    -- The engine comparison reads a whole day across agents.
+                    CREATE INDEX IF NOT EXISTS idx_agent_usage_day_engine
+                        ON agent_usage_events(day, engine);
+                `);
+
+                /**
+                 * Budget columns on the agent record.
+                 *
+                 * NO CHECK on `budget_action`, deliberately. v77 is this repository's record
+                 * of a CHECK constraint on an existing table taking migrations down and
+                 * leaving sign-in stuck (beta.328). The value is validated in code, where a
+                 * bad one is a caught error rather than a database that will not open.
+                 *
+                 * The caps default to NULL — no budget — so an upgrade starts enforcing
+                 * nothing. An upgrade that silently began parking agents would read as Genie
+                 * breaking, and a changed default cannot reach existing installs anyway.
+                 */
+                const agentCols = new Set(
+                    db
+                        .prepare<[], { name: string }>(`PRAGMA table_info(workspace_agents)`)
+                        .all()
+                        .map((r) => r.name),
+                );
+                if (!agentCols.has('budget_cost_usd_per_day')) {
+                    db.exec(`ALTER TABLE workspace_agents ADD COLUMN budget_cost_usd_per_day REAL`);
+                }
+                if (!agentCols.has('budget_turns_per_day')) {
+                    db.exec(`ALTER TABLE workspace_agents ADD COLUMN budget_turns_per_day INTEGER`);
+                }
+                if (!agentCols.has('budget_action')) {
+                    db.exec(
+                        `ALTER TABLE workspace_agents ADD COLUMN budget_action TEXT NOT NULL DEFAULT 'stop-and-ask'`,
+                    );
+                }
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3891,6 +3974,9 @@ export function bindAgentRuntimeTerminal(
         .run(terminalSpecId, Date.now(), runtimeId);
 }
 
+import { localDayKey, type AgentUsageEvent } from './agents/usage-rollup';
+import type { AgentBudget, AgentEngine, AgentSpend } from './agents/budget';
+
 export interface WorkspaceAgentRow {
     id: string;
     workspace_id: string;
@@ -4254,6 +4340,192 @@ export function markWorkspaceAgentReadyByTerminal(
             'SELECT *, COALESCE(native_transport, transport) AS transport FROM workspace_agents WHERE terminal_spec_id = ?',
         )
         .get(terminalSpecId);
+}
+
+/**
+ * AGENT TELEMETRY — the append-only facts a comparison is built from.
+ *
+ * Owner ask: *"I need to be able to immediately measure any gains or losses in this new
+ * infrastructure."* Every row carries `engine`, because the question is whether the ACP
+ * path beats the pty one and a merged total answers nothing about either.
+ *
+ * `cost_usd` stays NULL when nothing reported it. A pty agent reports no cost at all, and
+ * null ("cannot see") must never collapse into 0 ("spent nothing") — that would make the
+ * old path look free. The per-agent SPEND read below is the one place a 0 appears, because
+ * `budgetVerdict` takes a number and decides enforceability from the engine instead.
+ */
+export interface AgentUsageWrite {
+    agentId: string;
+    workspaceId: string | null;
+    engine: AgentEngine;
+    kind: AgentUsageEvent['kind'];
+    at: number;
+    durationMs?: number | null;
+    costUsd?: number | null;
+    tokensIn?: number | null;
+    tokensOut?: number | null;
+    contextUsed?: number | null;
+    contextMax?: number | null;
+    detail?: string | null;
+}
+
+export function recordAgentUsage(database: Database.Database, e: AgentUsageWrite): void {
+    database
+        .prepare(
+            `INSERT INTO agent_usage_events
+               (agent_id, workspace_id, engine, kind, at, day, duration_ms, cost_usd,
+                tokens_in, tokens_out, context_used, context_max, detail)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+            e.agentId,
+            e.workspaceId ?? null,
+            e.engine,
+            e.kind,
+            e.at,
+            // Written here, not derived at query time: SQLite has no timezone, so grouping
+            // by a value computed from epoch cuts the day at UTC midnight and "today" stops
+            // meaning the owner's today.
+            localDayKey(e.at),
+            e.durationMs ?? null,
+            e.costUsd ?? null,
+            e.tokensIn ?? null,
+            e.tokensOut ?? null,
+            e.contextUsed ?? null,
+            e.contextMax ?? null,
+            e.detail ?? null,
+        );
+}
+
+/**
+ * One agent's spend for a day, shaped for `budgetVerdict`.
+ *
+ * Defaults to `pty` with zeroes for an agent that has reported nothing. Defaulting the
+ * engine to `acp` would claim cost data exists for an agent that has produced none, which
+ * is the difference between "your cost cap cannot bind this agent" and "your cost cap is
+ * satisfied".
+ */
+export function agentSpendForDay(
+    database: Database.Database,
+    agentId: string,
+    day: string,
+): AgentSpend {
+    const row = database
+        .prepare<[string, string], { turns: number; cost: number | null }>(
+            `SELECT SUM(CASE WHEN kind = 'turn-ended' THEN 1 ELSE 0 END) AS turns,
+                    SUM(COALESCE(cost_usd, 0))                          AS cost
+             FROM agent_usage_events WHERE agent_id = ? AND day = ?`,
+        )
+        .get(agentId, day);
+    const engineRow = database
+        .prepare<[string, string], { engine: AgentEngine }>(
+            `SELECT engine FROM agent_usage_events
+             WHERE agent_id = ? AND day = ? ORDER BY at DESC, id DESC LIMIT 1`,
+        )
+        .get(agentId, day);
+    return {
+        engine: engineRow?.engine ?? 'pty',
+        costUsd: row?.cost ?? 0,
+        turns: row?.turns ?? 0,
+    };
+}
+
+/** A day's events, for the per-engine comparison. `rollUpUsage` does the arithmetic. */
+export function usageEventsForDay(database: Database.Database, day: string): AgentUsageEvent[] {
+    return database
+        .prepare<[string], {
+            agent_id: string; engine: AgentEngine; kind: AgentUsageEvent['kind']; at: number;
+            day: string; duration_ms: number | null; cost_usd: number | null;
+            tokens_in: number | null; tokens_out: number | null;
+        }>(
+            `SELECT agent_id, engine, kind, at, day, duration_ms, cost_usd, tokens_in, tokens_out
+             FROM agent_usage_events WHERE day = ? ORDER BY at ASC, id ASC`,
+        )
+        .all(day)
+        .map((r) => ({
+            agentId: r.agent_id,
+            engine: r.engine,
+            kind: r.kind,
+            at: r.at,
+            day: r.day,
+            durationMs: r.duration_ms,
+            costUsd: r.cost_usd,
+            tokensIn: r.tokens_in,
+            tokensOut: r.tokens_out,
+        }));
+}
+
+const BUDGET_ACTIONS: ReadonlySet<string> = new Set(['warn', 'stop-and-ask']);
+
+/**
+ * This agent's budget.
+ *
+ * An unrecognised stored action reads as `stop-and-ask`. The column carries no CHECK (v77's
+ * lesson — a CHECK added to an existing table took migrations down and left sign-in stuck),
+ * so a hand-edited or future value can exist, and the safe direction to fail is toward
+ * ASKING a human rather than toward silently enforcing nothing.
+ */
+export function agentBudgetFor(database: Database.Database, agentId: string): AgentBudget {
+    const row = database
+        .prepare<[string], {
+            budget_cost_usd_per_day: number | null;
+            budget_turns_per_day: number | null;
+            budget_action: string | null;
+        }>(
+            `SELECT budget_cost_usd_per_day, budget_turns_per_day, budget_action
+             FROM workspace_agents WHERE id = ?`,
+        )
+        .get(agentId);
+    const stored = row?.budget_action ?? '';
+    return {
+        costUsdPerDay: row?.budget_cost_usd_per_day ?? null,
+        turnsPerDay: row?.budget_turns_per_day ?? null,
+        action: BUDGET_ACTIONS.has(stored) ? (stored as AgentBudget['action']) : 'stop-and-ask',
+    };
+}
+
+/** Set this agent's budget. Validated here, because the column has no CHECK. */
+export function setAgentBudget(
+    database: Database.Database,
+    agentId: string,
+    b: AgentBudget,
+): void {
+    if (!BUDGET_ACTIONS.has(b.action)) {
+        throw new Error(
+            `Unknown budget action '${b.action}'. Expected one of: ${[...BUDGET_ACTIONS].join(', ')}`,
+        );
+    }
+    for (const [name, v] of [['costUsdPerDay', b.costUsdPerDay], ['turnsPerDay', b.turnsPerDay]] as const) {
+        // A negative cap can never be satisfied, so it would park the agent on its first
+        // turn and read as Genie refusing to work.
+        if (v !== null && v < 0) throw new Error(`Budget ${name} cannot be negative (got ${v})`);
+    }
+    database
+        .prepare(
+            `UPDATE workspace_agents
+             SET budget_cost_usd_per_day = ?, budget_turns_per_day = ?, budget_action = ?,
+                 updated_at = ?
+             WHERE id = ?`,
+        )
+        .run(b.costUsdPerDay, b.turnsPerDay, b.action, Date.now(), agentId);
+}
+
+/**
+ * The agent that owns a terminal spec, or undefined.
+ *
+ * The reverse of `terminal_spec_id`, and it exists because the ACP transport knows a spec
+ * while sessions are keyed by `workspace_agents.id`. Getting that wrong is silent — the
+ * declared session is stored under a key nothing reads.
+ */
+export function workspaceAgentBySpecId(
+    database: Database.Database,
+    specId: string,
+): WorkspaceAgentRow | undefined {
+    return database
+        .prepare<[string], WorkspaceAgentRow>(
+            `SELECT * FROM workspace_agents WHERE terminal_spec_id = ? LIMIT 1`,
+        )
+        .get(specId);
 }
 
 export function markWorkspaceAgentTransportState(

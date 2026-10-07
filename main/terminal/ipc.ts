@@ -122,6 +122,7 @@ import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { acpRegistry, terminalIsLive } from '../acp/registry';
 import { startAcpForSpec } from '../acp/start';
+import { declaredSessions } from '../agentsession/bindings';
 import { launchPlan } from '../agents/launch-plan';
 import { agentPulse } from './agent-pulse';
 import { InputHolds } from './input-hold';
@@ -896,16 +897,39 @@ export function createAgentTerminal(opts: {
         // which is tested; this file is 115 KB, imports electron and the database, and has
         // no test of its own, so it gets a branch and not a rule.
         //
-        // DEFAULT IS THE PTY. `acp_engine` is absent until the owner turns it on, and a
-        // provider with no ACP mode stays on the pty regardless, so this is behaviour-
-        // identical for every existing agent.
+        // The owner's direction is that ACP is the mechanism, not a mode. The flag is still
+        // read because ACP cannot resume a conversation yet (prism-acp's `session/load`
+        // cannot be given the id it needs), so making it mandatory would discard a
+        // conversation on every Genie restart. Flipped the moment that is fixed.
         const plan = launchPlan({
             provider: opts.agentMeta?.agent ?? null,
             command: launchCommand ?? null,
             acpEnabled: dbSettingsProvider().get('acp_engine') === 'on',
         });
         if (plan?.kind === 'acp') {
-            const started = startAcpForSpec({ specId: id, provider: plan.provider, cwd: opts.cwd });
+            const started = startAcpForSpec({
+                specId: id,
+                provider: plan.provider,
+                cwd: opts.cwd,
+                // THE LISTENER. Without this the transport talks and nothing hears it: the
+                // driver was built with an `onNotification` dep it never called, the driver
+                // returned here was discarded, and `applySessionUpdate` — the mapper for all
+                // twenty `session/update` kinds — had no production caller at all. So an ACP
+                // agent delivered a prompt and its transcript, plan, tool calls, approvals
+                // and usage never reached a session, which is also why no cost telemetry
+                // existed anywhere in the product.
+                //
+                // Addressed by SPEC: this is what the transport knows. The store resolves it
+                // to `workspace_agents.id` lazily, because the agent row may not point at
+                // this spec yet at launch.
+                onSessionUpdate: (update) =>
+                    declaredSessions.applyForSpec(id, update as never),
+                // ACP has no "turn over" notification — the mapper contains no `'idle'` at
+                // all — so `session/prompt` RESOLVING is the only signal a turn ended.
+                // Without this, telemetry records turns that start and never finish: no
+                // duration, no cost, and every agent looks permanently busy.
+                onTurnEnded: () => declaredSessions.endTurnForSpec(id),
+            });
             if ('error' in started) {
                 // Named, and surfaced the same way a refused pty launch is: an agent that
                 // could not start must say why rather than sit there looking idle.

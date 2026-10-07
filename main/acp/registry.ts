@@ -18,6 +18,19 @@ export interface AcpSessionEntry {
     kill: () => void;
     /** Whether the JSON-RPC channel has gone. */
     closed: boolean;
+    /**
+     * Send the agent a prompt.
+     *
+     * Held HERE because the registry is already the one thing that knows an agent is an ACP
+     * session — the same reason `isLive` lives here. Without it `AcpSessionDriver.prompt()`
+     * had no production caller, so a session could be started and observed and never talked
+     * to, and `writeRefusal` had no caller either, so a write went to a pty that was not
+     * there and reported nothing at all.
+     *
+     * Survivable while ACP was opt-in. Not survivable now that it is the mechanism: every
+     * Claude agent takes this path.
+     */
+    prompt: (text: string) => Promise<{ delivered: boolean; submitted: boolean }>;
 }
 
 export class AcpRegistry {
@@ -51,6 +64,20 @@ export class AcpRegistry {
     isLive(specId: string): boolean {
         const entry = this.sessions.get(specId);
         return entry !== undefined && !entry.closed;
+    }
+
+    /**
+     * This session's prompt function, or null when there is no live session for the spec.
+     *
+     * Null is the discriminator for the whole write path: most agents are pty agents, and
+     * the absence of an entry is what keeps their behaviour exactly as it was. A CLOSED
+     * entry is also null — prompting a dead channel would hang or throw inside a tool call,
+     * and a closed entry is not a session, which is the rule `isLive` already holds to.
+     */
+    promptFor(specId: string): AcpSessionEntry['prompt'] | null {
+        const entry = this.sessions.get(specId);
+        if (!entry || entry.closed) return null;
+        return entry.prompt;
     }
 
     liveSpecIds(): string[] {
