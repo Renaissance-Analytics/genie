@@ -86,7 +86,7 @@ export function mainBuildExternals() {
  * when the build has exactly one input — which is the same constraint, reached from the
  * other side, that `splitChunks: false` was solving for webpack.
  */
-export function mainBuildConfig(entry = 'background', { dev = false } = {}) {
+export function mainBuildConfig(entry = 'background', { dev = false, e2e = false } = {}) {
     const input = MAIN_BUILD_ENTRIES[entry];
     if (!input) throw new Error(`build-main: unknown entry '${entry}'`);
     return {
@@ -151,7 +151,23 @@ export function mainBuildConfig(entry = 'background', { dev = false } = {}) {
          * there would be no HMR, and no edit would ever appear. Asserted both ways in
          * scripts/__tests__/main-build-entries.test.ts.
          */
-        define: dev ? {} : { 'process.env.NODE_ENV': JSON.stringify('production') },
+        define: {
+            ...(dev ? {} : { 'process.env.NODE_ENV': JSON.stringify('production') }),
+            /**
+             * Whether the E2E rig is in this artifact AT ALL.
+             *
+             * A literal, because only a literal folds: `main/e2e/flags.ts` reads it so every
+             * `isE2E()` predicate resolves at BUILD time, each `if (isE2E())` becomes dead
+             * code, and rolldown drops the rig behind it — GitHub IPC mocks, a fake hosting
+             * layer, 18 seed modules. A shipped Genie cannot be talked into E2E mode by
+             * setting `GENIE_E2E=1`, because there is nothing left to enter.
+             *
+             * `scripts/assert-no-e2e-in-bundle.mjs` holds this to the real artifact. Whether
+             * a dead `await import()` is removed is a fact about the bundler, and this build
+             * sets `codeSplitting: false`, which otherwise INLINES dynamic imports.
+             */
+            __GENIE_E2E_BUILD__: e2e ? 'true' : 'false',
+        },
     };
 }
 
@@ -159,10 +175,10 @@ export function mainBuildConfig(entry = 'background', { dev = false } = {}) {
  * Build all four bundles. With `--watch`, rebuild each on change and never resolve —
  * which is what `scripts/dev.mjs` runs in place of nextron's dev main compiler.
  */
-async function main({ watch = false } = {}) {
+async function main({ watch = false, e2e = false } = {}) {
     const { build } = await import('vite');
     for (const entry of Object.keys(MAIN_BUILD_ENTRIES)) {
-        const config = mainBuildConfig(entry, { dev: watch });
+        const config = mainBuildConfig(entry, { dev: watch, e2e });
         if (watch) config.build.watch = {};
         await build(config);
         // Checked rather than assumed. The emitted filename comes from the input KEY, and
@@ -183,7 +199,10 @@ async function main({ watch = false } = {}) {
 
 // Only build when run as a script; importing this for its config must not build.
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-    main({ watch: process.argv.includes('--watch') }).catch((err) => {
+    main({
+        watch: process.argv.includes('--watch'),
+        e2e: process.argv.includes('--e2e'),
+    }).catch((err) => {
         console.error(err);
         process.exit(1);
     });

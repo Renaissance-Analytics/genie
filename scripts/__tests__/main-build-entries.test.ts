@@ -169,3 +169,50 @@ describe('NODE_ENV', () => {
         );
     });
 });
+
+/**
+ * `__GENIE_E2E_BUILD__` decides whether the E2E rig is in the artifact at all.
+ *
+ * `main/e2e/flags.ts` reads it as a compile-time literal, so every `isE2E()` predicate
+ * folds with the BUILD rather than with the environment. A production build therefore
+ * cannot be talked into E2E mode by `GENIE_E2E=1`, and the rig the dead branches reached —
+ * GitHub IPC mocks, a fake hosting layer, 18 seed modules, ~93 KB — is dropped.
+ *
+ * Both directions matter and neither is safe to assume:
+ *
+ *  - define it `true` by accident in production and the installer ships the mocks again;
+ *  - define it `false` in the E2E build and the entire suite goes inert, passing because
+ *    nothing it asserts against ever starts.
+ *
+ * Whether rolldown really removes the dead `await import()` is a claim about the bundler,
+ * not about the config, so `scripts/assert-no-e2e-in-bundle.mjs` checks the real artifact.
+ */
+describe('the E2E-rig build flag', () => {
+    const flagOf = (cfg: ReturnType<typeof mainBuildConfig>) =>
+        (cfg.define ?? {})['__GENIE_E2E_BUILD__'];
+
+    it('is the literal false for a production build', () => {
+        // A literal, not a boolean: `define` substitutes source text, and only a literal
+        // folds. `false` as a JS value would stringify to the same thing here, but asserting
+        // the string is what pins the substitution being textual.
+        expect(flagOf(mainBuildConfig('background'))).toBe('false');
+    });
+
+    it('is the literal true for an e2e build', () => {
+        expect(flagOf(mainBuildConfig('background', { e2e: true }))).toBe('true');
+    });
+
+    it('is false for the dev watch build, which is not the E2E suite', () => {
+        // `npm run dev` is a person at a keyboard. Shipping them mocked GitHub would make
+        // the app lie to them about their own repositories.
+        expect(flagOf(mainBuildConfig('background', { dev: true }))).toBe('false');
+    });
+
+    it('can be an e2e DEV build, which the harness uses against the dev server', () => {
+        // `showE2EWindow` loads `http://localhost:8888/<page>` when dev, so the two options
+        // are independent rather than a single mode.
+        const cfg = mainBuildConfig('background', { dev: true, e2e: true });
+        expect(flagOf(cfg)).toBe('true');
+        expect((cfg.define ?? {})['process.env.NODE_ENV']).toBeUndefined();
+    });
+});

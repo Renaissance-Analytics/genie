@@ -326,7 +326,6 @@ import { buildHostServerDeps } from './host-core/server-deps';
 import { registerAppBridge } from './apps/bridge';
 import { registerAppsIpc, sweepPreviewsAtBoot } from './apps/ipc';
 import { registerFlowsIpc } from './flows/ipc';
-import { registerAppsE2E } from './e2e/apps';
 import type { HostCorePorts } from './host-core/ports';
 import {
     hostBackendKind,
@@ -391,28 +390,30 @@ import {
 } from './updater/ipc';
 import { registerDocsIpc } from './docs/ipc';
 import { installAppMenu } from './app-menu';
-import {
-    isE2E,
-    isE2EMobile,
-    registerE2EMocks,
-    startMobileE2EServer,
-} from './e2e/mock';
-import {
-    isE2ETailscaleTunnel,
-    isE2ETunnel,
-    startTunnelE2EHarness,
-} from './e2e/tunnel';
-import { seedAgentAccessE2E } from './e2e/agent-access';
-import { seedAgentManagerE2E } from './e2e/agent-manager';
-import { seedRepoE2E } from './e2e/repo';
-import { seedAgentPulseE2E } from './e2e/agent-pulse';
-import { raiseAskE2E, seedAskE2E } from './e2e/ask';
-import { seedTynnImportE2E } from './e2e/tynn-import';
-import { seedWorkspaceCreateE2E } from './e2e/workspace-create';
-import { seedMasterE2E } from './e2e/master';
-import { registerAgentRevivalE2E } from './e2e/agent-revival';
+/**
+ * PREDICATES ONLY. The rig itself is reached through `await import('./e2e')`, inside
+ * branches guarded by `E2E_BUILD` — a compile-time literal, so a production build folds
+ * them away and rolldown drops the whole `main/e2e/` tree with them.
+ *
+ * `./e2e/flags` imports nothing, which is what makes it safe to reference from here. A
+ * static import of any other `./e2e/*` module anchors that module into the shipped bundle
+ * no matter how dead its call sites are — measured: 19 files survived with every
+ * `isE2E()` already folded to false. Held by `scripts/assert-no-e2e-in-bundle.mjs`.
+ */
+import { isE2E, isE2EMobile, isE2ETailscaleTunnel, isE2ETunnel } from './e2e/flags';
+
+/**
+ * Whether this build contains the E2E rig — computed LOCALLY, on purpose.
+ *
+ * `flags.ts` exports an identical constant, and importing it from there does not work:
+ * rolldown will not propagate a cross-module constant into a branch condition here, so the
+ * guard would not be statically false, the `await import('./e2e')` inside it would be
+ * INLINED (this build sets `codeSplitting: false`), and the whole rig would ship anyway.
+ * Measured at 20 surviving files before this line existed. See ./e2e/build-flag.d.ts.
+ */
+const E2E_BUILD: boolean =
+    typeof __GENIE_E2E_BUILD__ === 'boolean' ? __GENIE_E2E_BUILD__ : false;
 import { requestFeedback } from './feedback-open';
-import { seedFlowsE2E } from './e2e/flows';
 
 /**
  * Genie — Tynn desktop companion.
@@ -1733,11 +1734,8 @@ app.whenReady().then(async () => {
     // fixture and needs none of the normal desktop database/terminal startup.
     // Start it before native backends so the release-facing browser contract
     // cannot be hidden by an unrelated developer-machine service failure.
-    if (isE2ETunnel()) {
-        await startTunnelE2EHarness().catch((e) =>
-            console.error('[e2e] tunnel harness failed to start', e),
-        );
-        return;
+    if (E2E_BUILD && isE2ETunnel()) {
+        await (await import('./e2e')).startE2ETunnel();
     }
 
     // One-time upgrade migration: remove the system-wide tynn-cli installation
@@ -2472,57 +2470,21 @@ app.whenReady().then(async () => {
     // reconnect UI deterministically (no GitHub, no OAuth, no keychain, no DB
     // seed). Runs AFTER the real registrations and removeHandler's each channel
     // first, so it wins. Inert (never called) in a normal run.
-    if (isE2E()) {
-        registerE2EMocks();
-        // eslint-disable-next-line no-console
-        console.log('[e2e] GENIE_E2E=1 — GitHub + Issue Watch IPC mocked.');
-        // Open the harness window NOW — not at the end of whenReady. The later
-        // startup steps (terminal backend selection, MCP/control servers) touch
-        // native modules (node-pty) that may be unbuildable in a test sandbox; if
-        // one of those awaits hangs or throws, the end-of-whenReady window would
-        // never open. The flyout only needs IPC + the renderer, both ready here.
-        showE2EWindow();
-        // Mobile-server E2E harness (GENIE_E2E_MOBILE=1): bring the REAL mobile
-        // server up on 127.0.0.1 at a fixed port/PIN with mock data deps, BEFORE
-        // the native-module startup steps below (node-pty / sqlite) that may hang
-        // or throw in a test sandbox. The desktop window above is irrelevant for
-        // this spec — the served `/m/` page + REST + WS are what it drives.
-        if (isE2EMobile()) {
-            await startMobileE2EServer().catch((e) =>
-                console.error('[e2e] mobile server failed to start', e),
-            );
-        }
-    }
-    // Start with the master window OPEN by default. Genie launches to the tray
-    // alone (no window) only when EITHER the user set `start_minimized`
-    // (Settings → General) OR the OS launched Genie at sign-in (autostart passes
-    // `--autostart` / macOS wasOpenedAtLogin) — an auto-start should never ambush
-    // the user with a window on every boot. In both cases the window opens on the
-    // first tray click / feedback hotkey. E2E opened its own harness window
-    // above. Shown here — right after IPC + the terminal backend are ready, before
-    // the MCP/mobile servers — so it appears promptly and no later async step hides it.
-    //
-    // EXCEPTION: an auto-update relaunch. The user was actively using Genie and
-    // clicked to update; on Windows the updater's relaunch can look like an
-    // autostart launch, which silently stranded the window in the tray after
-    // every upgrade. `restartAndApply` persists a one-shot flag we consume here
-    // to reopen anyway — but a deliberate `start_minimized` is still honoured.
-    {
-        const settings = getAllSettings() as Record<string, string>;
-        const reopenAfterUpdate = settings[REOPEN_AFTER_UPDATE_KEY] === '1';
-        // One-shot: clear it now so only the boot immediately after the update
-        // reopens (whatever we decide below).
-        if (reopenAfterUpdate) setSettings({ [REOPEN_AFTER_UPDATE_KEY]: '' });
-        if (
-            shouldShowMasterWindowOnBoot({
-                isE2E: isE2E(),
-                fromAutostart: launchedFromAutostart(),
-                startMinimized: settings['start_minimized'] === 'on',
-                reopenAfterUpdate,
-            })
-        ) {
-            showMasterWindow();
-        }
+    if (E2E_BUILD && isE2E()) {
+        // The rig decides its own ordering (mocks before the window, mobile server after) --
+        // see main/e2e/index.ts. Awaited here so startup still happens in that order.
+        await (await import('./e2e')).startE2EAtBoot({
+            isDev,
+            appDir: __dirname,
+            devServerOrigin: 'http://localhost:8888',
+            backgroundColor: initialWindowTheme(false).backgroundColor,
+            registerForceQuestionIpc: () => registerForceQuestionIpc(forceQuestionIpcConfig()),
+            broadcast: (channel, payload) => broadcastToWindows(channel, payload),
+            recoveryChannels: {
+                status: TERMINAL_RECOVERY_STATUS_CHANNEL,
+                recover: TERMINAL_RECOVER_CHANNEL,
+            },
+        });
     }
     // Boot-time capability check: once GitHub is known-connected, detect any
     // missing required permission and broadcast `github:capabilities` so the
@@ -2675,7 +2637,7 @@ app.whenReady().then(async () => {
     // GApp window over the REAL bridge. The property it exists to prove is a
     // negative -- `window.genie` is absent inside a GApp's page -- and a negative
     // cannot be established by reading code. Inert in a normal run.
-    if (isE2E()) registerAppsE2E();
+    if (E2E_BUILD && isE2E()) (await import('./e2e')).registerE2EApps();
     // WHO SERVES THE AGENT MCP PORT (genie#346): the MCP shuttle — a separate
     // process on the standalone Node that outlives this one, so an upgrade never
     // drops an agent's connection. Always; it is not a setting. Only when it
@@ -2760,9 +2722,9 @@ app.whenReady().then(async () => {
     // server-push chain in the compiled app — including that the boot above
     // actually wired the notify sink. Published here (after startMcpServer) so
     // the endpoint URL exists. Inert in a normal run.
-    if (isE2E()) {
+    if (E2E_BUILD && isE2E()) {
         const wsId = 'e2e-push-ws';
-        registerAgentRevivalE2E();
+        (await import('./e2e')).registerE2EAgentRevival();
         (globalThis as Record<string, unknown>).__GENIE_E2E_MCP__ = {
             endpointUrl: workspaceEndpointUrl(wsId),
             diagnostics: () => serverPushDiagnostics(),
@@ -3568,191 +3530,6 @@ function forceQuestionIpcConfig(): Parameters<typeof registerForceQuestionIpc>[0
     };
 }
 
-function showE2EWindow(): void {
-    // Allowlist the harness routes so a stray env value can't load an arbitrary
-    // page; default to the issue-watch harness for back-compat.
-    const requested = process.env.GENIE_E2E_PAGE ?? 'e2e-issuewatch';
-    const ALLOWED = [
-        'e2e-ghcaps',
-        // Not a harness page either — see the `ask` branch below.
-        'ask',
-        'e2e-issuewatch',
-        'e2e-agent-access',
-        'e2e-agent-manager',
-        'e2e-picker-layer',
-        'e2e-hosting',
-        'e2e-repo-panel',
-        'e2e-terminal-recovery',
-        'e2e-tynn-health',
-        'e2e-tynn-import',
-        'e2e-workspace-create',
-        'e2e-agent-pulse',
-        'e2e-deck',
-        'e2e-agent-view',
-        // The product page, not a harness (genie#228). See the doc comment.
-        'master',
-    ] as const;
-    /**
-     * An UNKNOWN page that was explicitly asked for is a MISTAKE, and must not be
-     * substituted quietly.
-     *
-     * This used to fall back to `e2e-issuewatch` for any unrecognised value. A new harness
-     * added to `e2e/helpers/launch.ts` but not to this second list therefore ran its specs
-     * against a DIFFERENT page, and every assertion failed as "element not found" -- which
-     * points at the component under test rather than at this allowlist. Cost a full CI
-     * round trip to find.
-     *
-     * The default (nothing requested) still falls back, because that is back-compat rather
-     * than a mistake.
-     */
-    if (process.env.GENIE_E2E_PAGE && !(ALLOWED as readonly string[]).includes(requested)) {
-        throw new Error(
-            `GENIE_E2E_PAGE="${requested}" is not in showE2EWindow's ALLOWED list. ` +
-                'Add it there as well as to HARNESS_ROUTE in e2e/helpers/launch.ts — otherwise ' +
-                'the specs silently run against a different page.',
-        );
-    }
-    const page = (ALLOWED as readonly string[]).includes(requested) ? requested : 'e2e-issuewatch';
-    if (page === 'e2e-agent-access') {
-        // Seed the fixture workspaces BEFORE the window loads — the harness page
-        // resolves its target by listing on mount, so the rows must already exist.
-        // Also resets agent_access, since the E2E profile is reused across runs.
-        try {
-            seedAgentAccessE2E();
-        } catch (e) {
-            console.error('[e2e] agent-access seed failed', e);
-        }
-    }
-    if (page === 'e2e-agent-manager') {
-        // Seed the workspace, its REAL AGENT.md and .mcp.json, and the agent +
-        // sidecar rows BEFORE the window loads — the harness page resolves its
-        // target by listing on mount. Re-seeded every run because the spec's own
-        // saves rewrite the file, and a leftover one would make the round-trip
-        // assertion pass against a value it did not write.
-        try {
-            seedAgentManagerE2E();
-        } catch (e) {
-            console.error('[e2e] agent-manager seed failed', e);
-        }
-    }
-    if (page === 'e2e-repo-panel') {
-        // Seed the fixture git repo + workspace BEFORE the window loads; the
-        // harness page discovers it via workspaces.list() on mount.
-        try {
-            seedRepoE2E();
-        } catch (e) {
-            console.error('[e2e] repo-panel seed failed', e);
-        }
-    }
-    if (page === 'e2e-agent-pulse') {
-        // Seed the fixture workspace BEFORE the window loads — the harness page
-        // resolves its row by listing on mount — and expose the pulse emitter so
-        // the spec can push activity on the REAL `agent-pulse` channel.
-        try {
-            seedAgentPulseE2E();
-        } catch (e) {
-            console.error('[e2e] agent-pulse seed failed', e);
-        }
-    }
-    if (page === 'e2e-workspace-create') {
-        // Empty the destination folder, drop any workspace a previous run left
-        // in it, and pre-set the primary workspace folder BEFORE the window
-        // loads — the form reads it on mount as the default location (genie#431).
-        try {
-            seedWorkspaceCreateE2E();
-        } catch (e) {
-            console.error('[e2e] workspace-create seed failed', e);
-        }
-    }
-    if (page === 'e2e-tynn-import') {
-        // Clear any workspace a previous run registered and pre-set the primary
-        // workspace folder BEFORE the window loads — the modal reads it on mount
-        // as the default clone destination (genie#355).
-        try {
-            seedTynnImportE2E();
-        } catch (e) {
-            console.error('[e2e] tynn-import seed failed', e);
-        }
-    }
-    if (page === 'master') {
-        // Seed the fixture workspaces + terminals BEFORE the window loads: the
-        // real page lists them on mount and restores its launch grid from what it
-        // finds, so a row that arrives afterwards is a row the floor never lays
-        // out. Also resets the persisted layout + active workspace, since the E2E
-        // profile is reused across runs.
-        try {
-            seedMasterE2E();
-        } catch (e) {
-            console.error('[e2e] master seed failed', e);
-        }
-        // Flows for the manager flyout the master header opens, plus the emitter
-        // the spec drives the header animation with. Separate from the master
-        // seed because it touches a different table and a failure in one must
-        // not take the other's rows with it.
-        try {
-            seedFlowsE2E();
-        } catch (e) {
-            console.error('[e2e] flows seed failed', e);
-        }
-    }
-    if (page === 'e2e-terminal-recovery') {
-        // Let the spec drive the host-loss watchdog's OWN emit path (genie#203):
-        // the SAME broadcastToWindows + channel constants genie-adapter uses, so a
-        // channel-string drift between emit (genie-adapter) and listen (preload)
-        // surfaces as a failing E2E rather than a silent dead path.
-        (globalThis as Record<string, unknown>).__GENIE_E2E_RECOVERY__ = {
-            emitStatus: (state: RecoveryState) =>
-                broadcastToWindows(TERMINAL_RECOVERY_STATUS_CHANNEL, { state }),
-            reattach: (ids: string[]) => broadcastToWindows(TERMINAL_RECOVER_CHANNEL, { ids }),
-        };
-    }
-    if (page === 'ask') {
-        // NOT a harness page, and not a page load either: the ForceTheQuestion
-        // modal is a window the PRODUCT opens, so the fixture raises real
-        // questions and `createAskWindow` makes the window Playwright attaches
-        // to. Opening a harness window here as well would hand the spec the
-        // wrong `firstWindow`.
-        try {
-            registerForceQuestionIpc(forceQuestionIpcConfig());
-            seedAskE2E();
-            raiseAskE2E();
-        } catch (e) {
-            console.error('[e2e] ask seed failed', e);
-        }
-        return;
-    }
-    const win = new BrowserWindow({
-        width: 900,
-        height: 760,
-        show: true,
-        title: 'Genie E2E',
-        backgroundColor: initialWindowTheme(false).backgroundColor,
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false,
-        },
-    });
-    /**
-     * `GENIE_E2E_VIEW` lets a spec ask for a specific surface.
-     *
-     * The DEFAULT is deliberately left alone, so the E2E harness opens whatever the product
-     * opens -- if the default surface ever fails to render, a spec catches it. Specs that are
-     * about the PANEL GRID ask for it by name (`view=grid`) rather than relying on it being
-     * the default, which it no longer is.
-     */
-    const e2eView = process.env.GENIE_E2E_VIEW?.trim();
-    const viewQuery = e2eView ? `?view=${encodeURIComponent(e2eView)}` : '';
-    if (isDev) {
-        win.loadURL(`http://localhost:8888/${page}${viewQuery}`);
-    } else {
-        win.loadFile(
-            path.join(__dirname, `${page}.html`),
-            viewQuery ? { search: viewQuery.slice(1) } : {},
-        );
-    }
-}
 
 /**
  * Consent for fetching a container image the Dev Server needs (#234 P4).
