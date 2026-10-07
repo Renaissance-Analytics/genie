@@ -52,7 +52,7 @@ interface Props {
      * is a drop target.
      */
     drag?: PanelDragHandlers;
-    /** AgentPanel supplies agent-specific chrome while sharing the stable PTY host. */
+    /** AgentTerminal supplies agent-specific chrome while sharing the stable PTY host. */
     surface?: 'terminal' | 'agent';
     /** Surface-specific header controls, rendered inside the actions row. */
     headerActions?: ReactNode;

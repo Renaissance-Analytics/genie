@@ -47,7 +47,7 @@ import ListsFlyout from '../components/Master/ListsFlyout';
 import AppStoreFlyout from '../components/Master/AppStoreFlyout';
 import AppTray from '../components/Master/AppTray';
 import Floor from '../components/Master/Floor';
-import AgentPanel from '../components/Master/AgentPanel';
+import AgentTerminal from '../components/Master/AgentTerminal';
 import { questionBadgeCount } from '../lib/question-badge';
 import TerminalTypeSplitButton from '../components/Master/TerminalTypeSplitButton';
 import AgentTerminalForm from '../components/Master/AgentTerminalForm';
@@ -2927,7 +2927,7 @@ function MasterInner() {
                 >
                     <button className="genie-os-backdrop" aria-label="Close Genie OS" onClick={() => setGenieOsOpen(false)} />
                     <aside className="genie-os-flyout" aria-label="Genie OS agent">
-                        <AgentPanel
+                        <AgentTerminal
                             spec={genieOsSpec}
                             workspace={systemWorkspace}
                             focused={genieOsOpen}
