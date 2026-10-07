@@ -12,10 +12,11 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
-    "incremental": true,
-    "plugins": [{ "name": "next" }]
+    // `react-jsx`, not `preserve`: Next used to do the JSX transform downstream. Vite
+    // compiles it, so the renderer must emit real JSX calls.
+    "jsx": "react-jsx",
+    "incremental": true
   },
-  "include": ["./**/*", ".next/types/**/*.ts", "next-env.d.ts"],
+  "include": ["./**/*"],
   "exclude": ["node_modules"]
 }

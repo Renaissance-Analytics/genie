@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
+import { usePageQuery } from '../lib/page-query';
 import Terminal from '../components/Terminal/Terminal';
 import { hasGenieBridge } from '../lib/genie';
 import { parseTerminalWindowRoute } from '../lib/terminal-window-route';
@@ -24,7 +24,7 @@ import { parseTerminalWindowRoute } from '../lib/terminal-window-route';
  */
 export default function TerminalPage() {
     const [ready, setReady] = useState(false);
-    const router = useRouter();
+
 
     useEffect(() => {
         if (hasGenieBridge()) {
@@ -47,12 +47,11 @@ export default function TerminalPage() {
               ? process.env.USERPROFILE
               : '.';
 
-    // `router.isReady` matters: before it, query is empty and we would briefly decide
-    // "scratch" and spawn a pty the window never wanted.
-    const view = useMemo(
-        () => (router.isReady ? parseTerminalWindowRoute(router.query) : null),
-        [router.isReady, router.query],
-    );
+    // No `isReady` guard: `URLSearchParams` is synchronous, so the query is correct on the
+    // FIRST render. Under next/router it was empty initially and this had to wait or it
+    // would briefly decide "scratch" and spawn a pty the window never wanted.
+    const pageQuery = usePageQuery();
+    const view = useMemo(() => parseTerminalWindowRoute(pageQuery), [pageQuery]);
 
     if (!ready || !view) {
         return (

@@ -43,7 +43,7 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
-      # Through the npm scripts, which name the project's own TypeScript: nextron
+      # Through the npm scripts, which name the project's own TypeScript: the renderer
       # ships a TypeScript 6 `tsc` bin too, and a bare `tsc` is whichever npm
       # linked last (scripts/__tests__/typecheck-uses-project-typescript.test.ts).
       - name: Typecheck (main)

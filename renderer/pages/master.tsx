@@ -179,7 +179,7 @@ import {
 import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
-import { useRouter } from 'next/router';
+import { usePageQuery } from '../lib/page-query';
 import { parseViewRoute, type GenieView } from '../lib/view-route';
 import { AgentView } from '../components/Master/AgentView';
 import { answerForOption } from '../lib/attention-actions';
@@ -339,8 +339,8 @@ function MasterInner() {
      * `?host=<connKey>`, and `host` decides whether this renderer points at a remote
      * host at all. Replacing the whole query would silently turn a remote window local.
      */
-    const router = useRouter();
-    const view: GenieView = parseViewRoute(router.query ?? {});
+    const pageQuery = usePageQuery();
+    const view: GenieView = parseViewRoute(pageQuery);
     const surface = floorSurface(view);
 
     /**
