@@ -3197,6 +3197,15 @@ function MasterInner() {
                         case 'genie-os':
                             setGenieOsOpen(true);
                             break;
+                        // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
+                        // that the Deck is the default. `mergeViewRoute` rather than
+                        // replacing the query, for the same reason as every other
+                        // navigation here -- `host` and `stage` decide whether this window
+                        // points at a remote machine, and dropping them would silently make
+                        // a remote window local.
+                        case 'grid':
+                            replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
+                            break;
                         // Workspace-SCOPED: these take a workspace, not a toggle. With no
                         // active workspace there is nothing to open them against, so they
                         // no-op rather than opening against a guess.
