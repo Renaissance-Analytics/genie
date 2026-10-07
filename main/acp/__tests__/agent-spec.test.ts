@@ -53,8 +53,23 @@ describe('acpLaunch', () => {
         });
     });
 
-    it('lists exactly the providers that have an ACP mode', () => {
-        expect([...ACP_PROVIDERS].sort()).toEqual(['claude', 'codex', 'gemini', 'kimi']);
+    it('lists exactly the providers that can ACTUALLY run on ACP', () => {
+        // codex was here and `acpLaunch` refused it `no-acp-mode` — so with `acp_engine` on,
+        // `engineFor` routed every codex agent to ACP and it never started, leaving one
+        // console line as the only symptom. The list must mean capability, not intent.
+        // It returns when prism ships a codex driver; the third-party adapter is not an
+        // option (owner: NO 3RD PARTY).
+        expect([...ACP_PROVIDERS].sort()).toEqual(['claude', 'gemini', 'kimi']);
+    });
+
+    it('REFUSES codex by name, rather than pointing it at the claude host', () => {
+        // A wrong spawn starts something that cannot drive the provider and then times out
+        // in the handshake, which reads as a hung agent instead of an unsupported one.
+        expect(acpLaunch('codex', { hostScript: () => '/fake/host.mjs' } as never)).toMatchObject({
+            ok: false,
+            reason: 'no-acp-mode',
+            provider: 'codex',
+        });
     });
 });
 

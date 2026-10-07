@@ -80,9 +80,19 @@ describe('the main-process entry map', () => {
 });
 
 describe('what the main bundle resolves at runtime vs inlines', () => {
-    it('externalises every production dependency, as nextron did', () => {
+    it('externalises every production dependency that CAN be required', () => {
+        // nextron externalised all of them unconditionally. That was right until an ESM-only
+        // dependency arrived: `@particle-academy/prism-acp` has no `require` condition at
+        // all, so externalising it emitted a `require` that killed the main process at boot.
+        // The rule is now "external unless it cannot be required", and the exception is
+        // named in `ESM_ONLY_DEPENDENCIES` rather than being a silent hole here.
         const external = mainBuildExternals();
+        const esmOnly = ['@particle-academy/prism-acp'];
         for (const dep of Object.keys(pkg.dependencies ?? {})) {
+            if (esmOnly.includes(dep)) {
+                expect(external, `${dep} is ESM-only and must be INLINED`).not.toContain(dep);
+                continue;
+            }
             expect(external, `${dep} must stay external`).toContain(dep);
         }
     });
@@ -214,5 +224,46 @@ describe('the E2E-rig build flag', () => {
         const cfg = mainBuildConfig('background', { dev: true, e2e: true });
         expect(flagOf(cfg)).toBe('true');
         expect((cfg.define ?? {})['process.env.NODE_ENV']).toBeUndefined();
+    });
+});
+
+/**
+ * AN ESM-ONLY DEPENDENCY MUST BE BUNDLED, NOT REQUIRED.
+ *
+ * `@particle-academy/prism-acp` is `"type": "module"` with an `exports` map that offers only
+ * an `"import"` condition — there is no `require` path into it at all. The main bundle is
+ * CommonJS and externalises every production dependency, so importing it emitted
+ * `require("@particle-academy/prism-acp")` into `background.js` and the main process **died
+ * at boot**: no window, and all 173 E2E specs failed at 0ms on all three platforms with
+ * nothing in the log but `firstWindow: Timeout`.
+ *
+ * It was survivable before only because the package was used exclusively by
+ * `main/acp/prism-host.mjs`, which runs as real ESM in its own process. Reading
+ * `META_CLI_SESSION_ID` and `readRateLimit` from the mapper pulled it into the CJS bundle.
+ *
+ * Inlining is safe and is the right answer rather than a workaround: the package has ZERO
+ * dependencies, so bundling it pulls in nothing else, and the alternative — a dynamic import
+ * — is inlined anyway by `codeSplitting: false` while making the mapper async for no gain.
+ *
+ * This guard exists because the failure mode is maximally unhelpful: a unit suite of 11,730
+ * tests passes, the renderer builds, `test` goes green on CI, and the only symptom is a
+ * window that never opens.
+ */
+describe('ESM-only dependencies', () => {
+    it('does NOT externalise prism-acp, which cannot be required', () => {
+        expect(mainBuildExternals()).not.toContain('@particle-academy/prism-acp');
+    });
+
+    it('positive control: a CJS dependency IS still externalised', () => {
+        // Without this, "nothing is external" would pass — and bundling `better-sqlite3`
+        // would try to inline a native `.node` binding.
+        expect(mainBuildExternals()).toContain('better-sqlite3');
+    });
+
+    it('names every ESM-only dependency it inlines, so the list cannot rot silently', () => {
+        // A second ESM-only package added later must be added here too, and the way to find
+        // out must not be a boot failure. The reason lives beside the list.
+        const config = mainBuildConfig();
+        expect(config.ssr?.noExternal).toContain('@particle-academy/prism-acp');
     });
 });

@@ -110,8 +110,21 @@ export interface AgentObservation {
     runtimeTerminalId: string | null;
     /** Whether that terminal spec is still in the database. */
     terminalSpecExists: boolean;
-    /** Whether its pty is running right now (`isTerminalLive`). */
+    /**
+     * Whether its TRANSPORT is running right now (`isTerminalLive`).
+     *
+     * Named `ptyLive` for history; `isTerminalLive` is `ptyLive || acpLive`, so a live ACP
+     * session reports true here and is correctly NOT diagnosed as a dead pty.
+     */
     ptyLive: boolean;
+    /**
+     * `'acp'` for a structured session, from `meta.engine`.
+     *
+     * Only the WORDING depends on it, never the detection. But the wording matters: the
+     * dead-transport repair tells an operator to read the pty's exit tail, and an ACP
+     * session has no pty and therefore no tail — sending them to look at nothing.
+     */
+    engine?: 'acp' | 'pty';
     /** What its harness MUST verify, or null when its provider requires nothing. */
     requiredTransport: string | null;
     /** `workspace_agents.transport_verified_at` — durable, survives a restart. */
@@ -240,15 +253,25 @@ export function diagnoseAgent(obs: AgentObservation): AgentDiagnosis {
             repair: '`runAgent start` — it creates a fresh terminal for this agent.',
         });
     } else if (!obs.ptyLive) {
+        // Same ailment and the same repair — only the explanation differs, because an ACP
+        // session has no pty and therefore no exit tail to read. Telling an operator to go
+        // and read one sends them to look at nothing and makes the real cause harder to find.
+        const acp = obs.engine === 'acp';
         findings.push({
             ailment: 'pty-exited',
-            detail:
-                `Its terminal "${terminalId}" still exists but the pty is not running: the TUI ` +
-                'exited, or the terminal backend dropped it.',
-            repair:
-                '`runAgent start` reattaches and revives the SAME terminal, so the conversation ' +
-                'survives. Read the last output first (`manageTerminals read`) — the exit tail is ' +
-                'the only evidence of why it went.',
+            detail: acp
+                ? `Its ACP session for terminal "${terminalId}" is not running: the agent ` +
+                  'process exited or its JSON-RPC channel closed. There is no pty here, so ' +
+                  'there is no terminal output to inspect.'
+                : `Its terminal "${terminalId}" still exists but the pty is not running: the TUI ` +
+                  'exited, or the terminal backend dropped it.',
+            repair: acp
+                ? '`runAgent start` reattaches and starts a fresh session. The CONVERSATION ' +
+                  'survives when Genie captured the provider’s session id — it resumes through ' +
+                  '`session/load` rather than replaying anything, so no history reappears on screen.'
+                : '`runAgent start` reattaches and revives the SAME terminal, so the conversation ' +
+                  'survives. Read the last output first (`manageTerminals read`) — the exit tail is ' +
+                  'the only evidence of why it went.',
         });
     }
 

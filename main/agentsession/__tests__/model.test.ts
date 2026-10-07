@@ -107,6 +107,45 @@ describe('sessionFidelity', () => {
         expect(sessionFidelity(session({ composer: { text: '', cursor: 0, busy: false } }))).toBe('declared');
     });
 
+    /**
+     * ACP has NO COMPOSER, and keying fidelity on one locked it out.
+     *
+     * `composer` was the right discriminator for `reportState`, the genie-tui producer,
+     * which does report an input box. An ACP agent cannot: it has no idea what the human is
+     * typing, so `applySessionUpdate` never sets one. An ACP session would therefore have
+     * been classified `observed` forever — showing the Terminal-first tab set and hiding the
+     * Conversation tab — no matter how much declared data arrived.
+     *
+     * So the test is "did something no observer could have produced arrive". Measured, the
+     * floor projector assigns exactly four fields — `turn`, `transcript`, `approvals`,
+     * `error` — and leaves `composer`, `plan`, `usage` and `commands` null. Any of those
+     * four is proof of a declaration, whichever producer sent it.
+     */
+    it('is declared when the agent states its PLAN, which no observer can infer', () => {
+        expect(sessionFidelity(session({ plan: [] }))).toBe('declared');
+    });
+
+    it('is declared when the agent states its USAGE', () => {
+        // Cost and context come from `usage_update`. Genie cannot watch a pty and learn
+        // either, which is why a pty agent's cost cell renders nothing at all.
+        expect(
+            sessionFidelity(session({ usage: { contextUsed: 1000, contextMax: 200_000, costUsd: 0.1 } })),
+        ).toBe('declared');
+    });
+
+    it('is declared when the agent offers its own SLASH COMMANDS', () => {
+        // `available_commands_update`. Today a human has to KNOW an agent's commands; a
+        // declaring agent hands over the list, and nothing else can.
+        expect(sessionFidelity(session({ commands: [] }))).toBe('declared');
+    });
+
+    it('treats an EMPTY declared value as a declaration, not as absence', () => {
+        // The asymmetry `knownFacts` already documents: `plan: []` means the agent said it
+        // has no plan; `plan: null` means we cannot say. The first is a declaration.
+        expect(sessionFidelity(session({ plan: [] }))).toBe('declared');
+        expect(sessionFidelity(session({ plan: null }))).toBe('observed');
+    });
+
     it('is unknown when the provider could not be resolved', () => {
         // Not the same as observed. Observed means "running, and we can see
         // activity"; unknown means "we cannot even say what this is", which the

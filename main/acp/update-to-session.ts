@@ -1,3 +1,9 @@
+import {
+    META_CLI_SESSION_ID,
+    META_RATE_LIMIT,
+    META_UNMAPPED_FRAME,
+    readRateLimit,
+} from '@particle-academy/prism-acp';
 /**
  * ACP `session/update` → `AgentSession`.
  *
@@ -106,6 +112,31 @@ function planStatus(status: string | undefined): PlanEntry['status'] {
  * update.
  */
 export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: number): AgentSession {
+    /**
+     * THE CLI'S SESSION ID — captured from whichever update carries it first.
+     *
+     * ACP's `session/new` returns an id prism-acp MINTS; the provider's real id is a
+     * different string, and `session/load` needs THAT one. Before prism-acp 0.3.0 it was
+     * recorded as unmapped and reached nobody, which is why resume was unreachable from a
+     * client at all.
+     *
+     * Taken before the kind switch because it rides on the FIRST update of a session,
+     * whatever kind that happens to be — keying off `agent_message_chunk` would miss a
+     * session whose first update was a tool call.
+     *
+     * Never overwritten by a later update that omits it: every subsequent chunk arrives with
+     * no `_meta`, and clearing the id would lose resume one message after gaining it.
+     *
+     * Validated rather than trusted. `_meta` is `unknown` on the wire, and a number or an
+     * empty string passed to `session/load` fails ONE TURN LATE — after the load reported
+     * success — which is the shape prism-acp measured on claude 2.1.292 and the reason
+     * Genie's old "a wrong resume starts fresh" doctrine is wrong for this CLI.
+     */
+    const metaCliId = (u as { _meta?: Record<string, unknown> })._meta?.[META_CLI_SESSION_ID];
+    if (typeof metaCliId === 'string' && metaCliId.trim() !== '' && !s.session.sessionId) {
+        s = { ...s, session: { ...s.session, sessionId: metaCliId } };
+    }
+
     switch (u.sessionUpdate as HandledUpdateKind) {
         case 'agent_message_chunk':
         case 'session_message_chunk':
@@ -247,7 +278,43 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
         case 'current_mode_update':
         case 'config_option_update':
         case 'session_info_update':
-        case 'notice':
+        case 'notice': {
+            /**
+             * A NOTICE CARRIES THE RATE-LIMIT READING, and this used to throw it away.
+             *
+             * The old comment was honest — *"the model has no field for any of these yet"* —
+             * and the cost was that the one thing the owner asked to see arrived on every
+             * turn and was discarded.
+             *
+             * BOTH `_meta` keys are read. Prism refuses an unrecognised payload totally and
+             * routes the frame to `unmapped_frame` with a reason naming the field that
+             * failed; reading only `rate_limit` would leave "no gauge and no explanation",
+             * which is their warning and would have been my bug.
+             */
+            const meta = (u as { _meta?: Record<string, unknown> })._meta ?? {};
+            const noticeText =
+                (u as { notice?: { message?: string } }).notice?.message ?? null;
+
+            if (meta[META_RATE_LIMIT] !== undefined) {
+                const read = readRateLimit(meta[META_RATE_LIMIT]);
+                if (read.ok) {
+                    // The sentence is OURS to carry and display only — Prism changed it once
+                    // already and says it is deliberately unstable.
+                    return { ...s, rateLimit: { ...read.limit, notice: noticeText }, rateLimitUnavailable: null };
+                }
+                return { ...s, rateLimit: null, rateLimitUnavailable: read.reason };
+            }
+
+            const unmapped = meta[META_UNMAPPED_FRAME] as { reason?: string } | undefined;
+            // `unmapped_frame` is a GENERAL channel: any frame with no mapping lands there.
+            // Reporting "no gauge because <unrelated frame>" would be a false explanation, so
+            // only a rate-limit refusal is taken.
+            if (unmapped?.reason?.startsWith('rate_limit')) {
+                return { ...s, rateLimit: null, rateLimitUnavailable: unmapped.reason };
+            }
+            return s;
+        }
+
         case 'compaction_update':
         case 'compaction_summary_chunk':
         case 'subagent_update':

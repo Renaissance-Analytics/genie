@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AcpRegistry, terminalIsLive, writeRefusal } from '../registry';
+import { AcpRegistry, terminalIsLive, writeRefusal, type AcpSessionEntry } from '../registry';
 
 /**
  * The seam that makes an ACP session a first-class Genie agent.
@@ -12,7 +12,7 @@ import { AcpRegistry, terminalIsLive, writeRefusal } from '../registry';
  */
 
 describe('AcpRegistry', () => {
-    const entry = () => ({ kill: () => {}, closed: false });
+    const entry = () => ({ kill: () => {}, closed: false, prompt: async () => ({ delivered: true, submitted: true }) });
 
     it('reports a registered session as live', () => {
         const r = new AcpRegistry();
@@ -28,7 +28,7 @@ describe('AcpRegistry', () => {
         // A registered entry whose channel died is not live. Reporting it live hides a dead
         // agent behind a healthy-looking roster row.
         const r = new AcpRegistry();
-        const e = { kill: () => {}, closed: false };
+        const e = { kill: () => {}, closed: false, prompt: async () => ({ delivered: true, submitted: true }) };
         r.register('s1', e);
         e.closed = true;
         expect(r.isLive('s1')).toBe(false);
@@ -44,7 +44,7 @@ describe('AcpRegistry', () => {
     it('kills the child when asked, and forgets it', () => {
         let killed = 0;
         const r = new AcpRegistry();
-        r.register('s1', { kill: () => (killed += 1), closed: false });
+        r.register('s1', { kill: () => void (killed += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }) });
         r.stop('s1');
         expect(killed).toBe(1);
         expect(r.isLive('s1')).toBe(false);
@@ -58,7 +58,7 @@ describe('AcpRegistry', () => {
     it('lists live sessions only', () => {
         const r = new AcpRegistry();
         r.register('live', entry());
-        r.register('dead', { kill: () => {}, closed: true });
+        r.register('dead', { kill: () => {}, closed: true, prompt: async () => ({ delivered: true, submitted: true }) });
         expect(r.liveSpecIds()).toEqual(['live']);
     });
 
@@ -68,7 +68,7 @@ describe('AcpRegistry', () => {
         // with nothing holding a handle to it.
         let firstKilled = 0;
         const r = new AcpRegistry();
-        r.register('s1', { kill: () => (firstKilled += 1), closed: false });
+        r.register('s1', { kill: () => void (firstKilled += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }) });
         r.register('s1', entry());
         expect(firstKilled).toBe(1);
         expect(r.liveSpecIds()).toEqual(['s1']);
@@ -114,5 +114,79 @@ describe('writeRefusal', () => {
         const refusal = writeRefusal('acp');
         expect(refusal).toBeTruthy();
         expect(refusal).toMatch(/prompt/i);
+    });
+});
+
+/**
+ * SENDING a prompt to an ACP session — the write path.
+ *
+ * `AcpSessionDriver.prompt()` existed, was tested, and **had no production caller**, exactly
+ * like `applySessionUpdate` before it. So an ACP agent could be started and observed and
+ * could not be TALKED TO — and `writeRefusal`, which exists to explain that, had no caller
+ * either, so a write went to a pty that was not there and reported nothing.
+ *
+ * That was survivable only while ACP was opt-in. The owner has since made it the mechanism
+ * (*"acp is the core of our agent communications, this is not optional"*), which means every
+ * Claude agent takes this path — and without it every one of them is unreachable, silently.
+ * Wiring it is a precondition of that change landing, not a follow-up to it.
+ */
+describe('the write path', () => {
+    const entry = (over: Partial<AcpSessionEntry> = {}): AcpSessionEntry => ({
+        kill: () => {},
+        closed: false,
+        prompt: async () => ({ delivered: true, submitted: true }),
+        ...over,
+    });
+
+    it('hands back a prompt function for a registered session', () => {
+        const r = new AcpRegistry();
+        r.register('spec-1', entry());
+        expect(r.promptFor('spec-1')).toBeTypeOf('function');
+    });
+
+    it('hands back nothing for a spec it does not hold — a PTY agent', () => {
+        // The discriminator for the whole branch: most agents are pty agents, and the
+        // absence of an entry is how the write path stays exactly as it was for them.
+        expect(new AcpRegistry().promptFor('spec-pty')).toBeNull();
+    });
+
+    it('hands back nothing once the channel has CLOSED', () => {
+        // Prompting a dead channel would hang or throw inside a tool call. A closed entry is
+        // not a session, which is the same rule `isLive` already holds to.
+        const r = new AcpRegistry();
+        r.register('spec-1', entry({ closed: true }));
+        expect(r.promptFor('spec-1')).toBeNull();
+    });
+
+    it('hands back nothing after the session is stopped', () => {
+        const r = new AcpRegistry();
+        r.register('spec-1', entry());
+        r.stop('spec-1');
+        expect(r.promptFor('spec-1')).toBeNull();
+    });
+
+    it('reports delivered AND submitted — the first time Genie can say so honestly', () => {
+        // The pty path could only ever say "we could not check": it wrote bytes and watched
+        // for a reaction. An ACP agent ACKNOWLEDGES the call, so both are earned.
+        const r = new AcpRegistry();
+        r.register('spec-1', entry());
+        return expect(r.promptFor('spec-1')!('hello')).resolves.toEqual({
+            delivered: true,
+            submitted: true,
+        });
+    });
+});
+
+describe('writeRefusal — raw writes, once there is a prompt path', () => {
+    it('refuses a raw write to an ACP session, and says what to do instead', () => {
+        // Still needed with the prompt path wired: `terminal:write` and friends send
+        // KEYSTROKES, which an ACP session has nowhere to put. The refusal is the difference
+        // between "nothing happened" and "nothing happened, send a prompt instead".
+        expect(writeRefusal('acp')).toMatch(/structured ACP session/i);
+        expect(writeRefusal('acp')).toMatch(/prompt/i);
+    });
+
+    it('does not refuse a pty write', () => {
+        expect(writeRefusal('pty')).toBeNull();
     });
 });

@@ -25,6 +25,8 @@ const base: AgentSessionSpec = {
     specId: 's1',
     session: { provider: 'claude', name: 'kai', cwd: 'repos/genie', workspaceId: 'w1', sessionId: 'sess' },
     turn: { state: 'awaiting-approval', since: NOW - 8_000 },
+    rateLimit: null,
+    rateLimitUnavailable: null,
     composer: { text: '', cursor: 0, busy: false },
     transcript: [{ id: 'm1', role: 'user', content: 'the pty host dies on upgrade' }],
     live: null,

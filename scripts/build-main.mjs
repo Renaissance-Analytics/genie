@@ -62,6 +62,25 @@ export const MAIN_BUILD_ENTRIES = {
 };
 
 /**
+ * Dependencies that CANNOT be required, so they must be inlined.
+ *
+ * `@particle-academy/prism-acp` is `"type": "module"` with an `exports` map offering only an
+ * `"import"` condition — there is no `require` path into it. Externalising it emitted
+ * `require("@particle-academy/prism-acp")` into a CommonJS `background.js` and the main
+ * process died at boot: no window, all 173 E2E specs failing at 0ms on three platforms, and
+ * nothing in the log but `firstWindow: Timeout`. The unit suite and the renderer build were
+ * both green throughout, which is what makes this worth naming rather than remembering.
+ *
+ * Safe to inline, and not a workaround: the package has zero dependencies, so bundling it
+ * pulls in nothing else. A dynamic import would be inlined anyway under
+ * `codeSplitting: false`, while making a synchronous mapper async for no benefit.
+ *
+ * Anything added here needs the same two properties — ESM-only, and cheap enough to inline.
+ * `scripts/__tests__/main-build-entries.test.ts` holds the list to this file.
+ */
+const ESM_ONLY_DEPENDENCIES = ['@particle-academy/prism-acp'];
+
+/**
  * Everything the bundle `require()`s at runtime instead of inlining.
  *
  * `electron` and the Node built-ins are provided by the runtime. The production
@@ -72,7 +91,8 @@ export function mainBuildExternals() {
     const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
     return [
         'electron',
-        ...Object.keys(pkg.dependencies ?? {}),
+        // Minus the ones that cannot be required — see ESM_ONLY_DEPENDENCIES.
+        ...Object.keys(pkg.dependencies ?? {}).filter((d) => !ESM_ONLY_DEPENDENCIES.includes(d)),
         ...module.builtinModules,
         ...module.builtinModules.map((m) => `node:${m}`),
     ];
@@ -106,6 +126,9 @@ export function mainBuildConfig(entry = 'background', { dev = false, e2e = false
                 '@renderer': path.join(REPO, 'renderer'),
             },
         },
+        // Explicit as well as effective: the externals list already omits these, and saying
+        // it here too is what a reader checks first.
+        ssr: { noExternal: ESM_ONLY_DEPENDENCIES },
         build: {
             outDir: path.join(REPO, 'app'),
             // The renderer writes its assets into the same `app/`, and `build:main` runs

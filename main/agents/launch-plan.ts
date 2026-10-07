@@ -20,9 +20,10 @@ export type LaunchPlan =
 
 export interface LaunchPlanInput {
     provider: string | null;
+    /** See the note on `EngineInput.acpEnabled` — held until ACP can resume. */
+    acpEnabled: boolean;
     /** The TUI launch line, when there is one. */
     command: string | null;
-    acpEnabled: boolean;
     agentOverride?: AgentEngine;
 }
 

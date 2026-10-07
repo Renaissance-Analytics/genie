@@ -1,3 +1,4 @@
+import type { SessionRateLimit } from './rate-limit';
 /**
  * `AgentSession` — what Genie can say about one agent, as a value.
  *
@@ -171,6 +172,23 @@ export interface AgentSession {
     tools: ToolCall[];
     /** Genie owns its approval queue, so `[]` here is a fact for any provider. */
     approvals: PendingApproval[];
+    /**
+     * SUBSCRIPTION HEADROOM — what is left before the wall.
+     *
+     * Owner requirement: *"I do need to see what is remaining on rate limits at least."*
+     * Arrives on a `notice` update's `_meta`, parsed by `prism-acp`. `null` is "cannot see" —
+     * a pty agent never reports one, and a declared agent has not yet in its first turn. It
+     * must never render as full headroom.
+     */
+    rateLimit: SessionRateLimit | null;
+    /**
+     * Why there is no reading, when the provider changed shape.
+     *
+     * Prism refuses an unrecognised payload TOTALLY and names the field that failed. Without
+     * storing the reason, a provider rename shows no gauge AND no explanation — strictly
+     * worse than a false gauge only in that nobody is misled, and strictly worse than this.
+     */
+    rateLimitUnavailable: string | null;
     /** null ⇒ not visible. `[]` ⇒ the agent has no plan right now. */
     plan: PlanEntry[] | null;
     /** null ⇒ not visible. NEVER render a dash for this — a dash reads as zero. */
@@ -202,6 +220,8 @@ export function emptyAgentSession(identity: AgentSessionIdentity, now = Date.now
         live: null,
         tools: [],
         approvals: [],
+        rateLimit: null,
+        rateLimitUnavailable: null,
         plan: null,
         usage: null,
         commands: null,
@@ -225,9 +245,39 @@ export function emptyAgentSession(identity: AgentSessionIdentity, now = Date.now
  * treating it as a declaration would have every pty agent claiming to show its
  * conversation while it was showing its mail.
  */
+/**
+ * Fields NO OBSERVER CAN PRODUCE, so the presence of any one proves a declaration.
+ *
+ * Measured against the floor projector, which assigns exactly four fields — `turn`,
+ * `transcript`, `approvals`, `error` — and leaves these four at their `emptyAgentSession`
+ * nulls. That asymmetry is what makes this a proof rather than a guess.
+ *
+ * `transcript` is deliberately NOT here: the projector fills it for every provider out of
+ * the AgentInbox thread and the last handoff, so treating it as a declaration would have
+ * every pty agent claiming to show its conversation while showing its mail.
+ */
+const DECLARED_ONLY_FIELDS = ['composer', 'plan', 'usage', 'commands', 'rateLimit'] as const;
+
+/**
+ * How much of this session Genie can actually see.
+ *
+ * It used to be `s.composer ? 'declared' : 'observed'`, and the reasoning was right for the
+ * producer it was written for: `reportState` (genie-tui) reports an input box, and
+ * `draft.ts` says in its own doc that *"Genie cannot read a TUI's input box"* — so a present
+ * composer meant the agent told us.
+ *
+ * ACP has no composer. The agent cannot see what the human is typing, so
+ * `applySessionUpdate` never sets one, and an ACP session would have been classified
+ * `observed` forever — Terminal-first tabs, no Conversation tab — however much declared data
+ * arrived. Keying on ANY declared-only field admits both producers without admitting the
+ * projector.
+ */
 export function sessionFidelity(s: AgentSession): SessionFidelity {
     if (!s.session.provider) return 'unknown';
-    return s.composer ? 'declared' : 'observed';
+    // Non-null, not truthy: `plan: []` and `commands: []` are DECLARATIONS — the agent said
+    // it has none — and a falsy check would read them as absence.
+    const declared = DECLARED_ONLY_FIELDS.some((f) => s[f] !== null && s[f] !== undefined);
+    return declared ? 'declared' : 'observed';
 }
 
 /** Which fields the UI is entitled to render for this session. */

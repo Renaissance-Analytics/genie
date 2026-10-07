@@ -115,6 +115,56 @@ export class AcpSessionDriver {
         this.sessionIdValue = session?.sessionId ?? null;
     }
 
+    /**
+     * RESUME an existing conversation instead of opening a new one.
+     *
+     * `initialize` then `session/load` — and NO `session/new`, which is the whole difference
+     * from {@link start}: minting a session here would create a second conversation and
+     * discard the one being resumed.
+     *
+     * ## The id is the provider's, not ACP's
+     *
+     * `session/new` returns an id prism-acp mints; the provider's own id arrives in `_meta`
+     * (`META_CLI_SESSION_ID`) and is stored on the agent record. This takes THAT one. Pass
+     * ACP's and prism-acp 0.3.0 refuses with a message naming the right key — which is a
+     * deliberate improvement on what the CLI does, because the CLI has never heard of ACP.
+     *
+     * ## Why an empty id is refused here rather than passed on
+     *
+     * Measured by prism-acp against claude 2.1.292: `--resume` with a non-UUID or an unknown
+     * UUID DOES error (`is_error: true`, zero turns, zero cost) — so this repository's
+     * doctrine that a wrong resume silently starts fresh is false for this CLI. But it errors
+     * ONE TURN TOO LATE, after the load has reported success. A caller would believe the
+     * conversation was continued and find out on the next prompt. Refusing an obviously
+     * absent id up front is the part we can do early.
+     *
+     * ## What resume does NOT do
+     *
+     * `session/load` returns `{}` and replays no history, because the CLI replays none. The
+     * conversation genuinely continues on the provider's side and nothing reappears in the
+     * UI. That is the honest shape rather than an omission — the alternative is re-prompting
+     * the agent with a transcript it never had, which looks resumed and is not.
+     */
+    async resume(opts: { cwd: string; sessionId: string }): Promise<void> {
+        const id = opts.sessionId?.trim();
+        if (!id) {
+            throw new Error(
+                'ACP resume refused: no session id was captured for this agent, so there is ' +
+                    'nothing to continue. Start it fresh instead.',
+            );
+        }
+        await this.deps.request('initialize', {
+            protocolVersion: 1,
+            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+            clientInfo: { name: 'genie', version: '2' },
+        });
+        // Throws on refusal, deliberately unhandled: prism-acp refuses an ACP id and refuses
+        // a load for an agent still running, and a swallowed refusal leaves the caller
+        // believing a conversation was continued when it was not.
+        await this.deps.request('session/load', { sessionId: id, cwd: opts.cwd });
+        this.sessionIdValue = id;
+    }
+
     async prompt(text: string): Promise<PromptOutcome> {
         if (!this.sessionIdValue) {
             // Prompting with no session is answered with a protocol error that reads as

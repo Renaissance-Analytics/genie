@@ -41,6 +41,8 @@ export interface Workspaceish {
     root: string;
 }
 
+import { mergeDeclared } from './merge-declared';
+
 export interface SessionPorts {
     /** Every workspace. The one read with no partial answer available. */
     workspaces: () => readonly Workspaceish[];
@@ -54,6 +56,14 @@ export interface SessionPorts {
     handoff: (agent: { agentId: string; name: string; workspaceRoot: string }) => FloorHandoff | null;
     /** Mail visible for an agent. */
     mail: (agent: { agentId: string; specId: string | null }) => readonly FloorMessage[];
+    /**
+     * This agent's DECLARED session, if one is open — `DeclaredSessionStore.get`.
+     *
+     * A port rather than an import so `sessionsFrom` stays pure and testable, and so the
+     * floor projection keeps working untouched when nothing is declared (every pty agent,
+     * which is most of them).
+     */
+    declared?: (agentId: string) => AgentSession | null;
     /** A triage ailment for an agent, or null. */
     ailment: (agent: { agentId: string; specId: string | null }) => string | null;
     now: () => number;
@@ -110,7 +120,15 @@ export function sessionsFrom(ports: SessionPorts): AgentSession[] {
             { agents, workingTerminalIds, questions, handoffs, mail, ailments },
             now,
         );
-        for (const i of inputs) out.push(projectFloorSession(i));
+        for (const i of inputs) {
+            const floorSession = projectFloorSession(i);
+            // DECLARED OVER FLOOR — P3's rule, and the point of the whole model: the agent
+            // says what it is doing instead of Genie inferring it from byte activity.
+            // `mergeDeclared` leaves the projection untouched when nothing is declared, so
+            // this is inert for a pty agent.
+            const declared = ports.declared ? safely(() => ports.declared!(i.identity.agentId), null) : null;
+            out.push(mergeDeclared(floorSession, declared));
+        }
     }
 
     return out;

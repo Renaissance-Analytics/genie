@@ -271,3 +271,92 @@ describe('what the agent asks of us', () => {
         expect(() => driver.decide('ghost', 'allow-once')).not.toThrow();
     });
 });
+
+/**
+ * RESUMING a conversation — `session/load`, and the id it must be given.
+ *
+ * Available from prism-acp 0.3.0, which fixed three stacked defects: the CLI's id was
+ * recorded as unmapped and reached no client; exited sessions were never removed from the
+ * agent's map, so a crashed agent came back as `already open` (the very case resume exists
+ * for); and the map was keyed by the ACP id, so a load by CLI id could not collide with a
+ * live session.
+ *
+ * ## Which id, and why it matters more than it looks
+ *
+ * `session/new` returns an id prism-acp MINTS (`sess_<n>_<timestamp>`). The provider's own id
+ * is a different string, captured from `_meta` and stored on the agent record. **`session/load`
+ * takes the provider's.**
+ *
+ * Measured by prism-acp against claude 2.1.292 rather than reasoned: a non-UUID gives *"is
+ * not a UUID and does not match any session title"*, a well-formed unknown UUID gives *"No
+ * conversation found with session ID"* — both `is_error: true`, zero turns, zero cost. So
+ * this repository's standing doctrine, *"a wrong resume flag does not error, it starts a
+ * FRESH conversation"*, is **false for `--resume`**. The real hazard is narrower and
+ * worse-shaped: it errors ONE TURN TOO LATE, after the load has already reported success.
+ * Which is exactly why the id is checked here and not discovered on the next prompt.
+ */
+describe('resume', () => {
+    const CLI_ID = '9f1c2f84-0000-4000-8000-5a6b7c8d9e01';
+
+    it('initializes, then LOADS, in that order', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).resume({ cwd: '/repo', sessionId: CLI_ID });
+        expect(calls.map((c) => c.method)).toEqual(['initialize', 'session/load']);
+    });
+
+    it('passes the provider id and the cwd to session/load', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).resume({ cwd: '/repo', sessionId: CLI_ID });
+        expect(calls[1]!.params).toMatchObject({ sessionId: CLI_ID, cwd: '/repo' });
+    });
+
+    it('opens NO new session — that is the whole difference from start()', async () => {
+        // A `session/new` here would mint a second conversation and discard the one being
+        // resumed, which is the bug this method exists to avoid.
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).resume({ cwd: '/repo', sessionId: CLI_ID });
+        expect(calls.some((c) => c.method === 'session/new')).toBe(false);
+    });
+
+    it('can be prompted afterwards, which is what "resumed" has to mean', async () => {
+        // `session/load` returns `{}` and replays nothing, so the only proof a resume
+        // WORKED is that the session is now promptable.
+        const { deps: d, calls } = deps();
+        const driver = new AcpSessionDriver(d);
+        await driver.resume({ cwd: '/repo', sessionId: CLI_ID });
+        await expect(driver.prompt('carry on')).resolves.toEqual({ delivered: true, submitted: true });
+        expect(calls.some((c) => c.method === 'session/prompt')).toBe(true);
+    });
+
+    it('keeps the provider id as the session id, not a minted one', async () => {
+        const { deps: d } = deps();
+        const driver = new AcpSessionDriver(d);
+        await driver.resume({ cwd: '/repo', sessionId: CLI_ID });
+        expect(driver.sessionId).toBe(CLI_ID);
+    });
+
+    it('REFUSES an empty id rather than loading nothing', async () => {
+        // An absent id means the provider never told us, so there is nothing to resume. A
+        // load with a blank id is the late-error shape: accepted now, failing a turn later.
+        const { deps: d, calls } = deps();
+        await expect(new AcpSessionDriver(d).resume({ cwd: '/repo', sessionId: '  ' })).rejects.toThrow(
+            /no session id/i,
+        );
+        expect(calls).toEqual([]);
+    });
+
+    it('propagates a refusal from the agent instead of reporting success', async () => {
+        // prism-acp refuses an ACP id with a message naming the right key, and refuses a
+        // load for an agent that is still running. Both must surface: a swallowed refusal
+        // leaves a caller believing a conversation was continued when it was not.
+        const { deps: d } = deps({
+            request: async (method) => {
+                if (method === 'session/load') throw new Error('session is already open');
+                return {};
+            },
+        });
+        await expect(
+            new AcpSessionDriver(d).resume({ cwd: '/repo', sessionId: CLI_ID }),
+        ).rejects.toThrow(/already open/i);
+    });
+});
