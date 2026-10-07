@@ -50,23 +50,33 @@ describe('the human switch is held to the agent’s own rule (genie#463)', () =>
         expect(body).toContain('ok: false');
     });
 
-    it('the switcher and the Driver tab both build rows from that one rule', () => {
-        // A second copy of "which drivers may this agent take" is how the UI
-        // and the host end up disagreeing — the visible symptom being a button
-        // whose only outcome is the host's error message.
+    it('the Driver tab builds its rows from that one rule', () => {
+        // A second copy of "which drivers may this agent take" is how the UI and the host
+        // end up disagreeing — the visible symptom being a button whose only outcome is the
+        // host's error message.
+        //
+        // There used to be TWO renderers of driver rows: `AgentTuiSwitcher`, in the Floor
+        // panel header, and the Driver tab. The switcher is gone (owner decision 2026-10-07:
+        // *"we don't need the TUI agent support like we have it now"*) — it was a duplicate
+        // of the tab the manager's own note calls *"the one place that answers 'what is this
+        // agent running under, and is it running'"*. Deleted rather than left unrendered,
+        // because this assertion would otherwise be guarding a component nobody draws.
         const rendererDir = path.join(mainDir, '..', 'renderer');
         const lib = fs.readFileSync(path.join(rendererDir, 'lib/agent-manager.ts'), 'utf8');
         expect(lib).toContain("from '../../main/agents/tui-switch'");
         expect(lib).toContain('export function driverRows');
-        for (const component of [
-            'components/Master/AgentTuiSwitcher.tsx',
-            'components/Master/AgentManager.tsx',
-        ]) {
-            expect(
-                fs.readFileSync(path.join(rendererDir, component), 'utf8'),
-                `${component} should build its driver list from driverRows`,
-            ).toContain('driverRows');
-        }
+        const component = 'components/Master/AgentManager.tsx';
+        expect(
+            fs.readFileSync(path.join(rendererDir, component), 'utf8'),
+            `${component} should build its driver list from driverRows`,
+        ).toContain('driverRows');
+    });
+
+    it('the switcher that duplicated it is really gone, not merely unused', () => {
+        // Dead code with a guard pointing at it reads as a live, protected surface. The
+        // nextron main-entry test spent weeks passing against exactly that.
+        const rendererDir = path.join(mainDir, '..', 'renderer');
+        expect(fs.existsSync(path.join(rendererDir, 'components/Master/AgentTuiSwitcher.tsx'))).toBe(false);
     });
 });
 

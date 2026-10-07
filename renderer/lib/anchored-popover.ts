@@ -17,7 +17,7 @@
  *     Chooser proc-log — and against a hard-coded 340px, not a measurement
  *     TerminalTypeSplitButton `row` variant — the one existing helper, half used
  *   NEITHER — opened at the cursor and left there:
- *     Chooser proc context menu, AgentPanel menu
+ *     Chooser proc context menu, agent chrome menu
  *
  * That spread is the argument for one helper rather than ten fixes: nobody was
  * careless. A rule kept as a per-component habit is a rule a new component can

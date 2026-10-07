@@ -29,12 +29,29 @@ import { agentViewTabs, defaultTabFor, parkedApproval, type AgentViewTab } from 
  * nothing at all, which is why every rail is gated on `knownFacts`.
  */
 
+import type { AgentSpecLike, RestartMode } from '../../../main/agents/restart-options';
+import {
+    AgentChromeMenu,
+    AgentHeaderActions,
+    useAgentChromeMenu,
+} from './AgentChrome';
+
 export interface AgentViewProps {
     session: AgentSession;
     tab?: AgentViewTab;
     onTab?: (tab: AgentViewTab) => void;
     onApprove?: (approvalId: string, decision: 'allow-once' | 'allow-always' | 'deny-once') => void;
     onTakeOver?: () => void;
+    /**
+     * This agent's terminal spec, for the shared chrome (restart + settings).
+     *
+     * Optional because a projected session can exist before Genie holds a spec for it, and
+     * `agentChromeControls` already returns nothing for an absent or non-agent spec — so the
+     * header simply has no chrome rather than a row of controls that cannot act.
+     */
+    spec?: AgentSpecLike | null;
+    onRestartAgent?: (mode: RestartMode) => void;
+    onAgentSettings?: () => void;
     now?: number;
 }
 
@@ -67,6 +84,9 @@ export function AgentView({
     onTab,
     onApprove,
     onTakeOver,
+    spec,
+    onRestartAgent,
+    onAgentSettings,
     now = Date.now(),
 }: AgentViewProps): React.JSX.Element {
     const tabs = agentViewTabs(session);
@@ -74,9 +94,35 @@ export function AgentView({
     const facts = knownFacts(session);
     const fidelity = sessionFidelity(session);
     const parked = parkedApproval(session);
+    /**
+     * The SAME chrome the Floor tile renders (`AgentTerminal`), from the same decisions.
+     *
+     * It was missing here entirely: restart and agent settings lived only on the grid tile,
+     * inside `AgentPanel`. The Genie 2 plan proposed deleting that component on the grounds
+     * its pieces would "migrate to the Agent header" — this is that migration, finally done,
+     * and shared rather than reimplemented so the two surfaces cannot drift.
+     */
+    const menu = useAgentChromeMenu();
+    const chrome = {
+        spec: spec ?? null,
+        onRestart: !!onRestartAgent,
+        onSettings: !!onAgentSettings,
+        screenSwitch: null,
+    };
 
     return (
-        <div className="agent-view" data-fidelity={fidelity} data-testid="agent-view">
+        <div
+            className="agent-view"
+            data-fidelity={fidelity}
+            data-testid="agent-view"
+            onContextMenu={menu.open}
+        >
+            <AgentChromeMenu
+                menu={menu}
+                input={chrome}
+                onRestartAgent={onRestartAgent}
+                onAgentSettings={onAgentSettings}
+            />
             <div className="agent-view-head">
                 <Heading as="h2" size="sm">
                     {session.session.name}
@@ -95,6 +141,7 @@ export function AgentView({
                         Take over
                     </Button>
                 ) : null}
+                <AgentHeaderActions input={chrome} onRestartAgent={onRestartAgent} />
             </div>
 
             <div className="agent-view-tabs" role="tablist">

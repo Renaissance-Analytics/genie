@@ -8,7 +8,7 @@ import {
     type PointerEvent as ReactPointerEvent,
 } from 'react';
 import TerminalPanel from './TerminalPanel';
-import AgentPanel from './AgentPanel';
+import AgentTerminal from './AgentTerminal';
 import type { ReactNode } from 'react';
 import { agentForSpec } from '../../lib/agent-for-spec';
 import { agentSidecarScreen } from '../../lib/agent-sidecar-screen';
@@ -813,7 +813,7 @@ function PanelFor({
 }: PanelForProps) {
     // The tile is keyed by `spec.id`; the screen inside it may be the paired
     // `<name>-slave` agent's terminal. Keeping that choice HERE preserves the
-    // grid slot while AgentPanel remounts only the terminal being viewed.
+    // grid slot while AgentTerminal remounts only the terminal being viewed.
     const [shownSpecId, setShownSpecId] = useState(spec.id);
     const [screenSwitching, setScreenSwitching] = useState(false);
     useEffect(() => setShownSpecId(spec.id), [spec.id]);
@@ -910,15 +910,9 @@ function PanelFor({
               }
             : undefined;
         return (
-            <AgentPanel
+            <AgentTerminal
                 key={shownSpec.id}
                 spec={shownSpec}
-                agentId={owner?.id}
-                agentAvatar={owner?.avatar ?? null}
-                agentAllowedTuis={owner?.allowedTuis ?? []}
-                agentCurrentTui={String(shownSpec.meta.agent ?? '')}
-                runtimes={agentRecord?.runtimes ?? []}
-                onRuntimesChanged={onRuntimesChanged}
                 screenSwitch={otherScreen && switchScreen ? {
                     label:
                         otherScreen.target === 'sidecar'
@@ -928,7 +922,7 @@ function PanelFor({
                     target: otherScreen.target,
                     busy: screenSwitching,
                     onClick: switchScreen,
-                } : undefined}
+                } : null}
                 workspace={workspace}
                 attention={attention}
                 pendingNudge={pendingNudge}
