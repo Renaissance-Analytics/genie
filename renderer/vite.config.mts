@@ -176,9 +176,13 @@ export default defineConfig(({ mode }) => {
         base: './',
         plugins: [react(), geniePages(pages, includeHarnesses)],
         build: {
-            // Where main/tsconfig.json also emits, so `loadFile(__dirname/master.html)` finds
-            // its page beside the compiled main process.
+            // Where `scripts/build-main.mjs` also writes, so `loadFile(__dirname/master.html)`
+            // finds its page beside the main-process bundles. `__dirname` IS this directory
+            // at runtime, which is why both halves of the build target it.
             outDir: path.join(here, '..', 'app'),
+            // Required, not preferred: the four main bundles are written here FIRST, and
+            // emptying would delete them. `pruneStaleHarnessPages` in `buildStart` covers
+            // what this leaves behind.
             emptyOutDir: false,
             rollupOptions: {
                 input: Object.fromEntries(pages.map((p) => [p, `${VIRTUAL}${p}`])),

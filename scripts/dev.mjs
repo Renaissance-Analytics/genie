@@ -7,11 +7,11 @@
  * lines.
  *
  * The main watcher is `build-main.mjs --watch`, i.e. THE SAME builder the release uses,
- * not a `tsc --watch` beside it. An earlier version of this file did run bare `tsc`, and
- * it could not work: `main/tsconfig.json` sets `rootDir: '..'`, so tsc emits
- * `app/main/background.js` while `package.json#main` loads `app/background.js`. Dev sat
- * here for the full 60s timeout below and gave up. One builder for both paths means dev
- * cannot drift from what ships.
+ * not a `tsc --watch` beside it. An earlier version of this file did run bare `tsc`, and it
+ * could not work: that tsconfig mirrored the source tree, so tsc emitted
+ * `app/main/background.js` while `package.json#main` loads `app/background.js`. Dev sat at
+ * the 60s timeout below and gave up. `main/tsconfig.json` is now `noEmit` for exactly this
+ * reason — there is one builder, and dev cannot drift from what ships.
  *
  * Everything is reaped on exit. A dev runner that leaks its children is how this machine
  * ended up with a `vite` burning 18.4 CPU-hours over nine days and a test runner holding
