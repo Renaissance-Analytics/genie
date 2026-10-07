@@ -139,25 +139,42 @@ describe('THEME_BOOT_SCRIPT', () => {
     });
 });
 
-describe('_document.tsx wiring', () => {
+describe('page-shell wiring (the genie#229 guard)', () => {
     /**
-     * Wiring guard. The paint behaviour itself is proven by capturing frames
-     * from the built master.html; this only fails loudly if the blocking script
-     * is ever dropped from the document head, which would silently restore the
-     * white flash.
+     * Wiring guard, RETARGETED when the renderer moved off Next (Tynn #449).
+     *
+     * It used to read `pages/_document.tsx`. That file is gone — the page shell is now the
+     * HTML template in `renderer/vite.config.mts`, which emits one `<page>.html` per entry.
+     *
+     * The invariant is unchanged, and is the whole reason the guard exists: Genie's dark
+     * palette hangs off a `.dark` class, so an unclassed `<html>` is the LIGHT theme and
+     * every page ships a near-white full-window boot screen. A script that is deferred,
+     * async, or a module stops being pre-paint and silently restores the white flash.
      */
-    const documentSrc = fs.readFileSync(
-        path.join(__dirname, '..', '..', 'pages', '_document.tsx'),
-        'utf8',
-    );
+    const configSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'vite.config.mts'), 'utf8');
 
-    it('injects the boot script into <Head>', () => {
-        expect(documentSrc).toMatch(/THEME_BOOT_SCRIPT/);
-        expect(documentSrc).toMatch(/dangerouslySetInnerHTML/);
+    it('positive control: the guard is reading the real config', () => {
+        // Without this, every assertion below would also pass against an empty string.
+        expect(configSrc).toContain('pageHtml');
+        expect(configSrc.length).toBeGreaterThan(2_000);
     });
 
-    it('does not defer the script', () => {
-        expect(documentSrc).not.toMatch(/<script[^>]*\bdefer\b/);
-        expect(documentSrc).not.toMatch(/<script[^>]*\basync\b/);
+    it('inlines the boot script into the page head', () => {
+        expect(configSrc).toMatch(/THEME_BOOT_SCRIPT/);
+        // Inlined, not referenced as a file: a separate file is a second request and cannot
+        // be guaranteed to run before paint.
+        expect(configSrc).toContain('<script>${THEME_BOOT_SCRIPT}</script>');
+    });
+
+    it('does not defer, async or modularise the inline script', () => {
+        for (const tag of configSrc.match(/<script(?![^>]*src)[^>]*>/g) ?? []) {
+            expect(tag).not.toMatch(/\bdefer\b/);
+            expect(tag).not.toMatch(/\basync\b/);
+            expect(tag).not.toMatch(/type=["']module["']/);
+        }
+    });
+
+    it('keeps the theme class on <html>, which is what the script toggles', () => {
+        expect(configSrc).toContain('<html class="genie-theme-root">');
     });
 });
