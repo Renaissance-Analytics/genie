@@ -42,6 +42,48 @@ describe('handshake', () => {
         expect(driver.sessionId).toBe('sess-1');
     });
 
+    /**
+     * GENIE LENDS THE AGENT NOTHING. This is the decision, and it is load-bearing.
+     *
+     * ACP lets a CLIENT offer capabilities the agent may then call back into —
+     * `terminal/create|output|kill|wait_for_exit|release` to run commands on its behalf,
+     * and `fs/read_text_file|write_text_file` to touch the disk. Genie declares neither, so
+     * a well-behaved agent never asks: it uses its own Bash/Read/Edit tools inside the child
+     * process Genie spawned, with Genie controlling `cwd` and `env`.
+     *
+     * That IS the point of moving to ACP — the agent stops being a terminal. Advertising
+     * `terminal` would put one straight back, in the other direction: Genie executing
+     * whatever the agent asked for.
+     *
+     * Asserted because the Genie 2 plan says the opposite. It lists `terminal/*` under
+     * "ACP requests Genie must SERVE", and an `AcpTerminalService` was built, unit-tested,
+     * and never wired to anything — dead for as long as it existed, because nothing
+     * advertised the capability that would make an agent call it. It has been deleted; this
+     * test is what stops the next reader of that plan quietly re-adding the capability and
+     * handing the agent a shell.
+     *
+     * If serving terminals is ever WANTED — to confine the agent's commands to Genie's pty
+     * host for auditability — it is a deliberate product change that starts by failing here.
+     */
+    it('declares NO terminal capability, and declines fs, so the agent runs its own tools', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).start({ cwd: '/repo' });
+
+        const init = calls.find((c) => c.method === 'initialize')?.params as {
+            clientCapabilities?: Record<string, unknown>;
+        };
+        expect(init).toBeTruthy();
+        const caps = init.clientCapabilities ?? {};
+
+        // Absent, not false: the protocol reads an absent capability as unsupported, and
+        // `terminal: false` would be a claim we support the shape and declined.
+        expect(caps).not.toHaveProperty('terminal');
+        expect(JSON.stringify(caps)).not.toMatch(/terminal/i);
+
+        // fs is declared and explicitly refused, which is the documented shape for it.
+        expect(caps.fs).toEqual({ readTextFile: false, writeTextFile: false });
+    });
+
     it('passes the working directory to session/new', async () => {
         const { deps: d, calls } = deps();
         await new AcpSessionDriver(d).start({ cwd: '/repo' });
