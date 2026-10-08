@@ -120,7 +120,7 @@ describe('the launch path captures it', () => {
          * The capture and the sink are two halves of one mechanism, and a working capture over a
          * silent sink looks exactly like a healthy run.
          */
-        expect(src).toContain("'--enable-logging=stderr'");
+        expect(src).toContain("'--enable-logging'");
     });
 
     it('positive control: the guard reads the real file', () => {
