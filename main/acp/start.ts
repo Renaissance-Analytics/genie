@@ -71,6 +71,13 @@ export function startAcpForSpec(input: {
      * `META_CLI_SESSION_ID` on an earlier run. Absent means there is nothing to continue
      * (a first launch, or a provider that never reported one), and the session starts fresh.
      */
+    /**
+     * This agent's identity for the genie MCP rig — `{ terminalId, mcpUrl }`.
+     *
+     * Absent means the workspace has MCP switched off, and then nothing is forwarded: an empty URL
+     * looks configured and resolves nowhere.
+     */
+    genie?: { terminalId: string; mcpUrl: string | null };
     resumeSessionId?: string | null;
     /**
      * The agent's persona and opening prompt.
@@ -82,7 +89,23 @@ export function startAcpForSpec(input: {
     instructions?: string | null;
 }): StartedAcpAgent | { error: string } {
     const started = startAcpAgent(
-        { provider: input.provider, cwd: input.cwd, auth: input.auth ?? 'subscription' },
+        {
+            provider: input.provider,
+            cwd: input.cwd,
+            auth: input.auth ?? 'subscription',
+            /**
+             * THE AGENT'S OWN IDENTITY, so it can call Genie back.
+             *
+             * `imDone` and `ForceTheQuestion` resolve the caller from `GENIE_TERMINAL_ID`, and an
+             * ACP child had neither that nor the endpoint — so every one of them was refused in any
+             * workspace with more than one terminal. `imDone` is the protocol's mandatory finish;
+             * an agent that cannot call it stalls the work in silence.
+             *
+             * The spec id IS the terminal id. The URL comes from the caller because registering an
+             * endpoint is a side effect and this file spawns rather than decides.
+             */
+            ...(input.genie ? { genie: input.genie } : {}),
+        },
         {
             spawn: (command, args, env, cwd) =>
                 spawn(command, args, {

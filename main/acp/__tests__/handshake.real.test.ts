@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { startAcpAgent, type ChildLike } from '../spawn';
+import { hostScriptOf } from './real-host';
 
 /**
  * THE PROOF, not a unit test: a real `claude-agent-acp` child, a real `initialize`
@@ -31,24 +32,6 @@ import { startAcpAgent, type ChildLike } from '../spawn';
  * reads as covered.
  */
 
-/**
- * OUR ACP host on disk.
- *
- * prism-acp ships NO `bin` -- it is an ESM library -- so there is no package entry to
- * resolve. Genie owns the entry, which is also what removes the `.cmd`-shim hazard: a
- * published shim re-enters whatever `node` is first on PATH and defeats the runtime choice.
- */
-export function hostScriptOf(): string | null {
-    try {
-        const script = path.join(process.cwd(), 'main', 'acp', 'prism-host.mjs');
-        if (!fs.existsSync(script)) return null;
-        // The library it imports must be installed too, or the host dies on its first line.
-        const lib = path.join(process.cwd(), 'node_modules', '@particle-academy', 'prism-acp', 'package.json');
-        return fs.existsSync(lib) ? script : null;
-    } catch {
-        return null;
-    }
-}
 
 interface Preconditions {
     adapter: string | null;

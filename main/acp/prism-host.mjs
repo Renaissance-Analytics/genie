@@ -19,7 +19,25 @@
  * stripped). This file only joins the library to the pipes.
  */
 
-import { ClaudeDriver, probeSessionStore, serve } from '@particle-academy/prism-acp';
+import {
+    ClaudeDriver,
+    CodexDriver,
+    probeSessionStore,
+    serve,
+} from '@particle-academy/prism-acp';
+
+/**
+ * WHICH PROVIDER this child is driving, from the env `agent-spec.ts` built.
+ *
+ * prism-acp 0.5.0 ships a Codex driver beside the Claude one, so this script is no longer
+ * claude-only. The provider arrives in the environment rather than as an argv flag for the same
+ * reason everything else does: `acpEnv` is an allow-list and the argv is `[script]` and nothing
+ * else, so adding a flag would mean two places that decide how this child is launched.
+ *
+ * Defaulting to claude keeps an older spec — one whose env predates this variable — working
+ * exactly as it did, rather than refusing to start over a missing hint.
+ */
+const provider = (process.env.GENIE_ACP_PROVIDER ?? 'claude').trim();
 
 /**
  * REFUSE A RESUME AT LOAD, rather than letting it die on the first prompt.
@@ -46,13 +64,26 @@ import { ClaudeDriver, probeSessionStore, serve } from '@particle-academy/prism-
  * `main/acp/agent-spec.ts`, so `process.env` here is exactly that env, and the default — read this
  * process's environment — is right by construction rather than by luck.
  */
-const probeSession = (id) => probeSessionStore(id);
+/**
+ * CLAUDE ONLY. prism says so explicitly: *"Omit `probeSession` for Codex — that helper reads
+ * claude's store, and Codex checks its identity by resuming the captured thread id."*
+ *
+ * Pointing it at a codex session id would read `~/.claude/projects`, find nothing, and refuse a
+ * resume that would have worked — the exact failure the gate before it existed to avoid, arrived at
+ * from the other side.
+ */
+const probeSession = provider === 'claude' ? (id) => probeSessionStore(id) : undefined;
 
 const served = serve({
     input: process.stdin,
     output: process.stdout,
-    driverFactory: (opts, events) => new ClaudeDriver({ ...opts, cwd: opts.cwd }, events),
-    probeSession,
+    driverFactory: (opts, events) =>
+        provider === 'codex'
+            ? new CodexDriver(opts, events)
+            : new ClaudeDriver({ ...opts, cwd: opts.cwd }, events),
+    // Omitted for codex — see above. Passing `undefined` explicitly is the same as passing it, but
+    // reads as though a probe was intended.
+    ...(probeSession ? { probeSession } : {}),
     /**
      * A frame that arrived and could not be used.
      *

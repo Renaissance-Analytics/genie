@@ -46,14 +46,22 @@ describe('claude launches through our own prism host', () => {
     });
 });
 
-describe('providers prism does not drive yet', () => {
+describe('which providers prism drives, and which it refuses', () => {
     const ctx = { nodeExec: '/n/node', hostScript: () => '/app/main/acp/prism-host.mjs' };
 
-    it('REFUSES codex, because prism-acp ships a claude driver only', () => {
-        // Measured in the published package: `dist/claude/` is the only driver. Pointing
-        // codex at the claude host would start something that cannot drive it and then
-        // time out in the handshake — indistinguishable from a hung agent.
-        expect(acpLaunch('codex', ctx)).toEqual({ ok: false, reason: 'no-acp-mode', provider: 'codex' });
+    it('DRIVES codex now, because prism-acp 0.5.0 ships a Codex driver', () => {
+        // It refused until 2026-10-08, when prism published one. Measured in the installed package
+        // rather than taken from a changelog: `dist/codex/driver.js` exists and the index exports
+        // `CodexDriver`.
+        //
+        // CAPABILITY, not routing. `ACP_PROVIDERS` still excludes codex, so `engineFor` keeps every
+        // codex agent on the pty — conflating the two is what once sent them all to an engine that
+        // refused them and never started. Flipping that is a separate decision and wants a measured
+        // handshake first, exactly as claude's did.
+        expect(acpLaunch('codex', ctx)).toEqual({
+            ok: true,
+            launch: { command: '/n/node', args: ['/app/main/acp/prism-host.mjs'] },
+        });
     });
 
     it('leaves gemini and kimi on their own native ACP modes', () => {

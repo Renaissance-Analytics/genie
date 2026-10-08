@@ -982,6 +982,22 @@ export function createAgentTerminal(opts: {
                 specId: id,
                 provider: plan.provider,
                 cwd: opts.cwd,
+                /**
+                 * THE GENIE RIG, with this agent's own identity in it.
+                 *
+                 * The pty path sets `GENIE_MCP_URL` and `GENIE_TERMINAL_ID` in the shell's env a
+                 * few lines above; an ACP child inherited neither, so `imDone` and
+                 * `ForceTheQuestion` were refused in any workspace with more than one terminal —
+                 * the tools resolve the caller from `GENIE_TERMINAL_ID` and fall back to the
+                 * last-active terminal, which a busy workstation makes ambiguous.
+                 *
+                 * `registerTerminalEndpoint` is idempotent per terminal and is what the pty path
+                 * calls too, so this asks the same question rather than inventing a second URL.
+                 * Gated on the workspace's MCP setting, exactly as the pty path is.
+                 */
+                ...(workspaceMcpEnabled(opts.workspaceId)
+                    ? { genie: { terminalId: id, mcpUrl: registerTerminalEndpoint(id) } }
+                    : {}),
                 // THE LISTENER. Without this the transport talks and nothing hears it: the
                 // driver was built with an `onNotification` dep it never called, the driver
                 // returned here was discarded, and `applySessionUpdate` — the mapper for all
