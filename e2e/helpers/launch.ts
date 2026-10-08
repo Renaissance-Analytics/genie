@@ -291,9 +291,15 @@ export async function warmElectronRuntime(
  * Windows this answers **null**, which is the honest answer and not 0: a confident zero would read as
  * "no threads", which is impossible, and would corrupt the series this exists to produce.
  */
-export function readThreadCount(): number | null {
+export function readThreadCount(pid?: number): number | null {
+    // The PID IS REQUIRED IN PRACTICE, and the first version of this omitted it. `/proc/self/task`
+    // is the Playwright test runner — a node process sitting at a constant ~11 threads — while
+    // Electron runs as its CHILD. That version logged `threads: 11 (+0 …)` for every spec file,
+    // which reads as "no accumulation" and is a measurement of the wrong process. A flat line from
+    // the wrong place is worse than no line, because it gets believed.
+    const target = typeof pid === 'number' && pid > 0 ? String(pid) : 'self';
     try {
-        const entries = fs.readdirSync('/proc/self/task');
+        const entries = fs.readdirSync(`/proc/${target}/task`);
         return entries.length > 0 ? entries.length : null;
     } catch {
         return null;
@@ -497,7 +503,8 @@ export async function launchGenieE2E(
          * is whatever the first launch saw, kept in module scope so every spec file in a worker
          * compares against the same number.
          */
-        const threads = readThreadCount();
+        // The ELECTRON main process, by pid — not `/proc/self`, which is this test runner.
+        const threads = readThreadCount(app.process().pid);
         if (firstThreadCount === null) firstThreadCount = threads;
         // eslint-disable-next-line no-console
         console.log(resourceNote({ threads, first: firstThreadCount }).message);

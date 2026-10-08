@@ -77,6 +77,38 @@ describe('resourceNote — the series', () => {
     });
 });
 
+describe('it samples the APP under test, not the harness', () => {
+    /**
+     * THE DEFECT THIS PINS, which shipped in the first version and produced a flat line that looked
+     * like an answer.
+     *
+     * `readThreadCount()` with no argument reads `/proc/self/task` — the PLAYWRIGHT TEST RUNNER, a
+     * node process with a constant ~11 threads. Electron runs as its CHILD. So the first run logged
+     * `threads: 11 (+0 ...)` for all thirty spec files, which reads as "no accumulation, hypothesis
+     * dead" when it is a measurement of the wrong process and evidence about nothing.
+     *
+     * Worse than no measurement, for exactly that reason. The tests asserted the formatting and the
+     * climb threshold and never that the number described the right process — this session's own
+     * pattern, in its own instrumentation.
+     */
+    const src = require('node:fs')
+        .readFileSync(require('node:path').resolve(__dirname, '../launch.ts'), 'utf8')
+        .replace(/\r\n/g, '\n');
+
+    it('passes the ELECTRON pid, so the series is about the app', () => {
+        expect(src).toContain('app.process().pid');
+    });
+
+    it('does not sample /proc/self for the series', () => {
+        // The bug as an assertion: a bare `readThreadCount()` at the launch site is the harness.
+        expect(src).not.toContain('console.log(resourceNote({ threads: readThreadCount()');
+    });
+
+    it('takes a pid argument at all', () => {
+        expect(src).toMatch(/export function readThreadCount\(pid/);
+    });
+});
+
 describe('the launch path samples it', () => {
     const src = require('node:fs')
         .readFileSync(require('node:path').resolve(__dirname, '../launch.ts'), 'utf8')
