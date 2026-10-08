@@ -74,14 +74,69 @@ describe('docking reserves the gutter without touching the header', () => {
         expect(declarationsFor(css, '.gwrap.lists-docked')).toBeNull();
     });
 
-    it('reserves the gutter on the CONTENT row instead', () => {
-        // ONE row now. It was `.gbody` and `.gstatus` until P7 deleted the status bar — and
-        // deleting it took the whole rule with it, so the Floor stopped reserving the gutter
-        // entirely. This case is why that lasted minutes rather than until someone pinned the
-        // panel and saw the dock sitting on top of the grid.
-        expect(declarationsFor(css, '.gwrap.lists-docked .gbody')).toContain(
-            'margin-right: var(--lists-dock-w)',
+    it('reserves the gutter on EVERY content row, not just the grid', () => {
+        /**
+         * REWRITTEN to the new contract, not loosened — and the rewrite is a BUG FIX.
+         *
+         * This asserted the reserve on `.gbody` alone, which was true and insufficient.
+         * `Floor.tsx` returns `<>{deck}<div className="gbody">…</div></>`, so the deck
+         * surface is a SIBLING of `.gbody` — and `.gbody` is `display: none` whenever a
+         * surface is showing. So the ONE row being reserved was the hidden one, and pinning
+         * the panel on the **Deck, which is the default surface**, put the dock straight over
+         * the content. Same for the Agent view.
+         *
+         * The three roots are every branch of master.tsx's `deck` prop: `<Deck>`, `<AgentView>`,
+         * and the `.agent-view-missing` sentence a stale route falls back to.
+         *
+         * The history is the argument for naming rows rather than trusting one: the rule once
+         * read `.gbody, .gstatus`, and deleting the status bar took the whole rule with it.
+         * Both failures are the same shape — a reserve that names rows one at a time is wrong
+         * whenever the set of rows changes.
+         *
+         * Exact on the full prelude, deliberately: `declarationsFor` matches the normalised
+         * selector list, so dropping a row fails here rather than passing on a partial match.
+         */
+        expect(
+            declarationsFor(
+                css,
+                '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
+            ),
+        ).toContain('margin-right: var(--lists-dock-w)');
+    });
+
+    it('names every root the deck slot can render, so a new surface cannot be forgotten', () => {
+        /**
+         * THE EXHAUSTIVENESS HALF, and the reason this bug existed: the reserve is a list, and
+         * a list is only correct until someone adds a surface. So this reads master.tsx and
+         * fails when the `deck` prop gains a branch the stylesheet does not name.
+         *
+         * Approximated by the roots' class names rather than by parsing JSX — `.agent-view` and
+         * `.deck` come from their components, `.agent-view-missing` is written inline. A fourth
+         * surface will almost certainly introduce a fourth class here, and this fails until the
+         * reserve names it.
+         */
+        const page = readFileSync(join(__dirname, '../../pages/master.tsx'), 'utf8');
+        const deckSlot = page.slice(page.indexOf('deck={'), page.indexOf('hideGrid={'));
+        expect(deckSlot.length).toBeGreaterThan(100);
+
+        // Every component/class root the slot mounts must appear in the reserve.
+        const reserve = declarationsFor(
+            css,
+            '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
         );
+        expect(reserve).not.toBeNull();
+
+        for (const [tag, root] of [
+            ['<AgentView', '.agent-view'],
+            ['<Deck', '.deck'],
+            ['className="agent-view-missing"', '.agent-view-missing'],
+        ] as const) {
+            if (!deckSlot.includes(tag)) continue;
+            expect(
+                css,
+                `${tag} is rendered into the deck slot, so ${root} must be in the dock reserve`,
+            ).toContain(`.gwrap.lists-docked ${root}`);
+        }
     });
 
     it('does not put the reserve on .gright either — padding grows a flex item', () => {

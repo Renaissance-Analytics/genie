@@ -7525,7 +7525,7 @@ body.gutter-dragging .grid-gutter {
    Two shapes for one panel. UNPINNED it reuses the Docs flyout chrome
    (`.docs-flyout-root` / `.docs-flyout`), so it inherits the titlebar offset,
    the scrim and the slide. PINNED it becomes a DOCK: a fixed column at the
-   right edge, below BOTH header rows, with `.gwrap.lists-docked .gright`
+   right edge, below BOTH header rows, with the per-content-row reserve below
    reserving exactly that width so the Floor shrinks beside it instead of being
    covered. The two header rows are pulled back to full width, because pinning
    must not move the header icons.
@@ -7557,11 +7557,32 @@ body.gutter-dragging .grid-gutter {
    children, which size to its PADDING box — padding would leave them running on underneath the
    dock, whereas a margin moves .gbody's border box and everything inside follows.
 
-   It names ONE row now. It used to name two, `.gbody` and `.gstatus`, and deleting the status
-   bar took the whole rule with it — so the Floor silently stopped reserving the gutter and the
-   dock overlapped it. Caught by `lists-dock-layout.test.ts`, which is the guard this rule has
-   had since it was first written in the wrong place. */
-.gwrap.lists-docked .gbody {
+   It names EVERY CONTENT ROW, and the history of this one rule is the argument for that.
+
+   It used to name two — `.gbody` and `.gstatus` — and deleting the status bar took the whole
+   rule with it, so the Floor silently stopped reserving at all. It was then rewritten to name
+   `.gbody` alone, which was true and insufficient: `Floor.tsx` renders
+   `<>{deck}<div className="gbody">…</div></>`, so the deck surface is a SIBLING of `.gbody`,
+   and `.gbody` is `display: none` whenever a surface is showing. The one row being reserved
+   was the HIDDEN one. Pinning the panel on the Deck — the default surface — put the dock
+   straight over the content, and the same for the Agent view.
+
+   So the list is the three roots master.tsx's `deck` prop can mount: `.deck`, `.agent-view`,
+   and the `.agent-view-missing` sentence a stale route falls back to. A FOURTH surface must be
+   added here; `lists-dock-layout.test.ts` reads that prop and fails until it is.
+
+   A margin is safe on all three: `.deck` is a column flex child, `.agent-view` is a grid whose
+   first column is `minmax(0, 1fr)`, and both already size to their own box.
+
+   NOT a wrapper row around the deck surface, which would be the structurally better answer and
+   is deliberately deferred: `{deck}` is EMPTY whenever the grid shows, so a wrapper with
+   `flex: 1` would collapse `.gbody` to nothing and take the Floor with it. That needs an E2E
+   geometry measurement on the VMs rather than a guess, and this geometry has already shipped
+   wrong three times. */
+.gwrap.lists-docked .gbody,
+.gwrap.lists-docked .deck,
+.gwrap.lists-docked .agent-view,
+.gwrap.lists-docked .agent-view-missing {
     margin-right: var(--lists-dock-w);
 }
 :root {

@@ -1447,6 +1447,12 @@ async function headerGeometry() {
             titlebar: box('.titlebar'),
             toolbar: box('.gtoolbar'),
             body: box('.gbody'),
+            // THE DECK SURFACE. `.gbody` is `display: none` whenever a surface is showing, so
+            // measuring only that row proved the hidden one gave up the gutter while the
+            // visible one was covered. Null when the Floor is showing, which is why every
+            // assertion on it is guarded rather than assumed.
+            deck: box('.deck'),
+            agentView: box('.agent-view'),
             gright: box('.gright'),
             scrollX: sx,
             icons,
@@ -1541,6 +1547,92 @@ ${JSON.stringify({ before, after }, null, 2)}`)
     await expect(listsDock()).toHaveCount(0);
     await listsScrim().click({ position: { x: 6, y: 6 } });
     await expect(listsRoot()).not.toHaveClass(/\bopen\b/);
+});
+
+/**
+ * THE SAME QUESTION, ASKED ON THE SURFACE PEOPLE ACTUALLY LOOK AT.
+ *
+ * The test above is thorough — it even carries a positive control, *"the Floor MUST give up
+ * the gutter, or the dock is covering content"*. That control measures `.gbody`. And `.gbody`
+ * is `display: none` whenever a surface is showing (`Floor.tsx` hides the grid rather than
+ * unmounting it, so the terminals survive). The deck surface is its SIBLING.
+ *
+ * So the reserve named exactly one row, that row was the hidden one, and pinning the panel on
+ * the **Deck — the default surface, the first thing anyone sees** — put the dock on top of the
+ * content. The guard that was supposed to prevent this measured the row that was already fine.
+ * It shipped that way.
+ *
+ * This is the fourth shape of this bug. The previous three (the reserve on `.gwrap`, then
+ * `padding-right` on `.gright`, then the rule vanishing with `.gstatus`) all moved or squeezed
+ * something visible and were caught. This one covered content on a surface no assertion
+ * looked at, which is why it needed a new assertion rather than a better one.
+ */
+test('docking the lists panel reserves the gutter on the DECK, not just the Floor', async () => {
+    // The Deck is "no view param" in both directions (`viewRouteQuery`), and `usePageQuery`
+    // listens for Genie's own event because `replaceState` notifies nobody — the same
+    // navigation the signal-strip test uses.
+    const toDeck = async () => {
+        await page.evaluate(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('view');
+            window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+            window.dispatchEvent(new Event('genie:pagequery'));
+        });
+        await expect(page.locator('.deck')).toBeVisible({ timeout: 15_000 });
+    };
+
+    await toDeck();
+    const before = await headerGeometry();
+    expect(before.deck, 'the Deck must be on screen to measure it').not.toBeNull();
+
+    await openLists();
+    await expect(listsPin()).toBeVisible();
+    await listsPin().click();
+    await expect(listsDock()).toBeVisible();
+
+    const after = await headerGeometry();
+    expect(after.deck, 'the Deck must still be on screen while docked').not.toBeNull();
+
+    const dock = await page.evaluate(() => {
+        const r = document.querySelector('.lists-dock')!.getBoundingClientRect();
+        return { right: r.right, left: r.left, width: r.width };
+    });
+
+    // THE ASSERTION THE OLD CONTROL MADE ABOUT THE WRONG ROW: the visible surface gives up
+    // the gutter. Pre-fix this difference was 0 — the Deck kept its full width and the dock
+    // sat over its right-hand edge.
+    expect(
+        before.deck!.w - after.deck!.w,
+        `deck geometry:\n${JSON.stringify({ before: before.deck, after: after.deck, dock }, null, 2)}`,
+    ).toBeGreaterThan(100);
+
+    // And it gave up EXACTLY the dock's width, so the reserve is the dock's size rather than
+    // some other narrowing that happens to shrink it.
+    expect(Math.abs((before.deck!.w - after.deck!.w) - dock.width)).toBeLessThanOrEqual(1);
+
+    // The header still does not move — the thing the three previous shapes of this bug each
+    // got wrong, re-checked here because this fix touches the same rule.
+    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+    expect(after.gright!.w).toBeCloseTo(before.gright!.w, 0);
+
+    // Leave it as it was found — including the route, or every test after this one runs on the
+    // Deck instead of the Floor. The test above learned this the expensive way: its cleanup
+    // once left the Lists flyout open and CI reported it two tests later as a scrim
+    // intercepting pointer events.
+    await listsUnpin().click();
+    await expect(listsDock()).toHaveCount(0);
+    await listsScrim().click({ position: { x: 6, y: 6 } });
+    await expect(listsRoot()).not.toHaveClass(/\bopen\b/);
+    await page.evaluate(() => {
+        const url = new URL(window.location.href);
+        // `grid`, not `floor` — `viewRouteQuery` NAMES the grid and leaves the Deck
+        // paramless, so restoring with any other value lands back on the Deck and every
+        // test after this one runs on the wrong surface.
+        url.searchParams.set('view', 'grid');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+        window.dispatchEvent(new Event('genie:pagequery'));
+    });
+    await expect(page.locator('.gbody')).toBeVisible({ timeout: 15_000 });
 });
 
 /**
