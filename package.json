@@ -32,7 +32,8 @@
     "build:e2e": "node scripts/build-main.mjs --e2e && vite build --config renderer/vite.config.mts --mode e2e",
     "pretest:e2e": "node scripts/prepare-e2e-natives.mjs",
     "test:e2e": "npm run build:e2e && playwright test",
-    "build:icons": "node resources/build-icons.cjs"
+    "build:icons": "node resources/build-icons.cjs",
+    "release:check": "node scripts/release-preflight.mjs"
   },
   "overrides": {
     "esbuild": "^0.28.2",
