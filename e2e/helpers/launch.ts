@@ -268,7 +268,7 @@ export async function warmElectronRuntime(
              * exist to a stream instead of discarding them. The chatter it adds is dropped by
              * `isFatalElectronLine`, which is why that filter was built first.
              */
-            args: [MAIN_ENTRY, `--user-data-dir=${userData}`, '--enable-logging=stderr'],
+            args: [MAIN_ENTRY, `--user-data-dir=${userData}`, '--enable-logging'],
             env: {
                 ...process.env,
                 NODE_ENV: 'production',
@@ -529,7 +529,7 @@ export async function launchGenieE2E(
     const app = await launchElectron(harness, {
         // See the note on the other launch site: without this, a CHECK failure writes its reason
         // nowhere and the stderr capture has nothing to find (genie#667).
-        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`, '--enable-logging=stderr'],
+        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`, '--enable-logging'],
         env: {
             ...process.env,
             NODE_ENV: 'production',
