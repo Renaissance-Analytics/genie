@@ -42,7 +42,11 @@ describe('engineFor', () => {
     it('keeps CODEX on the pty, because ACP cannot launch it yet', () => {
         // Not a preference: `acpLaunch` refuses it `no-acp-mode` until prism ships a driver.
         // `main/acp/__tests__/engine-launch-agree.test.ts` holds the two halves together.
-        expect(engineFor({ provider: 'codex' })).toBe('pty');
+        // CODEX IS ACP-CAPABLE NOW — prism-acp 0.5.4 ships a first-party `CodexDriver`, and a real
+        // child completes `initialize` with no API key and drives a real turn. The old assertion
+        // here (`'pty'`) encoded the holdback, not a property of codex, and the comment above it
+        // named the condition for lifting it. Rewritten to the new contract rather than loosened.
+        expect(engineFor({ provider: 'codex' })).toBe('acp');
     });
 
     it('stays on the pty for a provider with no ACP mode', () => {
@@ -73,6 +77,8 @@ describe('engineFor', () => {
         // conjure a server that does not exist, and honouring it would spawn something that
         // is not an ACP server and then hang in the handshake.
         expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBe('pty');
-        expect(engineFor({ provider: 'codex', agentOverride: 'acp' })).toBe('pty');
+        // Previously this proved an override cannot CONJURE a capability. Codex now has one, so the
+        // case needs a provider that genuinely lacks it or it proves nothing.
+        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBe('pty');
     });
 });

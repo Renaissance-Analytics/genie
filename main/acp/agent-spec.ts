@@ -39,15 +39,27 @@
  * that then refuses it, and the only symptom is one console line (`[acp] … did not start`)
  * and an agent that sits in the roster doing nothing — no exception, no failing test, no UI.
  *
- * **codex is deliberately absent.** It was here, and `acpLaunch` refuses it `no-acp-mode`
- * "until prism ships its driver" — so with `acp_engine` on, every codex agent was routed to
- * ACP and never started. Held by `__tests__/engine-launch-agree.test.ts`, which walks this
- * list and asserts each entry can launch.
+ * **codex is here now, and the condition this comment set is why.** It used to read: *"codex is
+ * deliberately absent … it returns the moment prism can drive it. The third-party `codex-acp`
+ * adapter is not an option (owner: NO 3RD PARTY), which is why this waits on prism rather than on
+ * npm."* That was a CONDITION, not a decision pending anybody, and it has been met:
  *
- * It returns the moment prism can drive it. The third-party `codex-acp` adapter is not an
- * option (owner: NO 3RD PARTY), which is why this waits on prism rather than on npm.
+ *  - **prism-acp 0.5.4 ships a first-party `CodexDriver`** — no third party, which was the owner's
+ *    constraint.
+ *  - **Measured, not read off a release note.** `handshake-codex.real.test.ts` starts a real child,
+ *    completes `initialize` with **no API key in its environment**, and drives a real turn
+ *    (`stopReason=end_turn`). Same bar claude cleared.
+ *  - **`acpLaunch` already drove it.** `PRISM_DRIVES` has contained `codex` since 0.5.0, so this list
+ *    was the only holdback — and the rule that the two must agree now agrees in both directions.
+ *
+ * And the owner's plan says so outright: *"Providers: **Claude first, Codex right after.**"*
+ *
+ * Still CAPABILITY rather than a promise. `launchPlan` holds an agent on the pty when its command
+ * carries anything Genie did not add, and `withCodexMcpLaunch` weaves `-c` TOML into every codex
+ * command in an MCP-enabled workspace — so most codex agents stay on the pty regardless, which is
+ * correct, because ACP cannot carry those flags.
  */
-export const ACP_PROVIDERS = ['claude', 'gemini', 'kimi'] as const;
+export const ACP_PROVIDERS = ['claude', 'codex', 'gemini', 'kimi'] as const;
 export type AcpProvider = (typeof ACP_PROVIDERS)[number];
 
 export interface AcpLaunch {
