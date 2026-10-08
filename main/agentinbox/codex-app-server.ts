@@ -82,7 +82,15 @@ export class CodexAgentInboxSession {
         this.notify('notifications/initialized', {});
         const result = await this.request(
             resumeThreadId ? 'thread/resume' : 'thread/start',
-            resumeThreadId ? { threadId: resumeThreadId, cwd } : { cwd },
+            resumeThreadId
+                // `excludeTurns`: this session reads exactly one field off the answer — the thread
+                // id — so the full history was being built, serialised and thrown away on every
+                // resume. prism measured the server emitting a `deprecationNotice` for the
+                // hydrated form, pointing at this flag plus `thread/turns/list` /
+                // `thread/items/list`, so excluding it is both cheaper and the direction the
+                // server is going.
+                ? { threadId: resumeThreadId, cwd, excludeTurns: true }
+                : { cwd },
         ) as {
             thread?: { id?: string };
         };
@@ -157,7 +165,52 @@ export class CodexAgentInboxSession {
         } catch {
             return;
         }
+        /**
+         * A REQUEST FROM THE SERVER — answer it, always.
+         *
+         * Codex asks for command approval this way (`item/commandExecution/requestApproval`, an
+         * `id` and a `method` together), and prism measured that **nothing times it out**: at ~47
+         * seconds unanswered the thread still held an active writer and emitted no expiry frame.
+         * An unanswered request HANGS rather than failing safe — and this adapter used to ignore
+         * requests entirely, so `turn/completed` never arrived, `busy` stayed true for the life of
+         * the session, and every later DM queued until the cap rejected it. The owner would read
+         * that as "my agent stopped getting mail", nowhere near the cause.
+         *
+         * An approval is DECLINED. This socket is a mail-delivery boundary: approving a command on
+         * a human's behalf because a message arrived is not a thing it may do, and the agent's own
+         * surface is where a person says yes. Declining ends the turn (prism recorded
+         * `item/completed` `declined` then `turn/completed` `interrupted`), which releases the
+         * queue instead of stalling it.
+         *
+         * Anything else gets `-32601`. The failure mode is "a request with an id went unanswered",
+         * not "an approval did" — so a method this adapter has never heard of must not be the thing
+         * that wedges a thread, and a server that adds one should not need a Genie release to stay
+         * unwedged. An error rather than an invented `decision`, because answering a question we
+         * did not read is how the wrong command gets approved.
+         */
+        if (typeof message.id === 'number' && typeof message.method === 'string') {
+            const isApproval = message.method.endsWith('requestApproval');
+            this.socket.send(
+                JSON.stringify(
+                    isApproval
+                        ? { jsonrpc: '2.0', id: message.id, result: { decision: 'cancel' } }
+                        : {
+                              jsonrpc: '2.0',
+                              id: message.id,
+                              error: {
+                                  code: -32601,
+                                  message: `genie-agentinbox does not serve ${message.method}`,
+                              },
+                          },
+                ),
+            );
+            return;
+        }
+
         if (typeof message.id === 'number') {
+            // A RESPONSE to something we sent. Reached only after the request branch above, which
+            // is the ordering that matters: a server REQUEST also carries a numeric id, so this
+            // lookup found no pending entry and returned — swallowing it.
             const request = this.pending.get(message.id);
             if (!request) return;
             this.pending.delete(message.id);
