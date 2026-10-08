@@ -3,6 +3,7 @@ import { Badge, Button, Card, Heading, Progress, Text, Textarea } from '@particl
 import type { AgentSession } from '../../../main/agentsession/model';
 import { knownFacts, sessionFidelity } from '../../../main/agentsession/model';
 import { agentViewTabs, defaultTabFor, parkedApproval, type AgentViewTab } from '../../lib/agent-view';
+import { toolSubject } from '../../lib/tool-subject';
 // The LEAF, not `./rate-limit` — that one imports prism's types and the renderer boundary
 // test refuses a `main/` module with a bare package specifier in it.
 import { rateLimitSummary } from '../../../main/agentsession/rate-limit-headroom';
@@ -254,13 +255,28 @@ export function AgentView({
                             </div>
                         ) : null}
 
-                        {session.tools.map((t) => (
-                            <Card className="agent-tool" key={t.id}>
-                                <Text size="xs">
-                                    {t.name} · {t.status}
-                                </Text>
-                            </Card>
-                        ))}
+                        {session.tools.map((t) => {
+                            /**
+                             * WHAT it is acting on, when the agent said — "Write · ipc.ts"
+                             * rather than "Write". The brief asks for exactly this phrasing
+                             * (*"it is editing `ipc.ts` right now"*), and genie#843 is what made
+                             * it answerable: the arguments used to be discarded on arrival.
+                             *
+                             * `null` renders NO separator and no word. Not "unknown" — a
+                             * provider shaping its arguments differently is not this row's
+                             * business to narrate, and the refusals are asserted in
+                             * `lib/__tests__/tool-subject.test.ts`.
+                             */
+                            const subject = toolSubject(t);
+                            return (
+                                <Card className="agent-tool" key={t.id} data-kind={t.kind ?? undefined}>
+                                    <Text size="xs">
+                                        {t.name}
+                                        {subject ? ` · ${subject}` : ''} · {t.status}
+                                    </Text>
+                                </Card>
+                            );
+                        })}
 
                         {parked ? (
                             <Card className="agent-approval">

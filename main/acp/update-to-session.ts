@@ -65,13 +65,23 @@ export interface AcpSessionUpdate {
     sessionUpdate: string;
     /** A ContentBlock. Only `text` carries text; the other kinds (`image`, `audio`,
      *  `resource_link`, `resource`) carry their own fields, which is why this permits
-     *  them rather than rejecting a payload the protocol really sends. */
-    content?: { type: string; text?: string; [extra: string]: unknown };
+     *  them rather than rejecting a payload the protocol really sends.
+     *
+     *  OR AN ARRAY: on a `tool_call_update` this field is the call's RESULT, and arrives as a
+     *  list of content entries. Two different things under one name is the protocol's choice,
+     *  not ours — so the union is declared here and `textOf` refuses the array form rather
+     *  than reading `.type` off a list and quietly finding `undefined`. */
+    content?: { type: string; text?: string; [extra: string]: unknown } | unknown[];
     messageId?: string;
     toolCallId?: string;
     title?: string;
     name?: string;
     status?: string;
+    /** What SORT of operation a tool call is — `edit`, `read`, `execute`… Optional on the wire
+     *  and genuinely absent in practice, so it reaches the model as `null` rather than a
+     *  guess. It was not read at all until genie#843, which is why a delivery could not say
+     *  whether it was an edit. */
+    kind?: string;
     /** A tool call's arguments, straight off the wire. Untrusted. */
     rawInput?: unknown;
     /** PlanEntry also carries `priority`, which the model has no field for — accepted
@@ -86,8 +96,18 @@ export interface AcpSessionUpdate {
 /** Only a text block carries text. An image or an embedded resource has none, and
  *  inventing `[image]` would put words in the agent's mouth. */
 function textOf(content: AcpSessionUpdate['content']): string | null {
-    if (!content || content.type !== 'text') return null;
+    // The ARRAY form is a tool call's result, never speech. Checked first: an array has no
+    // `.type`, so the old test would read `undefined`, compare it to `'text'` and return null
+    // by luck rather than by decision — and would break the day a result array carried one.
+    if (!content || Array.isArray(content)) return null;
+    if (content.type !== 'text') return null;
     return typeof content.text === 'string' ? content.text : null;
+}
+
+/** A tool call's result, or undefined when this update carries none. The ARRAY form only —
+ *  the object form is a content block and belongs to a message. */
+function resultOf(content: AcpSessionUpdate['content']): unknown[] | undefined {
+    return Array.isArray(content) ? content : undefined;
 }
 
 /** ACP has four tool statuses; the model has three. `in_progress` is still pending
@@ -96,6 +116,26 @@ function toolStatus(status: string | undefined): ToolCall['status'] {
     if (status === 'completed') return 'success';
     if (status === 'failed') return 'failure';
     return 'pending';
+}
+
+/**
+ * One place that turns an update into a `ToolCall`, used by all three construction sites.
+ *
+ * There were three, each listing the fields it happened to care about — which is how the
+ * canary branch and the ordinary branch came to build different shapes of the same thing.
+ * Adding a field to a type with three hand-written constructors means remembering three
+ * places; this makes it one.
+ */
+function toolCallFrom(u: AcpSessionUpdate, id: string, name: string, now: number): ToolCall {
+    return {
+        id,
+        name,
+        status: toolStatus(u.status),
+        kind: u.kind ?? null,
+        rawInput: u.rawInput ?? null,
+        result: resultOf(u.content) ?? null,
+        at: now,
+    };
 }
 
 function planStatus(status: string | undefined): PlanEntry['status'] {
@@ -254,15 +294,11 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
                     error:
                         s.error ??
                         `Genie does not recognise the plan tool "${rawName}", so the plan rail may be incomplete. Its name has probably changed.`,
-                    tools: [...s.tools, { id: u.toolCallId, name: u.title ?? rawName ?? u.toolCallId, status: toolStatus(u.status) }],
+                    tools: [...s.tools, toolCallFrom(u, u.toolCallId, u.title ?? rawName ?? u.toolCallId, now)],
                     turn: { state: 'tool', since: now },
                 };
             }
-            const call: ToolCall = {
-                id: u.toolCallId,
-                name: u.title ?? u.name ?? u.toolCallId,
-                status: toolStatus(u.status),
-            };
+            const call = toolCallFrom(u, u.toolCallId, u.title ?? u.name ?? u.toolCallId, now);
             return {
                 ...s,
                 tools: [...s.tools, call],
@@ -279,11 +315,23 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
             // phantom row with no name is worse than a missing one.
             if (index === -1) return s;
             const existing = s.tools[index]!;
+            const result = resultOf(u.content);
             const next: ToolCall = {
                 ...existing,
                 // Keep the title when the update omits one.
                 name: u.title ?? u.name ?? existing.name,
                 status: u.status === undefined ? existing.status : toolStatus(u.status),
+                /**
+                 * MERGED, NEVER OVERWRITTEN — a lifecycle proves why. The arguments arrive on
+                 * the `in_progress` frame and the result on the `completed` frame, and NEITHER
+                 * repeats the other's field. Assigning `u.rawInput` unconditionally would wipe
+                 * the file path the instant the call succeeded, leaving a finished edit that
+                 * cannot say what it edited — the exact fact this change exists to keep.
+                 */
+                kind: u.kind ?? existing.kind,
+                rawInput: u.rawInput === undefined ? existing.rawInput : u.rawInput,
+                result: result === undefined ? existing.result : result,
+                at: now,
             };
             const tools = [...s.tools];
             tools[index] = next;
