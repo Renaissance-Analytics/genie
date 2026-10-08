@@ -1434,6 +1434,17 @@ export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
+    /**
+     * Run ACP-capable agents as structured sessions instead of TUIs in a pty — the Genie 2
+     * engine switch. Absent or 'off' means the pty, which is the default.
+     *
+     * ABSENT FROM THIS TYPE until 2026-10-08, which is the structural reason no renderer code
+     * could reference it: `main/db.ts` has had the column and the doc comment saying it "stays
+     * the default until the owner moves it", and the renderer's own view of settings did not
+     * know the key existed. So the setting was reachable only by editing SQLite — wired
+     * everywhere except where a person could touch it. See `renderer/lib/acp-engine-setting.ts`.
+     */
+    acp_engine?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
     /** Last Genie version whose What’s New modal was shown to the user. */

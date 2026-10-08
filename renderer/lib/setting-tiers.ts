@@ -178,6 +178,11 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     toolchain_defaults: 'workstation',
     gapp_ai_provider: 'workstation',
     agent_default: 'workstation',
+    // The Genie 2 engine switch. `workstation` for the same reason the per-provider launch keys
+    // are: it decides HOW an agent is launched on THIS machine, and a remote client wants to read
+    // it to know whether the host's agents are structured sessions or ptys. Not `user` — it is not
+    // a preference that should follow a person onto a workstation whose drivers differ.
+    acp_engine: 'workstation',
     agent_enabled: 'workstation',
     genie_os_backup_repo: 'workstation',
     // The launch command + flags the HOST resolves when it spawns each TUI.
