@@ -77,6 +77,7 @@ export type E2EHarnessPage =
     | 'deck'
     | 'agent-view'
     | 'dashboard'
+    | 'stream'
     | 'ask'
     | 'master';
 
@@ -96,6 +97,7 @@ const HARNESS_ROUTE: Record<E2EHarnessPage, string> = {
     deck: 'e2e-deck',
     'agent-view': 'e2e-agent-view',
     dashboard: 'e2e-dashboard',
+    stream: 'e2e-stream',
     ask: 'ask',
     master: 'master',
 };
