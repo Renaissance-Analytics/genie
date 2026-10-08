@@ -87,7 +87,7 @@
     "node-forge": "^1.4.0",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
-    "simple-git": "^3.36.0",
+    "simple-git": "^4.0.2",
     "ws": "^8.21.3"
   },
   "devDependencies": {

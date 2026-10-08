@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
     ipcMain: { handle: () => {} },
 }));
 vi.mock('simple-git', () => ({
-    default: () => ({ getRemotes: async () => [] }),
+    simpleGit: () => ({ getRemotes: async () => [] }),
 }));
 vi.mock('../../db', () => ({
     getWorkspace: () => WS,

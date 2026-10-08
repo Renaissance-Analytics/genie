@@ -2,7 +2,10 @@ import type { TynnFeedbackItemPush } from '../tynn/workspace-assignment';
 import { ipcMain } from 'electron';
 import { requestIssueWatchRefresh } from './force-refresh';
 import path from 'node:path';
-import simpleGit from 'simple-git';
+// NAMED, mandatory since simple-git 4.x: there is no default export, and `esModuleInterop`
+// synthesises one that is `undefined` at runtime — so the default form typechecks clean and
+// then throws on first use. Guarded in `main/__tests__/simple-git-import-style.test.ts`.
+import { simpleGit } from 'simple-git';
 import {
     getWorkspace,
     listIssueWatches,

@@ -33,7 +33,7 @@ vi.mock('electron', () => ({
 }));
 // resolveWorkspaceRepos reads remotes via simple-git, then parseGitHubRemote.
 vi.mock('simple-git', () => ({
-    default: () => ({
+    simpleGit: () => ({
         getRemotes: async () => [
             { name: 'origin', refs: { fetch: 'git@github.com:o/r.git' } },
         ],
