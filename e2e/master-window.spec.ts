@@ -1636,6 +1636,75 @@ test('docking the lists panel reserves the gutter on the DECK, not just the Floo
 });
 
 /**
+ * THE SAME GEOMETRY, FOR THE SECOND DOCKABLE PANEL.
+ *
+ * §5.4's chat flyout is pinnable, which made the right edge a ONE-SLOT problem: `listsPinned`
+ * was a boolean, and a second pinnable panel would have made "both docked" representable — two
+ * panels competing for the same gutter, each reserving its own.
+ *
+ * This is the rule that has shipped WRONG THREE TIMES (the reserve on `.gwrap`; `padding-right`
+ * on a flex column; the rule naming only the hidden grid row), and each previous fix was
+ * verified for Lists alone. A second panel inheriting the same guarantee is not something to
+ * assume — it is a different width (380px vs 340px) riding on a different occupant class, and
+ * the whole `--dock-w` indirection exists so that one reserve rule serves both.
+ */
+test('pinning CHAT reserves its own gutter, and the header still does not move', async () => {
+    const before = await headerGeometry();
+    expect(before.button, 'the header menu must be on screen to measure it').not.toBeNull();
+
+    await openPalette();
+    await paletteRow('Chat').click();
+    await expect(page.locator('.chat-dock')).toBeVisible();
+
+    // Unpinned it OVERLAYS: nothing underneath moves. That is the board's wording, and it is
+    // the half a reserve test usually forgets to check.
+    const overlaid = await headerGeometry();
+    expect(overlaid.body!.w).toBeCloseTo(before.body!.w, 0);
+
+    await page.locator('[aria-label="Pin chat right"]').click();
+    // The shell names the SLOT and the OCCUPANT — `docked` carries the reserve, `docked-chat`
+    // carries the width. A missing occupant class would make `var(--dock-w)` resolve to
+    // nothing, which CSS drops, and the reserve would vanish SILENTLY.
+    await expect(page.locator('#app')).toHaveClass(/\bdocked\b/);
+    await expect(page.locator('#app')).toHaveClass(/\bdocked-chat\b/);
+
+    const after = await headerGeometry();
+
+    // THE HEADER IS UNTOUCHED — same offset within its own row, same widths. Measured as an
+    // offset rather than an absolute x for the reason this file already records: the header
+    // overflows at this window size, so the shell scrolls and absolute coordinates move
+    // without anything having been displaced.
+    const offset = (g: typeof before) => g.button!.x - g.titlebar!.x;
+    expect(offset(after), `header geometry:\n${JSON.stringify({ before, after }, null, 2)}`).toBeCloseTo(
+        offset(before),
+        0,
+    );
+    expect(after.titlebar!.w).toBeCloseTo(before.titlebar!.w, 0);
+    // And the RAIL does not pay for the gutter either — the second failed shape of this bug
+    // squeezed `.gleft` from 300px to 163px while keeping the header's width.
+    expect(after.gright!.w).toBeCloseTo(before.gright!.w, 0);
+
+    // THE POSITIVE CONTROL: the content gives up the gutter, or the dock is covering it.
+    const given = before.body!.w - after.body!.w;
+    expect(given).toBeGreaterThan(100);
+
+    // And it gives up EXACTLY the chat dock's width — not the Lists dock's. This is the
+    // assertion that would catch a single hard-coded reserve width serving both panels.
+    const dockWidth = await page.evaluate(() => {
+        const el = document.querySelector('.chat-dock');
+        return el ? Math.round(el.getBoundingClientRect().width) : 0;
+    });
+    expect(Math.abs(given - dockWidth)).toBeLessThanOrEqual(1);
+
+    // Leave it as found. The Lists spec above learned this the expensive way: its cleanup once
+    // left a flyout open and CI reported it two tests later as a scrim intercepting clicks.
+    await page.locator('[aria-label="Unpin chat"]').click();
+    await expect(page.locator('#app')).not.toHaveClass(/\bdocked\b/);
+    await page.locator('[aria-label="Close chat"]').click();
+    await expect(page.locator('.chat-dock')).toHaveCount(0);
+});
+
+/**
  * EACH RUNTIME BOX IS ITS OWN CONTROL — NO MENU (owner).
  *
  * The two status boxes on a workspace row (background processes above, hosted
