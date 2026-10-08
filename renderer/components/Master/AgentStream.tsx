@@ -1,6 +1,8 @@
 import { Icon, Text } from '@particle-academy/react-fancy';
-import type { AgentSession } from '../../../main/agentsession/model';
+import { useState } from 'react';
+import type { AgentSession, ToolCall } from '../../../main/agentsession/model';
 import { agentStream, EVENT_KIND_ICON, type StreamRow } from '../../lib/agent-stream';
+import { ToolInspector } from './ToolInspector';
 
 /**
  * THE STREAM — §5.2's body, "oversight on every edit, every thought".
@@ -20,7 +22,15 @@ import { agentStream, EVENT_KIND_ICON, type StreamRow } from '../../lib/agent-st
  * are the shape to build them against.
  */
 
-function Row({ row }: { row: StreamRow }): React.JSX.Element {
+function Row({
+    row,
+    selected,
+    onSelect,
+}: {
+    row: StreamRow;
+    selected: boolean;
+    onSelect?: () => void;
+}): React.JSX.Element {
     if (row.type === 'speech') {
         return (
             <div className="stream-speech" data-live={row.live ? '' : undefined}>
@@ -45,12 +55,23 @@ function Row({ row }: { row: StreamRow }): React.JSX.Element {
         );
     }
 
+    /**
+     * A tool row is a BUTTON when it has something to inspect, and a plain div otherwise.
+     *
+     * Not a div with an onClick: a row that responds to Enter and announces itself as
+     * activatable is the difference between a surface a keyboard reaches and one it does not.
+     * And rows with nothing behind them stay inert rather than becoming controls that do
+     * nothing — absence of a control, not a dead one.
+     */
+    const Tag = onSelect ? 'button' : 'div';
     return (
-        <div
+        <Tag
             className="stream-event"
             data-kind={row.kind ?? undefined}
             data-level={row.level ?? undefined}
             data-live={row.live ? '' : undefined}
+            data-selected={selected ? '' : undefined}
+            {...(onSelect ? { type: 'button' as const, onClick: onSelect, 'aria-pressed': selected } : {})}
         >
             {row.kind ? <Icon name={EVENT_KIND_ICON[row.kind] as never} size="xs" /> : null}
             {/* ONE LINE. The text is already flattened; the ellipsis is for width, not for
@@ -63,7 +84,7 @@ function Row({ row }: { row: StreamRow }): React.JSX.Element {
                     {row.meta}
                 </Text>
             ) : null}
-        </div>
+        </Tag>
     );
 }
 
@@ -75,6 +96,17 @@ export function AgentStream({
     now?: number;
 }): React.JSX.Element {
     const rows = agentStream(session, { now });
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+
+    /**
+     * The selected call, looked up FRESH each render rather than stored.
+     *
+     * Storing the ToolCall itself would freeze it at selection time — and a selected call is
+     * frequently the one still running, whose status and result arrive after you clicked it.
+     * A stale copy would show "running" forever.
+     */
+    const byRowId = new Map<string, ToolCall>(session.tools.map((c) => [`tool:${c.id}`, c]));
+    const selected: ToolCall | null = (selectedId && byRowId.get(selectedId)) || null;
 
     if (rows.length === 0) {
         // The board's empty state is a SENTENCE, not a blank panel: a new agent has said
@@ -87,10 +119,24 @@ export function AgentStream({
     }
 
     return (
-        <div className="agent-stream">
-            {rows.map((row) => (
-                <Row key={row.id} row={row} />
-            ))}
+        <div className="agent-stream-wrap">
+            <div className="agent-stream">
+                {rows.map((row) => {
+                    const call = byRowId.get(row.id);
+                    return (
+                        <Row
+                            key={row.id}
+                            row={row}
+                            selected={row.id === selectedId}
+                            {...(call ? { onSelect: () => setSelectedId(row.id === selectedId ? null : row.id) } : {})}
+                        />
+                    );
+                })}
+            </div>
+            {/* FIXED pane, outside the scroller. Expansion happens here and never in the
+                stream, so opening a row cannot move the rows above it — which is the whole
+                reason the stream's rows are one line in the first place. */}
+            <ToolInspector call={selected} onClose={() => setSelectedId(null)} />
         </div>
     );
 }
