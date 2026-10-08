@@ -285,6 +285,72 @@ export async function warmElectronRuntime(
 }
 
 /**
+ * HOW MANY THREADS DOES THIS PROCESS HAVE? — or null where the OS will not say.
+ *
+ * `/proc/self/task` is Linux-only, and ubuntu is where genie#667 has crashed most. On macOS and
+ * Windows this answers **null**, which is the honest answer and not 0: a confident zero would read as
+ * "no threads", which is impossible, and would corrupt the series this exists to produce.
+ */
+export function readThreadCount(): number | null {
+    try {
+        const entries = fs.readdirSync('/proc/self/task');
+        return entries.length > 0 ? entries.length : null;
+    } catch {
+        return null;
+    }
+}
+
+/** A count has to MULTIPLY before it is called a climb — see `resourceNote`. */
+const THREAD_CLIMB_FACTOR = 2;
+
+/**
+ * The thread-count series, which decides whether genie#667 is really genie#805.
+ *
+ * #667's sixth occurrence produced a minidump at last. It establishes that the RENDERER dies, that
+ * `--disable-dev-shm-usage` is already set, and that discardable memory was **99.1 % free** — so the
+ * two usual Chromium suspects are both out. It suggests, from a truncated `glibc: pthread` fragment on
+ * the crashing stack, a fatal glibc error of the `pthread_create`-failed shape: a renderer that cannot
+ * create a thread aborts exactly like this, with no exception of ours anywhere.
+ *
+ * #805 is already filed and says *"pty-host leaks ~12 MB commit, 1 thread and ~11 handles per exited
+ * terminal."* An E2E run kills a great many terminals across ~180 specs. **If threads accumulate, the
+ * crash is #805 arriving at a ceiling** and the fix belongs there, not in whichever spec happened to
+ * reload at the wrong moment.
+ *
+ * One number per spec file answers it: monotonic growth means accumulation, a flat line kills the
+ * hypothesis cheaply. A MULTIPLE is required before flagging, because thread pools spin up and down
+ * normally and a warning on every run teaches the reader to skip the line that matters — the same
+ * failure the release-notes limit exists to prevent.
+ *
+ * Reads only. It never raises a limit: doing that before knowing whether the count climbs would hide
+ * the leak, which is the error that raising genie#826's timeout would have been — and the measurement
+ * there proved it, at ~0.4s against a 30s budget.
+ */
+export function resourceNote(input: { threads: number | null; first: number | null }): {
+    message: string;
+    climbing: boolean;
+} {
+    const { threads, first } = input;
+    if (threads === null) {
+        return { message: '[e2e] threads: not available on this platform (no /proc)', climbing: false };
+    }
+    if (first === null || first <= 0) {
+        // A count with no baseline is a number, not a series. Claiming a delta against null would be
+        // inventing one.
+        return { message: `[e2e] threads: ${threads} (no baseline)`, climbing: false };
+    }
+    const delta = threads - first;
+    const climbing = threads >= first * THREAD_CLIMB_FACTOR;
+    const base = `[e2e] threads: ${threads} (${delta >= 0 ? '+' : ''}${delta} since the first spec, baseline ${first})`;
+    return {
+        climbing,
+        message: climbing
+            ? `${base} — CLIMBING, see genie#667/#805: a per-terminal thread leak would look exactly like this.`
+            : base,
+    };
+}
+
+/**
  * Playwright's own `waitForEvent` budget, which is what genie#826 reported expiring.
  *
  * Named so the warning below fires at a real fraction of the enforced limit rather than of a number
@@ -292,6 +358,9 @@ export async function warmElectronRuntime(
  * becomes a lie.
  */
 export const WINDOW_WAIT_BUDGET_MS = 30_000;
+
+/** The first thread count this worker saw, so every later sample has the same baseline. */
+let firstThreadCount: number | null = null;
 
 /** Fraction of the budget a PASSING open may reach before it is worth saying so. */
 const WINDOW_WAIT_WARN_AT = 0.7;
@@ -421,6 +490,17 @@ export async function launchGenieE2E(
         page = await app.firstWindow();
         // BEFORE the first wait, so a crash during initial load is reported too — see genie#667.
         attachCrashReporter(page, harness);
+        /**
+         * ONE THREAD SAMPLE PER SPEC FILE — genie#667 vs genie#805.
+         *
+         * Here rather than per test: ~30 lines a run is a readable series, 180 is noise. The baseline
+         * is whatever the first launch saw, kept in module scope so every spec file in a worker
+         * compares against the same number.
+         */
+        const threads = readThreadCount();
+        if (firstThreadCount === null) firstThreadCount = threads;
+        // eslint-disable-next-line no-console
+        console.log(resourceNote({ threads, first: firstThreadCount }).message);
         await page.waitForLoadState('domcontentloaded');
     } catch (e) {
         await closeGenieE2E(app).catch(() => {});
