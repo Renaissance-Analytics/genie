@@ -1,3 +1,4 @@
+import { stripAnsiControlSequences } from '@particle-academy/prism-acp';
 import type { ToolCall } from '../../main/agentsession/model';
 
 /**
@@ -60,6 +61,45 @@ function textOfEntry(entry: unknown): string | null {
     return null;
 }
 
+/**
+ * Result text, made READABLE — terminal control sequences removed.
+ *
+ * ## It is legibility, not safety, and the distinction matters
+ *
+ * This pane renders through React, which escapes text nodes, so an escape sequence here
+ * cannot execute or inject anything. What it does is wreck the reading: C0/C1 controls draw
+ * as nothing or as replacement glyphs, so `\x1b[31mFAILED\x1b[0m` arrives as `[31mFAILED[0m`,
+ * and a cursor-movement sequence quietly swallows the characters someone is looking for.
+ * Claiming this as a security fix would be the overclaim; the honest reason is that a
+ * build log is unreadable with the colour codes left in.
+ *
+ * ## Why prism does not do it for us
+ *
+ * 0.6.1 sanitises LABELS — approval titles, consent reasons, tool-call titles — and states
+ * the contract for the rest: *"result text may contain meaningful color codes for terminal
+ * clients … Clients should not assume control sequences have been removed from content or
+ * input data."* Correct for a library serving terminal clients too. We are a DOM pane, so
+ * we ask.
+ *
+ * Their helper, not a local regex: it covers the 8-bit C1 introducers and both
+ * string-terminator spellings, and prism found a hole in its own four-branch version that
+ * three tests had missed. A `\x1b\[[0-9;]*m` here would have exactly that hole — and the
+ * 8-bit forms are what someone reaches for BECAUSE naive filters only match the 7-bit one.
+ *
+ * ARGUMENTS are deliberately untouched: `JSON.stringify` escapes control characters itself,
+ * so no raw byte ever reaches the DOM, and prism keeps `rawInput` byte-exact so a command
+ * can be re-run. A stripped args pane would show a command that is not the one that ran.
+ */
+function forReading(text: string): string {
+    try {
+        return stripAnsiControlSequences(text).text;
+    } catch {
+        // This runs inside a render; the file's opening note applies. Unstripped text is
+        // ugly, a thrown render is the whole stream.
+        return text;
+    }
+}
+
 function diffOfEntry(entry: unknown): ToolDiff | null {
     if (!isRecord(entry) || entry['type'] !== 'diff') return null;
     const { path, oldText, newText } = entry as Record<string, unknown>;
@@ -88,7 +128,10 @@ export function inspectorFor(call: ToolCall): ToolInspector {
     }
 
     const entries = Array.isArray(call.result) ? call.result : [];
-    const texts = entries.map(textOfEntry).filter((t): t is string => t !== null);
+    const texts = entries
+        .map(textOfEntry)
+        .filter((t): t is string => t !== null)
+        .map(forReading);
     const diff = entries.map(diffOfEntry).find((d): d is ToolDiff => d !== null) ?? null;
 
     return {

@@ -1,5 +1,6 @@
 import type { AgentEngine } from '../agents/engine';
 import type { PermissionDecision } from './permission';
+import type { DriverCapabilities } from './session';
 
 /**
  * The seam that makes an ACP session a first-class Genie agent.
@@ -48,6 +49,25 @@ export interface AcpSessionEntry {
      * permission waited forever: alive, mid-turn, and silent about why.
      */
     decide: (approvalId: string, decision: PermissionDecision) => void;
+    /**
+     * What the driver on the other end DECLARED it can do, or `null` for "not declared".
+     *
+     * Held here for the same reason as everything above: this registry is the one thing
+     * that knows an agent is an ACP session, so it is the only place a surface can ask.
+     *
+     * A FUNCTION, not a value, because the answer is per session and is learned at the
+     * handshake — an entry registered before `start()` completes would have captured
+     * `null` forever. The same mistake as caching it against a provider name, made one
+     * layer down.
+     *
+     * **Nothing renders this yet, and that is deliberate rather than forgotten.** The one
+     * UI decision it should drive — not offering an approval affordance for an agent that
+     * cannot be asked — is a board surface the owner has not designed, and claude's
+     * `permissionRequests` flips to `true` when prism 0.7.0's bridge lands, so a surface
+     * built against today's value would be built against a value with a known expiry.
+     * Reachable and measured now; rendered when there is a design to render.
+     */
+    capabilities: () => DriverCapabilities | null;
 }
 
 export class AcpRegistry {

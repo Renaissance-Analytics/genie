@@ -18,6 +18,9 @@ describe('AcpRegistry', () => {
         prompt: async () => ({ delivered: true, submitted: true }),
         cancel: async () => ({ honoured: true }),
         decide: () => {},
+        // See the note on the other fixture below: `null` is "declared nothing", and the
+        // field is required so a real registration cannot omit it.
+        capabilities: () => null,
     });
 
     it('reports a registered session as live', () => {
@@ -34,7 +37,7 @@ describe('AcpRegistry', () => {
         // A registered entry whose channel died is not live. Reporting it live hides a dead
         // agent behind a healthy-looking roster row.
         const r = new AcpRegistry();
-        const e = { kill: () => {}, closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {} };
+        const e = { kill: () => {}, closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {}, capabilities: () => null };
         r.register('s1', e);
         e.closed = true;
         expect(r.isLive('s1')).toBe(false);
@@ -50,7 +53,7 @@ describe('AcpRegistry', () => {
     it('kills the child when asked, and forgets it', () => {
         let killed = 0;
         const r = new AcpRegistry();
-        r.register('s1', { kill: () => void (killed += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {} });
+        r.register('s1', { kill: () => void (killed += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {}, capabilities: () => null });
         r.stop('s1');
         expect(killed).toBe(1);
         expect(r.isLive('s1')).toBe(false);
@@ -64,7 +67,7 @@ describe('AcpRegistry', () => {
     it('lists live sessions only', () => {
         const r = new AcpRegistry();
         r.register('live', entry());
-        r.register('dead', { kill: () => {}, closed: true, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {} });
+        r.register('dead', { kill: () => {}, closed: true, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {}, capabilities: () => null });
         expect(r.liveSpecIds()).toEqual(['live']);
     });
 
@@ -74,7 +77,7 @@ describe('AcpRegistry', () => {
         // with nothing holding a handle to it.
         let firstKilled = 0;
         const r = new AcpRegistry();
-        r.register('s1', { kill: () => void (firstKilled += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {} });
+        r.register('s1', { kill: () => void (firstKilled += 1), closed: false, prompt: async () => ({ delivered: true, submitted: true }), cancel: async () => ({ honoured: true }), decide: () => {}, capabilities: () => null });
         r.register('s1', entry());
         expect(firstKilled).toBe(1);
         expect(r.liveSpecIds()).toEqual(['s1']);
@@ -143,6 +146,11 @@ describe('the write path', () => {
         prompt: async () => ({ delivered: true, submitted: true }),
         cancel: async () => ({ honoured: true }),
         decide: () => {},
+        // `null` is the honest default for a fixture: "this session declared nothing".
+        // Required rather than optional on the interface so a real registration that
+        // forgets it fails to compile instead of silently reporting "not declared" about
+        // every agent — which is indistinguishable from the bug this field exists to end.
+        capabilities: () => null,
         ...over,
     });
 
