@@ -1270,17 +1270,6 @@
     box-shadow: var(--shadow-xl);
 }
 /* ===== Issue Watch ====================================================== */
-    min-width: 15px;
-    height: 15px;
-    padding: 0 4px;
-    border-radius: 8px;
-    background: var(--blue-500, #3b82f6);
-    color: #fff;
-    font-size: 9.5px;
-    font-weight: 700;
-    line-height: 15px;
-    text-align: center;
-}
 .iw-rail-dot {
     position: absolute;
     top: 6px;
@@ -8012,12 +8001,16 @@ body.gutter-dragging .grid-gutter {
 /* ── Deck ─────────────────────────────────────────────────────────────────────
    The cross-workspace "does anything need me" surface.
 
-   LAYOUT ONLY, deliberately. Every visible surface here is a Fancy `Card`, so
-   none of these classes declares a background — which is what keeps them clear
-   of the rule that produced genie#114 (an overlay inheriting its background from
-   a class whose real job was something else, and `.docs-flyout` still carrying a
-   fallback-less `var(--shell)`). A class that paints nothing cannot inherit the
-   wrong paint.
+   LAYOUT ONLY, deliberately. Every visible surface here is a Fancy `Card`, so none of these
+   classes declares a background — and a class that paints nothing cannot inherit the wrong paint,
+   which is the rule that produced genie#114.
+
+   This used to add that `.docs-flyout` "still carries a fallback-less `var(--shell)`", as an
+   outstanding hazard. It is not one any more: genie#591 moved `--shell` and `--rail` from `.gwrap`
+   to `:root`, for exactly this reason — *"a token the chrome paints itself with has to reach a
+   portaled overlay too, and `:root` reaches strictly more"*. A fallback-less read of a token that
+   `:root` declares cannot go invalid-at-computed-value-time. P7 listed the same worry as a thing
+   to fix; it was fixed by moving the token, not by adding a fallback.
 
    No z-index either: the Deck lives INSIDE the Floor, not over it, so it has no
    business in the stacking ladder that runs from -1 to 9999 elsewhere in this
