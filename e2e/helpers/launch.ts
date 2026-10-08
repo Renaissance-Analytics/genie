@@ -251,7 +251,24 @@ export async function warmElectronRuntime(
     let app: Awaited<ReturnType<WarmupEffects['launch']>> | undefined;
     try {
         app = await effects.launch({
-            args: [MAIN_ENTRY, `--user-data-dir=${userData}`],
+            /**
+             * `--enable-logging=stderr` — WITHOUT IT THERE IS NOTHING TO CAPTURE (genie#667).
+             *
+             * Measured: occurrence 8 crashed the renderer with the stderr capture confirmed
+             * `attached`, and produced ZERO lines. The capture was correct; Chromium simply had not
+             * written anything. Chromium's own logging — which is where `[FATAL:file.cc(123)] Check
+             * failed: <expr>` goes — is OFF unless logging is explicitly enabled, so the one line
+             * that names the crash was never emitted on any of the eight occurrences.
+             *
+             * The minidump says this is a deliberate trap (`SIGTRAP` + `SI_KERNEL`, fault address 0),
+             * i.e. `IMMEDIATE_CRASH()` from a failed CHECK — and a CHECK always prints its reason
+             * first. Enabling the sink is the difference between having that sentence and not.
+             *
+             * E2E ONLY, and it changes no behaviour under test: it routes messages that already
+             * exist to a stream instead of discarding them. The chatter it adds is dropped by
+             * `isFatalElectronLine`, which is why that filter was built first.
+             */
+            args: [MAIN_ENTRY, `--user-data-dir=${userData}`, '--enable-logging=stderr'],
             env: {
                 ...process.env,
                 NODE_ENV: 'production',
@@ -510,7 +527,9 @@ export async function launchGenieE2E(
     page: Page;
 }> {
     const app = await launchElectron(harness, {
-        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
+        // See the note on the other launch site: without this, a CHECK failure writes its reason
+        // nowhere and the stderr capture has nothing to find (genie#667).
+        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`, '--enable-logging=stderr'],
         env: {
             ...process.env,
             NODE_ENV: 'production',

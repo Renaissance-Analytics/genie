@@ -112,6 +112,17 @@ describe('the launch path captures it', () => {
         expect(src).toContain('NOT AVAILABLE');
     });
 
+    it('ENABLES Chromium logging, or there is nothing to capture', () => {
+        /**
+         * Occurrence 8 crashed the renderer with the capture confirmed `attached` and produced ZERO
+         * lines. Chromium's logging — where `[FATAL:…] Check failed:` goes — is off unless enabled,
+         * so the sentence that names the crash was never emitted on any of the eight occurrences.
+         * The capture and the sink are two halves of one mechanism, and a working capture over a
+         * silent sink looks exactly like a healthy run.
+         */
+        expect(src).toContain("'--enable-logging=stderr'");
+    });
+
     it('positive control: the guard reads the real file', () => {
         expect(src).toContain('export async function launchGenieE2E');
         expect(src).not.toContain('isFatalElectronLineThatDoesNotExist');
