@@ -186,6 +186,7 @@ import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
 import { attentionItems, moveQueueFocus } from '../lib/attention-queue';
 import { floorSurface } from '../lib/floor-surface';
+import { ChatFlyout } from '../components/Master/ChatFlyout';
 import { Dashboard } from '../components/Master/Dashboard';
 import { Deck } from '../components/Master/Deck';
 import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
@@ -193,8 +194,12 @@ import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib
 import { probeTynnAuth } from '../lib/auth-probe';
 import {
     closeDrawerNext,
+    DOCKABLE,
+    isDocked,
     isDrawerOpen,
+    pinDockNext,
     somethingCoversTheFloor,
+    type DockId,
     type DrawerId,
 } from '../lib/drawers';
 
@@ -797,43 +802,78 @@ function MasterInner() {
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
     // unlike a setting it has no business reaching another workstation.
-    const [listsPinned, setListsPinned] = useState(false);
+    /**
+     * THE ONE DOCK SLOT — at most one panel docked at the right edge.
+     *
+     * Was `listsPinned: boolean`, which was right while Lists was the only pinnable panel.
+     * §5.4 adds a pinnable chat and §5.3 a file panel, and three booleans would make "all
+     * pinned" representable: three panels competing for the same gutter, each reserving its
+     * own. The owner's escape valve for wanting two at once is the file panel's own window.
+     *
+     * The same move as `openDrawer` replacing eleven booleans, for the same reason — the
+     * illegal state becomes unrepresentable rather than merely absent. See `lib/drawers.ts`.
+     */
+    const [pinnedDock, setPinnedDock] = useState<DockId | null>(null);
+    /**
+     * WHO the chat thread is with — the agent on screen, or null for the genie thread.
+     *
+     * Derived rather than stored, so it cannot disagree with the route. A second piece of
+     * state holding "which agent am I chatting to" is a second truth, and the one nobody
+     * updates is the one a send goes to.
+     */
+    const chatSession = useMemo(
+        () => (surface.showAgent ? (sessions.find((x) => x.agentId === surface.showAgent) ?? null) : null),
+        [surface.showAgent, sessions],
+    );
     useEffect(() => {
         try {
-            if (window.localStorage.getItem(LISTS_PIN_KEY) === '1') {
-                setListsPinned(true);
+            const stored = window.localStorage.getItem(LISTS_PIN_KEY);
+            /**
+             * BACK-COMPAT, deliberately. Every existing install has `'1'` in this key, written
+             * when the pin was a boolean that could only ever mean Lists. Reading only the new
+             * id form would silently unpin everyone who had it docked — a preference lost by a
+             * refactor, which is the shape of defect this repo has already paid for (a changed
+             * default cannot reach a value already persisted).
+             */
+            const dock = stored === '1' ? 'lists' : DOCKABLE.find((d) => d === stored);
+            if (dock) {
+                setPinnedDock(dock);
                 // A panel that was docked when the window closed comes back
                 // docked. Restoring the preference but not the panel would
                 // leave the pin set with nothing on screen to show for it.
-                setOpenDrawer('lists');
+                setOpenDrawer(dock);
             }
         } catch {
             /* a browser with storage blocked simply starts unpinned */
         }
     }, []);
     // The two stay separate on purpose: `openDrawer === 'lists'` is "the panel is
-    // showing", `listsPinned` is "when it shows, dock it rather than float it".
+    // showing", the dock slot is "when it shows, dock it rather than float it".
     // Folding them together is what made the header icon a dead control while
     // the panel was docked — it toggled a state nothing rendered.
     //
-    // And the pin is why Lists is not simply a drawer like the other ten. Owner's
-    // ruling, asked directly: "a pinned dock is NOT a drawer" — a pin exists so the
-    // panel stays up WHILE you work, so `somethingCoversTheFloor` excludes a pinned
-    // Lists from the overlay question even though it occupies the drawer slot.
-    const toggleListsPin = useCallback(() => {
-        setListsPinned((was) => {
-            const now = !was;
+    // And the pin is why a docked panel is not simply a drawer like the other eleven.
+    // Owner's ruling, asked directly: "a pinned dock is NOT a drawer" — a pin exists so
+    // the panel stays up WHILE you work, so `somethingCoversTheFloor` excludes the DOCKED
+    // panel from the overlay question even though it occupies the drawer slot.
+    const togglePin = useCallback((id: DockId) => {
+        setPinnedDock((was) => {
+            // ONE SLOT: pinning chat while Lists is docked undocks Lists, and pinning the
+            // panel already docked undocks it. Both in `pinDockNext`, with its tests.
+            const next = pinDockNext(was, id);
             try {
-                window.localStorage.setItem(LISTS_PIN_KEY, now ? '1' : '0');
+                window.localStorage.setItem(LISTS_PIN_KEY, next ?? '');
             } catch {
                 /* the pin still applies for this session */
             }
             // Pinning is done FROM the open panel, so it stays open: changing
             // HOW it is shown must never be a way to lose it.
-            setOpenDrawer('lists');
-            return now;
+            setOpenDrawer(id);
+            return next;
         });
     }, []);
+    // The Lists panel's own pin, which is what its header button calls.
+    const toggleListsPin = useCallback(() => togglePin('lists'), [togglePin]);
     // The badge counts ONLY what is waiting on the PERSON. An agent's own
     // checklist is the agent's work, and a number the user cannot clear is a
     // number they learn to ignore.
@@ -2604,7 +2644,7 @@ function MasterInner() {
         // than over it (`master.css`: the reserve exists "so a pinned panel covers nothing").
         overlayOpen: somethingCoversTheFloor({
             openDrawer,
-            listsPinned,
+            pinnedDock,
             paletteOpen,
             onboardingOpen,
             recipeLauncherOpen,
@@ -2713,6 +2753,11 @@ function MasterInner() {
                     case 'dashboard':
                         replacePageQuery(mergeViewRoute(pageQuery, { kind: 'dashboard' }));
                         break;
+                    // A DRAWER, not a surface: chat opens over or beside whatever you are
+                    // looking at, which is the point of a flyout.
+                    case 'chat':
+                        setOpenDrawer('chat');
+                        break;
                     // Workspace-SCOPED: these take a workspace, not a toggle. With no
                     // active workspace there is nothing to open them against, so they
                     // no-op rather than opening against a guess.
@@ -2765,6 +2810,26 @@ function MasterInner() {
                 // have nowhere to act.
                 e.preventDefault();
                 setPaletteOpen(true);
+                return;
+            }
+            /**
+             * CHAT (⌘J) and its PIN (⌘⇧J) — the board's two new keys for §5.4.
+             *
+             * ⌘J TOGGLES, because it is the key you press to get to chat and the key you press
+             * to get out of the way again. A key that only opens leaves the panel to be closed
+             * by a different gesture, which is how the Lists header icon became a dead control.
+             *
+             * ⌘⇧J only pins. It does not open: pinning is a statement about HOW the panel is
+             * shown, and `pinDockNext` already keeps the panel open when it fires.
+             */
+            if (intent.kind === 'chat') {
+                e.preventDefault();
+                setOpenDrawer((d) => (d === 'chat' ? closeDrawerNext(d, 'chat') : 'chat'));
+                return;
+            }
+            if (intent.kind === 'chat-pin') {
+                e.preventDefault();
+                togglePin('chat');
                 return;
             }
             /**
@@ -2889,7 +2954,20 @@ function MasterInner() {
     }
 
     return (
-        <div className={`gwrap${listsPinned && isDrawerOpen(openDrawer, 'lists') ? ' lists-docked' : ''}`} id="app">
+        /**
+         * `docked` names the SLOT and `docked-<id>` names the occupant, which is what lets ONE
+         * reserve rule serve every dockable panel. The old class was `lists-docked`, and the
+         * agent-surfaces design calls out why that shape is a trap: a third pinnable panel
+         * arrives with its own class and its own forgotten reserve — which is exactly how the
+         * Deck came to be overlapped by a pinned dock in genie#841.
+         *
+         * The WIDTH rides on the occupant class (`--dock-w`), because the panels are not the
+         * same width: Lists is 340px and chat is 380px per the board.
+         */
+        <div
+            className={`gwrap${isDocked(pinnedDock, openDrawer) ? ` docked docked-${pinnedDock!}` : ''}`}
+            id="app"
+        >
             {/* TWO FULL-HEIGHT COLUMNS:
                   LEFT  — the workspace chooser (icon rail + search/list
                           sidebar), under a drag strip that owns the window's
@@ -3446,9 +3524,25 @@ function MasterInner() {
                 open={isDrawerOpen(openDrawer, 'lists')}
                 onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'lists'))}
                 workspaceId={activeWorkspaceId}
-                pinned={listsPinned}
+                pinned={pinnedDock === 'lists'}
                 onTogglePin={toggleListsPin}
             />
+            {/**
+              * CHAT (§5.4) — the second DOCKABLE panel, and the first since the dock became a
+              * single slot. Pinning it undocks Lists and vice versa, which is `pinDockNext`.
+              *
+              * Rendered only while open, unlike the grid: there is no live pty here to lose, so
+              * concealment buys nothing and an unmounted composer cannot hold a stale draft for
+              * an agent you have since navigated away from.
+              */}
+            {isDrawerOpen(openDrawer, 'chat') ? (
+                <ChatFlyout
+                    session={chatSession}
+                    pinned={pinnedDock === 'chat'}
+                    onTogglePin={() => togglePin('chat')}
+                    onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'chat'))}
+                />
+            ) : null}
             <GithubCapabilitiesFlyout
                 open={isDrawerOpen(openDrawer, 'github-caps')}
                 caps={githubCaps}

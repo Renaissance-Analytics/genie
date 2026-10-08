@@ -1362,7 +1362,7 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
  * PINNING THE LISTS PANEL MUST NOT MOVE THE HEADER ICONS.
  *
  * Reported with two screenshots: pin the Agent/User lists panel and every
- * header control slides left. The cause was that `.gwrap.lists-docked` put the
+ * header control slides left. The cause was that `.gwrap.docked` put the
  * gutter reserve on the WHOLE app shell, so the titlebar and the workspace
  * toolbar were narrowed along with the Floor. The panel is meant to dock UNDER
  * the header, not reformat it.

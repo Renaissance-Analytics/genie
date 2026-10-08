@@ -441,6 +441,15 @@ describe('Genie stylesheet tokens', () => {
              * already exists for in this sheet.
              */
             '--dash-': '.dash',
+            /**
+             * The dock reserve's WIDTH. Set by `.gwrap.docked-<id>` — because the dockable
+             * panels are not the same size — and read by `.gwrap.docked`'s content rows.
+             *
+             * Owner is `.gwrap`, the shell, which is where both halves live. It is scope-local
+             * rather than global on purpose: a width that resolved everywhere would invite a
+             * rule outside the shell to reserve a gutter nothing is docked in.
+             */
+            '--dock-w': '.gwrap',
         };
 
         /**

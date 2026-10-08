@@ -49,3 +49,45 @@ describe('the feature router', () => {
         ).toEqual([]);
     });
 });
+
+
+/**
+ * AND EVERY SHORTCUT INTENT MUST BE ACTED ON — the same defect, one layer over.
+ *
+ * `resolveShortcut` answers what the human asked for; `master.tsx` performs it. An intent the
+ * resolver can return and the component never handles is a DEAD KEY: the chord is captured
+ * (and `preventDefault`ed away from the browser's own meaning) and nothing happens.
+ *
+ * That is worse than an unbound key, because the native behaviour is taken too. ⌘J is the
+ * reason this exists: it was assigned in the resolver and the handler came several minutes
+ * later, and in between nothing would have told anyone.
+ *
+ * The intents are read out of the TYPE rather than listed here — a list typed here would pass
+ * by construction, which is the mistake `update-to-session.test.ts` refuses by name.
+ */
+describe('the shortcut dispatch', () => {
+    const SHORTCUTS = codeOnly(
+        readFileSync(join(__dirname, '../master-shortcuts.ts'), 'utf8'),
+    );
+
+    it('reads both files, so the comparison is not against nothing', () => {
+        expect(SHORTCUTS).toMatch(/export type ShortcutIntent/);
+        expect(MASTER).toMatch(/intent\.kind ===/);
+    });
+
+    it('handles every intent the resolver can return', () => {
+        // Every `{ kind: 'x' }` member of the union, taken from the type's own declaration.
+        const union = SHORTCUTS.slice(
+            SHORTCUTS.indexOf('export type ShortcutIntent'),
+            SHORTCUTS.indexOf(';', SHORTCUTS.indexOf('export type ShortcutIntent')),
+        );
+        const kinds = [...new Set([...union.matchAll(/kind:\s*'([a-z-]+)'/g)].map((m) => m[1]!))];
+        expect(kinds.length).toBeGreaterThan(5);
+
+        const unhandled = kinds.filter((k) => !MASTER.includes(`intent.kind === '${k}'`));
+        expect(
+            unhandled,
+            `these shortcut intents are resolvable but never acted on, so the chord is swallowed and nothing happens: ${unhandled.join(', ')}`,
+        ).toEqual([]);
+    });
+});

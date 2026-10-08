@@ -7579,12 +7579,23 @@ body.gutter-dragging .grid-gutter {
    `flex: 1` would collapse `.gbody` to nothing and take the Floor with it. That needs an E2E
    geometry measurement on the VMs rather than a guess, and this geometry has already shipped
    wrong three times. */
-.gwrap.lists-docked .gbody,
-.gwrap.lists-docked .deck,
-.gwrap.lists-docked .dashboard,
-.gwrap.lists-docked .agent-view,
-.gwrap.lists-docked .agent-view-missing {
-    margin-right: var(--lists-dock-w);
+.gwrap.docked .gbody,
+.gwrap.docked .deck,
+.gwrap.docked .dashboard,
+.gwrap.docked .agent-view,
+.gwrap.docked .agent-view-missing {
+    margin-right: var(--dock-w);
+}
+
+/* The WIDTH rides on the occupant, because the panels are not the same size — Lists is 340px
+   and chat is 380px per the board. One reserve rule, one width variable: a fourth dockable
+   panel adds a line here and inherits a correct reserve, instead of arriving with its own
+   class and its own forgotten one. */
+.gwrap.docked-lists {
+    --dock-w: var(--lists-dock-w);
+}
+.gwrap.docked-chat {
+    --dock-w: var(--chat-dock-w);
 }
 :root {
     --lists-dock-w: 340px;
@@ -8823,4 +8834,212 @@ body.gutter-dragging .grid-gutter {
     padding: 0 20px 0 28px;
     border-bottom: 1px solid var(--border-1);
     color: var(--fg-3);
+}
+
+/* ===== Chat — the pinnable flyout (§5.4) ================================
+   380px, from the board. Pinned it RESERVES the gutter and the header does
+   not move; unpinned it overlays with a shadow and nothing underneath
+   moves. Both halves of that have been shipped wrong here before, so the
+   width is `--chat-dock-w` and the reserve lives with the other content-row
+   rules rather than being invented locally. */
+:root {
+    --chat-dock-w: 380px;
+}
+
+.chat-dock {
+    width: var(--chat-dock-w);
+    height: 100%;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    box-sizing: border-box;
+    background: var(--surface);
+    border-left: 1px solid var(--border-1);
+}
+
+.chat-head {
+    height: 48px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px 0 16px;
+    border-bottom: 1px solid var(--border-1);
+}
+.chat-head-title {
+    font-weight: 600;
+}
+.chat-head-spacer {
+    flex: 1;
+}
+.chat-target {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    background: var(--bg-2);
+}
+
+/* The context line. Colour carries URGENCY, and only when there is some —
+   a parked turn is amber because the person reading it is the thing it
+   waits for; everything else is quiet on purpose (§6.2). */
+.chat-context {
+    flex: none;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border-1);
+    background: var(--bg-1);
+    color: var(--fg-2);
+}
+.chat-context[data-level='attention'] {
+    color: var(--amber-400);
+}
+.chat-context[data-level='broken'] {
+    color: var(--red-500);
+}
+.chat-context[data-level='muted'] {
+    color: var(--fg-3);
+}
+
+/* BOTTOM-ALIGNED. A thread reads from the newest message, and a short
+   conversation pinned to the top of a tall pane puts the thing you came to
+   read as far from the composer as the layout allows. */
+.chat-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 16px;
+}
+
+.chat-msg {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 94%;
+}
+/* The human's own words are the only RIGHT-aligned thing here, which is what
+   makes "who said this" readable without looking at the label. */
+.chat-msg[data-from='you'] {
+    align-self: flex-end;
+    align-items: flex-end;
+    max-width: 86%;
+}
+.chat-who {
+    font-family: var(--font-mono);
+    color: var(--fg-3);
+}
+.chat-who-name {
+    color: var(--violet-400);
+}
+.chat-bubble {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-1);
+}
+.chat-agent-text {
+    color: var(--fg-2);
+    line-height: 1.5;
+}
+.chat-msg[data-live] .chat-agent-text {
+    color: var(--fg-1);
+}
+
+.chat-empty {
+    margin: auto 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+}
+.chat-empty-title {
+    font-weight: 600;
+}
+.chat-empty-hint {
+    color: var(--fg-3);
+    line-height: 1.5;
+}
+
+/* The one-sided note. Bordered rather than tinted: it is a FACT about the
+   provider, not a warning about the agent, and amber would read as a fault. */
+.chat-fact {
+    padding: 10px 12px;
+    border: 1px solid var(--border-1);
+    border-radius: 10px;
+    color: var(--fg-2);
+    line-height: 1.5;
+}
+
+/* Inline, never a modal (§6.4). An Edit approval fires many times a turn. */
+.chat-approval {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--amber-500);
+    border-radius: 10px;
+    background: var(--bg-1);
+}
+.chat-approval-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--amber-400);
+}
+.chat-approval-title {
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.chat-approval-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.chat-key {
+    font-family: var(--font-mono);
+    opacity: 0.8;
+}
+
+/* The turn visibly PARKS — a rule rather than a decoration. A stopped agent
+   has to be obvious in the thread, not inferable from an absence. */
+.chat-parked {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    color: var(--amber-400);
+}
+.chat-parked::before,
+.chat-parked::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--amber-500);
+    opacity: 0.5;
+}
+
+.chat-composer {
+    flex: none;
+    padding: 12px;
+    border-top: 1px solid var(--border-1);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.chat-composer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.chat-composer-hint {
+    font-family: var(--font-mono);
+    color: var(--fg-4);
 }

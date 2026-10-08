@@ -54,9 +54,56 @@ export const DRAWER_IDS = [
     'lists',
     'appstore',
     'github-caps',
+    /** Chat (§5.4) — a drawer like the rest, and DOCKABLE on top of that; see
+     *  {@link DOCKABLE}. The file panel (§5.3) joins when it is built. */
+    'chat',
 ] as const;
 
 export type DrawerId = (typeof DRAWER_IDS)[number];
+
+/**
+ * THE PANELS THAT MAY BE DOCKED — and there is ONE slot for them.
+ *
+ * §0.3 of the agent-surfaces design, and the generalisation of the owner's ruling on the
+ * Lists panel: *"a pinned dock is NOT a drawer."* Lists was the only pinnable panel, so its
+ * state was a boolean. §5.4 adds a pinnable chat and §5.3 a pinnable file panel, and two
+ * booleans would make "both pinned" REPRESENTABLE — three panels competing for the right edge,
+ * each reserving its own gutter.
+ *
+ * So the slot is a value, exactly as `openDrawer` replaced eleven booleans and for the same
+ * reason: the illegal state stops being merely absent and becomes unrepresentable. The owner
+ * already supplied the escape valve for wanting two at once — the file panel pops into its own
+ * window.
+ */
+export const DOCKABLE = ['lists', 'chat'] as const;
+// `files` (§5.3) joins this list WITH the panel, not before it. Listing it early failed the
+// dock-width guard — a dockable id with no panel and no `--dock-w` rule would reserve nothing
+// and the dock would sit on the content, which is genie#841's failure mode exactly. The guard
+// reads this constant, so the list and the stylesheet cannot drift.
+
+export type DockId = (typeof DOCKABLE)[number];
+
+/**
+ * What the dock slot becomes when the pin on `id` is pressed.
+ *
+ * A TOGGLE, because the pin is one button: pressing the pin of the panel already docked
+ * undocks it. A pin that cannot unpin is a dead control the moment it is pressed, which is
+ * exactly what the Lists header icon was while the panel was docked (genie#589).
+ */
+export function pinDockNext(pinnedDock: DockId | null, id: DockId): DockId | null {
+    return pinnedDock === id ? null : id;
+}
+
+/**
+ * Is `id` actually DOCKED — pinned AND open?
+ *
+ * Both halves, because pinned-but-closed reserves nothing. The old `listsPinned` meant "when
+ * it shows, dock it rather than float it" — a preference, not a state — and conflating the two
+ * is what made the header icon toggle something nothing rendered.
+ */
+export function isDocked(pinnedDock: DockId | null, openDrawer: DrawerId | null): boolean {
+    return pinnedDock !== null && openDrawer === pinnedDock;
+}
 
 /**
  * Is this drawer the open one?
@@ -103,13 +150,21 @@ export function closeDrawerNext(openDrawer: DrawerId | null, id: DrawerId): Draw
  */
 export function somethingCoversTheFloor(input: {
     openDrawer: DrawerId | null;
-    listsPinned: boolean;
+    pinnedDock: DockId | null;
     paletteOpen: boolean;
     onboardingOpen: boolean;
     recipeLauncherOpen: boolean;
 }): boolean {
-    const { openDrawer, listsPinned, paletteOpen, onboardingOpen, recipeLauncherOpen } = input;
-    // A pinned Lists panel is docked beside the content, not over it.
-    const drawerCovers = openDrawer !== null && !(openDrawer === 'lists' && listsPinned);
+    const { openDrawer, pinnedDock, paletteOpen, onboardingOpen, recipeLauncherOpen } = input;
+    /**
+     * A DOCKED panel sits beside the content, not over it — whichever panel it is.
+     *
+     * This used to name Lists specifically. Generalising it is what stops the chat flyout
+     * inheriting a bug the Lists panel already had fixed: a pin exists so the panel stays up
+     * WHILE you work, so it must not be the thing that makes Escape navigate out from under
+     * you. Unpinned, the same panel DOES overlay — the board says so, with a shadow and Esc to
+     * close — so it counts then.
+     */
+    const drawerCovers = openDrawer !== null && !isDocked(pinnedDock, openDrawer);
     return drawerCovers || paletteOpen || onboardingOpen || recipeLauncherOpen;
 }

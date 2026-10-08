@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { declarationsFor, stripCssComments } from '../../lib/css-rules';
+import { DOCKABLE } from '../../lib/drawers';
 
 /**
  * Pinning the lists panel must not move the header icons.
@@ -35,7 +36,7 @@ import { declarationsFor, stripCssComments } from '../../lib/css-rules';
  */
 
 const BROKEN = `
-.gwrap.lists-docked {
+.gwrap.docked {
     padding-right: var(--lists-dock-w);
 }
 .lists-dock { top: var(--titlebar-h); }
@@ -43,7 +44,7 @@ const BROKEN = `
 
 const FIXED = `
 /* A comment naming .gwrap.lists-docked, which must not be mistaken for a rule. */
-.gwrap.lists-docked .gbody {
+.gwrap.docked .gbody {
     margin-right: var(--lists-dock-w);
 }
 `;
@@ -54,12 +55,12 @@ describe('the guard can actually tell the two apart', () => {
     // Without these, every assertion below would pass against a matcher that
     // finds nothing in anything.
     it('finds the reserve on the shell in the BROKEN css', () => {
-        expect(declarationsFor(BROKEN, '.gwrap.lists-docked')).toContain('padding-right');
+        expect(declarationsFor(BROKEN, '.gwrap.docked')).toContain('padding-right');
     });
 
     it('does not find it there in the FIXED css, and is not fooled by the comment', () => {
-        expect(declarationsFor(FIXED, '.gwrap.lists-docked')).toBeNull();
-        expect(declarationsFor(FIXED, '.gwrap.lists-docked .gbody')).toContain('margin-right');
+        expect(declarationsFor(FIXED, '.gwrap.docked')).toBeNull();
+        expect(declarationsFor(FIXED, '.gwrap.docked .gbody')).toContain('margin-right');
     });
 
     it('strips a multi-line comment whole, not line by line', () => {
@@ -71,7 +72,7 @@ describe('docking reserves the gutter without touching the header', () => {
     it('does not put the reserve on the whole shell', () => {
         // The regression, stated as the thing it is: a rule on `.gwrap` narrows
         // the header rows too.
-        expect(declarationsFor(css, '.gwrap.lists-docked')).toBeNull();
+        expect(declarationsFor(css, '.gwrap.docked')).toBeNull();
     });
 
     it('reserves the gutter on EVERY content row, not just the grid', () => {
@@ -99,9 +100,9 @@ describe('docking reserves the gutter without touching the header', () => {
         expect(
             declarationsFor(
                 css,
-                '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .dashboard, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
+                '.gwrap.docked .gbody, .gwrap.docked .deck, .gwrap.docked .dashboard, .gwrap.docked .agent-view, .gwrap.docked .agent-view-missing',
             ),
-        ).toContain('margin-right: var(--lists-dock-w)');
+        ).toContain('margin-right: var(--dock-w)');
     });
 
     it('names every root the deck slot can render, so a new surface cannot be forgotten', () => {
@@ -154,7 +155,25 @@ describe('docking reserves the gutter without touching the header', () => {
             expect(
                 css,
                 `${root} is mounted in the deck slot, so it must be in the dock reserve or a pinned panel covers it`,
-            ).toContain(`.gwrap.lists-docked ${root}`);
+            ).toContain(`.gwrap.docked ${root}`);
+        }
+    });
+
+    it('gives EVERY dockable panel a width, or the reserve silently vanishes', () => {
+        /**
+         * `margin-right: var(--dock-w)` with no `--dock-w` in scope is an INVALID declaration,
+         * which CSS drops — so a `docked` class without a matching `docked-<id>` width would
+         * reserve nothing at all, silently, and the dock would sit on the content exactly as
+         * it did in genie#841. The failure mode is identical and the cause is one missing line.
+         *
+         * So the width rules are checked against `DOCKABLE` itself rather than a list typed
+         * here: adding a fourth pinnable panel fails this until it has a width.
+         */
+        for (const id of DOCKABLE) {
+            expect(
+                declarationsFor(css, `.gwrap.docked-${id}`),
+                `a pinned ${id} panel would reserve nothing: .gwrap.docked-${id} must set --dock-w`,
+            ).toContain('--dock-w');
         }
     });
 
@@ -163,12 +182,12 @@ describe('docking reserves the gutter without touching the header', () => {
         // header's WIDTH but grew the column's outer box, so the row overflowed
         // and squeezed `.gleft` from 300px to 163px. The rail shrank instead of
         // the Floor, and the whole header still moved.
-        expect(declarationsFor(css, '.gwrap.lists-docked .gright')).toBeNull();
+        expect(declarationsFor(css, '.gwrap.docked .gright')).toBeNull();
     });
 
     it('names neither header row, so neither can be moved by the rule', () => {
         expect(
-            declarationsFor(css, '.gwrap.lists-docked .titlebar, .gwrap.lists-docked .gtoolbar'),
+            declarationsFor(css, '.gwrap.docked .titlebar, .gwrap.docked .gtoolbar'),
         ).toBeNull();
     });
 
