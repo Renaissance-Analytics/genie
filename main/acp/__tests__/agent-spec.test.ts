@@ -62,12 +62,30 @@ describe('acpLaunch', () => {
     });
 
     it('lists exactly the providers that can ACTUALLY run on ACP', () => {
-        // codex was here and `acpLaunch` refused it `no-acp-mode` — so with `acp_engine` on,
-        // `engineFor` routed every codex agent to ACP and it never started, leaving one
-        // console line as the only symptom. The list must mean capability, not intent.
-        // It returns when prism ships a codex driver; the third-party adapter is not an
-        // option (owner: NO 3RD PARTY).
-        expect([...ACP_PROVIDERS].sort()).toEqual(['claude', 'gemini', 'kimi']);
+        /**
+         * CODEX IS IN THE LIST NOW, and the condition this test itself recorded is why.
+         *
+         * It used to assert `['claude', 'gemini', 'kimi']` with the comment: *"codex was here and
+         * `acpLaunch` refused it `no-acp-mode` … It returns when prism ships a codex driver; the
+         * third-party adapter is not an option (owner: NO 3RD PARTY)."* That was a CONDITION, not a
+         * decision waiting on anybody, and all of it has been met:
+         *
+         *  - prism-acp 0.5.4 ships a **first-party** `CodexDriver`, so the NO-3RD-PARTY constraint
+         *    holds.
+         *  - `handshake-codex.real.test.ts` starts a real child, completes `initialize` with **no API
+         *    key in its environment**, and drives a real turn at `stopReason=end_turn` — the same bar
+         *    claude cleared, measured rather than read off a release note.
+         *  - `PRISM_DRIVES` has contained `codex` since 0.5.0, so `acpLaunch('codex')` already
+         *    succeeded and this list was the sole holdback. The rule the list exists for — that
+         *    `ACP_PROVIDERS` and `acpLaunch` must agree — now agrees in both directions, which is
+         *    exactly what the sibling test below walks the list to prove.
+         *
+         * The owner's plan says it outright: *"Providers: Claude first, Codex right after."*
+         *
+         * Rewritten to the new contract, not loosened — the assertion is still exact, so adding a
+         * provider `acpLaunch` cannot drive still fails here.
+         */
+        expect([...ACP_PROVIDERS].sort()).toEqual(['claude', 'codex', 'gemini', 'kimi']);
     });
 
     it('tells the child WHICH driver to serve, because the host is no longer claude-only', () => {
