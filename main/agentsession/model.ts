@@ -91,6 +91,45 @@ export interface ToolCall {
     id: string;
     name: string;
     status: 'pending' | 'success' | 'failure';
+    /**
+     * WHAT SORT of operation the agent says this is — `edit`, `read`, `execute`, `search`…
+     *
+     * `null` means the agent did not classify it, which really happens: measured against a
+     * real child, `kind` was present on `Write` and ABSENT on `PowerShell` in the same
+     * session. So this is never defaulted to `'other'` — a classification Genie was not given
+     * is the `null`-is-not-zero rule applied to a string, and "this is an edit" is exactly the
+     * claim a delivery column would make on the strength of it.
+     */
+    kind: string | null;
+    /**
+     * The arguments, AS THE AGENT SENT THEM. `null` ⇒ none reported yet.
+     *
+     * UNTRUSTED and deliberately `unknown`: it is an agent's payload, so a consumer narrows it
+     * at the point of use rather than this type promising a shape the wire does not guarantee.
+     *
+     * This is where "it is editing `ipc.ts` right now" comes from — `rawInput.file_path`. It
+     * arrives on the `in_progress` update rather than with the call, which is why it went
+     * unnoticed: that branch read `title`, `name` and `status` and dropped the rest.
+     */
+    rawInput: unknown;
+    /**
+     * What the call produced. `null` ⇒ nothing reported.
+     *
+     * Kept in the SHAPE IT ARRIVED IN rather than flattened to text. ACP's tool content is
+     * structured, and its `diff` variant carries `path`/`oldText`/`newText` — flattening would
+     * destroy precisely what "every edit as a diff" needs in order to save a consumer one
+     * parse. Faithful and untrusted, for the same reason as `rawInput`.
+     */
+    result: unknown;
+    /**
+     * When this call last CHANGED, by Genie's clock. `null` ⇒ never stamped.
+     *
+     * The agent does not timestamp these, so it is ours — the same reasoning as
+     * {@link Message.at}. A board that sorts by what happened most recently needs a per-call
+     * time, and the alternative (inferring it from array position) breaks the moment two
+     * calls run concurrently, which is normal.
+     */
+    at: number | null;
 }
 
 export interface PendingApproval {

@@ -50,7 +50,11 @@ const base: AgentSessionSpec = {
     composer: { text: '', cursor: 0, busy: false },
     transcript: [{ id: 'm1', role: 'user', content: 'the pty host dies on upgrade' }],
     live: null,
-    tools: [{ id: 't1', name: 'Bash', status: 'pending' }],
+    // A PENDING call genuinely has no arguments and no result yet: measured, `rawInput`
+    // arrives on the `in_progress` frame and the result on the closing one. So the nulls here
+    // are the realistic state of a call that has only just been announced, not placeholders —
+    // and `kind` is null because this frame did not declare one.
+    tools: [{ id: 't1', name: 'Bash', status: 'pending', kind: null, rawInput: null, result: null, at: NOW }],
     approvals: [{ id: 'ap1', name: 'Write main/terminal/ipc.ts', args: {} }],
     plan: [
         { id: 'p1', title: 'read ipc.ts', status: 'done' },

@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { emptyAgentSession, type AgentSession } from '../../agentsession/model';
-import { HANDLED_UPDATE_KINDS, applySessionUpdate } from '../update-to-session';
+import { HANDLED_UPDATE_KINDS, applySessionUpdate, type AcpSessionUpdate } from '../update-to-session';
 
 /**
  * ACP `session/update` → `AgentSession`.
@@ -10,9 +12,15 @@ import { HANDLED_UPDATE_KINDS, applySessionUpdate } from '../update-to-session';
  * break` would absorb a new one and the surface would simply stop showing something
  * nobody noticed it had — a cost figure, a plan, a tool call.
  *
- * So the last test here reads the SHIPPED SCHEMA and asserts every variant in it is
- * handled by name. A version bump that adds one turns this red, which is the whole
- * point of pinning against the package rather than against a list I typed out.
+ * That used to be guarded by reading the SHIPPED SCHEMA and asserting every variant in it
+ * is handled by name. **It no longer is** — the owner ruled NO THIRD PARTY and the vendored
+ * protocol package is gone; the note further down records the removal and refuses to replace
+ * it with a list declared here and compared against itself.
+ *
+ * What stands in its place is `fixtures/real-tool-calls.json`: `session/update` frames
+ * RECORDED from a real claude child. It cannot prove completeness the way a schema could,
+ * but it cannot pass by construction either — and it is what caught the mapper discarding
+ * three fields the agent was sending all along.
  */
 
 const base = (): AgentSession =>
@@ -163,7 +171,19 @@ describe('tool calls', () => {
         // `tool` is distinct from `thinking` for the reason the protocol separates
         // them: a build can run silently for minutes.
         const s = applySessionUpdate(base(), { sessionUpdate: 'tool_call', toolCallId: 'tc1', title: 'npm test', status: 'pending' }, NOW);
-        expect(s.tools).toEqual([{ id: 'tc1', name: 'npm test', status: 'pending' }]);
+        /**
+         * STILL EXACT, and updated to the grown contract rather than relaxed to an
+         * `objectContaining`. A whole-object `toEqual` is the right assertion here — it is
+         * what fails when a field is added without a decision about its honest empty value,
+         * which is exactly what it did when genie#843 gave `ToolCall` four more.
+         *
+         * Every new field is NULL here because this frame declares none of them: no `kind`
+         * (so not `'other'`), no `rawInput`, no result. `at` is Genie's stamp, which is the
+         * one thing it can always know.
+         */
+        expect(s.tools).toEqual([
+            { id: 'tc1', name: 'npm test', status: 'pending', kind: null, rawInput: null, result: null, at: NOW },
+        ]);
         expect(s.turn.state).toBe('tool');
     });
 
@@ -289,5 +309,118 @@ describe('every protocol variant is handled BY NAME', () => {
             const after = applySessionUpdate(before, { sessionUpdate: kind }, NOW);
             expect(after).toEqual(before);
         }
+    });
+});
+
+
+/**
+ * A TOOL CALL KEEPS WHAT THE AGENT ACTUALLY SENT — genie#843.
+ *
+ * `ToolCall` was `{id, name, status}`. Measured against a real child, a real `tool_call`
+ * carries `kind`, its update carries `rawInput` with the real arguments, and the closing
+ * update carries `content` with the result. All three arrived and were thrown away —
+ * `rawInput` was read only to sniff for plan tools, and `kind` was not even in the
+ * `AcpSessionUpdate` interface.
+ *
+ * That poverty is what blocked two designed surfaces: the Workflow Dashboard's "latest
+ * delivery" (which needs to say *which file*) and the Agent view's "every edit as a diff".
+ * Both were written as though the protocol could not supply it. It could.
+ *
+ * The frames below are RECORDED, not composed — see the fixture's `_provenance`.
+ */
+const REAL = JSON.parse(
+    readFileSync(join(__dirname, 'fixtures', 'real-tool-calls.json'), 'utf8'),
+) as {
+    // Typed as the real parameter so the mapper is called the way production calls it. The
+    // cast is a CLAIM about recorded JSON, so the control case below checks it at runtime —
+    // every frame really does carry a `sessionUpdate` — rather than letting `as` assert it.
+    editLifecycle: AcpSessionUpdate[];
+    unclassifiedCall: AcpSessionUpdate[];
+};
+
+describe('a tool call keeps what the agent actually sent', () => {
+    it('the fixture is real traffic, not a sketch', () => {
+        // The control for every case below: if the fixture were trimmed to the fields the
+        // assertions want, those assertions would prove nothing about the wire.
+        const [open, args, done] = REAL.editLifecycle;
+        expect(REAL.editLifecycle).toHaveLength(3);
+        expect(open!.sessionUpdate).toBe('tool_call');
+        expect(open!.kind).toBe('edit');
+        expect(args!.rawInput).toBeTruthy();
+        expect(done!.content).toBeTruthy();
+        // One call, three frames — so the id is what ties them together.
+        expect(new Set(REAL.editLifecycle.map((f) => f.toolCallId)).size).toBe(1);
+
+        // VALIDATES THE CAST above, for both fixtures: a recorded frame missing its
+        // discriminator would be silently accepted by `as` and then take a `default:` branch.
+        for (const frame of [...REAL.editLifecycle, ...REAL.unclassifiedCall]) {
+            expect(typeof frame.sessionUpdate).toBe('string');
+            expect(HANDLED_UPDATE_KINDS).toContain(frame.sessionUpdate);
+        }
+    });
+
+    it('stores the kind the agent declared', () => {
+        const s = applySessionUpdate(base(), REAL.editLifecycle[0]!, NOW);
+        expect(s.tools[0]!.kind).toBe('edit');
+    });
+
+    it('stores NULL, not a guess, when the agent declared no kind', () => {
+        /**
+         * `kind` is OPTIONAL on the wire and really is absent in practice — measured, present
+         * on `Write` and missing on `PowerShell` in the same session. So the honest value is
+         * `null`, never `'other'`: a design that renders a classification Genie was not given
+         * is the `null`-is-not-zero mistake applied to a string.
+         */
+        const s = applySessionUpdate(base(), REAL.unclassifiedCall[0]!, NOW);
+        expect(s.tools[0]!.name).toBe('PowerShell');
+        expect(s.tools[0]!.kind).toBeNull();
+    });
+
+    it('keeps rawInput off the UPDATE, which is the frame that carries it', () => {
+        // The arguments do not arrive with the call — they arrive on the `in_progress` update,
+        // which is the branch that read `title`, `name` and `status` and dropped everything
+        // else. So the field was being discarded on the only frame that had it.
+        let s = applySessionUpdate(base(), REAL.editLifecycle[0]!, NOW);
+        s = applySessionUpdate(s, REAL.editLifecycle[1]!, NOW + 10);
+        expect((s.tools[0]!.rawInput as { file_path?: string } | null)?.file_path).toMatch(
+            /hello\.txt$/,
+        );
+    });
+
+    it('keeps the result, and keeps it in the shape it arrived in', () => {
+        /**
+         * Stored as `unknown`, faithfully, rather than flattened to a string. ACP's tool
+         * content is structured and a `diff` variant carries `path`/`oldText`/`newText` —
+         * flattening would destroy exactly what "every edit as a diff" needs, to save a
+         * consumer one parse. Same reasoning as `rawInput`: faithful and untrusted.
+         */
+        let s = applySessionUpdate(base(), REAL.editLifecycle[0]!, NOW);
+        s = applySessionUpdate(s, REAL.editLifecycle[2]!, NOW + 20);
+        expect(Array.isArray(s.tools[0]!.result)).toBe(true);
+        expect(JSON.stringify(s.tools[0]!.result)).toContain('File created successfully');
+    });
+
+    it('stamps when the call last changed, so a board can sort by it', () => {
+        // The Dashboard's Muster sorts by delivery recency, which needs a per-call time. Genie's
+        // clock, like `Message.at` — the agent does not timestamp these.
+        let s = applySessionUpdate(base(), REAL.editLifecycle[0]!, NOW);
+        expect(s.tools[0]!.at).toBe(NOW);
+        s = applySessionUpdate(s, REAL.editLifecycle[2]!, NOW + 20);
+        expect(s.tools[0]!.at).toBe(NOW + 20);
+    });
+
+    it('replays the whole recorded lifecycle into ONE finished call that names its file', () => {
+        // The end-to-end claim, in the agent's own frames: after three updates there is one
+        // tool call, it succeeded, it is an edit, and it says what it wrote.
+        const s = REAL.editLifecycle.reduce(
+            (acc, frame, i) => applySessionUpdate(acc, frame, NOW + i * 10),
+            base(),
+        );
+        expect(s.tools).toHaveLength(1);
+        const call = s.tools[0]!;
+        expect(call.status).toBe('success');
+        expect(call.kind).toBe('edit');
+        expect((call.rawInput as { file_path?: string }).file_path).toMatch(/hello\.txt$/);
+        expect(call.result).toBeTruthy();
     });
 });
