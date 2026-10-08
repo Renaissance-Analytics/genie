@@ -91,6 +91,7 @@ function showE2EWindow(host: E2EHost): void {
         'e2e-agent-pulse',
         'e2e-deck',
         'e2e-agent-view',
+        'e2e-dashboard',
         // The product page, not a harness (genie#228). See the doc comment.
         'master',
     ] as const;
