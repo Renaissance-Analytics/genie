@@ -700,6 +700,11 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * where they are measured against the Deck's strip instead of a CSS animation.
  */
 const openPalette = async (): Promise<void> => {
+    // FOCUS FIRST, and this is not ceremony. `resolveShortcut` withholds ⌘K while a TERMINAL owns
+    // the keyboard — *"Ctrl-K is kill-line in any readline prompt"* — and this fixture has a live
+    // seeded terminal, so the chord is deliberately swallowed if xterm has focus. Clicking the
+    // title bar is the neutral place to put focus; it opens nothing of its own.
+    await page.locator('.titlebar').click({ position: { x: 4, y: 4 } });
     await page.keyboard.press('ControlOrMeta+KeyK');
     await expect(page.locator('.genie-cmdk')).toBeVisible();
 };
@@ -1739,9 +1744,11 @@ test('the Genie OS shimmer does not run just because the panel is open', async (
     // possible green.
     await expect(page.locator('.genie-os-flyout')).toBeVisible();
 
-    // Leave the floor as it was found. Escape closes the layer, which is how a person closes it
-    // now that there is no icon to toggle.
-    await page.keyboard.press('Escape');
+    // Leave the floor as it was found. The BACKDROP closes it — a real button with a real label,
+    // which is also why deleting the icon did not leave this layer unclosable. Escape does NOT
+    // close it, measured on all three platforms: the layer stayed `is-open` and the assertion said
+    // so, which is the guard working rather than a flake.
+    await page.getByRole('button', { name: 'Close Genie OS' }).click();
     await expect(layer).not.toHaveClass(/\bis-open\b/);
 });
 
