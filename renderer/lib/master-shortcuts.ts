@@ -149,7 +149,7 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
 
 /** What the window is showing, for {@link escapeLeavesForDeck}. */
 export interface EscapeContext {
-    view: 'deck' | 'grid' | 'workbench' | 'agent';
+    view: 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent';
     /** Is any overlay up — a flyout, the palette, a modal, a drawer? */
     overlayOpen: boolean;
 }
@@ -174,5 +174,15 @@ export interface EscapeContext {
  */
 export function escapeLeavesForDeck(ctx: EscapeContext): boolean {
     if (ctx.overlayOpen) return false;
+    /**
+     * Only from an AGENT. Escape means "up a level", and the Dashboard is a TOP-LEVEL surface
+     * like the Deck — there is no level above it to go to, so Escape must stay with whatever
+     * else wants it rather than navigating somewhere arbitrary.
+     *
+     * Stated here because the compiler asked: widening `EscapeContext` for the Dashboard made
+     * this expression answer `false` for it silently, which happens to be right. A behaviour
+     * that is correct by accident is one nobody can defend later, so it is now asserted in
+     * `master-shortcuts.test.ts`.
+     */
     return ctx.view === 'agent';
 }

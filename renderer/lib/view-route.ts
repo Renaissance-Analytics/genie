@@ -46,6 +46,18 @@ export type GenieView =
     /** Cross-workspace view: what needs you, every agent, what changed. Reached
      *  EXPLICITLY with `?view=deck` until it becomes the default. */
     | { kind: 'deck' }
+    /**
+     * The WORKFLOW DASHBOARD — what every agent is producing, grouped by workspace.
+     *
+     * A sibling of the Deck, not a replacement: the Deck answers "does anything need me?" and
+     * is a queue you clear; this answers "what is being produced, and by whom?" and is a board
+     * you read. The owner's ruling on the overlap, and it is why a waiting agent appears on
+     * both — only the Deck row asks for anything.
+     *
+     * NAMED rather than default, like the grid. The board's own title bars read
+     * `genie://dashboard?group=workspace`.
+     */
+    | { kind: 'dashboard' }
     /** One workspace's panels — today's Floor. */
     | { kind: 'workbench'; workspaceId: string }
     /** One agent. `tab: null` means "not chosen yet"; the surface picks a default
@@ -81,6 +93,7 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     const named = one(query.view);
     if (named === 'deck') return { kind: 'deck' };
     if (named === 'grid') return { kind: 'grid' };
+    if (named === 'dashboard') return { kind: 'dashboard' };
 
     const agentId = one(query.agent);
     if (agentId) {
@@ -130,6 +143,8 @@ export function viewRouteQuery(view: GenieView): Record<string, string> {
         case 'deck':
             // The DEFAULT carries no params, so the url you sit on most stays clean.
             return {};
+        case 'dashboard':
+            return { view: 'dashboard' };
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':

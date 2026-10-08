@@ -57,6 +57,34 @@
     --amber-500: #f59e0b;
     --violet-500: #8b5cf6;
     --zinc-400: #a1a1aa;
+    --zinc-500: #71717a;
+    --red-500: #ef4444;
+
+    /* ── From the Fancy UI Kit design system, for the Genie v2 oversight surfaces ──
+       Added because the spec board names them and Genie did not define them. Values are
+       the kit's own (`_ds/.../colors_and_type.css`), not invented.
+
+       `--red-500` is the kit's danger ramp. Genie already had `--rose-500`, which is a
+       DIFFERENT hue (#f43f5e) — the spec uses red, so both now exist rather than one
+       silently standing in for the other.
+
+       `--surface` is the kit's name for cards, modals and popovers. Aliased onto Genie's
+       existing `--card` rather than given a literal, so the two cannot drift: a popover in a
+       new surface and a card in an old one are the same colour by construction. */
+    --surface: var(--card);
+
+    /* The brand gradient, used by the title-bar mark. Sky-300 → indigo-400 → violet-300. */
+    --brand-grad-from: #7dd3fc;
+    --brand-grad-via: #818cf8;
+    --brand-grad-to: #c4b5fd;
+
+    /* The SANS token the spec board's surfaces ask for.
+       NOT the kit's Geist stack: `colors_and_type.css` pulls Geist from Google Fonts with an
+       `@import url(...)`, and a desktop app that fetches a typeface over the network at
+       runtime has both an offline failure mode and a privacy one. So this resolves to the
+       stack Genie already renders in, and adopting Geist means BUNDLING it — a deliberate
+       change, not a side effect of defining a variable. */
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 
     /* The -400 STATUS INKS. The 500s above are fills — a dot, a pill, a bar —
        where a mid-tone reads on either ground. These are the same hues used as

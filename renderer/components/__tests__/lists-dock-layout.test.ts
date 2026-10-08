@@ -99,42 +99,61 @@ describe('docking reserves the gutter without touching the header', () => {
         expect(
             declarationsFor(
                 css,
-                '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
+                '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .dashboard, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
             ),
         ).toContain('margin-right: var(--lists-dock-w)');
     });
 
     it('names every root the deck slot can render, so a new surface cannot be forgotten', () => {
         /**
-         * THE EXHAUSTIVENESS HALF, and the reason this bug existed: the reserve is a list, and
-         * a list is only correct until someone adds a surface. So this reads master.tsx and
-         * fails when the `deck` prop gains a branch the stylesheet does not name.
+         * EXHAUSTIVE BY DISCOVERY, not by recognition — and the first version of this test was
+         * the latter, which is why this comment exists.
          *
-         * Approximated by the roots' class names rather than by parsing JSX — `.agent-view` and
-         * `.deck` come from their components, `.agent-view-missing` is written inline. A fourth
-         * surface will almost certainly introduce a fourth class here, and this fails until the
-         * reserve names it.
+         * As first shipped it walked three hard-coded `[tag, root]` pairs and `continue`d past
+         * anything else. Adding the Workflow Dashboard to the slot therefore left the reserve
+         * incomplete and this guard GREEN: the new root was never one of the three it knew to
+         * ask about. Its own PR description had warned about exactly that shape ("a hard-coded
+         * list would pass while an eleventh file reintroduced the broken form"), one surface
+         * earlier.
+         *
+         * So it now reads the component tags OUT of the slot and fails on any it cannot
+         * account for. A fourth surface cannot be added without this map changing, which is a
+         * diff a human reads.
          */
         const page = readFileSync(join(__dirname, '../../pages/master.tsx'), 'utf8');
         const deckSlot = page.slice(page.indexOf('deck={'), page.indexOf('hideGrid={'));
         expect(deckSlot.length).toBeGreaterThan(100);
 
-        // Every component/class root the slot mounts must appear in the reserve.
-        const reserve = declarationsFor(
-            css,
-            '.gwrap.lists-docked .gbody, .gwrap.lists-docked .deck, .gwrap.lists-docked .agent-view, .gwrap.lists-docked .agent-view-missing',
-        );
-        expect(reserve).not.toBeNull();
+        /** Every component the slot can mount → the CSS root it renders. */
+        const ROOTS: Record<string, string> = {
+            AgentView: '.agent-view',
+            Dashboard: '.dashboard',
+            Deck: '.deck',
+        };
 
-        for (const [tag, root] of [
-            ['<AgentView', '.agent-view'],
-            ['<Deck', '.deck'],
-            ['className="agent-view-missing"', '.agent-view-missing'],
-        ] as const) {
-            if (!deckSlot.includes(tag)) continue;
+        // Components, discovered. `<Icon`-style leaf elements inside a surface are not roots —
+        // only the top-level branches of this prop are — so the scan is deliberately anchored
+        // to the `) : (`-separated branch heads the slot is built from.
+        const found = [...deckSlot.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!);
+        const unknown = [...new Set(found)].filter((tag) => !(tag in ROOTS));
+        expect(
+            unknown,
+            `the deck slot mounts ${unknown.join(', ')}, which this guard cannot account for — add each to ROOTS with the CSS root it renders, and put that root in the dock reserve`,
+        ).toEqual([]);
+
+        // Plus the inline fallback, which has no component of its own.
+        const inlineRoots = deckSlot.includes('className="agent-view-missing"')
+            ? ['.agent-view-missing']
+            : [];
+
+        const required = [...new Set([...found.map((tag) => ROOTS[tag]!), ...inlineRoots])];
+        // The walk must have found something, or every assertion below is vacuous.
+        expect(required.length).toBeGreaterThan(1);
+
+        for (const root of required) {
             expect(
                 css,
-                `${tag} is rendered into the deck slot, so ${root} must be in the dock reserve`,
+                `${root} is mounted in the deck slot, so it must be in the dock reserve or a pinned panel covers it`,
             ).toContain(`.gwrap.lists-docked ${root}`);
         }
     });

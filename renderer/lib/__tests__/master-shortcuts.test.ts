@@ -226,3 +226,17 @@ describe('escapeLeavesForDeck — when Escape may actually navigate', () => {
         expect(escapeLeavesForDeck({ view: 'deck', overlayOpen: false })).toBe(false);
     });
 });
+
+
+describe('Escape on the Dashboard', () => {
+    it('does NOT navigate, because a top-level surface has no level above it', () => {
+        // The same answer as the Deck, for the same reason. Asserted rather than left as a
+        // consequence of `=== 'agent'`: widening the union made this true silently, and a
+        // behaviour that is right by accident cannot be defended when the next view arrives.
+        expect(escapeLeavesForDeck({ view: 'dashboard', overlayOpen: false })).toBe(false);
+        expect(escapeLeavesForDeck({ view: 'deck', overlayOpen: false })).toBe(false);
+        // The positive control: it still DOES navigate from an agent, or this test would pass
+        // against a function that always returned false.
+        expect(escapeLeavesForDeck({ view: 'agent', overlayOpen: false })).toBe(true);
+    });
+});

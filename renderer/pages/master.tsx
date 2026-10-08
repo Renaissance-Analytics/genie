@@ -186,6 +186,7 @@ import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
 import { attentionItems, moveQueueFocus } from '../lib/attention-queue';
 import { floorSurface } from '../lib/floor-surface';
+import { Dashboard } from '../components/Master/Dashboard';
 import { Deck } from '../components/Master/Deck';
 import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
 import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
@@ -2586,7 +2587,7 @@ function MasterInner() {
      * out from under an open panel.
      */
     const keys = useRef({
-        view: 'deck' as 'deck' | 'grid' | 'workbench' | 'agent',
+        view: 'deck' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
         overlayOpen: false,
         query: {} as RouteQuery,
         sessions: [] as AgentSessionSpec[],
@@ -2706,6 +2707,11 @@ function MasterInner() {
                     // a remote window local.
                     case 'grid':
                         replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
+                        break;
+                    // Also a SURFACE rather than a flyout, and routed the same way — through
+                    // `mergeViewRoute`, so a remote window stays remote.
+                    case 'dashboard':
+                        replacePageQuery(mergeViewRoute(pageQuery, { kind: 'dashboard' }));
                         break;
                     // Workspace-SCOPED: these take a workspace, not a toggle. With no
                     // active workspace there is nothing to open them against, so they
@@ -3182,6 +3188,26 @@ function MasterInner() {
                                         </div>
                                     );
                                 })()
+                            ) : surface.showDashboard ? (
+                                /**
+                                 * THE WORKFLOW DASHBOARD — a sibling of the Deck, not a layer
+                                 * over it. `floorSurface` guarantees the two are never both
+                                 * mounted, and that is asserted rather than assumed.
+                                 *
+                                 * Workspaces are passed WHOLE rather than filtered to those
+                                 * with agents: the board keeps an empty workspace on screen
+                                 * with an Add agent affordance, because a workspace that
+                                 * disappears when its agents stop is one you cannot start work
+                                 * in.
+                                 */
+                                <Dashboard
+                                    sessions={sessions}
+                                    workspaces={workspaces.map((w) => ({
+                                        id: w.id,
+                                        name: w.project_name,
+                                        path: w.path,
+                                    }))}
+                                />
                             ) : surface.showDeck ? (
                                 <Deck
                                     sessions={sessions}
