@@ -77,6 +77,77 @@ export function policyAppliesTo(filename) {
  * Every message says the actual number AND the limit, because "too long" with
  * no measurement just sends the author guessing.
  */
+/**
+ * Does this tag have curated notes, and if not, what IS in the directory?
+ *
+ * `release.yml` already fails correctly when `docs/releases/<tag>.md` is missing — in
+ * `prepare-release`, which gates the platform builds through `needs:`, so nothing is built or
+ * published and the dispatch fails in about twenty seconds. The ordering is right.
+ *
+ * What it never said is what exists instead, and that is the entire cost of the failure. "Missing
+ * docs/releases/v0.7.0-beta.343.md" sends somebody to the repo to look; "the directory has
+ * v2.0.0-beta.1.md" tells them the answer is a rename.
+ *
+ * Not hypothetical: `docs/releases/` currently holds `v2.0.0-beta.1.md`, a version nobody has
+ * committed to, while `package.json` is `0.7.0-beta.342` and every tag is `v0.7.0-beta.*`. Whichever
+ * scheme is chosen, one of them needs renaming first, and the only thing preventing a failed dispatch
+ * today is remembering a sentence in a PR body.
+ *
+ * It REPORTS and does not guess. Choosing the version is the owner's call; a helper that confidently
+ * renamed to the wrong tag would be worse than the message it replaced.
+ *
+ * Pure, taking the listing as an argument, so the wording is testable without a release.
+ */
+export function notesVerdict(tag, available = []) {
+    const clean = typeof tag === 'string' ? tag.trim().replace(/^v/i, '') : '';
+    if (!clean) {
+        return { ok: false, message: 'No tag given, so no release notes can be looked up.' };
+    }
+    const wanted = `v${clean}.md`;
+    const notes = available.filter((f) => typeof f === 'string' && f.toLowerCase().endsWith('.md'));
+    if (notes.includes(wanted)) {
+        return { ok: true, message: `Found curated release notes: docs/releases/${wanted}` };
+    }
+    if (notes.length === 0) {
+        return {
+            ok: false,
+            message: `No release notes at all in docs/releases/ — ${wanted} is required before tagging.`,
+        };
+    }
+    /**
+     * CAPPED, and the first version of this was not: it listed all 68 files in the real directory.
+     * A wall of filenames is as unhelpful as no listing, and it is the exact failure the policy in
+     * this same module exists to prevent — the owner's complaint there being *"people don't want to
+     * read novels."* Committed by the tool that enforces it.
+     *
+     * Newest LAST, because that is where a reader's eye lands and where the answer usually is. The
+     * odd-major file is named separately: sorting alone either buries it or over-promotes it, and
+     * "there is a v2.x file among your v0.7.x ones" is the sentence that actually helps.
+     */
+    const SHOW = 5;
+    const sorted = [...notes].sort((a, b) => compareVersions(a.replace(/\.md$/i, ''), b.replace(/\.md$/i, '')));
+    const shown = sorted.slice(-SHOW);
+    const hidden = sorted.length - shown.length;
+    const major = (f) => f.replace(/^v/i, '').split('.')[0];
+    const oddMajor = sorted.filter((f) => major(f) !== major(wanted));
+
+    const lines = [
+        `Missing curated release notes: docs/releases/${wanted}`,
+        `  newest present: ${shown.join(', ')}${hidden > 0 ? ` (and ${hidden} more)` : ''}`,
+    ];
+    if (oddMajor.length > 0) {
+        lines.push(
+            `  NOTE: ${oddMajor.join(', ')} ${oddMajor.length === 1 ? 'is' : 'are'} from a different major`
+                + ` than the tag — most likely this release's notes under the wrong version.`,
+        );
+    }
+    lines.push(
+        `  If one of those holds this release's notes, RENAME it to ${wanted}.`,
+        '  The file name must match the tag EXACTLY — release.yml reads it by name.',
+    );
+    return { ok: false, message: lines.join('\n') };
+}
+
 export function checkReleaseNotes(text, limits = RELEASE_NOTES_LIMITS) {
     const problems = [];
     const lines = text.split(/\r?\n/);

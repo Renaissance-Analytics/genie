@@ -56,7 +56,18 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           NOTES_FILE="docs/releases/${TAG}.md"
           if [ ! -s "$NOTES_FILE" ]; then
-            echo "Missing curated release notes: $NOTES_FILE" >&2
+            # Say what IS there, not only what was wanted. The old message named the path it
+            # looked for and nothing else, so the fix meant a trip to the repo to discover that
+            # the notes exist under a different version and need renaming. `notesVerdict` is the
+            # same helper `npm run release:check` uses before a tag is pushed.
+            node -e "
+              const fs = require('node:fs');
+              import('./scripts/release-notes-policy.mjs').then(({ notesVerdict }) => {
+                const have = fs.existsSync('docs/releases') ? fs.readdirSync('docs/releases') : [];
+                console.error(notesVerdict(process.argv[1], have).message);
+                process.exit(1);
+              });
+            " "$TAG"
             exit 1
           fi
           # Notes are read in an update POPOVER, not a changelog. Bullets had
