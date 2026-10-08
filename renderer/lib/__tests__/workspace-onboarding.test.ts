@@ -9,6 +9,8 @@ import {
     workspacePathPreview,
     workspaceSlug,
     scannedWorkspaceAction,
+    FIRST_AGENT_PRESETS,
+    firstAgentDriver,
 } from '../workspace-onboarding';
 
 it('registers a folder that is already a workspace instead of wrapping it again', () => {
@@ -163,33 +165,144 @@ describe('the container repository', () => {
 // import route reads it. See tynn-import.test.ts.
 
 describe('first-run onboarding contract', () => {
-    it('puts model drivers before accounts without forcing existing users to add a workspace', () => {
-        expect(FIRST_RUN_STEPS.map((step) => step.id)).toEqual([
-            'welcome',
-            'drivers',
-            'tynn',
-            'github',
-            'verify',
-            'workspace',
-            'ready',
-        ]);
-        expect(FIRST_RUN_STEPS.find((step) => step.id === 'tynn')?.optional).toBe(false);
-        expect(FIRST_RUN_STEPS.find((step) => step.id === 'github')?.optional).toBe(true);
+    /**
+     * REPLACED, not loosened. This case used to pin the seven-step order — welcome, drivers,
+     * tynn, github, verify, workspace, ready — and it was right for the flow it was written
+     * against. P7 cuts first run to two steps, so the contract it pins is a different one; the
+     * cases in "FIRST RUN IS TWO STEPS" below are its replacement, and they say what was checked
+     * before each deleted step was removed.
+     */
+    it('still refuses to finish with no workspace', () => {
+        // The one gate that survives untouched: a workstation with no workspace has nothing to
+        // run an agent in, so finishing would land the user on an empty Deck.
         expect(canFinishFirstRun({ existingWorkspaceCount: 2, setupComplete: true })).toBe(true);
         expect(canFinishFirstRun({ existingWorkspaceCount: 0, setupComplete: true })).toBe(false);
     });
 
     it('resumes at the first incomplete required step', () => {
-        expect(nextIncompleteFirstRunStep({ welcome: true, drivers: true })).toBe('tynn');
-        expect(
-            nextIncompleteFirstRunStep({
-                welcome: true,
-                drivers: true,
-                tynn: true,
-                verify: true,
-                workspace: true,
-                ready: true,
-            }),
-        ).toBeNull();
+        expect(nextIncompleteFirstRunStep({})).toBe('workspace');
+        expect(nextIncompleteFirstRunStep({ workspace: true })).toBe('agent');
+        expect(nextIncompleteFirstRunStep({ workspace: true, agent: true })).toBeNull();
+    });
+});
+
+describe('FIRST RUN IS TWO STEPS', () => {
+    /**
+     * Seven gates, with Tynn sign-in and GitHub connect IN FRONT of seeing an agent work.
+     * The plan's target: *"two steps: pick a folder; Genie verifies the one driver it needs and
+     * starts one agent with a first prompt pre-filled… Target: first agent reply in under 2
+     * minutes, 2 decisions."*
+     *
+     * ## Nothing is lost by deleting the other five, and that was checked rather than assumed
+     *
+     *  - **Tynn** — `master.tsx` already refuses to render the app signed out (`authChecked &&
+     *    !signedIn` → `SignInPrompt`). The onboarding step was asking for something the app
+     *    cannot start without, which makes it a second door on the same wall.
+     *  - **GitHub** — already optional, and `GitHubConnect` lives in Settings.
+     *  - **Toolchain** — `ToolchainSetupWizard` is mounted in `settings.tsx`, and the one case
+     *    that actually blocks a first agent (no driver on the machine) is verified in step 2
+     *    where it can be acted on.
+     *  - **Genie OS** — its workspace is prepared automatically; the optional GitHub backup is
+     *    `syncGenieOs`, which `settings.tsx` already calls.
+     *  - **Welcome** — a page whose only control was "Get started".
+     *
+     * Every one of those was confirmed present elsewhere in source before the step was removed.
+     * A deferred prompt that does not exist is not deferred, it is deleted.
+     */
+    it('is exactly two steps, in order', () => {
+        expect(FIRST_RUN_STEPS.map((s) => s.id)).toEqual(['workspace', 'agent']);
+    });
+
+    it('gates on both, because neither is optional', () => {
+        // "Optional" meant a step the finish gate skips. Two steps and one of them optional
+        // would be one step wearing a disguise.
+        expect(FIRST_RUN_STEPS.every((s) => !s.optional)).toBe(true);
+    });
+
+    it('asks for the FOLDER first — the only thing Genie cannot guess', () => {
+        expect(FIRST_RUN_STEPS[0]!.id).toBe('workspace');
+        expect(nextIncompleteFirstRunStep({})).toBe('workspace');
+    });
+
+    it('moves to the agent once a workspace exists', () => {
+        expect(nextIncompleteFirstRunStep({ workspace: true })).toBe('agent');
+    });
+
+    it('is finished when both are done', () => {
+        expect(nextIncompleteFirstRunStep({ workspace: true, agent: true })).toBeNull();
+    });
+});
+
+describe('FIRST_AGENT_PRESETS', () => {
+    /**
+     * *"'New agent' offers three presets with real first prompts… each instructing the agent to
+     * finish with `imDone` + a handoff — so first run teaches the whole loop by construction."*
+     *
+     * The `imDone` instruction is the load-bearing part. A first agent that answers and stops
+     * teaches that Genie is a chat window; one that files a handoff teaches the loop the whole
+     * product is built on, on the very first run.
+     */
+    it('offers three, each with a real prompt', () => {
+        expect(FIRST_AGENT_PRESETS).toHaveLength(3);
+        for (const preset of FIRST_AGENT_PRESETS) {
+            expect(preset.label.length).toBeGreaterThan(3);
+            expect(preset.prompt.length).toBeGreaterThan(30);
+        }
+    });
+
+    it('names the three the plan specifies', () => {
+        const prompts = FIRST_AGENT_PRESETS.map((p) => p.prompt.toLowerCase());
+        expect(prompts.some((p) => p.includes('orientation'))).toBe(true);
+        expect(prompts.some((p) => p.includes('failing test'))).toBe(true);
+        expect(prompts.some((p) => p.includes('commits'))).toBe(true);
+    });
+
+    it('teaches the LOOP: every preset ends with imDone and a handoff', () => {
+        for (const preset of FIRST_AGENT_PRESETS) {
+            expect(preset.prompt).toContain('imDone');
+            expect(preset.prompt.toLowerCase()).toContain('handoff');
+        }
+    });
+
+    it('has distinct ids, so a choice can be recorded', () => {
+        const ids = FIRST_AGENT_PRESETS.map((p) => p.id);
+        expect(new Set(ids).size).toBe(ids.length);
+    });
+});
+
+describe('firstAgentDriver', () => {
+    /**
+     * "Genie verifies the ONE driver it needs" — not every driver the machine could have.
+     *
+     * The old flow asked which of twenty-one TUIs to enable before anything had run, which is a
+     * question nobody can answer on first launch and a decision Settings owns anyway.
+     */
+    it('prefers the configured default when it is installed', () => {
+        expect(firstAgentDriver({ configured: 'codex', installed: ['claude', 'codex'] })).toEqual({
+            ready: true,
+            driver: 'codex',
+        });
+    });
+
+    it('falls back to the first INSTALLED driver when the default is not there', () => {
+        // Better than refusing: the machine demonstrably has something that can run.
+        expect(firstAgentDriver({ configured: 'codex', installed: ['claude'] })).toEqual({
+            ready: true,
+            driver: 'claude',
+        });
+    });
+
+    it('prefers claude when nothing is configured', () => {
+        expect(firstAgentDriver({ configured: null, installed: ['aider', 'claude'] })).toEqual({
+            ready: true,
+            driver: 'claude',
+        });
+    });
+
+    it('reports NOT READY when the machine has no driver at all', () => {
+        // The one case that genuinely blocks a first agent — and the reason the toolchain check
+        // survives at all, now where it can be acted on instead of as a gate in front of
+        // everything.
+        expect(firstAgentDriver({ configured: 'claude', installed: [] })).toEqual({ ready: false });
     });
 });

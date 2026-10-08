@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { cssTokenValue, cssZIndexOf } from '../css-rules';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -368,23 +369,26 @@ describe('the modal is on the top layer, not just numbered high', () => {
         // Not a magic number: read the rungs the file itself declares and
         // require the modal to outrank them. If someone raises the picker, this
         // fails rather than letting the sheet silently slip underneath.
-        const rung = (re: RegExp): number => {
-            const m = css.match(re);
-            expect(m, `no rung matched ${re}`).toBeTruthy();
-            return Number(m![1]);
+        // Through `cssZIndexOf`, which follows the `var()` the ladder is expressed in now. These
+        // read raw digits until P7 made every rung a token, and that took them red while the
+        // assertions themselves stayed correct — so the reading moved to one shared helper.
+        const rung = (name: string): number => {
+            const value = cssTokenValue(css, name);
+            expect(value, `no token ${name}`).toBeTypeOf('number');
+            return value!;
         };
-        const fancy = rung(/--z-fancy-overlay:\s*(\d+)/);
-        const picker = rung(/--z-picker:\s*(\d+)/);
-        const whatsNew = rung(/\.whats-new-backdrop\s*\{[^}]*?z-index:\s*(\d+)/s);
+        const fancy = rung('--z-fancy-overlay');
+        const picker = rung('--z-picker');
+        const whatsNew = cssZIndexOf(css, '.whats-new-backdrop');
+        expect(whatsNew, 'no rung for .whats-new-backdrop').toBeTypeOf('number');
 
-        const backdrop = css.slice(css.indexOf('.upgrade-modal-backdrop'), css.indexOf('.upgrade-modal {'));
-        const mine = Number(backdrop.match(/z-index:\s*(\d+)/)?.[1]);
+        const mine = cssZIndexOf(css, '.upgrade-modal-backdrop');
         expect(Number.isFinite(mine)).toBe(true);
 
         for (const [name, below] of [
             ['the Fancy overlay layer', fancy],
             ['the picker layer', picker],
-            ["What's New", whatsNew],
+            ["What's New", whatsNew!],
         ] as const) {
             expect(mine, `the upgrade modal must outrank ${name}`).toBeGreaterThan(below);
         }
@@ -393,11 +397,10 @@ describe('the modal is on the top layer, not just numbered high', () => {
     it('stays below the boot screen', () => {
         // The boot screen covers a window that is not ready to be interacted
         // with at all. A dialog over it would be a dialog nobody can act on.
-        const boot = Number(css.match(/\.boot-screen\s*\{[^}]*?z-index:\s*(\d+)/s)?.[1]);
-        const backdrop = css.slice(css.indexOf('.upgrade-modal-backdrop'), css.indexOf('.upgrade-modal {'));
-        const mine = Number(backdrop.match(/z-index:\s*(\d+)/)?.[1]);
+        const boot = cssZIndexOf(css, '.boot-screen');
+        const mine = cssZIndexOf(css, '.upgrade-modal-backdrop');
         expect(boot).toBeGreaterThan(0);
-        expect(mine).toBeLessThan(boot);
+        expect(mine!).toBeLessThan(boot!);
     });
 });
 

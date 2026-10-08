@@ -143,7 +143,15 @@ function masterRouteGraph(): string[] {
  * contain its literal (so it cannot go stale by pointing somewhere convenient).
  */
 const RENDERED_BY: Record<string, string> = {
-    'Getting the Workstation Ready': 'renderer/components/Master/FirstRunOnboarding.tsx',
+    // `Getting the Workstation Ready` was here, mapped to `FirstRunOnboarding.tsx`. It is gone
+    // because the PHRASE is gone: P7 cut first run to two steps and that modal's header is now
+    // "Meet your first agent". The hook does not wait for it either — genie#356 deleted both
+    // dead waits — so an entry asserting the file still contains it was a false statement about
+    // a wait that no longer exists.
+    //
+    // Nothing is weakened by its absence: "knows what renders every one of them" below fails on
+    // any wait that appears without a mapping, which is the direction that matters. If that
+    // walkthrough is ever mounted again and waited for, the guard demands the entry back.
     'toolchain-wizard': 'renderer/components/Master/ToolchainSetupWizard.tsx',
     'whats-new-backdrop': 'renderer/pages/master.tsx',
     'genie-os-layer': 'renderer/pages/master.tsx',

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { cssZIndexOf } from '../css-rules';
 
 /**
  * THE AGENT MANAGER IS ACTUALLY ON SCREEN WHEN IT OPENS.
@@ -131,7 +132,10 @@ describe('the overlay it opens in is really an overlay', () => {
         // div satisfies neither, which is the whole of this bug: it rendered at
         // the end of the page, under everything, at zero z-index.
         expect(decl(`.${backdrop()}`, 'position')).toBe('fixed');
-        expect(Number(decl(`.${backdrop()}`, 'z-index'))).toBeGreaterThan(0);
+        // Through `cssZIndexOf`, because the ladder is tokens now: these read the raw digits
+        // until P7 named every rung, and `Number('var(--z-prompt-scrim)')` is NaN — which failed
+        // here for the right reason and the wrong cause. The assertion is unchanged.
+        expect(cssZIndexOf(CSS, `.${backdrop()}`)!).toBeGreaterThan(0);
     });
 
     it('CONTROL: the app has a working overlay, and it looks like this', () => {
@@ -139,6 +143,6 @@ describe('the overlay it opens in is really an overlay', () => {
         // stops declaring these, this file is pinning a shape that no longer
         // means anything and should say so here rather than passing quietly.
         expect(decl('.prompt-scrim', 'position')).toBe('fixed');
-        expect(Number(decl('.prompt-scrim', 'z-index'))).toBeGreaterThan(0);
+        expect(cssZIndexOf(CSS, '.prompt-scrim')!).toBeGreaterThan(0);
     });
 });

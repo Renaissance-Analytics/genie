@@ -4548,39 +4548,6 @@ body.gutter-dragging .grid-gutter {
     max-width: 300px;
     line-height: 1.55;
 }
-
-/* ===== Status bar ====================================================== */
-.gstatus {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    height: 30px;
-    padding: 0 14px;
-    flex: 0 0 auto;
-    background: var(--shell);
-    border-top: 1px solid var(--border-1);
-    font-size: 11.5px;
-    color: var(--fg-3);
-}
-.gstatus .si {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-}
-.gstatus .si .sdot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-}
-.gstatus .spacer {
-    flex: 1;
-}
-.gstatus .mono {
-    font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 11px;
-}
-
 /* ===== Docs flyout (in-window, toggled by the ? titlebar button) ======== */
 /* A right-side slide-in panel overlaying TheFloor. Mirrors the chooser
    flyout / .update-popover chrome: dark shell, soft border, xl shadow. The
@@ -7616,33 +7583,34 @@ body.gutter-dragging .grid-gutter {
    that overlay-layers.test.ts requires .genie-overlay-root to mirror in full
    (genie#114). A width no portaled overlay ever reads has no business in that
    contract. */
+
+/* The reserve goes on the CONTENT row, as a MARGIN, and on nothing else.
+
+   Docking must not move the header icons: the panel pins UNDER the header, it does not reformat
+   it. Two earlier shapes both failed, and the E2E geometry assertion measured each:
+
+   1. `padding-right` on `.gwrap` — the whole shell, so the titlebar and the toolbar narrowed
+      with the Floor and every header control slid left. The reported bug.
+   2. `padding-right` on `.gright`, with the header rows pulled back out by a negative margin.
+      The header kept its WIDTH (584px before and after) but the whole column still MOVED:
+      `.gright` is `flex: 1`, and padding grows a flex item's outer size, so the row overflowed
+      and squeezed `.gleft` from 300px to 163px. The rail shrank instead of the Floor.
+
+   A margin on the content row changes neither: `.gright`'s outer size is untouched, so the rail
+   is not squeezed, and the header rows are not in the rule at all, so they cannot move. MARGIN
+   rather than padding because `.gbody` is `position: relative` and hosts absolutely-positioned
+   children, which size to its PADDING box — padding would leave them running on underneath the
+   dock, whereas a margin moves .gbody's border box and everything inside follows.
+
+   It names ONE row now. It used to name two, `.gbody` and `.gstatus`, and deleting the status
+   bar took the whole rule with it — so the Floor silently stopped reserving the gutter and the
+   dock overlapped it. Caught by `lists-dock-layout.test.ts`, which is the guard this rule has
+   had since it was first written in the wrong place. */
+.gwrap.lists-docked .gbody {
+    margin-right: var(--lists-dock-w);
+}
 :root {
     --lists-dock-w: 340px;
-}
-/* The reserve goes on the CONTENT rows, as a MARGIN, and on nothing else.
-
-   Docking must not move the header icons: the panel pins UNDER the header, it
-   does not reformat it. Two earlier shapes both failed, and the E2E geometry
-   assertion measured each:
-
-   1. `padding-right` on `.gwrap` — the whole shell, so the titlebar and the
-      toolbar narrowed with the Floor and every header control slid left. The
-      reported bug.
-   2. `padding-right` on `.gright`, with the header rows pulled back out by a
-      negative margin. The header kept its WIDTH (584px before and after) but
-      the whole column still MOVED: `.gright` is `flex: 1`, and padding grows a
-      flex item's outer size, so the row overflowed and squeezed `.gleft` from
-      300px to 163px. The rail shrank instead of the Floor.
-
-   A margin on the content rows changes neither: `.gright`'s outer size is
-   untouched, so the rail is not squeezed, and the header rows are not in the
-   rule at all, so they cannot move. MARGIN rather than padding because `.gbody`
-   is `position: relative` and hosts absolutely-positioned children, which size
-   to its PADDING box — padding would leave them running on underneath the dock,
-   whereas a margin moves .gbody's border box and everything inside follows. */
-.gwrap.lists-docked .gbody,
-.gwrap.lists-docked .gstatus {
-    margin-right: var(--lists-dock-w);
 }
 .lists-dock {
     position: fixed;
@@ -8108,6 +8076,54 @@ body.gutter-dragging .grid-gutter {
     padding: 12px;
     overflow-y: auto;
     height: 100%;
+}
+
+/* THE WORKSTATION'S SIGNALS, above the bands — what the title-bar icons used to say at a glance
+   (owner: "move the signals to the Deck, then delete the icons").
+
+   Each is a BUTTON because each is still a door: the icons were a signal and a way in, and a badge
+   you cannot act on is worse than an icon you can. Rendered only when something is true, so this
+   strip is usually absent — which is what keeps it worth reading. */
+.deck-signals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.deck-signal {
+    appearance: none;
+    border: 1px solid var(--border-1, #26262e);
+    border-radius: 999px;
+    background: none;
+    color: var(--fg-3);
+    font: inherit;
+    font-size: 11.5px;
+    padding: 3px 10px;
+    cursor: pointer;
+}
+
+.deck-signal:hover {
+    border-color: var(--border-2, #33333d);
+}
+
+/* ATTENTION is the only tone that colours the border as well as the text: something is blocked and
+   the strip should catch an eye that was not looking for it. */
+.deck-signal[data-tone='attention'] {
+    color: var(--amber-400, #fbbf24);
+    border-color: rgba(251, 191, 36, 0.45);
+}
+
+/* BUSY is information, not a request — it reads as the agent colour, the same one the roster uses
+   for work in progress. */
+.deck-signal[data-tone='busy'] {
+    color: var(--agent, #7c9cff);
+}
+
+/* UNKNOWN stays quiet. A question is not a fault, and colouring it like one is the confident-zero
+   mistake this codebase keeps paying for. */
+.deck-signal[data-tone='unknown'] {
+    color: var(--fg-3);
+    border-style: dashed;
 }
 
 /* ONE BAND of the Deck — "Needs you", "Agents", "What changed". The surface itself is a Fancy

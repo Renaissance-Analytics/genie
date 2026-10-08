@@ -43,8 +43,7 @@ const BROKEN = `
 
 const FIXED = `
 /* A comment naming .gwrap.lists-docked, which must not be mistaken for a rule. */
-.gwrap.lists-docked .gbody,
-.gwrap.lists-docked .gstatus {
+.gwrap.lists-docked .gbody {
     margin-right: var(--lists-dock-w);
 }
 `;
@@ -60,9 +59,7 @@ describe('the guard can actually tell the two apart', () => {
 
     it('does not find it there in the FIXED css, and is not fooled by the comment', () => {
         expect(declarationsFor(FIXED, '.gwrap.lists-docked')).toBeNull();
-        expect(
-            declarationsFor(FIXED, '.gwrap.lists-docked .gbody, .gwrap.lists-docked .gstatus'),
-        ).toContain('margin-right');
+        expect(declarationsFor(FIXED, '.gwrap.lists-docked .gbody')).toContain('margin-right');
     });
 
     it('strips a multi-line comment whole, not line by line', () => {
@@ -77,10 +74,14 @@ describe('docking reserves the gutter without touching the header', () => {
         expect(declarationsFor(css, '.gwrap.lists-docked')).toBeNull();
     });
 
-    it('reserves the gutter on the CONTENT rows instead', () => {
-        expect(
-            declarationsFor(css, '.gwrap.lists-docked .gbody, .gwrap.lists-docked .gstatus'),
-        ).toContain('margin-right: var(--lists-dock-w)');
+    it('reserves the gutter on the CONTENT row instead', () => {
+        // ONE row now. It was `.gbody` and `.gstatus` until P7 deleted the status bar — and
+        // deleting it took the whole rule with it, so the Floor stopped reserving the gutter
+        // entirely. This case is why that lasted minutes rather than until someone pinned the
+        // panel and saw the dock sitting on top of the grid.
+        expect(declarationsFor(css, '.gwrap.lists-docked .gbody')).toContain(
+            'margin-right: var(--lists-dock-w)',
+        );
     });
 
     it('does not put the reserve on .gright either — padding grows a flex item', () => {

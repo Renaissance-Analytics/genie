@@ -52,24 +52,60 @@ test('a single-part question offers its REAL options, and answering reports the 
     await expect.poll(clicks).toContain('answer:q-single:Migrate now');
 });
 
-test('a MULTI-PART question offers Open, and never the first part options', async () => {
-    // The assertion this spec exists for. `yes` and `no` belong to sub-questions; showing
-    // either means the surface can submit a partial answer.
+test('a MULTI-PART question offers ANSWER, and never the first part options', async () => {
+    // The assertion this spec exists for. `yes` and `no` belong to sub-questions; showing either
+    // up front means the surface can submit a partial answer.
     await expect(page.getByRole('button', { name: 'yes', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'no', exact: true })).toHaveCount(0);
 
-    const open = page.getByRole('button', { name: 'Open', exact: true });
-    await expect(open).toBeVisible();
-
-    await open.click();
-    await expect.poll(clicks).toContain('open:q-multi');
+    // It used to offer "Open", which sent the person to another surface to do the same job. The
+    // form is on the row now, which is what let P7 delete `QuestionInboxFlyout` without
+    // stranding multi-part, multi-select and free-text answers.
+    const answer = page.getByRole('button', { name: 'Answer', exact: true });
+    await expect(answer).toBeVisible();
 });
 
-test('Open is a DIFFERENT affordance, not a disabled one', async () => {
-    // "A disabled control is an accusation; a different shape is a fact." A greyed-out
-    // Answer would tell the user they had done something wrong.
+test('Answer is a DIFFERENT affordance, not a disabled one', async () => {
+    // "A disabled control is an accusation; a different shape is a fact." A greyed-out button
+    // would tell the user they had done something wrong.
+    await expect(page.getByRole('button', { name: 'Answer', exact: true })).toBeEnabled();
+});
+
+test('the form opens on the row, carries EVERY part, and sends only when complete', async () => {
+    await page.getByRole('button', { name: 'Answer', exact: true }).click();
+
+    const form = page.getByTestId('needs-answer-form');
+    await expect(form).toBeVisible();
+    // BOTH parts, which is the whole point: a form showing one of two is the partial answer
+    // this row refused to offer in the first place.
+    await expect(form.getByText('first?')).toBeVisible();
+    await expect(form.getByText('second?')).toBeVisible();
+
+    const send = page.getByRole('button', { name: 'Send', exact: true });
+    // Disabled until every part is answered — the defect the inline path avoided by refusing
+    // multi-part outright: the agent carries on with three quarters of a decision.
+    await expect(send).toBeDisabled();
+
+    await form.getByRole('button', { name: 'yes', exact: true }).click();
+    await expect(send, 'one of two parts is still a partial answer').toBeDisabled();
+
+    await form.getByRole('button', { name: 'no', exact: true }).click();
+    await expect(send).toBeEnabled();
+
+    await send.click();
+    // The ANSWER, part by part — not merely that Send was pressed.
+    await expect.poll(clicks).toContain('submit:q-multi:yes|no');
+    // And the form closes, so the queue is readable again.
+    await expect(form).toHaveCount(0);
+});
+
+test('a FORWARDED question still offers Open, because it is answered on its own host', async () => {
+    // Resolving the local copy would mark it done here while the real one waits forever on the
+    // machine that asked. The ONE case that keeps the old affordance.
     const open = page.getByRole('button', { name: 'Open', exact: true });
-    await expect(open).toBeEnabled();
+    await expect(open).toBeVisible();
+    await open.click();
+    await expect.poll(clicks).toContain('open:q-forwarded');
 });
 
 test('a list item offers all three outcomes, and names the agent it throws back to', async () => {

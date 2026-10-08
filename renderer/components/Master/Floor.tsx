@@ -62,7 +62,19 @@ export interface FloorState {
     addDisabled?: boolean;
     addDisabledReason?: string;
     onReorder?: (orderedIds: string[]) => void;
-    /** Status bar: how many projects have a live panel, and how many are running. */
+    /**
+     * How many projects have a live panel, and how many agents are running.
+     *
+     * These used to paint a status bar at the bottom of the Floor (`.gstatus`), deleted in P7:
+     * the Deck is the default surface now and reports "N live · N waiting on you" from the same
+     * facts, so the bar was grid-era chrome repeating what the landing view already says.
+     *
+     * The NUMBERS are kept and published as data attributes on `.gbody`, because
+     * `e2e/screenshots.spec.ts` uses them as deliberate corroboration — *"from the app rather
+     * than from the DOM… if these two ever disagree, that gap IS the bug"*. Dropping them would
+     * have removed a real signal along with the chrome, which is the cheapest kind of mistake to
+     * make while deleting things.
+     */
     projectCount: number;
     activeCount: number;
     /** Set when the ACTIVE workspace is hibernating (genie#672). Its panels are
@@ -89,7 +101,14 @@ export default function Floor(state: FloorState) {
                 remounted → PTY reset". Opening the Deck is the same hazard in a new
                 hat, so it conceals rather than replaces. `renderer/lib/floor-surface.ts`
                 carries a source guard that fails if this ever becomes conditional. */}
-            <div className="gbody" style={hideGrid ? { display: 'none' } : undefined}>
+            <div
+                className="gbody"
+                style={hideGrid ? { display: 'none' } : undefined}
+                // The floor's own account of itself — see the note on `projectCount`.
+                data-panel-count={state.specs.length}
+                data-project-count={projectCount}
+                data-live-count={activeCount}
+            >
                 <TerminalGrid
                     {...grid}
                     // In place of the empty workspace's Add tiles, so the OTHER
@@ -105,40 +124,6 @@ export default function Floor(state: FloorState) {
                     }
                 />
             </div>
-            <StatusBar
-                panelCount={state.specs.length}
-                projectCount={projectCount}
-                activeCount={activeCount}
-            />
         </>
-    );
-}
-
-interface StatusBarProps {
-    panelCount: number;
-    projectCount: number;
-    activeCount: number;
-}
-
-function StatusBar({ panelCount, projectCount, activeCount }: StatusBarProps) {
-    return (
-        <div className="gstatus">
-            <span className="si">
-                <IconLayoutGrid size={13} /> {panelCount} panel
-                {panelCount === 1 ? '' : 's'}
-            </span>
-            <span className="si">
-                <IconBox size={13} />
-                {projectCount === 0
-                    ? 'No project'
-                    : projectCount === 1
-                      ? '1 project'
-                      : `${projectCount} projects`}
-            </span>
-            <span className="si">
-                <span className="sdot" style={{ background: '#10b981' }} />
-                {activeCount} live
-            </span>
-        </div>
     );
 }

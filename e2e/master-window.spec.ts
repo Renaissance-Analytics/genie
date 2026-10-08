@@ -212,11 +212,11 @@ test('the window comes up signed in, on the real two-column frame', async () => 
     await expect(page.getByText('Connect Genie')).toHaveCount(0);
     await expect(page.locator('.winframe.stacked')).toHaveCount(0);
 
-    // The three parts of the frame: the full-height chooser column, the floor's
-    // grid, and the floor's status bar.
+    // The two parts of the frame: the full-height chooser column and the floor's grid.
+    // The status bar was the third until P7 deleted it — the Deck is the default surface and
+    // reports the same "N live" from the same facts, so the bar repeated the landing view.
     await expect(page.locator('.gleft')).toBeVisible();
     await expect(page.locator('.gbody')).toBeVisible();
-    await expect(page.locator('.gstatus')).toBeVisible();
 });
 
 test('the rail lists the seeded workspaces, with the launch target active', async () => {
@@ -307,13 +307,17 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // shell, so the assertion goes as far as the xterm the panel mounts.
     await expect(panel(seed.terminalLabel).locator('.xterm')).toBeVisible();
 
-    const status = page.locator('.gstatus');
-    await expect(status).toContainText('1 panel');
-    await expect(status).toContainText('1 project');
-    // `live` is workstation-wide, unlike the Floor's panel/project counts. The
-    // seeded shell and the always-running Genie OS agent are both live, while
-    // only the seeded workspace terminal is laid out above.
-    await expect(status).toContainText('2 live');
+    // THE FLOOR'S OWN ACCOUNT, still a second source after the status bar was deleted: these
+    // are the counts the bar rendered, published on `.gbody` as data. The assertion is the same
+    // one — the app's numbers, not the DOM's — because a visible panel with a zero count (or the
+    // reverse) is exactly the disagreement worth catching.
+    const floor = page.locator('.gbody');
+    await expect(floor).toHaveAttribute('data-panel-count', '1');
+    await expect(floor).toHaveAttribute('data-project-count', '1');
+    // `live` is workstation-wide, unlike the Floor's panel/project counts. The seeded shell and
+    // the always-running Genie OS agent are both live, while only the seeded workspace terminal
+    // is laid out above.
+    await expect(floor).toHaveAttribute('data-live-count', '2');
 });
 
 test('an agent panel flips to its sidecar screen and back without adding a panel (genie#707)', async () => {

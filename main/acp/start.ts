@@ -200,11 +200,22 @@ export function startAcpForSpec(input: {
         : driver.start({ cwd: input.cwd, instructions: opening });
 
     void begin.catch((err) => {
-        // A REFUSED RESUME IS NOT A DEAD AGENT. prism-acp refuses a load for a session that
-        // is still running, and refuses an ACP id with a message naming the right key —
-        // neither is a reason to leave the agent with no session at all. Falling back to a
-        // fresh start keeps it usable and says so, rather than leaving a window that accepts
-        // prompts into nothing.
+        /**
+         * A REFUSED RESUME IS NOT A DEAD AGENT. prism-acp refuses a load for a session that is
+         * still running, and refuses an ACP id with a message naming the right key — neither is a
+         * reason to leave the agent with no session at all. Falling back to a fresh start keeps it
+         * usable and says so, rather than leaving a window that accepts prompts into nothing.
+         *
+         * WHAT THIS CANNOT CATCH, corrected by prism 2026-10-08. An id that names no conversation
+         * at all used to be accepted by `session/load`, which RETURNED SUCCESS; the CLI's refusal
+         * (`No conversation found with session ID`) arrived on the first prompt, a turn later,
+         * where this handler never runs. So the fallback was never the safety net it reads as.
+         *
+         * Two things close most of that window and neither is this `catch`: the provenance fix
+         * (`acpResumeSessionId` refuses an id Genie merely MINTED, which was the common case), and
+         * prism-acp 0.4.0's `probeSession`, wired in `./prism-host.mjs` where it can be trusted,
+         * which moves the refusal to the load — i.e. to here.
+         */
         if (resumeId) {
             console.warn(
                 `[acp] could not resume ${input.specId} (${String(err)}) — starting a fresh ` +

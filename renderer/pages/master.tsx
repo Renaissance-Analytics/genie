@@ -2562,6 +2562,85 @@ function MasterInner() {
         })(),
     };
 
+    /**
+     * OPEN A FEATURE BY ID — one route, two callers.
+     *
+     * It was inline on the palette's `onActivateFeature`, which was fine while the palette was
+     * the only way in. The Deck's signal strip is the second (owner: *"move the signals to the
+     * Deck, then delete the icons"*), and the signals are ABOUT features — a running Flow opens
+     * Flows, unread agent mail opens AgentInbox. Two copies of this switch would be two answers
+     * to "where does this feature live", and the one nobody updated would be the one a badge
+     * used.
+     *
+     * Ids come from `FEATURE_SURFACES` in `lib/feature-reachability`, which the reachability
+     * guard also reads — so a feature cannot be contracted there and silently unreachable here.
+     */
+    const activateFeature = (featureId: string): void => {
+                // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
+                // reachability guard also reads -- so a feature cannot be contracted
+                // there and silently unreachable here.
+                const ws = activeWorkspaceId;
+                switch (featureId) {
+                    case 'remote-host':
+                    case 'sharing':
+                        setSharingOpen(true);
+                        break;
+                    case 'plugins-appstore':
+                        setAppStoreOpen(true);
+                        break;
+                    case 'knowledge-graph':
+                        // A main-owned window, not a flyout. Guarded so it no-ops if
+                        // the preload bridge is not wired yet.
+                        if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
+                        break;
+                    case 'agent-inbox':
+                        setAgentInboxOpen(true);
+                        break;
+                    case 'issuewatch':
+                        setIssueWatchOpen(true);
+                        break;
+                    case 'flows':
+                        setFlowsOpen(true);
+                        break;
+                    case 'lists':
+                        setListsOpen(true);
+                        break;
+                    case 'questions':
+                        setQuestionsOpen(true);
+                        break;
+                    case 'docs':
+                        setDocsOpen(true);
+                        break;
+                    case 'tasks':
+                        setTaskManagerOpen(true);
+                        break;
+                    case 'github-caps':
+                        setGithubCapsOpen(true);
+                        break;
+                    case 'genie-os':
+                        setGenieOsOpen(true);
+                        break;
+                    // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
+                    // that the Deck is the default. `mergeViewRoute` rather than
+                    // replacing the query, for the same reason as every other
+                    // navigation here -- `host` and `stage` decide whether this window
+                    // points at a remote machine, and dropping them would silently make
+                    // a remote window local.
+                    case 'grid':
+                        replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
+                        break;
+                    // Workspace-SCOPED: these take a workspace, not a toggle. With no
+                    // active workspace there is nothing to open them against, so they
+                    // no-op rather than opening against a guess.
+                    case 'sites':
+                        if (ws) setSiteManagerWsId(ws);
+                        break;
+                    case 'processes':
+                        if (ws) setProcessManagerWsId(ws);
+                        break;
+                }
+    };
+
     // Guard against stealing the keystroke while the user is typing in a real text
     // input — the in-app prompt modal, the editor's fields, any <input>/<textarea>/
     // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
@@ -2910,7 +2989,16 @@ function MasterInner() {
                         setupIncomplete={onboardingOpen}
                     />
                     <UpgradeModal />
-                    <Toolbar
+                    {/* THE GRID'S OWN CHROME, with the grid.
+                        It rendered unconditionally, so the Deck — the default surface — carried a
+                        layout picker for a grid that was not on screen, beside Add buttons that
+                        act on `activeWorkspaceId` while the Deck is cross-workspace by
+                        definition. `showGridChrome` is the rule and it is tested; this is the one
+                        place it is read.
+                        A conditional RENDER, not a hidden one: nothing here owns a pty. That is
+                        the whole reason `hideGrid` exists for the grid itself and does not apply
+                        to its toolbar. */}
+                    {surface.showGridChrome && <Toolbar
                         activeWorkspace={
                             activeWorkspaceId
                                 ? workspacesById.get(activeWorkspaceId)
@@ -2933,8 +3021,8 @@ function MasterInner() {
                         onLastTerminalType={setLastTerminalType}
                         onAgentCreated={selectAgentSpec}
                         agentCustomCommand={agentCustomCommand}
-                    />
-                    {/* The Floor — the grid plus its status bar, now ONE component
+                    />}
+                    {/* The Floor — the grid, now ONE component
                         the GApp window's Agent tab mounts too. The state stays
                         here because this window derives it across every workspace
                         (background specs keep off-workspace ptys alive); a GApp
@@ -3079,6 +3167,32 @@ function MasterInner() {
                                      * multi-select or free-text question.
                                      */
                                     onOpenQuestion={() => setQuestionsOpen(true)}
+                                    /**
+                                     * THE SIGNALS THE ICONS CARRIED.
+                                     *
+                                     * Owner decision: *"move the signals to the Deck, then delete
+                                     * the icons."* The same facts the title bar read — a running
+                                     * Flow, agent mail nobody has collected, GitHub permissions
+                                     * blocking features, the OS agent working, IssueWatch unable
+                                     * to tell. `stationSignals` decides which are worth saying
+                                     * and keeps quiet otherwise.
+                                     */
+                                    signals={{
+                                        flowsRunning: flowsBusy,
+                                        mailBehind: agentInboxLag,
+                                        githubBlocked: githubNeedsResolve,
+                                        osWorking:
+                                            !!genieOsSpec && streamingTerms.has(genieOsSpec.id),
+                                        issueWatchUnknown: issueWatchBadge(
+                                            activeWorkspaceId
+                                                ? issueWatchCounts[activeWorkspaceId]
+                                                : undefined,
+                                        ).unknown,
+                                    }}
+                                    // A signal is still a DOOR: it opens what the icon opened, by
+                                    // the same `featureId` the palette dispatches on, so there is
+                                    // one route to each feature rather than two that can drift.
+                                    onSignal={(featureId) => activateFeature(featureId)}
                                     focusedKey={focusedQueueKey}
                                     expandedQuestionId={expandedQuestionId}
                                     onExpandQuestion={setExpandedQuestionId}
@@ -3387,71 +3501,7 @@ function MasterInner() {
                     setCommandWindowFor(null);
                 }}
                 terminalId={commandWindowFor}
-                onActivateFeature={(featureId) => {
-                    // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
-                    // reachability guard also reads -- so a feature cannot be contracted
-                    // there and silently unreachable here.
-                    const ws = activeWorkspaceId;
-                    switch (featureId) {
-                        case 'remote-host':
-                        case 'sharing':
-                            setSharingOpen(true);
-                            break;
-                        case 'plugins-appstore':
-                            setAppStoreOpen(true);
-                            break;
-                        case 'knowledge-graph':
-                            // A main-owned window, not a flyout. Guarded so it no-ops if
-                            // the preload bridge is not wired yet.
-                            if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
-                            break;
-                        case 'agent-inbox':
-                            setAgentInboxOpen(true);
-                            break;
-                        case 'issuewatch':
-                            setIssueWatchOpen(true);
-                            break;
-                        case 'flows':
-                            setFlowsOpen(true);
-                            break;
-                        case 'lists':
-                            setListsOpen(true);
-                            break;
-                        case 'questions':
-                            setQuestionsOpen(true);
-                            break;
-                        case 'docs':
-                            setDocsOpen(true);
-                            break;
-                        case 'tasks':
-                            setTaskManagerOpen(true);
-                            break;
-                        case 'github-caps':
-                            setGithubCapsOpen(true);
-                            break;
-                        case 'genie-os':
-                            setGenieOsOpen(true);
-                            break;
-                        // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
-                        // that the Deck is the default. `mergeViewRoute` rather than
-                        // replacing the query, for the same reason as every other
-                        // navigation here -- `host` and `stage` decide whether this window
-                        // points at a remote machine, and dropping them would silently make
-                        // a remote window local.
-                        case 'grid':
-                            replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
-                            break;
-                        // Workspace-SCOPED: these take a workspace, not a toggle. With no
-                        // active workspace there is nothing to open them against, so they
-                        // no-op rather than opening against a guess.
-                        case 'sites':
-                            if (ws) setSiteManagerWsId(ws);
-                            break;
-                        case 'processes':
-                            if (ws) setProcessManagerWsId(ws);
-                            break;
-                    }
-                }}
+                onActivateFeature={activateFeature}
                 workspaces={workspaces.map((w) => ({ id: w.id, name: w.project_name }))}
                 terminals={specs.map((sp) => ({
                     id: sp.id,

@@ -19,12 +19,32 @@
  * stripped). This file only joins the library to the pipes.
  */
 
-import { ClaudeDriver, serve } from '@particle-academy/prism-acp';
+import { ClaudeDriver, probeSessionStore, serve } from '@particle-academy/prism-acp';
+import { probeIsTrustworthy } from './probe-trust.mjs';
+
+/**
+ * REFUSE A RESUME AT LOAD, when the probe can be trusted here.
+ *
+ * prism-acp 0.4.0's `probeSession` turns a `session/load` for a conversation that does not exist
+ * into a named `invalid_params` refusal, instead of an agent that comes up "resumed" and then
+ * dies on its FIRST PROMPT — a failure Genie asked for because the late form is indistinguishable
+ * from any other and quietly loses a conversation.
+ *
+ * Gated, because `probeSessionStore` reads `~/.claude/projects` and does not look at
+ * `CLAUDE_CONFIG_DIR`, which Genie forwards deliberately and the CLI honours. See
+ * `./probe-trust.mjs` — on an installation where those disagree the probe would call a live
+ * conversation absent and refuse a resume that would have worked, which is the worse of the two
+ * failures. Omitting it is exactly 0.3.0's behaviour.
+ */
+const probeSession = probeIsTrustworthy(process.env) ? (id) => probeSessionStore(id) : undefined;
 
 const served = serve({
     input: process.stdin,
     output: process.stdout,
     driverFactory: (opts, events) => new ClaudeDriver({ ...opts, cwd: opts.cwd }, events),
+    // Spread rather than `probeSession,`: the option is OPTIONAL and passing `undefined`
+    // explicitly is the same as passing it, but reads as though a probe was intended.
+    ...(probeSession ? { probeSession } : {}),
     /**
      * A frame that arrived and could not be used.
      *

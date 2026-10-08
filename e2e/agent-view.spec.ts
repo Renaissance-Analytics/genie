@@ -84,6 +84,67 @@ test('Take over is offered as a VERB, distinct from the Terminal tab', async () 
     await expect.poll(clicks).toContain('takeover');
 });
 
+test('the Conversation can be TALKED TO — the composer sends what was typed', async () => {
+    // The gap this closes: `agentSession` over IPC was `list()` and nothing else, and the
+    // Conversation tab had no input at all. A surface that shows an agent and cannot speak to it
+    // is not a default surface.
+    const composer = page.getByTestId('agent-composer');
+    await expect(composer).toBeVisible();
+
+    const box = composer.locator('textarea');
+    const send = page.getByRole('button', { name: 'Send', exact: true });
+    // Nothing to send yet, and the control says so rather than starting a turn with no
+    // instruction — which costs tokens and produces a shrug.
+    await expect(send).toBeDisabled();
+
+    await box.fill('read main/terminal/ipc.ts and tell me why the pty host dies');
+    await expect(send).toBeEnabled();
+    await send.click();
+
+    // The TEXT, not merely that Send was pressed: a composer that sent an empty string, or the
+    // placeholder, would pass an assertion about the click alone.
+    await expect
+        .poll(clicks)
+        .toContain('send:read main/terminal/ipc.ts and tell me why the pty host dies');
+    // The box clears on a send that was accepted, so the next prompt starts empty.
+    await expect(box).toHaveValue('');
+});
+
+test('CMD-ENTER sends, and a bare Enter does not', async () => {
+    // The plan's keyboard model (`⌘↵ send`), and the right way round for a box people paste
+    // multi-line instructions into.
+    const box = page.getByTestId('agent-composer').locator('textarea');
+    await box.fill('first line');
+    await box.press('Enter');
+    await expect(box, 'Enter must insert a newline, not submit').not.toHaveValue('');
+
+    await box.fill('send me with the chord');
+    await box.press('ControlOrMeta+Enter');
+    await expect.poll(clicks).toContain('send:send me with the chord');
+});
+
+test('STOP appears only while a turn is running, and asks rather than kills', async () => {
+    // `session/cancel` only ASKS — the protocol says so — and the word is chosen so nobody reads
+    // it as a kill. The fixture's turn is parked on an approval, which is a running turn.
+    const stop = page.getByTestId('agent-stop');
+    await expect(stop).toBeVisible();
+    await stop.click();
+    await expect.poll(clicks).toContain('cancel');
+});
+
+test('the SUBSCRIPTION HEADROOM gauge is on screen, with what is LEFT', async () => {
+    // "I do need to see what is remaining on rate limits at least." The computation was built and
+    // tested and NOTHING rendered it: `rateLimit` reached the session model, the renderer's types
+    // and an e2e fixture's `null`, and no surface read it.
+    const rail = page.getByTestId('rail-ratelimit');
+    await expect(rail).toBeVisible();
+    await expect(rail).toContainText('87% left');
+    await expect(rail).toContainText('5h');
+    await expect(rail).toContainText('resets in 1h');
+    // The TONE drives the colour, and 87% left is not a warning.
+    await expect(rail).toHaveAttribute('data-tone', 'ok');
+});
+
 test('an OBSERVED agent has a DIFFERENT SHAPE — no Conversation at all, nothing disabled', async () => {
     const observed = await app.evaluate(async ({ BrowserWindow }) => {
         const win = BrowserWindow.getAllWindows()[0]!;
@@ -102,4 +163,9 @@ test('an OBSERVED agent has a DIFFERENT SHAPE — no Conversation at all, nothin
     // cell reads as zero.
     await expect(page.getByTestId('rail-plan')).toHaveCount(0);
     await expect(page.getByTestId('rail-usage')).toHaveCount(0);
+
+    // AND NO COMPOSER. A pty agent is driven by typing into its TUI on the Terminal tab; a
+    // second input that cannot reach it would be two ways to do one thing, one of which fails in
+    // silence. A box that cannot send is worse than no box — it invites typing and swallows it.
+    await expect(page.getByTestId('agent-composer')).toHaveCount(0);
 });

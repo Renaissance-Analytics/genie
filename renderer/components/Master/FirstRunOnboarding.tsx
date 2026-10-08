@@ -1,26 +1,46 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Button, Card, Heading, Icon, Modal, Text } from '@particle-academy/react-fancy';
-import { agentTuis, providerDef, type AgentTuiId } from '../../../main/agents/registry';
+import { Button, Card, Heading, Icon, Modal, Text, Textarea } from '@particle-academy/react-fancy';
 import { agentCliToolByProvider } from '../../../main/agents/agent-cli-catalog';
-import { api, type BackendUser, type HostToolName, type WorkspaceRow } from '../../lib/genie';
-import { GitHubConnect, OwnerSelect, useGitHubAccount } from '../GitHubConnect';
+import { providerDef, type AgentTuiId } from '../../../main/agents/registry';
+import { api, type HostToolName, type WorkspaceRow } from '../../lib/genie';
 import AddWorkspaceModal from '../AddWorkspaceModal';
-import { ToolchainSetupWizard } from './ToolchainSetupWizard';
-import { canFinishFirstRun } from '../../lib/workspace-onboarding';
-
-type Step = 'welcome' | 'drivers' | 'toolchain' | 'tynn' | 'github' | 'os' | 'workspace';
+import {
+    FIRST_AGENT_PRESETS,
+    canFinishFirstRun,
+    firstAgentDriver,
+    type FirstAgentPreset,
+} from '../../lib/workspace-onboarding';
 
 /**
- * Which host tool each provider's driver IS, so the wizard can tick one that is
- * already on the machine.
+ * FIRST RUN, IN TWO STEPS: pick a folder, then meet an agent.
  *
- * DERIVED from the agent-CLI catalog. Written out, this was a third copy of the
- * provider→tool fact (the registry, the renderer's `AGENT_CLI_TOOLS`, and here),
- * and the one with the quietest failure: a provider missing from it has no tool,
- * so the wizard cannot tell whether its CLI is installed and offers to install a
- * driver that is already there.
+ * It was seven gates — welcome, drivers, toolchain, Tynn, GitHub, Genie OS, workspace — with
+ * sign-in and GitHub in front of ever seeing an agent do anything. The plan's target is *"first
+ * agent reply in under 2 minutes, 2 decisions"*, and the honest version of that is not a shorter
+ * wizard: it is asking only what Genie cannot work out for itself.
+ *
+ *  - **The folder** is the one thing Genie cannot guess, so it is step one, unchanged
+ *    (`AddWorkspaceModal` already does this well).
+ *  - **The driver** is checked, not chosen. `firstAgentDriver` picks the configured default if it
+ *    is installed, falls back to anything that is, and reports NOT READY only when the machine
+ *    has nothing — which is the one case that genuinely blocks a first agent, and now surfaces
+ *    where it can be acted on instead of as a gate in front of everything.
+ *  - **Everything else is deferred to where it already lives.** Each was located in source before
+ *    its step was deleted: Tynn is enforced by `master.tsx` refusing to render signed out, GitHub
+ *    and the toolchain wizard are in Settings, and the Genie OS backup is `syncGenieOs`, which
+ *    Settings already calls. A deferred prompt that does not exist is not deferred, it is
+ *    deleted.
+ *
+ * The three presets come from the plan and each ends by calling `imDone` with a handoff, so the
+ * first run teaches the loop the product is built on rather than teaching that Genie is a chat
+ * window. The prompt is EDITABLE before it is sent — a pre-filled prompt nobody can change is a
+ * demo, not a start.
  */
+
+/** Which host tool each provider's driver IS, so a probe can say whether it is installed. */
 const DRIVER_TOOL: Partial<Record<AgentTuiId, HostToolName>> = agentCliToolByProvider();
+
+type Step = 'workspace' | 'agent';
 
 export function FirstRunOnboarding({
     open,
@@ -33,227 +53,205 @@ export function FirstRunOnboarding({
     onWorkspaceAdded: (workspace: WorkspaceRow) => void;
     existingWorkspaceCount: number;
 }) {
-    const [step, setStep] = useState<Step>('welcome');
-    const [drivers, setDrivers] = useState<AgentTuiId[]>(['claude']);
-    const [primary, setPrimary] = useState<AgentTuiId>('claude');
-    const [tynnUser, setTynnUser] = useState<BackendUser | null>(null);
-    const [signingIn, setSigningIn] = useState(false);
+    /**
+     * A workstation that already has a workspace starts at the agent step.
+     *
+     * The folder question is the only reason step one exists, and asking it again of someone who
+     * has already answered it is how a two-step flow becomes a three-step one.
+     */
+    const [step, setStep] = useState<Step>(existingWorkspaceCount > 0 ? 'agent' : 'workspace');
+    const [workspace, setWorkspace] = useState<WorkspaceRow | null>(null);
+    const [installed, setInstalled] = useState<readonly string[] | null>(null);
+    const [configured, setConfigured] = useState<string | null>(null);
+    const [preset, setPreset] = useState<FirstAgentPreset>(FIRST_AGENT_PRESETS[0]!);
+    const [prompt, setPrompt] = useState(FIRST_AGENT_PRESETS[0]!.prompt);
+    const [starting, setStarting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [osPath, setOsPath] = useState('');
-    const [osOwner, setOsOwner] = useState('');
-    const [osSyncing, setOsSyncing] = useState(false);
-    const [osSynced, setOsSynced] = useState(false);
-    const github = useGitHubAccount();
+
     const finish = () => {
         localStorage.setItem('genie-onboarding-complete', '1');
         onComplete();
     };
 
-    const wanted = useMemo<HostToolName[]>(() => {
-        const tools: HostToolName[] = ['git', 'node', 'npm'];
-        for (const driver of drivers) {
-            const tool = DRIVER_TOOL[driver];
-            if (tool && !tools.includes(tool)) tools.push(tool);
-        }
-        return tools;
-    }, [drivers]);
-
+    /**
+     * WHICH DRIVERS ARE ACTUALLY ON THE MACHINE.
+     *
+     * `toolchainInspect` reports `present` / `missing` per host tool, so the question "can an
+     * agent run here" is answered by a probe rather than by asking the user to tick boxes about
+     * software they may not have. `null` while it is in flight means "not known yet", and the
+     * step says so instead of claiming either answer.
+     */
     useEffect(() => {
         if (!open) return;
-        const refresh = () => void api().auth.whoami('tynn').then((user) => {
-            setTynnUser(user as BackendUser | null);
-            if (user) setSigningIn(false);
-        });
-        refresh();
-        return api().on.authChanged(refresh);
+        let live = true;
+        void api()
+            .settings.get()
+            .then((settings) => {
+                if (live) setConfigured(settings.agent_default ?? null);
+            })
+            .catch(() => {});
+        const driverTools = Object.values(DRIVER_TOOL).filter(Boolean) as HostToolName[];
+        void api()
+            .devServer.toolchainInspect(undefined, driverTools)
+            .then((inspection) => {
+                if (!live) return;
+                const present = new Set<string>(inspection.report.present);
+                setInstalled(
+                    Object.entries(DRIVER_TOOL)
+                        .filter(([, tool]) => tool && present.has(tool))
+                        .map(([providerId]) => providerId),
+                );
+            })
+            // A failed probe must not block the step: it reports "cannot tell" and still offers
+            // to start, because the start itself will say what went wrong far better than a
+            // guess here would.
+            .catch(() => live && setInstalled([]));
+        return () => {
+            live = false;
+        };
     }, [open]);
 
-    useEffect(() => {
-        if (open) void api().app.genieOsWorkspace().then((result) => setOsPath(result.path));
-    }, [open]);
+    const driver = useMemo(
+        () => (installed === null ? null : firstAgentDriver({ configured, installed })),
+        [installed, configured],
+    );
 
     if (!open) return null;
-    if (step === 'toolchain') {
-        return (
-            <ToolchainSetupWizard
-                open
-                wanted={wanted}
-                onClose={() => setStep('tynn')}
-            />
-        );
-    }
+
     if (step === 'workspace') {
         return (
             <AddWorkspaceModal
                 onClose={() => {
-                    if (existingWorkspaceCount > 0) finish();
+                    // Closing without adding is allowed once there IS one — otherwise this is the
+                    // only thing standing between the user and an empty Deck.
+                    if (canFinishFirstRun({ existingWorkspaceCount, setupComplete: true })) finish();
                 }}
-                onAdded={(workspace) => {
-                    onWorkspaceAdded(workspace);
-                    finish();
+                onAdded={(added) => {
+                    onWorkspaceAdded(added);
+                    setWorkspace(added);
+                    setStep('agent');
                 }}
             />
         );
     }
 
-    const continueFromDrivers = async () => {
-        if (!drivers.length) return;
-        await api().settings.set({ agent_default: primary });
-        setStep('toolchain');
-    };
-
-    const startTynn = async () => {
+    const startFirstAgent = async () => {
+        if (!driver?.ready) return;
+        const wsId = workspace?.id;
+        if (!wsId) {
+            // Nothing to start in. Reached only when an existing workspace was never handed to
+            // this component — say so rather than appearing to do nothing.
+            setError('Pick a workspace first.');
+            return;
+        }
+        setStarting(true);
         setError(null);
-        setSigningIn(true);
         try {
-            await api().auth.startSignIn('tynn');
+            const name = 'Scout';
+            const created = await api().agents.create({
+                workspaceId: wsId,
+                name,
+                purpose: 'Your first agent',
+                agent: driver.driver,
+            });
+            if (!created.ok) throw new Error(created.error ?? 'Genie could not create the agent.');
+            const started = await api().agents.start(wsId, name);
+            if (!started.ok) throw new Error(started.error ?? 'Genie could not start the agent.');
+            // THE PROMPT, delivered through the session write path — `agentSession.prompt` reaches
+            // an ACP session, which is what a claude agent is now. A pty agent gets it typed in by
+            // the same host routine that types its launch line.
+            if (started.id) {
+                await api().agentSession.prompt(started.id, prompt).catch(() => {});
+            }
+            finish();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : String(cause));
-            setSigningIn(false);
+        } finally {
+            setStarting(false);
         }
     };
 
     return (
-        <>
-            <Modal open onClose={() => {
-                if (existingWorkspaceCount > 0) finish();
-            }} size="lg">
-                <Modal.Header>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Icon name="sparkles" size="sm" /> Getting the Workstation Ready
-                    </span>
-                </Modal.Header>
-                <Modal.Body>
-                    {step === 'welcome' && (
-                        <OnboardingPage
-                            title="A working agent workstation, one step at a time"
-                            body="Genie will connect your model driver, Tynn account, optional GitHub access, and first managed workspace. You can change any of it later in Settings."
-                        >
-                            <Button color="blue" onClick={() => setStep('drivers')}>Get started</Button>
-                        </OnboardingPage>
+        <Modal
+            open
+            onClose={() => {
+                if (canFinishFirstRun({ existingWorkspaceCount, setupComplete: true })) finish();
+            }}
+            size="lg"
+        >
+            <Modal.Header>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Icon name="sparkles" size="sm" /> Meet your first agent
+                </span>
+            </Modal.Header>
+            <Modal.Body>
+                <OnboardingPage
+                    title="Give it something real to do"
+                    body="Pick one of these, change the wording if you like, and Genie will start an agent in your workspace and send it. Everything else — Tynn, GitHub, your toolchain — is in Settings when you want it."
+                >
+                    <div style={{ display: 'grid', gap: 8 }}>
+                        {FIRST_AGENT_PRESETS.map((item) => (
+                            <Card
+                                key={item.id}
+                                style={{
+                                    padding: 10,
+                                    borderColor: preset.id === item.id ? 'var(--violet-500)' : undefined,
+                                    cursor: 'pointer',
+                                }}
+                                onClick={() => {
+                                    setPreset(item);
+                                    setPrompt(item.prompt);
+                                }}
+                            >
+                                <strong>{item.label}</strong>
+                            </Card>
+                        ))}
+                    </div>
+
+                    {/* EDITABLE. A pre-filled prompt nobody can change is a demo, not a start. */}
+                    <Textarea
+                        rows={4}
+                        value={prompt}
+                        onChange={(e: { target: { value: string } }) => setPrompt(e.target.value)}
+                    />
+
+                    {/* THE DRIVER, reported rather than chosen. Three states and no fourth: not
+                        known yet, ready and named, or genuinely absent — which is the only case
+                        that stops a first agent, and it says what to do about it. */}
+                    {driver === null ? (
+                        <Text size="xs" className="text-zinc-500">Checking which agent CLI is installed…</Text>
+                    ) : driver.ready ? (
+                        <Text size="xs" className="text-zinc-500">
+                            Using <strong>{providerDef(driver.driver as AgentTuiId).label}</strong>, which is
+                            already installed. You can change this in Settings.
+                        </Text>
+                    ) : (
+                        <Text size="sm" className="text-amber-500">
+                            No agent CLI is installed on this machine yet. Settings → Toolchain will
+                            install one, and then this takes a few seconds.
+                        </Text>
                     )}
 
-                    {step === 'drivers' && (
-                        <OnboardingPage
-                            title="Choose your model drivers"
-                            body="Pick every TUI you want available. Choose one as the default for Workspace Agents and the built-in Genie workstation operator."
-                        >
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                                {agentTuis().filter((id) => id !== 'custom').map((id) => {
-                                    const selected = drivers.includes(id);
-                                    const def = providerDef(id);
-                                    return (
-                                        <Card key={id} style={{ padding: 12, borderColor: selected ? 'var(--violet-500)' : undefined }}>
-                                            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selected}
-                                                    onChange={() => {
-                                                        setDrivers((current) => selected
-                                                            ? current.filter((driver) => driver !== id)
-                                                            : [...current, id]);
-                                                        if (selected && primary === id) {
-                                                            const next = drivers.find((driver) => driver !== id);
-                                                            if (next) setPrimary(next);
-                                                        }
-                                                    }}
-                                                />
-                                                <span>
-                                                    <strong>{def.label}</strong>
-                                                    <Text size="xs" className="text-zinc-500" style={{ display: 'block' }}>{def.hint}</Text>
-                                                </span>
-                                            </label>
-                                            {selected && (
-                                                <Button size="sm" variant={primary === id ? 'default' : 'ghost'} onClick={() => setPrimary(id)} style={{ marginTop: 8 }}>
-                                                    {primary === id ? 'Default driver' : 'Make default'}
-                                                </Button>
-                                            )}
-                                        </Card>
-                                    );
-                                })}
-                            </div>
-                            <Button color="blue" disabled={!drivers.length || !drivers.includes(primary)} onClick={() => void continueFromDrivers()}>
-                                Check toolchain
-                            </Button>
-                        </OnboardingPage>
-                    )}
+                    {error && <Text size="xs" className="text-rose-500">{error}</Text>}
 
-                    {step === 'tynn' && (
-                        <OnboardingPage
-                            title="Sign in to Tynn"
-                            body="Tynn is the shared account and workspace service Genie uses. This step is required; your source code still stays in Git."
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <Button
+                            color="blue"
+                            disabled={!driver?.ready || starting || !prompt.trim()}
+                            onClick={() => void startFirstAgent()}
                         >
-                            {tynnUser ? (
-                                <Text size="sm">✓ Connected as <strong>{tynnUser.name}</strong></Text>
-                            ) : (
-                                <Button color="blue" disabled={signingIn} onClick={() => void startTynn()}>
-                                    {signingIn ? 'Waiting for browser sign-in…' : 'Sign in to Tynn…'}
-                                </Button>
-                            )}
-                            {error && <Text size="xs" className="text-rose-500">{error}</Text>}
-                            <Button color="blue" disabled={!tynnUser} onClick={() => setStep('github')}>Continue</Button>
-                        </OnboardingPage>
-                    )}
-
-                    {step === 'github' && (
-                        <OnboardingPage
-                            title="Connect GitHub"
-                            body="Optional. Connect now to import private repositories and let Genie create or fork repositories for you."
-                        >
-                            <GitHubConnect account={github} />
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <Button color="blue" onClick={() => setStep('os')}>
-                                    {github.connected ? 'Continue' : 'Skip for now'}
-                                </Button>
-                                {existingWorkspaceCount > 0 && (
-                                    <Button variant="ghost" onClick={() => setStep('workspace')}>
-                                        Add another workspace
-                                    </Button>
-                                )}
-                            </div>
-                        </OnboardingPage>
-                    )}
-
-                    {step === 'os' && (
-                        <OnboardingPage
-                            title="Set up Genie OS"
-                            body="Genie has its own private workspace and memory. It operates this workstation, never your project folders. You can optionally back that workspace up to a private GitHub repository."
-                        >
-                            <Text size="xs" className="text-zinc-500">Workspace: <code>{osPath || 'Preparing…'}</code></Text>
-                            {github.connected && !osSynced && (
-                                <>
-                                    <OwnerSelect account={github} value={osOwner} onChange={setOsOwner} />
-                                    <Button variant="ghost" disabled={osSyncing} onClick={async () => {
-                                        setOsSyncing(true);
-                                        setError(null);
-                                        try {
-                                            const created = await api().github.createRepo({
-                                                name: 'genie-os.agi', owner: osOwner || null,
-                                                ownerId: osOwner ? github.installations.find((item) => item.login === osOwner)?.id ?? null : null,
-                                                description: 'Private Genie OS workspace and memory', private: true,
-                                            });
-                                            await api().app.syncGenieOs(created.clone_url);
-                                            setOsSynced(true);
-                                        } catch (cause) {
-                                            setError(cause instanceof Error ? cause.message : String(cause));
-                                        } finally {
-                                            setOsSyncing(false);
-                                        }
-                                    }}>{osSyncing ? 'Creating private backup…' : 'Back up Genie OS to GitHub'}</Button>
-                                </>
-                            )}
-                            {osSynced && <Text size="sm">✓ Genie OS workspace is synced.</Text>}
-                            {error && <Text size="xs" className="text-rose-500">{error}</Text>}
-                            <Button color="blue" onClick={() => {
-                                if (canFinishFirstRun({ existingWorkspaceCount, setupComplete: true })) finish();
-                                else setStep('workspace');
-                            }}>{existingWorkspaceCount > 0 ? 'Finish setup' : 'Add first workspace'}</Button>
-                        </OnboardingPage>
-                    )}
-                </Modal.Body>
-            </Modal>
-
-        </>
+                            {starting ? 'Starting…' : 'Start the agent'}
+                        </Button>
+                        {/* A way past it. Someone who wants to look around first should not have
+                            to start an agent to be allowed in — that is the gate this whole
+                            change is removing. */}
+                        <Button variant="ghost" onClick={finish}>
+                            I will do this later
+                        </Button>
+                    </div>
+                </OnboardingPage>
+            </Modal.Body>
+        </Modal>
     );
 }
 

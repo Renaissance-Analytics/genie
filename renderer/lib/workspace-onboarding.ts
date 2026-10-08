@@ -147,14 +147,30 @@ export function scannedWorkspaceAction(scan: { has_project_json: boolean }): 're
     return scan.has_project_json ? 'register' : 'convert';
 }
 
-export type FirstRunStepId =
-    | 'welcome'
-    | 'drivers'
-    | 'tynn'
-    | 'github'
-    | 'verify'
-    | 'workspace'
-    | 'ready';
+/**
+ * FIRST RUN IS TWO STEPS.
+ *
+ * It was seven, with Tynn sign-in and GitHub connect in front of ever seeing an agent work.
+ * The plan's target: *"pick a folder; Genie verifies the one driver it needs and starts one agent
+ * with a first prompt pre-filled… first agent reply in under 2 minutes, 2 decisions."*
+ *
+ * ## What happened to the other five, each confirmed in source before it was removed
+ *
+ *  - **Tynn** — `master.tsx` will not render the app signed out at all (`authChecked &&
+ *    !signedIn` → `SignInPrompt`). The step asked for something the app cannot start without,
+ *    which makes it a second door on the same wall.
+ *  - **GitHub** — already optional, and `GitHubConnect` is in Settings.
+ *  - **Toolchain** — `ToolchainSetupWizard` is mounted by `settings.tsx`. The one case that
+ *    genuinely blocks a first agent, a machine with no driver at all, is checked in step 2 where
+ *    it can be acted on rather than as a gate in front of everything.
+ *  - **Genie OS** — its workspace is prepared automatically, and the optional GitHub backup is
+ *    `syncGenieOs`, which `settings.tsx` already calls.
+ *  - **Welcome** — a page whose only control was "Get started".
+ *
+ * A deferred prompt that does not exist is not deferred, it is deleted — so each of those was
+ * located somewhere a person can still reach it, not assumed to be reachable.
+ */
+export type FirstRunStepId = 'workspace' | 'agent';
 
 export interface FirstRunStep {
     id: FirstRunStepId;
@@ -163,14 +179,70 @@ export interface FirstRunStep {
 }
 
 export const FIRST_RUN_STEPS: readonly FirstRunStep[] = [
-    { id: 'welcome', title: 'Getting the Workstation Ready', optional: false },
-    { id: 'drivers', title: 'Choose your model drivers', optional: false },
-    { id: 'tynn', title: 'Sign in to Tynn', optional: false },
-    { id: 'github', title: 'Connect GitHub', optional: true },
-    { id: 'verify', title: 'Verify your drivers', optional: false },
-    { id: 'workspace', title: 'Add your first workspace', optional: false },
-    { id: 'ready', title: 'Ready', optional: false },
+    { id: 'workspace', title: 'Pick a folder', optional: false },
+    { id: 'agent', title: 'Meet your first agent', optional: false },
 ] as const;
+
+/** One of the three first prompts "New agent" offers. */
+export interface FirstAgentPreset {
+    id: string;
+    label: string;
+    /** The prompt, pre-filled and editable. */
+    prompt: string;
+}
+
+/**
+ * THE THREE FIRST PROMPTS, from the plan, each ending the way every Genie turn should.
+ *
+ * *"each instructing the agent to finish with `imDone` + a handoff — so first run teaches the
+ * whole loop by construction."* That instruction is the load-bearing part: a first agent that
+ * answers and stops teaches that Genie is a chat window, while one that files a handoff teaches
+ * the loop the whole product is built on, on the very first run.
+ */
+const FINISH = 'When you are done, call imDone with a handoff note saying what you found and what the next run should pick up.';
+
+export const FIRST_AGENT_PRESETS: readonly FirstAgentPreset[] = [
+    {
+        id: 'orientation',
+        label: 'Learn this codebase',
+        prompt: `Learn this codebase and write me an orientation: what it is, how it is laid out, how to run it, and the three things you would want to know before changing anything. ${FINISH}`,
+    },
+    {
+        id: 'failing-test',
+        label: 'Fix the top failing test',
+        prompt: `Run the test suite, find the top failing test, and fix it at the root cause rather than the symptom. Write the failing test first if there is not one. ${FINISH}`,
+    },
+    {
+        id: 'review-commits',
+        label: 'Review my last 5 commits',
+        prompt: `Review my last 5 commits. Tell me what is wrong, what is risky, and what you would have done differently — specifically, with file and line references. ${FINISH}`,
+    },
+] as const;
+
+/**
+ * THE ONE DRIVER the first agent needs, or a report that there is none.
+ *
+ * The old flow asked which of twenty-one TUIs to enable before anything had run — a question
+ * nobody can answer on first launch, and a decision Settings owns anyway. This asks the only
+ * question that blocks a first agent: is there something on this machine that can run one?
+ *
+ * Falling back to any installed driver is deliberate. A configured default that is not installed
+ * is a stale setting, and refusing on its behalf would strand a user whose machine demonstrably
+ * has a working CLI.
+ */
+export function firstAgentDriver(input: {
+    configured: string | null;
+    installed: readonly string[];
+}): { ready: true; driver: string } | { ready: false } {
+    if (input.installed.length === 0) return { ready: false };
+    if (input.configured && input.installed.includes(input.configured)) {
+        return { ready: true, driver: input.configured };
+    }
+    // `claude` before the list's own order: it is the provider Genie supports most completely
+    // (ACP, resume, rate limits), so it is the best first experience when nothing was chosen.
+    if (input.installed.includes('claude')) return { ready: true, driver: 'claude' };
+    return { ready: true, driver: input.installed[0]! };
+}
 
 export function nextIncompleteFirstRunStep(
     completed: Partial<Record<FirstRunStepId, boolean>>,
