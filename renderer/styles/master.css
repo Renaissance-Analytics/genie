@@ -9165,3 +9165,117 @@ body.gutter-dragging .grid-gutter {
     background: var(--red-500);
     opacity: 0.5;
 }
+
+/* ===== The Inspector — §5.2's expansion surface =========================
+   FIXED height, OUTSIDE the stream's scroller. Expansion happens here and
+   never in the stream, so opening a row cannot move the rows above it —
+   which is the whole reason an event row is one line to begin with. A pane
+   that grew with its content would be the same defect arriving from below. */
+.agent-stream-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+/* A selectable event row is a real button, so it resets the browser's. */
+.stream-event {
+    appearance: none;
+    background: none;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    cursor: default;
+}
+button.stream-event {
+    cursor: pointer;
+}
+button.stream-event:hover {
+    background: var(--bg-1);
+}
+.stream-event[data-selected] {
+    background: var(--bg-2);
+    /* The marker is INSET on the leading edge rather than an outline: an outline would change
+       the row's box and move its neighbours, which is the one thing this surface forbids. */
+    box-shadow: inset 2px 0 0 var(--violet-400);
+}
+button.stream-event:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+.tool-inspector {
+    flex: none;
+    height: 240px;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border-1);
+    background: var(--surface);
+}
+.tool-inspector-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--border-1);
+}
+.tool-inspector-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.tool-inspector-status {
+    font-family: var(--font-mono);
+    color: var(--fg-4);
+}
+.tool-inspector-status[data-status='failure'] {
+    color: var(--red-500);
+}
+.tool-inspector-status[data-status='pending'] {
+    color: var(--amber-400);
+}
+.tool-inspector-spacer {
+    flex: 1;
+}
+.tool-inspector-close {
+    appearance: none;
+    background: none;
+    border: 0;
+    color: var(--fg-3);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+}
+.tool-inspector-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.tool-inspector-label {
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--fg-4);
+}
+.tool-inspector-pre {
+    margin: 4px 0 0;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--fg-1);
+    /* WRAPS rather than scrolling sideways: a horizontal scrollbar on an argument blob hides
+       the end of every line, which is where a path usually differs. */
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.tool-inspector-empty {
+    color: var(--fg-3);
+}
