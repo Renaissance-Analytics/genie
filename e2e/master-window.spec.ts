@@ -11,6 +11,7 @@ import {
     readPtyGrid,
     readPtyGridLog,
     type MasterSeed,
+    windowWaitNote,
 } from './helpers/launch';
 
 /**
@@ -747,7 +748,20 @@ const flowRow = (title: string) => flowsPanel().locator('.flowmgr-row', { hasTex
 async function openFlowEditor(open: () => Promise<void>): Promise<Page> {
     const appeared = app.waitForEvent('window');
     await open();
+    /**
+     * TIMED, and logged on SUCCESS — genie#826.
+     *
+     * This exact `await` is what timed out on the macOS leg, and the only thing the rig has ever
+     * reported about it is the failure. The useful number is how long a WORKING open takes on that
+     * runner: at 20s the budget is wrong and raising it is evidence-backed, at 2s the budget is
+     * innocent and something intermittently blocks the open. Logging the passing case is how that
+     * number gets collected without waiting for another red run.
+     */
+    const startedAt = Date.now();
     const win = await appeared;
+    const note = windowWaitNote({ ms: Date.now() - startedAt, label: 'flow editor' });
+    // eslint-disable-next-line no-console
+    console.log(note.message);
     await win.waitForLoadState('domcontentloaded');
     // React Flow's own root. The window being there proves nothing — an editor
     // that failed to register its node kinds renders a "Loading…" line in a

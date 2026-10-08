@@ -285,6 +285,49 @@ export async function warmElectronRuntime(
 }
 
 /**
+ * Playwright's own `waitForEvent` budget, which is what genie#826 reported expiring.
+ *
+ * Named so the warning below fires at a real fraction of the enforced limit rather than of a number
+ * somebody typed. If Playwright's default ever changes, these must move together or the logged ratio
+ * becomes a lie.
+ */
+export const WINDOW_WAIT_BUDGET_MS = 30_000;
+
+/** Fraction of the budget a PASSING open may reach before it is worth saying so. */
+const WINDOW_WAIT_WARN_AT = 0.7;
+
+/**
+ * HOW LONG A SECOND WINDOW TOOK — the measurement genie#826 needs before anyone touches the timeout.
+ *
+ * The failure is `waitForEvent: Timeout 30000ms exceeded while waiting for event "window"`, macOS
+ * only. The two obvious responses are both guesses: raising the budget hides the bug if something
+ * intermittently blocks the open, and calling it infrastructure is what the issue itself warns a
+ * timeout always looks like and usually is not.
+ *
+ * The discriminating fact is how long a SUCCESSFUL open takes on that runner, and nobody has it,
+ * because the rig only ever reported the failure. So the elapsed time is logged on success — the case
+ * that carries the information — and flagged when a passing run comes close to the limit, so the next
+ * failure is predicted rather than discovered. A run at 24s passes today and is the warning that it
+ * will not on a slightly slower runner tomorrow.
+ *
+ * Pure, so the thresholds are testable without opening a window — which the desktop rule forbids here
+ * anyway.
+ */
+export function windowWaitNote(input: { ms: number; label: string }): { message: string; nearLimit: boolean } {
+    const { ms, label } = input;
+    // A clock that went backwards is not a slow window, and reporting it as near the limit would send
+    // somebody after the wrong thing.
+    const nearLimit = ms > 0 && ms >= Math.ceil(WINDOW_WAIT_BUDGET_MS * WINDOW_WAIT_WARN_AT);
+    const base = `[e2e] window wait — ${label} took ${ms}ms of a ${WINDOW_WAIT_BUDGET_MS}ms budget`;
+    return {
+        nearLimit,
+        message: nearLimit
+            ? `${base} — NEAR THE LIMIT, see genie#826: this run passed and is the warning that a slower runner will not.`
+            : base,
+    };
+}
+
+/**
  * WHERE ELECTRON PUTS MINIDUMPS for this rig.
  *
  * Crashpad writes under the user-data dir, and the rig launches with
