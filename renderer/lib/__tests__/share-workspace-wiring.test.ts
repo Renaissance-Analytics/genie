@@ -103,18 +103,29 @@ const PALETTE = read('components/Master/GenieCommandWindow.tsx');
  * `lib/command-window.ts`, and `command-window.test.ts` holds the behaviour.
  */
 describe('the Sharing flyout is reachable and complete', () => {
-    it('is still mounted by master', () => {
+    it('is still mounted by master, and its open state is the ONE drawer slot', () => {
         // The flyout itself, not its door: a feature whose component is gone is not reachable
         // however many rows point at it.
         expect(MASTER).toMatch(/<SharingFlyout/);
-        expect(MASTER).toMatch(/const \[sharingOpen, setSharingOpen\]/);
+        /**
+         * REWRITTEN to the new contract, not loosened. This asserted
+         * `const [sharingOpen, setSharingOpen]`, which was the right shape while every flyout owned
+         * a boolean. P7's single `openDrawer` replaced eleven of them — the owner's ruling on the
+         * Lists conflict being *"a pinned dock is NOT a drawer"*, which settled that the refactor
+         * governs the flyouts — so the state to assert is the slot, not a per-panel flag.
+         *
+         * Still exact: Sharing must read its open state from `openDrawer` rather than reintroducing
+         * one of its own, which is the property the old assertion was really protecting.
+         */
+        expect(MASTER).toMatch(/open=\{isDrawerOpen\(openDrawer, 'sharing'\)\}/);
+        expect(MASTER).toMatch(/const \[openDrawer, setOpenDrawer\]/);
     });
 
     it('is opened by the ONE feature router, not a second path of its own', () => {
         // `activateFeature` is what the palette dispatches and what a Deck signal calls. Two ways
         // to open one feature is two answers to where it lives, and the one nobody updates is the
         // one a badge uses.
-        expect(MASTER).toMatch(/case 'sharing':\s*\n\s*setSharingOpen\(true\);/);
+        expect(MASTER).toMatch(/case 'sharing':\s*\n\s*setOpenDrawer\('sharing'\);/);
     });
 
     it('is withheld in a REMOTE window — now in the palette, where the way in is', () => {
