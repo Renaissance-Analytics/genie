@@ -4273,6 +4273,32 @@ export interface GenieApi {
      */
     agentSession: {
         list: () => Promise<AgentSessionSpec[]>;
+        /**
+         * Send a prompt to a structured session.
+         *
+         * `ok: false` is a real answer with a named reason — `no-session` for a pty agent or a
+         * closed channel, `parked` when the agent is over its daily cap, `empty` for a stray
+         * Enter. The composer keeps the text on anything but a delivered send.
+         */
+        prompt: (
+            specId: string,
+            text: string,
+        ) => Promise<
+            | { ok: true; delivered: boolean; submitted: boolean }
+            | { ok: false; reason: 'no-session' | 'empty' | 'parked' | 'failed'; error?: string }
+        >;
+        /** Ask the agent to stop the turn. `honoured` is a real answer either way — cancel only ASKS. */
+        cancel: (
+            specId: string,
+        ) => Promise<
+            { ok: true; honoured: boolean } | { ok: false; reason: 'no-session' | 'failed'; error?: string }
+        >;
+        /** Answer a permission the agent is parked on. */
+        decide: (
+            specId: string,
+            approvalId: string,
+            decision: 'allow-once' | 'allow-always' | 'deny-once' | 'deny-always',
+        ) => Promise<{ ok: true } | { ok: false; reason: 'no-session' }>;
     };
     lists: {
         read: (workspaceId: string) => Promise<WorkspaceListsSpec>;

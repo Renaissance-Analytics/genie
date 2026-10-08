@@ -156,10 +156,13 @@ describe('the transcript', () => {
                 ],
             }),
         );
+        // `at` is KEPT, not stripped. It used to be dropped here as an internal sort key, which left
+        // `mergeDeclared` unable to interleave this stream with a declared one — so it replaced it
+        // instead, deleting exactly these messages. See `Message.at`.
         expect(s.transcript).toEqual([
-            { id: 'm1', role: 'user', author: null, content: 'ship it' },
-            { id: 'm2', role: 'user', author: 'vale', content: 'rebased' },
-            { id: 'm3', role: 'agent', author: null, content: 'on it' },
+            { id: 'm1', role: 'user', author: null, content: 'ship it', at: NOW - 3000 },
+            { id: 'm2', role: 'user', author: 'vale', content: 'rebased', at: NOW - 2000 },
+            { id: 'm3', role: 'agent', author: null, content: 'on it', at: NOW - 1000 },
         ]);
     });
 
@@ -187,6 +190,7 @@ describe('the transcript', () => {
             role: 'agent',
             author: null,
             content: 'Landed #770. The win32 test still fails.',
+            at: NOW - 500,
         });
     });
 
@@ -254,7 +258,7 @@ describe('a DORMANT agent', () => {
             }),
         );
         expect(s.transcript).toEqual([
-            { id: 'handoff:a1', role: 'agent', author: null, content: 'Landed #770.' },
+            { id: 'handoff:a1', role: 'agent', author: null, content: 'Landed #770.', at: NOW - 1000 },
         ]);
     });
 

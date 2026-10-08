@@ -1,7 +1,13 @@
 import { Badge, Card, Heading, Progress, Text } from '@particle-academy/react-fancy';
-import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../../lib/genie';
+import type {
+    AgentSessionSpec,
+    ForceAnswerSpec,
+    ListItemSpec,
+    PendingQuestionSpec,
+} from '../../lib/genie';
 import { deckView, type RosterRow, type RosterState } from '../../lib/deck-view';
 import { attentionItems } from '../../lib/attention-queue';
+import { stationSignals, type StationFacts } from '../../lib/station-signals';
 import { NeedsYou } from './NeedsYou';
 
 /**
@@ -106,12 +112,37 @@ export interface DeckProps {
     now?: number;
     onAnswerOption?: (questionId: string, label: string) => void;
     onOpenQuestion?: (questionId: string) => void;
+    /**
+     * The WORKSTATION'S ambient facts — what the title-bar icons used to say at a glance.
+     *
+     * Owner decision, asked directly: *"move the signals to the Deck, then delete the icons."* P7's
+     * "0 features lost" held for features and not for signals: an icon animated for a running Flow
+     * and badged unread agent mail, and a ⌘K row cannot.
+     *
+     * Absent means the window cannot see the workstation — a remote one — and then nothing is
+     * rendered rather than a claim that all is well.
+     */
+    signals?: StationFacts;
+    /** Clicking a signal goes where the icon went. A badge you cannot act on is worse. */
+    onSignal?: (featureId: string) => void;
+    /** The row the keyboard is on — `J`/`K` move it. */
+    focusedKey?: string | null;
+    /** Which question's full-answer form is open — see `NeedsYou`. */
+    expandedQuestionId?: string | null;
+    onExpandQuestion?: (questionId: string | null) => void;
+    onSubmitAnswer?: (questionId: string, answers: ForceAnswerSpec[]) => void;
     onResolveListItem?: (todoId: string, action: 'done' | 'thrown_back' | 'refused') => void;
 }
 
 export function Deck({
     sessions,
     questions = [],
+    signals,
+    onSignal,
+    focusedKey = null,
+    expandedQuestionId = null,
+    onExpandQuestion,
+    onSubmitAnswer,
     listItems = [],
     now = Date.now(),
     onAnswerOption,
@@ -129,15 +160,38 @@ export function Deck({
         sessions.find((s) => s.specId === terminalId)?.session.name ?? null;
 
     const attention = attentionItems({ questions, listItems }, { agentNameFor: nameForTerminal });
+    // SILENT unless something is true. `stationSignals` owns which and in what order.
+    const strip = signals ? stationSignals(signals) : [];
 
     return (
         <div className="deck">
+            {strip.length > 0 ? (
+                <div className="deck-signals" data-testid="deck-signals">
+                    {strip.map((signal) => (
+                        <button
+                            key={signal.id}
+                            type="button"
+                            className="deck-signal"
+                            data-tone={signal.tone}
+                            data-feature={signal.featureId}
+                            onClick={() => onSignal?.(signal.featureId)}
+                        >
+                            {signal.label}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+
             <NeedsYou
                 items={attention}
                 questionsById={new Map(questions.map((q) => [q.id, q]))}
                 now={now}
                 onAnswerOption={onAnswerOption ?? (() => {})}
                 onOpenQuestion={onOpenQuestion ?? (() => {})}
+                focusedKey={focusedKey}
+                expandedQuestionId={expandedQuestionId}
+                {...(onExpandQuestion ? { onExpandQuestion } : {})}
+                {...(onSubmitAnswer ? { onSubmitAnswer } : {})}
                 onResolveListItem={onResolveListItem ?? (() => {})}
             />
             <Card className="deck-band">

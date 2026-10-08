@@ -12,6 +12,47 @@ describe('AMS harness-native transport registry', () => {
         expect(requiredHarnessTransport('codex')).toBe('codex-app-server');
         expect(requiredHarnessTransport('kilo')).toBeNull();
         expect(requiredHarnessTransport('genie')).toBeNull();
+    });
+
+    /**
+     * THE ENGINE DECIDES, not the provider — once a provider has two engines.
+     *
+     * `claude-channel` is a Claude CODE transport: a bridge Claude Code spawns, loaded only
+     * when the launch line carries `--dangerously-load-development-channels`. An ACP session
+     * has no launch line (claude's ACP launch is prism's adapter under node), so that
+     * transport cannot exist for one — and this function is what three call sites use to
+     * decide which transport an agent is REQUIRED to have:
+     *
+     *  - `thumbsUp` refuses to boot the OS agent until its required transport is verified, so
+     *    answering `claude-channel` for an ACP session would make the OS agent unbootable.
+     *  - `registerTransport` refuses a transport that is not the required one, which is how a
+     *    bridge that starts inside an ACP session is turned away rather than swallowing mail.
+     *  - `observeWorkspaceAgents` reports it in a diagnosis, where naming a transport that
+     *    cannot exist sends an operator to look for a bridge nobody launched.
+     */
+    it('requires the ACP SESSION for an agent running on ACP', () => {
+        expect(requiredHarnessTransport('claude', 'acp')).toBe('acp-session');
+    });
+
+    it('still requires the channel for a claude agent on the pty', () => {
+        // Most providers are pty-only and claude itself is, whenever it holds a custom
+        // command or a per-agent pin.
+        expect(requiredHarnessTransport('claude', 'pty')).toBe('claude-channel');
+    });
+
+    it('requires the ACP session whatever the provider, because the engine owns the pipe', () => {
+        // gemini and kimi have no native transport of their own at all — `null` today — so an
+        // ACP session is the FIRST push transport either has ever had.
+        expect(requiredHarnessTransport('gemini', 'acp')).toBe('acp-session');
+        expect(requiredHarnessTransport('kimi', 'acp')).toBe('acp-session');
+    });
+
+    it('is unchanged when no engine is named', () => {
+        // Most callers know the provider and not the engine. The old answer stays the default
+        // rather than becoming `acp-session` by omission — which would have claimed a transport
+        // for every pty agent in the product.
+        expect(requiredHarnessTransport('claude')).toBe('claude-channel');
+        expect(requiredHarnessTransport('aider')).toBeNull();
         expect(requiredHarnessTransport('custom')).toBeNull();
     });
 

@@ -3831,6 +3831,15 @@ export type WorkspaceAgentReachability = 'workspace' | 'workstation' | 'hidden';
 export type WorkspaceAgentTransport =
     | 'claude-channel'
     | 'codex-app-server'
+    /**
+     * The agent's own ACP session, used as a PUSH transport (`main/acp/mail-transport.ts`).
+     *
+     * No migration: the v52 `transport` column's two-value CHECK cannot be widened in place,
+     * and `markWorkspaceAgentTransportState` already writes NULL there for any value outside
+     * it while the canonical unconstrained `native_transport` takes the real one. That is what
+     * v53 added the second column FOR.
+     */
+    | 'acp-session'
     | 'genie-mcp';
 
 /** A first-class AMS configuration. Its terminal binding is intentionally nullable. */
@@ -6392,6 +6401,16 @@ export interface TerminalSpecMeta {
     issuewatch_action?: 'notify' | 'wake';
     /** The captured AI chat-session uuid (session-capture), when known. */
     chat_session_id?: string;
+    /**
+     * `chat_session_id` was MINTED by Genie and no session has been created under it yet.
+     *
+     * Set when `renderAgentLaunch` invents a uuid for claude's `--session-id` flag, cleared
+     * the moment a real session is observed. Only the ACP path reads it: the pty's launch
+     * line creates the session it was handed, so for a pty the promise is kept by the act of
+     * launching, while ACP never sends that line and would be loading a session that does
+     * not exist. See `acpResumeSessionId`.
+     */
+    chat_session_id_minted?: boolean;
     [key: string]: unknown;
 }
 

@@ -137,7 +137,15 @@ export const declaredSessions = new DeclaredSessionStore({
         try {
             const spec = getTerminalSpec(specId);
             if (!spec) return;
-            updateTerminalSpec(specId, { meta: { ...spec.meta, chat_session_id: sessionId } });
+            updateTerminalSpec(specId, {
+                meta: {
+                    ...spec.meta,
+                    chat_session_id: sessionId,
+                    // Not minted any more: this one came FROM the provider, so a later
+                    // restart may continue it.
+                    chat_session_id_minted: false,
+                },
+            });
             const agentId = spec.meta?.agent_id;
             if (typeof agentId === 'string') agentInboxBroker.setChatSession(agentId, sessionId);
             // DYNAMIC, to break a cycle rather than to be clever: `terminal/ipc` imports

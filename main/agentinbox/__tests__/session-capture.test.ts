@@ -95,6 +95,35 @@ describe('renderAgentLaunch — flag strategy (claude)', () => {
         expect(r.chatSessionId).toBeNull();
     });
 
+    /**
+     * MINTED vs CAPTURED — the distinction ACP needs and the pty never did.
+     *
+     * For the pty this id is a PROMISE: Genie hands `--session-id <uuid>` to the CLI, which
+     * then creates that session, so the minted id is real the moment the agent starts. ACP
+     * has no launch line, so nothing ever creates it — and the ACP path read the same field
+     * to decide whether to CONTINUE a conversation. Measured: a GApp claude agent's very
+     * first launch attempted `session/load` on an id no session had ever had.
+     *
+     * So the renderer says which it is. The two cases below are both `strategy: 'flag'`,
+     * which is why the strategy alone cannot answer the question.
+     */
+    it('marks an id it MINTED as minted', () => {
+        expect(renderAgentLaunch('claude', 'claude', () => 'uuid-123').minted).toBe(true);
+    });
+
+    it('does NOT mark an id it merely read off the command', () => {
+        // Somebody else pinned this session; it exists or it does not, independently of us.
+        const existing = 'abcd1234-5678-90ab-cdef-1234567890ab';
+        const r = renderAgentLaunch('claude', `claude --session-id ${existing}`, () => 'no');
+        expect(r.chatSessionId).toBe(existing);
+        expect(r.minted).toBe(false);
+    });
+
+    it('does not mark anything for a provider that mints nothing', () => {
+        expect(renderAgentLaunch('codex', 'codex').minted).toBe(false);
+        expect(renderAgentLaunch('aider', 'aider').minted).toBe(false);
+    });
+
     it('carries through extra flags around the injected one', () => {
         const r = renderAgentLaunch('claude', 'claude --model opus', () => 'sid');
         expect(r.command).toBe('claude --model opus --session-id sid');

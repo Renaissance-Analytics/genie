@@ -31,12 +31,16 @@ export type GenieView =
     /**
      * Today's Floor — the panel grid for whatever workspace is active.
      *
-     * THE DEFAULT, and deliberately so for now. The Deck becomes the landing view in a
-     * later phase; until then it is a parallel surface reached explicitly, because
-     * moving the default is the owner's call to make once the Deck is better than what
-     * it replaces. An earlier version of this module made the Deck the no-params
-     * default and E2E caught it on all three platforms: the grid was hidden on every
-     * window that opened without a query string, which is most of them.
+     * NOT the default any more: `parseViewRoute` answers the Deck for no params and
+     * `viewRouteQuery` gives the grid `?view=grid`, so the grid is now the one you ask for.
+     *
+     * This comment used to say the opposite — "THE DEFAULT, and deliberately so for now" —
+     * which was true when it was written and became a lie the moment the default moved. It is
+     * corrected rather than deleted because the warning inside it is still live: an earlier
+     * attempt made the Deck the no-params default BEFORE it was ready, and E2E caught it on
+     * all three platforms with the grid hidden on every window that opened without a query
+     * string. The lesson is that the default is load-bearing in E2E, not that it may never
+     * move.
      */
     | { kind: 'grid' }
     /** Cross-workspace view: what needs you, every agent, what changed. Reached

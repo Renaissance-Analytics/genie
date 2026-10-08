@@ -27,11 +27,19 @@ describe('acpLaunch', () => {
         });
     });
 
-    it('REFUSES codex, because prism-acp ships a claude driver only', () => {
-        // Pointing codex at the claude host would start something that cannot drive it and
-        // then time out in the handshake -- a hang, not a named refusal. Revisit when
-        // prism ships a codex driver.
-        expect(acpLaunch('codex', ctx())).toEqual({ ok: false, reason: 'no-acp-mode', provider: 'codex' });
+    it('DRIVES codex now, because prism-acp 0.5.0 ships a Codex driver', () => {
+        // It refused until 2026-10-08, when prism published one. Measured in the installed package
+        // rather than taken from a changelog: `dist/codex/driver.js` exists and the index exports
+        // `CodexDriver`.
+        //
+        // CAPABILITY, not routing. `ACP_PROVIDERS` still excludes codex, so `engineFor` keeps every
+        // codex agent on the pty — conflating the two is what once sent them all to an engine that
+        // refused them and never started. Flipping that is a separate decision and wants a measured
+        // handshake first, exactly as claude's did.
+        expect(acpLaunch('codex', ctx())).toEqual({
+            ok: true,
+            launch: { command: '/usr/bin/node', args: ['/app/main/acp/prism-host.mjs'] },
+        });
     });
 
     it('uses the NATIVE mode for gemini and kimi, which need no adapter', () => {
@@ -62,14 +70,16 @@ describe('acpLaunch', () => {
         expect([...ACP_PROVIDERS].sort()).toEqual(['claude', 'gemini', 'kimi']);
     });
 
-    it('REFUSES codex by name, rather than pointing it at the claude host', () => {
-        // A wrong spawn starts something that cannot drive the provider and then times out
-        // in the handshake, which reads as a hung agent instead of an unsupported one.
-        expect(acpLaunch('codex', { hostScript: () => '/fake/host.mjs' } as never)).toMatchObject({
-            ok: false,
-            reason: 'no-acp-mode',
-            provider: 'codex',
-        });
+    it('tells the child WHICH driver to serve, because the host is no longer claude-only', () => {
+        // `prism-host.mjs` reads `GENIE_ACP_PROVIDER` and picks `CodexDriver` or `ClaudeDriver`. In
+        // the ENV rather than argv: the argv is `[script]` and nothing else, so one place decides
+        // how this child is launched.
+        expect(acpEnv('codex', { PATH: '/bin' }, { auth: 'subscription' }).GENIE_ACP_PROVIDER).toBe(
+            'codex',
+        );
+        expect(acpEnv('claude', { PATH: '/bin' }, { auth: 'subscription' }).GENIE_ACP_PROVIDER).toBe(
+            'claude',
+        );
     });
 });
 
@@ -170,5 +180,69 @@ describe('nodeMajorOk', () => {
     it('refuses a version it cannot parse rather than assuming it is fine', () => {
         expect(nodeMajorOk('')).toBe(false);
         expect(nodeMajorOk('banana')).toBe(false);
+    });
+});
+
+describe('THE GENIE RIG reaches an ACP child', () => {
+    /**
+     * The defect this closes, and it is the one that would have made ACP agents useless on a busy
+     * workstation.
+     *
+     * An agent reaches `imDone`, `ForceTheQuestion` and `agentinbox` through Genie's own MCP server,
+     * which the claude CLI picks up from the workspace's `.mcp.json` — so an ACP child DOES get the
+     * server, because it runs `claude` in that cwd. What it did not get is **its own identity**:
+     * `agent-config.ts` says *"Per-terminal resolution for imDone/ForceTheQuestion is preserved
+     * server-side via the tools' optional `terminalId` arg (read from GENIE_TERMINAL_ID)"*, and
+     * `acpEnv` forwarded neither that variable nor the endpoint URL.
+     *
+     * The pty path sets both (`terminal/ipc.ts`: `GENIE_MCP_URL: mcpUrl, GENIE_TERMINAL_ID: id`).
+     * Without them an ACP agent asking Genie anything in a workspace with more than one terminal is
+     * refused — *"Could not determine which terminal to act on"* — which is the error a human sees
+     * too, so it is not even a new failure mode, just one nobody had hit from this direction.
+     *
+     * `imDone` is the Genie protocol's mandatory finish. An agent that cannot call it stalls the
+     * work silently, which is the exact failure the protocol exists to prevent.
+     */
+    const host = { PATH: '/bin', HOME: '/home/me' };
+
+    it('carries the terminal id, so the agent can name itself', () => {
+        const env = acpEnv('claude', host, {
+            auth: 'subscription',
+            genie: { terminalId: 'spec-42', mcpUrl: 'http://127.0.0.1:7777/mcp/abc' },
+        });
+        expect(env.GENIE_TERMINAL_ID).toBe('spec-42');
+        expect(env.GENIE_MCP_URL).toBe('http://127.0.0.1:7777/mcp/abc');
+    });
+
+    it('omits BOTH when the workspace has MCP switched off', () => {
+        // Not an empty string: `agent-config.ts` records that a referenced-but-unset variable broke
+        // every MCP server in a config, and an empty URL is worse than an absent one — it looks
+        // configured and resolves nowhere.
+        const env = acpEnv('claude', host, { auth: 'subscription' });
+        expect('GENIE_TERMINAL_ID' in env).toBe(false);
+        expect('GENIE_MCP_URL' in env).toBe(false);
+    });
+
+    it('omits the URL but keeps the id when there is no endpoint', () => {
+        // `registerTerminalEndpoint` can answer null. The id is still worth passing: the tools take
+        // it as an argument and the agent can still name itself to a server reached another way.
+        const env = acpEnv('claude', host, {
+            auth: 'subscription',
+            genie: { terminalId: 'spec-42', mcpUrl: null },
+        });
+        expect(env.GENIE_TERMINAL_ID).toBe('spec-42');
+        expect('GENIE_MCP_URL' in env).toBe(false);
+    });
+
+    it('still strips what outranks the subscription, which this must not have loosened', () => {
+        // The allow-list is the whole point of this function. Adding two keys to it is exactly the
+        // kind of change that quietly lets a third through.
+        const env = acpEnv(
+            'claude',
+            { ...host, ANTHROPIC_API_KEY: 'sk-nope', SOME_SECRET: 'nope' },
+            { auth: 'subscription', genie: { terminalId: 's1', mcpUrl: 'http://x/mcp/y' } },
+        );
+        expect('ANTHROPIC_API_KEY' in env).toBe(false);
+        expect('SOME_SECRET' in env).toBe(false);
     });
 });

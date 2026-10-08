@@ -17,6 +17,21 @@
  * AppStore and Knowledge. This module exists so CI refuses to let that happen, instead of
  * a plan asserting it won't.
  *
+ * ## 2026-10-08 — the icons are GONE, and the contract is what made that safe
+ *
+ * Both halves were fixed first: the palette opens without a terminal, and it carries a row for
+ * every feature here (`featureCommandItems(FEATURE_SURFACES)`). Most entries below moved from
+ * `titleBarProp` to `paletteId` in one diff — which is exactly the edit this module's shape was
+ * designed to force, since dropping a feature means editing this list where a human reads it.
+ *
+ * Four keep a second door because they really have one: the App Tray still opens the store, Docs
+ * and Genie OS are menu items, and the Deck's signal strip is a contextual route for the four
+ * features that carried a live signal. `contextual` still counts for nothing on its own.
+ *
+ * **What the icons also did was SIGNAL**, and a palette row cannot. That is why the signals moved
+ * to the Deck first (`lib/station-signals.ts`) — owner decision, asked directly: *"move the
+ * signals to the Deck, then delete the icons."*
+ *
  * ## Why it is shaped this way
  *
  * `FEATURE_SURFACES` is a hand-written CONTRACT. The entry points are DISCOVERED by
@@ -63,25 +78,39 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
         label: 'Remote / Work Mode hosts',
         // The safest of the four: its own subsystem (`api().workmode.discoverHosts()`),
         // not in P7's deletion list. It needs a home on the Deck, nothing more.
-        entry: { titleBarProp: 'onShowSharing', contextual: 'Settings → hosts; workmode discovery' },
+        entry: { paletteId: 'remote-host', contextual: 'Settings → hosts; workmode discovery' },
     },
-    { id: 'plugins-appstore', label: 'Plugins / App Store', entry: { titleBarProp: 'onShowAppStore' } },
-    { id: 'knowledge-graph', label: 'Knowledge graph', entry: { titleBarProp: 'onShowKnowledge' } },
+    {
+        id: 'plugins-appstore',
+        label: 'Plugins / App Store',
+        // The APP TRAY survives the icon deletion and still opens the store, so this one
+        // keeps a real second door as well as its ⌘K row.
+        entry: { titleBarProp: 'onShowAppStore', contextual: 'App Tray → open store' },
+    },
+    { id: 'knowledge-graph', label: 'Knowledge graph', entry: { paletteId: 'knowledge-graph' } },
     {
         id: 'agent-inbox',
         label: 'AgentInbox',
         // P7 RESTRUCTURES rather than deletes: agent↔agent channels stay (observing a
         // conversation you are not in is genuinely different), human↔agent DMs fold into
         // the Agent Conversation. Either way it must stay reachable.
-        entry: { titleBarProp: 'onShowAgentInbox' },
+        entry: { paletteId: 'agent-inbox', contextual: 'Deck → the mail signal, when agents are behind' },
     },
 
     // ─── The rest of today's surfaces ─────────────────────────────────────────────────
-    { id: 'sharing', label: 'Sharing', entry: { titleBarProp: 'onShowSharing' } },
-    { id: 'sites', label: 'Site Manager', entry: { titleBarProp: 'onShowSiteManager' } },
-    { id: 'issuewatch', label: 'IssueWatch', entry: { titleBarProp: 'onShowIssueWatch' } },
-    { id: 'flows', label: 'Flows', entry: { titleBarProp: 'onShowFlows' } },
-    { id: 'lists', label: 'Lists', entry: { titleBarProp: 'onShowLists' } },
+    { id: 'sharing', label: 'Sharing', entry: { paletteId: 'sharing' } },
+    { id: 'sites', label: 'Site Manager', entry: { paletteId: 'sites' } },
+    {
+        id: 'issuewatch',
+        label: 'IssueWatch',
+        entry: { paletteId: 'issuewatch', contextual: "Deck → the signal, when it cannot tell" },
+    },
+    {
+        id: 'flows',
+        label: 'Flows',
+        entry: { paletteId: 'flows', contextual: 'Deck → the signal, while one is running' },
+    },
+    { id: 'lists', label: 'Lists', entry: { paletteId: 'lists' } },
     {
         id: 'questions',
         label: 'Question inbox',
@@ -89,8 +118,13 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
         // badges exist -- and the palette is how you reach the flyout.
         entry: { paletteId: 'questions', contextual: 'Deck → Needs you' },
     },
-    { id: 'docs', label: 'Docs', entry: { titleBarProp: 'onShowDocs' } },
-    { id: 'processes', label: 'Process manager', entry: { titleBarProp: 'onShowProcessManager' } },
+    {
+        id: 'docs',
+        label: 'Docs',
+        // Still a MENU item — the plan's "already in the system menu" — as well as a ⌘K row.
+        entry: { titleBarProp: 'onShowDocs', contextual: 'Genie menu → Docs' },
+    },
+    { id: 'processes', label: 'Process manager', entry: { paletteId: 'processes' } },
     {
         id: 'tasks',
         label: 'Task manager',
@@ -98,8 +132,20 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
         // palette is how you reach this view.
         entry: { paletteId: 'tasks', contextual: 'Workspace → processes' },
     },
-    { id: 'github-caps', label: 'GitHub capabilities', entry: { titleBarProp: 'onShowGithubCaps' } },
-    { id: 'genie-os', label: 'Genie OS', entry: { titleBarProp: 'onShowGenieOs' } },
+    {
+        id: 'github-caps',
+        label: 'GitHub capabilities',
+        // The permanent warning GLYPH is gone; the Deck says it instead, and only while it is
+        // true. P7 asked for a dismissible Callout — a signal that disappears when resolved is
+        // the same promise kept better, because there is nothing to dismiss.
+        entry: { paletteId: 'github-caps', contextual: 'Deck → the signal, while permissions block features' },
+    },
+    {
+        id: 'genie-os',
+        label: 'Genie OS',
+        // Also the menu's "Continue workstation setup", while first run is unfinished.
+        entry: { titleBarProp: 'onShowGenieOs', contextual: 'Deck → the signal, while it works' },
+    },
 
     /**
      * THE GRID ITSELF — the surface this whole contract was protecting other things from

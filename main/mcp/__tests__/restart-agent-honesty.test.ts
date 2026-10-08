@@ -4,6 +4,30 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
+ * NOTE ON THE ENGINE, 2026-10-07.
+ *
+ * ACP is no longer optional, so a claude agent is a structured session with no pty and no
+ * launch line to type — and genie#364 is specifically about the pty resume GRAMMAR: minting
+ * `--session-id` and relaunching with `--resume <that id>`.
+ *
+ * That mechanism is not gone; it is what every pty provider still does, and most of the
+ * twenty-one are. So these cases pin claude to the pty with `engineOverride: 'pty'`.
+ *
+ * Pinning rather than swapping provider, deliberately. The first attempt moved them to
+ * `codex` — pty-only and with a resume grammar — and more tests broke, because codex's
+ * grammar is a SUBCOMMAND and these assertions are about claude's `--session-id` flag
+ * specifically. A swap would have been testing a different thing while looking like the
+ * same test.
+ *
+ * `engineOverride` is a real supported configuration rather than a test affordance: it is
+ * the only way to hold an agent on the pty now that ACP is the default. It was unreachable
+ * until this change — `engineFor` honoured it and nothing could set it.
+ *
+ * claude's ACP resume is covered where it now lives: `main/acp/__tests__/session.test.ts`
+ * (`session/load`) and `main/agents/__tests__/restart-options.test.ts` (engine-aware
+ * `canResume`).
+ */
+/**
  * genie#364, at the boundary the owner actually used.
  *
  * TWO defects, one click. The owner exited a TUI, pressed **Restart agent**, and
@@ -167,7 +191,12 @@ async function launchAgent(): Promise<{ id: string; firstCommand: string }> {
         workspaceId: WS_ID,
         cwd: wsDir,
         label: 'claude · restart-probe',
-        agentMeta: { agent: 'claude', command: 'claude --dangerously-skip-permissions' },
+        agentMeta: {
+            agent: 'claude',
+            command: 'claude --dangerously-skip-permissions',
+            // PINNED to the pty — see the note above the file.
+            engineOverride: 'pty',
+        },
         agentInbox: { purpose: 'restart-probe' },
     });
     await afterLaunchSettles();

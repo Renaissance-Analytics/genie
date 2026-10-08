@@ -53,6 +53,13 @@ export interface StartRequest {
     provider: string;
     cwd: string;
     auth: AcpAuth['auth'];
+    /**
+     * This agent's own identity for the genie MCP rig — see `acpEnv`'s `genie`.
+     *
+     * Without it an ACP agent cannot name its own terminal, and `imDone` — the protocol's mandatory
+     * finish — is refused in any workspace with more than one terminal.
+     */
+    genie?: AcpAuth['genie'];
 }
 
 export type StartResult = { client: AcpClient; pid: number | undefined; kill: () => void } | { error: string };
@@ -85,7 +92,10 @@ export function startAcpAgent(req: StartRequest, ports: SpawnPorts): StartResult
         };
     }
 
-    const env = acpEnv(req.provider, ports.hostEnv(), { auth: req.auth });
+    const env = acpEnv(req.provider, ports.hostEnv(), {
+        auth: req.auth,
+        ...(req.genie ? { genie: req.genie } : {}),
+    });
     const child = ports.spawn(launch.command, launch.args, env, req.cwd);
 
     let deliver: ((m: unknown) => void) | null = null;

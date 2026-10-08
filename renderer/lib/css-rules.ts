@@ -29,3 +29,35 @@ export function declarationsFor(css: string, selector: string): string | null {
     }
     return null;
 }
+
+/** The value of a `--token: N;` declaration anywhere in the sheet, or null. */
+export function cssTokenValue(css: string, name: string): number | null {
+    const m = new RegExp(`${name}:\\s*(-?[0-9]+)\\s*;`).exec(css);
+    return m ? Number(m[1]) : null;
+}
+
+/**
+ * The `z-index` a selector ends up with, FOLLOWING one level of `var()`.
+ *
+ * Every global rung in `master.css` is a token now. Three test files read those numbers, each
+ * with its own regex for raw digits, and tokenising the ladder took all three red at once — the
+ * assertions were right and only the reading was out of date. One reader, so the next change to
+ * how the sheet expresses a layer is one fix rather than three.
+ *
+ * Matches the FIRST block whose prelude mentions the selector, which is how the callers were
+ * already searching; one level of indirection only, because a token defined in terms of another
+ * token is not something this ladder does and a recursive resolver would quietly accept a tangle
+ * nobody could read.
+ */
+export function cssZIndexOf(css: string, selector: string): number | null {
+    const body = stripCssComments(css);
+    const at = body.indexOf(selector);
+    if (at < 0) return null;
+    const open = body.indexOf('{', at);
+    if (open < 0) return null;
+    const block = body.slice(open, body.indexOf('}', open));
+    const direct = /z-index:\s*(-?[0-9]+)\s*;/.exec(block);
+    if (direct) return Number(direct[1]);
+    const token = /z-index:\s*var\(\s*(--[a-z0-9-]+)\s*\)/i.exec(block);
+    return token ? cssTokenValue(css, token[1]!) : null;
+}

@@ -22,7 +22,7 @@ const ctx = { hostScript: () => '/fake/prism-host.mjs' } as never;
 
 describe('the two halves of the ACP decision', () => {
     it.each([...ACP_PROVIDERS])('%s is routed to ACP and can actually launch', (provider) => {
-        expect(engineFor({ provider, acpEnabled: true })).toBe('acp');
+        expect(engineFor({ provider })).toBe('acp');
         const launch = acpLaunch(provider, ctx);
         expect(
             launch,
@@ -34,7 +34,7 @@ describe('the two halves of the ACP decision', () => {
     it('positive control: a provider OUTSIDE the list is refused by both', () => {
         // Without this, "they agree" would pass against two functions that both said no to
         // everything.
-        expect(engineFor({ provider: 'aider', acpEnabled: true })).toBe('pty');
+        expect(engineFor({ provider: 'aider' })).toBe('pty');
         expect(acpLaunch('aider', ctx)).toMatchObject({ ok: false, reason: 'no-acp-mode' });
     });
 });

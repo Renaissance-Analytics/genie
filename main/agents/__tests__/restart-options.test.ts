@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PROVIDER_IDS, canResumeTui } from '../registry';
-import { capturedSessionId, restartOptionsFor } from '../restart-options';
+import { acpResumeSessionId, capturedSessionId, restartOptionsFor } from '../restart-options';
 
 /**
  * genie#443 — WHICH restart a terminal can be offered.
@@ -160,5 +160,52 @@ describe('a PTY agent is unaffected', () => {
     it('resumes with a grammar AND an id, exactly as before', () => {
         const withBoth = { meta: { agent: 'claude', chat_session_id: 'x' } } as never;
         expect(restartOptionsFor(withBoth).canResume).toBe(true);
+    });
+});
+
+describe('acpResumeSessionId — what an ACP session may CONTINUE', () => {
+    /**
+     * A MINTED id is not a captured one.
+     *
+     * `renderAgentLaunch` mints a uuid for claude's `--session-id` flag and stores it on the
+     * spec before anything has run. For a pty that is fine: the CLI creates the session it
+     * was handed. ACP never sends that command, so the session does not exist — and the ACP
+     * launch read `capturedSessionId` to decide whether to `session/load`.
+     *
+     * Measured in `gapp-agents-launch`: the first launch of a GApp claude agent attempted to
+     * resume a uuid no conversation had ever had. It recovered — the driver falls back to a
+     * fresh session — which is exactly what made it invisible, and the fallback is also what
+     * would hide a REAL resume failure.
+     */
+    it('refuses an id Genie minted, because no session was ever created under it', () => {
+        expect(
+            acpResumeSessionId({
+                meta: { agent: 'claude', chat_session_id: 'minted-uuid', chat_session_id_minted: true },
+            } as never),
+        ).toBeNull();
+    });
+
+    it('returns an id that was actually CAPTURED', () => {
+        // From `META_CLI_SESSION_ID` over ACP, or from the transcript on the pty path. Either
+        // way a conversation exists under it, so continuing is the right default.
+        expect(
+            acpResumeSessionId({ meta: { agent: 'claude', chat_session_id: 'real-id' } } as never),
+        ).toBe('real-id');
+    });
+
+    it('returns null when there is no id at all', () => {
+        expect(acpResumeSessionId({ meta: { agent: 'claude' } } as never)).toBeNull();
+        expect(acpResumeSessionId(null)).toBeNull();
+    });
+
+    it('does not change what the RESTART menu offers', () => {
+        // Separate question, deliberately. `canResume` is about whether a control is worth
+        // showing; this is about whether a handshake may claim a session exists. A minted id
+        // still means "this agent has a session id", and the pty resume grammar still works
+        // with it — so narrowing the menu here would remove a control that functions.
+        const minted = {
+            meta: { agent: 'claude', chat_session_id: 'minted-uuid', chat_session_id_minted: true },
+        } as never;
+        expect(capturedSessionId(minted)).toBe('minted-uuid');
     });
 });

@@ -1592,8 +1592,17 @@ export interface SavedAgentInfo {
     terminalId?: string;
     /** Is its TUI running right now? Not-live is dormant, not gone. */
     live: boolean;
-    /** Harness-native AgentInbox adapter required by this provider. */
-    transport?: 'claude-channel' | 'codex-app-server' | 'genie-mcp';
+    /**
+     * Harness-native AgentInbox adapter required by this agent.
+     *
+     * By its ENGINE first, not its provider: an ACP session's transport is the session
+     * (`acp-session`), because the Claude Channel is a Claude Code bridge that needs a launch
+     * flag an ACP session has no launch line to carry.
+     *
+     * Spelled out rather than imported from `db.ts`: this file is the MCP wire contract and
+     * importing a database type into it would make the protocol move whenever a column does.
+     */
+    transport?: 'claude-channel' | 'codex-app-server' | 'acp-session' | 'genie-mcp';
     /** Timestamp of the current boot's successful transport handshake. */
     transportVerifiedAt?: number;
     /** Actionable failure from the current boot's transport handshake. */

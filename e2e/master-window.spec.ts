@@ -212,11 +212,11 @@ test('the window comes up signed in, on the real two-column frame', async () => 
     await expect(page.getByText('Connect Genie')).toHaveCount(0);
     await expect(page.locator('.winframe.stacked')).toHaveCount(0);
 
-    // The three parts of the frame: the full-height chooser column, the floor's
-    // grid, and the floor's status bar.
+    // The two parts of the frame: the full-height chooser column and the floor's grid.
+    // The status bar was the third until P7 deleted it — the Deck is the default surface and
+    // reports the same "N live" from the same facts, so the bar repeated the landing view.
     await expect(page.locator('.gleft')).toBeVisible();
     await expect(page.locator('.gbody')).toBeVisible();
-    await expect(page.locator('.gstatus')).toBeVisible();
 });
 
 test('the rail lists the seeded workspaces, with the launch target active', async () => {
@@ -307,13 +307,17 @@ test('the floor lays out the seeded terminal, and the status bar counts it', asy
     // shell, so the assertion goes as far as the xterm the panel mounts.
     await expect(panel(seed.terminalLabel).locator('.xterm')).toBeVisible();
 
-    const status = page.locator('.gstatus');
-    await expect(status).toContainText('1 panel');
-    await expect(status).toContainText('1 project');
-    // `live` is workstation-wide, unlike the Floor's panel/project counts. The
-    // seeded shell and the always-running Genie OS agent are both live, while
-    // only the seeded workspace terminal is laid out above.
-    await expect(status).toContainText('2 live');
+    // THE FLOOR'S OWN ACCOUNT, still a second source after the status bar was deleted: these
+    // are the counts the bar rendered, published on `.gbody` as data. The assertion is the same
+    // one — the app's numbers, not the DOM's — because a visible panel with a zero count (or the
+    // reverse) is exactly the disagreement worth catching.
+    const floor = page.locator('.gbody');
+    await expect(floor).toHaveAttribute('data-panel-count', '1');
+    await expect(floor).toHaveAttribute('data-project-count', '1');
+    // `live` is workstation-wide, unlike the Floor's panel/project counts. The seeded shell and
+    // the always-running Genie OS agent are both live, while only the seeded workspace terminal
+    // is laid out above.
+    await expect(floor).toHaveAttribute('data-live-count', '2');
 });
 
 test('an agent panel flips to its sidecar screen and back without adding a panel (genie#707)', async () => {
@@ -687,7 +691,34 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * `main/__tests__/flow-ipc-channels.test.ts`.
  */
 
-const flowsButton = () => page.locator('.gicon.flows-button');
+/**
+ * THE FLOWS ICON IS GONE (P7). The palette is the way in now.
+ *
+ * `openFlows` goes through ⌘K, which is the route a person has — the icon cluster was deleted once
+ * every feature had a row built from `FEATURE_SURFACES` and the four live SIGNALS had moved to the
+ * Deck. The icon's own animation assertions moved with the signal, to `deck-signals.spec.ts`,
+ * where they are measured against the Deck's strip instead of a CSS animation.
+ */
+const openPalette = async (): Promise<void> => {
+    /**
+     * BLUR FIRST, and this is not ceremony.
+     *
+     * `resolveShortcut` withholds ⌘K while a TERMINAL owns the keyboard — *"Ctrl-K is kill-line in
+     * any readline prompt"* — and this fixture has a live seeded terminal, so the chord is
+     * deliberately swallowed whenever xterm has focus.
+     *
+     * Clicking the title bar does NOT fix it, measured: that strip is a window drag region, so the
+     * click moves the window's focus notion not at all and `document.activeElement` stays xterm's
+     * hidden helper textarea. Blurring it explicitly is the only thing that reliably hands the
+     * keyboard back to the surface.
+     */
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('ControlOrMeta+KeyK');
+    await expect(page.locator('.genie-cmdk')).toBeVisible();
+};
+
+const paletteRow = (label: string) =>
+    page.locator('.genie-cmdk').getByText(label, { exact: true }).first();
 
 /**
  * The flyout ROOT, not the dialog.
@@ -725,45 +756,6 @@ async function openFlowEditor(open: () => Promise<void>): Promise<Page> {
     return win;
 }
 
-/**
- * What is animating on the Flows icon, split by KIND.
- *
- * `getAnimations()` returns CSS **transitions** as well as CSS animations, and
- * `.gicon` transitions two properties — `background` and `color`, 150ms each —
- * on hover. The first version of this counted everything and went red with
- * `Received: 2`, seven milliseconds after the previous test had clicked the
- * button and left the pointer on it. Two transitioned properties, two effects,
- * 7ms into a 150ms transition: the icon was not animating, it was finishing a
- * hover.
- *
- * Asking the compositor is still the right instrument — it is the only thing
- * that knows whether a rule actually applied, which a class check cannot see —
- * but the question has to name the KIND, or the answer includes everything the
- * element happens to be doing for unrelated reasons.
- *
- * Both lists are returned so a failure says WHAT was running rather than only
- * that something was. That is what turned the last failure from a guess into a
- * measurement, and the next person should not have to re-derive it.
- */
-async function flowIconEffects(): Promise<{ animations: string[]; transitions: string[] }> {
-    return page.evaluate(() => {
-        const el = document.querySelector('.gicon.flows-button');
-        if (!el) return { animations: ['NO ELEMENT MATCHED'], transitions: [] };
-        const live = el.getAnimations().filter((a) => a.playState === 'running');
-        return {
-            animations: live
-                .filter((a): a is Animation & { animationName: string } => 'animationName' in a)
-                .map((a) => a.animationName)
-                .sort(),
-            transitions: live
-                .filter((a): a is Animation & { transitionProperty: string } =>
-                    'transitionProperty' in a,
-                )
-                .map((a) => a.transitionProperty)
-                .sort(),
-        };
-    });
-}
 
 /** Push run state from main, exactly as the runtime's callbacks do. */
 async function setFlowsRunning(running: string[]): Promise<void> {
@@ -778,19 +770,23 @@ async function setFlowsRunning(running: string[]): Promise<void> {
 
 async function openFlows(): Promise<void> {
     const cls = (await flowsRoot().getAttribute('class')) ?? '';
-    if (!cls.includes('open')) await flowsButton().click();
+    if (!cls.includes('open')) {
+        await openPalette();
+        await paletteRow('Flows').click();
+    }
     await expect(flowsRoot()).toHaveClass(/\bopen\b/);
 }
 
-test('the Flows button sits in the icon cluster and opens the manager', async () => {
+test('Flows opens from the command palette, now that the icon is gone', async () => {
+    // P7 deleted the icon cluster. This is the route that replaced it — a ⌘K row built from
+    // `FEATURE_SURFACES`, which is also what the reachability guard reads, so a feature cannot be
+    // dropped from the contract and silently unreachable here.
     await setFlowsRunning([]);
-    await expect(flowsButton()).toHaveAttribute('aria-label', 'Flow Manager');
-    // Same treatment as its neighbours: it IS a `.gicon`, not a lookalike.
-    await expect(flowsButton()).toHaveClass(/\bgicon\b/);
-
     await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
     await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'true');
-    await flowsButton().click();
+
+    await openPalette();
+    await paletteRow('Flows').click();
     await expect(flowsRoot()).toHaveClass(/\bopen\b/);
     await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'false');
 
@@ -798,38 +794,25 @@ test('the Flows button sits in the icon cluster and opens the manager', async ()
     await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
 });
 
-test('the Flows icon is still while nothing runs, and animates while one does', async () => {
-    await setFlowsRunning([]);
-    await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // EMPTY, not "does not contain flows-running": an unexpected animation on
-    // this icon should fail here too. The transitions are reported in the
-    // message so a failure names what was running instead of implying it.
-    const still = await flowIconEffects();
-    expect(still.animations, `transitions also live: ${still.transitions.join(', ')}`).toEqual([]);
-
-    await setFlowsRunning(['e2e-flow-manual']);
-    await expect(flowsButton()).toHaveClass(/is-running/);
-    // The control, and it NAMES the animation — "something is animating" is
-    // satisfied by the hover transition this test previously mistook for one.
-    //
-    // Polled rather than sampled: the class lands one style recalc before the
-    // animation object exists, and a single read can arrive in the gap.
-    await expect
-        .poll(async () => (await flowIconEffects()).animations, {
-            message: 'the flows-running animation should start when a Flow runs',
-        })
-        .toEqual(['flows-running']);
-
-    await setFlowsRunning([]);
-    await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // A stuck badge is worse than no badge. This is what catches one — and it
-    // asserts EMPTY rather than "no flows-running", so anything unexpected that
-    // starts animating this icon fails here too.
-    await expect
-        .poll(async () => (await flowIconEffects()).animations, {
-            message: 'the flows-running animation must STOP when the run ends',
-        })
-        .toEqual([]);
+test('the title bar has no icon cluster left to click', async () => {
+    // The deletion, asserted directly. Ten buttons were there; what remains is the menu and the
+    // window controls, so a count floor would pass against the cluster coming back — these name
+    // the labels that must NOT be there.
+    for (const label of [
+        'Flow Manager',
+        'Sharing',
+        'Knowledge Graph',
+        'Open Genie OS agent',
+        'Resolve GitHub permissions',
+    ]) {
+        await expect(
+            page.locator(`.titlebar [aria-label="${label}"]`),
+            `${label} should be a palette row now, not a title-bar icon`,
+        ).toHaveCount(0);
+    }
+    // POSITIVE CONTROL: the bar is still there and still has the menu, so the assertions above
+    // are about a deletion rather than about a title bar that failed to render.
+    await expect(page.locator('.titlebar [aria-label="Genie menu"]')).toBeVisible();
 });
 
 test('the Flow Manager lists the seeded Flows, and warns about the one that cannot fire', async () => {
@@ -1383,10 +1366,26 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
  * check and not a screenshot. A screenshot would go red for a font change; this
  * goes red for exactly one thing.
  */
-const listsButton = () => page.locator('.gicon.lists-hdr-btn');
+/**
+ * THE LISTS ICON IS GONE (P7) — the palette opens it.
+ *
+ * The geometry assertion below does not care which control opens the panel; it cares that pinning
+ * the panel does not move the header. So it measures what is still in the header (the menu) rather
+ * than the button that used to be there.
+ */
+const openLists = async (): Promise<void> => {
+    await openPalette();
+    await paletteRow('Lists').click();
+};
 const listsDock = () => page.locator('.lists-dock');
 const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
 const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
+/** The flyout ROOT (where `open` lives) and its scrim — the only way to CLOSE Lists, since
+ *  `activateFeature` only ever opens. Scoped by the dialog inside it: `.docs-scrim` is shared by
+ *  eight flyouts, so an unscoped locator is a strict-mode violation rather than a target. */
+const listsRoot = () =>
+    page.locator('.docs-flyout-root').filter({ has: page.locator('[role="dialog"][aria-label="Lists"]') });
+const listsScrim = () => listsRoot().locator('.docs-scrim');
 
 /** One element's box, or null when it is not on screen. */
 async function boxOf(selector: string): Promise<{ x: number; right: number; bottom: number } | null> {
@@ -1427,7 +1426,10 @@ async function headerGeometry() {
             icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x + sx), w: Math.round(r.width) };
         });
         return {
-            button: box('.gicon.lists-hdr-btn'),
+            // The MENU button, which survives the icon deletion. Any header element would do —
+            // the assertion is that this one does not move — but the menu is the one guaranteed
+            // to be there on every route.
+            button: box('.titlebar [aria-label="Genie menu"]'),
             titlebar: box('.titlebar'),
             toolbar: box('.gtoolbar'),
             body: box('.gbody'),
@@ -1440,10 +1442,10 @@ async function headerGeometry() {
 
 test('docking the lists panel leaves the header exactly where it was', async () => {
     const before = await headerGeometry();
-    expect(before.button, 'the lists button must be on screen to measure it').not.toBeNull();
+    expect(before.button, 'the header menu must be on screen to measure it').not.toBeNull();
     expect(before.toolbar).not.toBeNull();
 
-    await listsButton().click();
+    await openLists();
     // The PIN, not `[aria-label="Lists"]` — that label is on the header button
     // AND on the panel, so waiting on it is a strict-mode violation rather than
     // a wait. The pin only exists once the panel has rendered, which is the
@@ -1511,10 +1513,20 @@ ${JSON.stringify({ before, after }, null, 2)}`)
     // different coordinate systems, which is what this spec kept getting wrong.)
     expect(Math.abs((before.body!.w - after.body!.w) - dock.width)).toBeLessThanOrEqual(1);
 
-    // Leave the floor as it was found — every test after this one sees it.
+    // Leave the floor as it was found — every test after this one sees it, and this cleanup did
+    // NOT. It used to re-run `openLists()` after unpinning, which cannot close anything:
+    // `activateFeature` is `setListsOpen(true)`, never a toggle. So it left the Lists FLYOUT open
+    // for the rest of the file, and that is what CI reported two tests later — *"<div
+    // class="docs-scrim"> … intercepts pointer events"*, because an open flyout's scrim covers the
+    // whole window. (The palette being under that scrim at all was a real defect and is fixed
+    // separately, in the z-ladder; this is the pollution that exposed it.)
+    //
+    // Closed the way a person closes it: the scrim. Clicked near its top-left for the same reason
+    // the Genie OS backdrop is — the panel sits ON the scrim, so its centre is the panel.
     await listsUnpin().click();
-    await listsButton().click();
     await expect(listsDock()).toHaveCount(0);
+    await listsScrim().click({ position: { x: 6, y: 6 } });
+    await expect(listsRoot()).not.toHaveClass(/\bopen\b/);
 });
 
 /**
@@ -1733,13 +1745,16 @@ async function chaseAnimationsRunning(): Promise<string[]> {
 }
 
 test('the Genie OS shimmer does not run just because the panel is open', async () => {
-    const button = page.locator('.gicon.genie-os-button');
+    // OPENED FROM THE PALETTE. The icon it used to be opened from is gone with the rest of the
+    // cluster (P7); its pulse — the OTHER read-out this spec checked — is now the Deck's "Genie is
+    // working" signal, asserted in `deck-signals.spec.ts`. What remains here is the flyout's own
+    // chase, which is unchanged and still keyed on `.genie-os-layer.is-active`.
     const layer = page.locator('.genie-os-layer');
-    await expect(button).toHaveCount(1);
+    await openPalette();
+    await paletteRow('Genie OS').click();
 
-    // IDLE AND OPEN — the state the owner reported. Nothing is streaming into
-    // the OSA terminal in this fixture, so neither read-out may be running.
-    await button.click();
+    // IDLE AND OPEN — the state the owner reported. Nothing is streaming into the OSA terminal in
+    // this fixture, so the read-out may not be running.
     await expect(layer).toHaveClass(/\bis-open\b/);
 
     expect(
@@ -1747,15 +1762,25 @@ test('the Genie OS shimmer does not run just because the panel is open', async (
         'the flyout chase must not run while the panel merely sits open',
     ).toEqual([]);
     await expect(layer).not.toHaveClass(/\bis-active\b/);
-    await expect(button).not.toHaveClass(/\bis-active\b/);
 
-    // POSITIVE CONTROL: the panel really did open. Without it, every assertion
-    // above passes for a flyout that never rendered — and "no animation" on a
-    // missing element is the emptiest possible green.
+    // POSITIVE CONTROL: the panel really did open. Without it, every assertion above passes for a
+    // flyout that never rendered — and "no animation" on a missing element is the emptiest
+    // possible green.
     await expect(page.locator('.genie-os-flyout')).toBeVisible();
 
-    // Leave the floor as it was found.
-    await button.click();
+    // Leave the floor as it was found. The BACKDROP closes it — a real button with a real label,
+    // which is also why deleting the icon did not leave this layer unclosable. Escape does NOT
+    // close it, measured on all three platforms: the layer stayed `is-open` and the assertion said
+    // so, which is the guard working rather than a flake.
+    //
+    // CLICKED NEAR ITS TOP-LEFT, not at its centre, and CI is why: a bare `.click()` aims at the
+    // element's middle, the backdrop is `inset: 0`, and the flyout sits ON it — so Playwright
+    // reported *"<div class="xterm-screen"> from <aside class="genie-os-flyout"> … intercepts
+    // pointer events"* and retried for thirty seconds. The flyout is `right: 12px` and
+    // `width: min(760px, 100vw - 48px)`, so in this 884px window it starts at x≈112 and a few
+    // pixels in from the left is backdrop and nothing else. That is also what a person does: you
+    // dismiss a right-hand drawer by clicking the dimmed part, not through the drawer.
+    await page.getByRole('button', { name: 'Close Genie OS' }).click({ position: { x: 6, y: 6 } });
     await expect(layer).not.toHaveClass(/\bis-open\b/);
 });
 
@@ -1780,4 +1805,51 @@ test('the window itself does not scroll — no document scrollbar (owner report)
     });
     expect(overflow.docScrolls, 'the document must not overflow its viewport').toBe(false);
     expect(overflow.bodyScrolls, 'the body must not overflow its viewport').toBe(false);
+});
+
+/**
+ * THE DECK'S SIGNAL STRIP — the live signals the title-bar icons carried.
+ *
+ * These lived in their own spec file with its own Electron launch, and that launch's `afterAll`
+ * timed out at 60s on every platform, taking the two files that ran after it down with it. A second
+ * master app in one run is not worth an assertion: this file already has a working app, a working
+ * teardown and the flows fixture, so the specs moved here and navigate the same window.
+ *
+ * Owner decision behind the feature: *"move the signals to the Deck, then delete the icons."*
+ * `renderer/lib/station-signals.ts` decides which and in what order, and is unit-tested — what only
+ * a real window can show is that a REAL running Flow makes one appear and stopping it makes it go.
+ *
+ * Last in the file ON PURPOSE: they navigate to the Deck, and every spec above expects the grid.
+ */
+test('the Deck shows a running Flow as a signal, and clears it when the run ends', async () => {
+    await setFlowsRunning([]);
+    // NAVIGATE the way the app itself does. `usePageQuery` listens for `popstate` AND for Genie's
+    // own `genie:pagequery` event, because `history.replaceState` notifies nobody — so a test that
+    // only rewrote the url would change nothing on screen. Dropping `view` entirely is the Deck:
+    // no params and the Deck are the same thing in both directions (`viewRouteQuery`).
+    await page.evaluate(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('view');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+        window.dispatchEvent(new Event('genie:pagequery'));
+    });
+    await expect(page.locator('.deck')).toBeVisible({ timeout: 15_000 });
+
+    const strip = page.getByTestId('deck-signals');
+    const flow = () => strip.getByText('A Flow is running', { exact: false });
+
+    // NOT an assertion that the strip is empty: a fresh profile legitimately shows others (GitHub
+    // is not connected, IssueWatch cannot tell), and asserting a total would be asserting the
+    // fixture's GitHub state by accident.
+    await expect(flow()).toHaveCount(0);
+
+    await setFlowsRunning(['e2e-flow-manual']);
+    await expect(flow()).toBeVisible();
+    // The FEATURE id the signal routes through — the same one the palette dispatches on, so a
+    // signal cannot open something other than what it names.
+    await expect(strip.locator('[data-feature="flows"]')).toHaveAttribute('data-tone', 'busy');
+
+    await setFlowsRunning([]);
+    // A stuck signal is worse than no signal: the same failure as a badge that never clears.
+    await expect(flow()).toHaveCount(0);
 });

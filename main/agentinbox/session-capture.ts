@@ -149,6 +149,15 @@ export interface RenderedLaunch {
     command: string;
     /** The captured/known session id, or null (detect resolves it later). */
     chatSessionId: string | null;
+    /**
+     * Did WE mint this id, or did we find one that already existed?
+     *
+     * Both answers come back as `strategy: 'flag'`, so the strategy cannot be asked. The
+     * distinction only started to matter with ACP: a minted id is a promise the launch line
+     * keeps — the CLI creates the session it is handed — and an ACP session has no launch
+     * line, so nothing creates it. See {@link acpResumeSessionId}.
+     */
+    minted: boolean;
     strategy: SessionStrategy;
 }
 
@@ -168,19 +177,25 @@ export function renderAgentLaunch(
 
     // Already resuming or already pinned — never double-inject.
     if (isResumingCommand(agent, cmd)) {
-        return { command: cmd, chatSessionId: extractSessionId(cmd), strategy: profile.strategy };
+        return {
+            command: cmd,
+            chatSessionId: extractSessionId(cmd),
+            minted: false,
+            strategy: profile.strategy,
+        };
     }
     const existing = extractSessionId(cmd);
     if (existing) {
-        return { command: cmd, chatSessionId: existing, strategy: profile.strategy };
+        return { command: cmd, chatSessionId: existing, minted: false, strategy: profile.strategy };
     }
 
     if (profile.strategy === 'flag' && profile.flagTemplate) {
         const id = genId();
         const flag = profile.flagTemplate.replace('{id}', id);
-        return { command: `${cmd} ${flag}`.trim(), chatSessionId: id, strategy: 'flag' };
+        // The ONE place an id is invented. Everything else either read one or has none.
+        return { command: `${cmd} ${flag}`.trim(), chatSessionId: id, minted: true, strategy: 'flag' };
     }
-    return { command: cmd, chatSessionId: null, strategy: profile.strategy };
+    return { command: cmd, chatSessionId: null, minted: false, strategy: profile.strategy };
 }
 
 /** Strip any session-id / resume flag (+ its id) from a command, so a resume can

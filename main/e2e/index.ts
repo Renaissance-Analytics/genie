@@ -14,6 +14,7 @@ import { seedAgentPulseE2E } from './agent-pulse';
 import { registerAgentRevivalE2E } from './agent-revival';
 import { raiseAskE2E, seedAskE2E } from './ask';
 import { seedFlowsE2E } from './flows';
+import { listWorkspaces, removeWorkspace } from '../db';
 import { seedMasterE2E } from './master';
 import { seedRepoE2E } from './repo';
 import { seedTynnImportE2E } from './tynn-import';
@@ -176,15 +177,44 @@ function showE2EWindow(host: E2EHost): void {
         }
     }
     if (page === 'master') {
-        // Seed the fixture workspaces + terminals BEFORE the window loads: the
-        // real page lists them on mount and restores its launch grid from what it
-        // finds, so a row that arrives afterwards is a row the floor never lays
-        // out. Also resets the persisted layout + active workspace, since the E2E
-        // profile is reused across runs.
-        try {
-            seedMasterE2E();
-        } catch (e) {
-            console.error('[e2e] master seed failed', e);
+        /**
+         * AN EMPTY WORKSTATION, for the FIRST-RUN spec.
+         *
+         * `GENIE_E2E_EMPTY_WORKSTATION` skips the seed and clears whatever the reused profile has,
+         * because first run is defined by `workspaces.length === 0` and the master seed's whole job
+         * is to make that false. Without it the one state the flow exists for is unreachable in a
+         * real window — which is how that component went its whole life with no mount site and
+         * nobody noticed.
+         *
+         * Deliberately a SKIP rather than a second harness page: the spec needs the real master
+         * route, the real boot path and the real first-run gate. A separate page would test a
+         * different window.
+         */
+        if (process.env.GENIE_E2E_EMPTY_WORKSTATION) {
+            // ONE TRY PER ROW, not one around the loop. `removeWorkspaceIn` THROWS by design for
+            // the System Workspace — *"the workstation operator's own workspace and cannot be
+            // unregistered"* — and a `try` around the whole loop means the first such throw leaves
+            // every remaining workspace in place. `listWorkspaces()` excludes that row today, so
+            // this is latent rather than live; it costs a line, and the failure it prevents is a
+            // whole VM run spent on a first-run spec testing a seeded workstation.
+            for (const ws of listWorkspaces()) {
+                try {
+                    removeWorkspace(ws.id);
+                } catch (e) {
+                    console.error(`[e2e] clearing workspace ${ws.id} failed`, e);
+                }
+            }
+        } else {
+            // Seed the fixture workspaces + terminals BEFORE the window loads: the
+            // real page lists them on mount and restores its launch grid from what it
+            // finds, so a row that arrives afterwards is a row the floor never lays
+            // out. Also resets the persisted layout + active workspace, since the E2E
+            // profile is reused across runs.
+            try {
+                seedMasterE2E();
+            } catch (e) {
+                console.error('[e2e] master seed failed', e);
+            }
         }
         // Flows for the manager flyout the master header opens, plus the emitter
         // the spec drives the header animation with. Separate from the master

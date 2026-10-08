@@ -46,10 +46,12 @@ const single: PendingQuestionSpec = {
 };
 
 /**
- * One question that must NOT be answered inline: two parts.
+ * One question that cannot be answered by a single CLICK: two parts.
  *
- * Answering the first would submit a PARTIAL answer and tell the agent the human had
- * decided everything. This is the row that must show "Open" and must not show `yes`/`no`.
+ * Answering the first alone would submit a PARTIAL answer and tell the agent the human had
+ * decided everything, so the row must not show `yes`/`no` up front. It now offers "Answer",
+ * which expands the full form — the surface that made `QuestionInboxFlyout` redundant rather
+ * than merely duplicated.
  */
 const multi: PendingQuestionSpec = {
     id: 'q-multi',
@@ -61,6 +63,21 @@ const multi: PendingQuestionSpec = {
     ],
 };
 
+/**
+ * One question that is answered on ANOTHER HOST.
+ *
+ * The only case that still gets "Open": resolving the local copy would mark it done here while
+ * the real one waits forever on the machine that asked. It is in the fixture so the Open path
+ * keeps a live assertion after every other row grew a form.
+ */
+const forwarded: PendingQuestionSpec = {
+    id: 'q-forwarded',
+    index: 0,
+    createdAt: NOW - 60_000,
+    remoteHost: 'rig-2',
+    questions: [{ header: 'C', question: 'theirs?', options: [{ label: 'sure' }] }],
+};
+
 const sessions: readonly AgentSessionSpec[] = [];
 
 /** A UserList item -- resolvable three ways, and NOT blocking: an agent carries on. */
@@ -68,6 +85,9 @@ const listItems: readonly ListItemSpec[] = [{ id: 'l1', text: 'Rotate the GH tok
 
 export default function E2EDeckPage() {
     const [log, setLog] = useState<string[]>([]);
+    // The expanded row is CONTROLLED in the product too (`master.tsx` owns it), so the harness
+    // owning it here is the same shape rather than a test affordance.
+    const [expanded, setExpanded] = useState<string | null>(null);
 
     const record = (entry: string) => {
         setLog((l) => [...l, entry]);
@@ -79,11 +99,18 @@ export default function E2EDeckPage() {
         <div className="gwrap" style={{ height: '100vh', overflow: 'auto' }}>
             <Deck
                 sessions={sessions}
-                questions={[single, multi]}
+                questions={[single, multi, forwarded]}
                 listItems={listItems}
                 now={NOW}
                 onAnswerOption={(id: string, label: string) => record(`answer:${id}:${label}`)}
                 onOpenQuestion={(id: string) => record(`open:${id}`)}
+                expandedQuestionId={expanded}
+                onExpandQuestion={setExpanded}
+                // The ANSWER, not merely that Send was pressed: a form that submitted the wrong
+                // part, or dropped one, would pass an assertion about the click alone.
+                onSubmitAnswer={(id: string, answers: Array<{ selected: string[]; note: string }>) =>
+                    record(`submit:${id}:${answers.map((a) => a.selected.join('+') || a.note).join('|')}`)
+                }
                 onResolveListItem={(id: string, action: string) => record(`resolve:${id}:${action}`)}
             />
             {/* A visible mirror of the click log, so a failure shows what DID happen. */}

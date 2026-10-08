@@ -2505,7 +2505,12 @@ function observeWorkspaceAgents(
             const spec = terminalId ? getTerminalSpec(terminalId) : undefined;
             const inboxId =
                 typeof spec?.meta?.agent_id === 'string' ? spec.meta.agent_id : null;
-            const required = requiredHarnessTransport(agent.tui);
+            // Engine-aware: an ACP session's transport is the session, and reporting
+            // `claude-channel` would send an operator looking for a bridge nobody launched.
+            const required = requiredHarnessTransport(
+                agent.tui,
+                spec?.meta?.engine === 'acp' ? 'acp' : 'pty',
+            );
             const handoff = handoffPath(ws.path, agent.name);
             return {
                 agentId: agent.id,
@@ -3201,7 +3206,13 @@ export async function agentInboxForMcp(
                 };
             }
             case 'registerTransport': {
-                const required = requiredHarnessTransport(spec.meta?.agent as string | undefined);
+                // The ENGINE decides. A bridge CAN start inside an ACP session — it is an
+                // ordinary MCP server in `.mcp.json` — and binding it would tell AgentInbox
+                // the mail was handled while Claude Code dropped every notification it wrote.
+                const required = requiredHarnessTransport(
+                    spec.meta?.agent as string | undefined,
+                    spec.meta?.engine === 'acp' ? 'acp' : 'pty',
+                );
                 if (!required || req.transport !== required) {
                     return {
                         ok: false,

@@ -96,9 +96,18 @@ export type LaunchResult = { ok: true; launch: AcpLaunch } | { ok: false } & Lau
  */
 export const PRISM_HOST_FILENAME = 'prism-host.mjs';
 
-/** Providers prism-acp can actually drive today. Measured in the published package:
- *  `dist/claude/` is the only driver it ships. */
-const PRISM_DRIVES = new Set(['claude']);
+/**
+ * Providers prism-acp can actually drive today.
+ *
+ * Measured in the published package rather than taken from a changelog: 0.5.0 ships
+ * `dist/claude/` AND `dist/codex/`, and exports `CodexDriver` from its index. It was claude alone
+ * until 2026-10-08.
+ *
+ * The list means CAPABILITY. Whether a provider is ROUTED here is `ACP_PROVIDERS` + `engineFor`,
+ * and the two are deliberately separate — conflating them is what sent every codex agent to an
+ * engine that refused it and never started.
+ */
+const PRISM_DRIVES = new Set(['claude', 'codex']);
 
 export function acpLaunch(provider: string, ctx: LaunchContext): LaunchResult {
     // Native ACP modes: a flag for one, a subcommand for the other. No adapter to
@@ -109,8 +118,9 @@ export function acpLaunch(provider: string, ctx: LaunchContext): LaunchResult {
     // Anything prism cannot drive is refused BY NAME rather than pointed at the claude
     // host. A wrong spawn starts something that cannot drive the provider and then times
     // out in the handshake, which reads as a hung agent instead of an unsupported one.
-    // codex lands here until prism ships its driver — and is absent from ACP_PROVIDERS
-    // for that reason, so `engineFor` keeps it on the pty rather than routing it here.
+    // aider, goose and the rest land here: no ACP mode and no prism driver, so they stay on the
+    // pty where they work. They are absent from `ACP_PROVIDERS` for the same reason, so `engineFor`
+    // never routes them here in the first place — this is the second line of defence.
     if (!PRISM_DRIVES.has(provider)) return { ok: false, reason: 'no-acp-mode', provider };
 
     const script = ctx.hostScript();
@@ -163,12 +173,45 @@ export interface AcpAuth {
     /** `subscription` strips anything that would outrank the stored login.
      *  `api-key` is the deliberate opt-in and keeps it. */
     auth: 'subscription' | 'api-key';
+    /**
+     * THE GENIE RIG — this agent's own identity, so it can call Genie back.
+     *
+     * An ACP child gets the genie MCP server for free: the CLI reads the workspace's `.mcp.json`,
+     * and the child runs in that cwd. What it did not get is its own NAME. `agent-config.ts`:
+     * *"Per-terminal resolution for imDone/ForceTheQuestion is preserved server-side via the
+     * tools' optional `terminalId` arg (read from GENIE_TERMINAL_ID)"* — and this function
+     * forwarded neither that nor the endpoint, while the pty path sets both.
+     *
+     * So an ACP agent calling `imDone` in a workspace with more than one terminal was refused
+     * — *"Could not determine which terminal to act on"* — and `imDone` is the protocol's
+     * mandatory finish. An agent that cannot call it stalls the work in silence.
+     *
+     * Absent means the workspace has MCP switched off, and then NEITHER variable is set: an
+     * empty URL is worse than a missing one, because it looks configured and resolves nowhere
+     * (`agent-config.ts` records a referenced-but-unset var breaking every server in a config).
+     */
+    genie?: {
+        /** The terminal spec id this agent IS. */
+        terminalId: string;
+        /** The workspace's genie endpoint, or null when there is none to give. */
+        mcpUrl: string | null;
+    };
 }
 
 export type HostEnv = Record<string, string | undefined>;
 
-export function acpEnv(_provider: string, host: HostEnv, opts: AcpAuth): Record<string, string> {
-    const env: Record<string, string> = {};
+export function acpEnv(provider: string, host: HostEnv, opts: AcpAuth): Record<string, string> {
+    const env: Record<string, string> = {
+        /**
+         * WHICH DRIVER the host script should serve.
+         *
+         * prism-acp 0.5.0 ships a Codex driver beside the Claude one, so `prism-host.mjs` is no
+         * longer claude-only and needs telling. In the ENV rather than as an argv flag, because the
+         * argv is `[script]` and nothing else — one place decides how this child is launched, and
+         * the env is already the allow-listed thing this function exists to build.
+         */
+        GENIE_ACP_PROVIDER: provider,
+    };
 
     const take = (key: string) => {
         const value = host[key];
@@ -180,6 +223,13 @@ export function acpEnv(_provider: string, host: HostEnv, opts: AcpAuth): Record<
 
     for (const key of INHERITED) take(key);
     for (const key of SUBSCRIPTION_CREDENTIALS) take(key);
+
+    if (opts.genie) {
+        env.GENIE_TERMINAL_ID = opts.genie.terminalId;
+        // The URL only when there IS one. See the note on `genie` above for why an empty string is
+        // the worse of the two failures.
+        if (opts.genie.mcpUrl) env.GENIE_MCP_URL = opts.genie.mcpUrl;
+    }
 
     if (opts.auth === 'api-key') {
         // The explicit opt-in. Forwarded on purpose.

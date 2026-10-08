@@ -12,8 +12,10 @@
  * so anything claude-shaped breaks the moment somebody picks codex.
  *
  * This is the generalisation of the GApp persona briefing (genie#245), which was
- * the same mechanism with the text hard-coded. {@link withPersonaBriefing} is now
- * a caller of it, so the shell-quoting below is the only copy.
+ * the same mechanism with the text hard-coded. The GApp path now supplies only the
+ * TEXT ({@link personaBriefing}) and this does the folding, so the shell-quoting
+ * below is the only copy — and the briefing can also be handed to an ACP session,
+ * which has no command line to fold anything into.
  *
  * ## 2. When the chat-id becomes knowable — THE CODEX CONSTRAINT
  *
@@ -163,17 +165,24 @@ export function withProviderStartupInstructions(
 }
 
 /**
- * Point a launching TUI at the persona it is supposed to BE — the GApp flavour
- * of {@link withStartupInstructions} (genie#245).
+ * The persona briefing as TEXT — the GApp flavour of {@link withStartupInstructions}'s payload
+ * (genie#245).
  *
- * The persona is named by PATH rather than inlined, because personas are often
- * more than one file and the folder travels whole.
+ * TEXT and not a command line, because there are two ways to deliver it: the pty types it in,
+ * and an ACP session has no launch line so it takes it as its first prompt. It used to be
+ * `withPersonaBriefing`, which composed the line at the GApp call site — and since
+ * `createAgentTerminal` folds `agentMeta.instructions` into the command itself, passing both
+ * briefed the agent twice in one line.
+ *
+ * The persona is named by PATH rather than inlined, because personas are often more than one
+ * file and the folder travels whole.
  */
-export function withPersonaBriefing(command: string, personaPath: string, name: string): string {
-    return withStartupInstructions(
-        command,
+export function personaBriefing(personaPath: string, name: string): string {
+    return (
         `You are ${name}, an agent this Genie App ships. ` +
-            `Read ${personaPath} — it is your persona — and work as it describes ` +
-            'for this whole session.',
+        `Read ${personaPath} — it is your persona — and work as it describes ` +
+        'for this whole session.'
     );
 }
+
+

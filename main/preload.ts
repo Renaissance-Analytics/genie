@@ -1284,6 +1284,18 @@ const api = {
      */
     agentSession: {
         list: () => ipcRenderer.invoke('agentsession:list'),
+        /**
+         * The WRITE path — prompt, cancel, decide.
+         *
+         * `list` was the whole of this bridge, which meant the Conversation tab could show a
+         * session and not talk to it: `terminal:write` reaches a pty, and an ACP agent's pty is
+         * an empty shell.
+         */
+        prompt: (specId: string, text: string) =>
+            ipcRenderer.invoke('agentsession:prompt', specId, text),
+        cancel: (specId: string) => ipcRenderer.invoke('agentsession:cancel', specId),
+        decide: (specId: string, approvalId: string, decision: string) =>
+            ipcRenderer.invoke('agentsession:decide', specId, approvalId, decision),
     },
     lists: {
         /** Every agent's checklist in this workspace, plus the shared UserList. */

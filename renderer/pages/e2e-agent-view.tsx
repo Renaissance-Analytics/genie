@@ -16,6 +16,14 @@ import type { AgentViewTab } from '../lib/agent-view';
  *
  * Decisions are recorded on `window` so a spec can assert WHICH outcome a click produced —
  * "a button was clickable" would pass even if Allow sent Deny.
+ *
+ * ## The WRITE handlers are here because they had no caller at all
+ *
+ * `onApprove` and `onTakeOver` were declared by the component and passed by nothing in the
+ * product; there was no composer; and `terminal:write` reaches a pty, which for an ACP agent is
+ * an empty shell. So the default surface of Genie 2 could display an agent and not speak to it.
+ * `onSend` and `onCancel` exist now and `master.tsx` wires all four to
+ * `agentSession.prompt|cancel|decide` — these specs are the half that proves a human can act.
  */
 
 const NOW = 1_700_000_000_000;
@@ -25,7 +33,19 @@ const base: AgentSessionSpec = {
     specId: 's1',
     session: { provider: 'claude', name: 'kai', cwd: 'repos/genie', workspaceId: 'w1', sessionId: 'sess' },
     turn: { state: 'awaiting-approval', since: NOW - 8_000 },
-    rateLimit: null,
+    /**
+     * A REAL rate-limit reading, in the shape prism actually sends.
+     *
+     * The gauge is the one number the owner judges this migration by, and it had never rendered
+     * in a window — `rateLimit` reached the session model, the types and this fixture's `null`,
+     * and no surface read it. 13% used is one of the three values measured off live traffic.
+     */
+    rateLimit: {
+        status: 'allowed',
+        rateLimitType: 'five_hour',
+        windows: { five_hour: { utilization: 0.13, resetsAtMs: NOW + 3_600_000 } },
+        notice: null,
+    } as never,
     rateLimitUnavailable: null,
     composer: { text: '', cursor: 0, busy: false },
     transcript: [{ id: 'm1', role: 'user', content: 'the pty host dies on upgrade' }],
@@ -44,6 +64,16 @@ const base: AgentSessionSpec = {
 /** The same agent with NOTHING declared — every pty provider. */
 const observed: AgentSessionSpec = {
     ...base,
+    /**
+     * `rateLimit` HAS to be cleared here, and it is not cosmetic: it is one of
+     * `DECLARED_ONLY_FIELDS`, so inheriting the base fixture's reading makes this session
+     * DECLARED and the "different shape" assertion reads `data-fidelity="declared"`.
+     *
+     * Caught on CI on all three platforms the moment the base fixture gained a reading. It is
+     * also true to life — a pty agent reports no rate limit, which is the whole reason the
+     * field counts as a declaration.
+     */
+    rateLimit: null,
     composer: null,
     plan: null,
     usage: null,
@@ -75,6 +105,10 @@ export default function E2EAgentViewPage() {
                 }}
                 onApprove={(id, decision) => record(`approve:${id}:${decision}`)}
                 onTakeOver={() => record('takeover')}
+                // The TEXT, not merely that Send was pressed: a composer that sent an empty
+                // string, or the placeholder, would pass an assertion about the click alone.
+                onSend={(text) => record(`send:${text}`)}
+                onCancel={() => record('cancel')}
             />
         </div>
     );

@@ -172,7 +172,44 @@ describe('knownFacts', () => {
             usage: false,
             commands: false,
             transcript: false,
+            rateLimit: false,
         });
+    });
+
+    /**
+     * SUBSCRIPTION HEADROOM is a fact like the others, and the one the owner asked for:
+     * *"I do need to see what is remaining on rate limits at least."*
+     *
+     * It needs its own flag rather than riding on `usage`, which is per-session token and cost
+     * accounting. A limit is per-ACCOUNT and arrives on a different frame, so an agent can have
+     * one without the other in either direction.
+     */
+    it('reports headroom as unknown for an agent that reports none', () => {
+        // Every pty agent, forever. `false` is what keeps the gauge off the screen — rendering
+        // full headroom for an unmetered agent is the one number nobody may invent.
+        expect(knownFacts(session()).rateLimit).toBe(false);
+    });
+
+    it('reports headroom as known once there is a reading', () => {
+        expect(
+            knownFacts(
+                session({
+                    rateLimit: {
+                        status: 'allowed',
+                        rateLimitType: 'five_hour',
+                        windows: { five_hour: { utilization: 0.13, resetsAtMs: 1 } },
+                        notice: null,
+                    } as never,
+                }),
+            ).rateLimit,
+        ).toBe(true);
+    });
+
+    it('reports headroom as known when all we have is WHY there is none', () => {
+        // Prism refuses a payload with an unrecognised field outright. Their warning is that
+        // reading only `rate_limit` leaves "no gauge and no explanation" — so the explanation is
+        // itself something to render, and hiding the section would lose it.
+        expect(knownFacts(session({ rateLimitUnavailable: 'unmapped frame' })).rateLimit).toBe(true);
     });
 
     it('counts an EMPTY declared value as known', () => {

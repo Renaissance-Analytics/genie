@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionItems, type AttentionSources } from '../attention-queue';
+import { attentionItems, moveQueueFocus, type AttentionSources } from '../attention-queue';
 
 /**
  * One queue for "what needs me", out of the surfaces that each own a piece of it.
@@ -247,3 +247,51 @@ describe('agent attribution', () => {
         expect(item.askerTerminalId).toBe('t-kai');
     });
 })
+
+describe('moveQueueFocus — J and K through the queue', () => {
+    /**
+     * The plan's keyboard model: *`J/K` queue*. `resolveShortcut` has resolved
+     * `queue-move` since the shortcuts were restored and nothing acted on it, because there was
+     * no focus to move — the band rendered rows and never said which one you were on.
+     *
+     * Pure, so the WRAPPING and the empty cases are checked without a DOM, which is where an
+     * off-by-one in a list the human is about to approve things from would otherwise live.
+     */
+    const keys = ['question:q1', 'list:t1', 'question:q2'];
+    const items = keys.map((key) => ({ key }) as never);
+
+    it('starts at the TOP when nothing is focused and you press J', () => {
+        // The first row is the most urgent — `attentionItems` ranks them — so entering the queue
+        // from nowhere lands on the thing that matters most, not on row two.
+        expect(moveQueueFocus(items, null, 1)).toBe('question:q1');
+    });
+
+    it('starts at the BOTTOM when nothing is focused and you press K', () => {
+        expect(moveQueueFocus(items, null, -1)).toBe('question:q2');
+    });
+
+    it('moves down and up by one', () => {
+        expect(moveQueueFocus(items, 'question:q1', 1)).toBe('list:t1');
+        expect(moveQueueFocus(items, 'list:t1', -1)).toBe('question:q1');
+    });
+
+    it('STOPS at the ends rather than wrapping', () => {
+        // Wrapping in a queue you are resolving is how you approve the wrong thing: you press J
+        // once more than the list is long and the selection silently jumps back to the top,
+        // which looks identical to not having moved.
+        expect(moveQueueFocus(items, 'question:q2', 1)).toBe('question:q2');
+        expect(moveQueueFocus(items, 'question:q1', -1)).toBe('question:q1');
+    });
+
+    it('re-enters from the top when the focused row has GONE', () => {
+        // Rows disappear as agents answer and items resolve. A key that is no longer in the
+        // list must not leave the focus nowhere — and must not silently pick whatever row took
+        // its index, which would be a different item under the same cursor.
+        expect(moveQueueFocus(items, 'question:vanished', 1)).toBe('question:q1');
+    });
+
+    it('answers null for an EMPTY queue', () => {
+        expect(moveQueueFocus([], null, 1)).toBeNull();
+        expect(moveQueueFocus([], 'question:q1', -1)).toBeNull();
+    });
+});

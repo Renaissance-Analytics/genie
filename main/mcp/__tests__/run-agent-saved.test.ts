@@ -4,6 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
+ * PINNED TO THE PTY, 2026-10-07.
+ *
+ * ACP is no longer optional, so a claude agent is a structured session with no pty — and
+ * these cases are about PTY MECHANICS, which remain real for every pty provider and most of
+ * the twenty-one are. `engineOverride: 'pty'` keeps the behaviour under test on the engine
+ * that has it, rather than deleting coverage or asserting it of a transport that has no pty.
+ *
+ * `engineOverride` is a supported configuration, not a test affordance: it is the only way
+ * to hold an agent on the pty now that ACP is the default, and it was unreachable until the
+ * same change — `engineFor` honoured it and nothing could set it.
+ */
+/**
  * `runAgent start` on a SAVED agent REATTACHES — it does not mint a second one
  * (Tynn #254).
  *
@@ -355,7 +367,7 @@ describe('host-side saved-agent revival', () => {
         expect(terminalManager().isLive('headless')).toBe(true);
         expect(terminalIpc.terminalHasWindow('headless')).toBe(false);
         const attached = terminalIpc.createAgentTerminal({ id: 'headless', workspaceId: WS_ID, cwd: wsDir,
-            label: 'headless', agentMeta: { agent: 'claude', command: 'echo revived-agent' } });
+            label: 'headless', agentMeta: { agent: 'claude', command: 'echo revived-agent' , engineOverride: 'pty' } });
         expect(attached.existing).toBe(true);
         expect(spawnedPtys).toHaveLength(1);
         await vi.waitFor(() => expect(spawnedPtys[0].written.join('')).toContain('echo revived-agent'));
@@ -389,7 +401,7 @@ describe('host-side saved-agent revival', () => {
     it('records explicit start and stop, retaining stop intent until a new explicit start', async () => {
         saved('lifecycle', { was_running: false, user_stopped: true });
         const launch = () => terminalIpc.createAgentTerminal({ id: 'lifecycle', workspaceId: WS_ID, cwd: wsDir,
-            label: 'lifecycle', agentMeta: { agent: 'claude', command: 'echo revived-agent' } });
+            label: 'lifecycle', agentMeta: { agent: 'claude', command: 'echo revived-agent' , engineOverride: 'pty' } });
         launch();
         expect(getTerminalSpec('lifecycle')?.meta).toMatchObject({ was_running: true, user_stopped: false });
         terminalIpc.killTerminalById('lifecycle');
@@ -599,7 +611,7 @@ describe('runAgent start on a SAVED agent', () => {
         // observable once the timers run.
         vi.useFakeTimers();
         try {
-            const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+            const created = await registerAndStart({ name: 'tynn-builder', agent: 'aider' });
             vi.runAllTimers();
             const pty = spawnedPtys[spawnedPtys.length - 1]!;
             const writesAfterLaunch = pty.written.length;
@@ -624,7 +636,7 @@ describe('runAgent start on a SAVED agent', () => {
     });
 
     it('REVIVES a saved agent whose pty exited — same record, no second agent', async () => {
-        const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+        const created = await registerAndStart({ name: 'tynn-builder', agent: 'aider' });
         const agentIdBefore = getTerminalSpec(created.id!)?.meta?.agent_id;
         expect(agentIdBefore).toBeTruthy();
 
@@ -656,7 +668,7 @@ describe('runAgent start on a SAVED agent', () => {
         // A second TUI for the same agent is now a RUNTIME, not a second agent,
         // so the way to get one is to add a runtime rather than to register
         // again under a different provider.
-        const claude = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
+        const claude = await registerAndStart({ name: 'tynn-builder', agent: 'aider' });
         expect(claude.ok).toBe(true);
 
         const second = await registerAgentForMcp(CALLER_ID, {

@@ -153,10 +153,55 @@ export function featureCommandItems(features: readonly FeatureSurface[]): Comman
  * Workspaces, features and actions are unaffected: none of them needs a shell, and the
  * Deck is exactly where someone reaches for Hosts, Knowledge or the App Store.
  */
+/**
+ * Features that belong to the workstation this window IS, not the one it is driving.
+ *
+ * The title-bar icons enforced this and nearly took it with them when they were deleted:
+ * `onShowSharing` was withheld in a remote window because *"a share link is scoped to the
+ * workstation that OWNS the workspace"*, the Hosts button refused to render in a host window at
+ * all, and `master.tsx` skips the Genie OS first-run effect there for the same reason. Moving
+ * every feature behind ⌘K moved them behind a surface that had no notion of a remote window — so
+ * a remote window could have minted a link for the wrong host. `share-workspace-wiring.test.ts`
+ * caught it, which is what it was written for.
+ */
+const LOCAL_ONLY_FEATURES = new Set(['sharing', 'remote-host', 'genie-os']);
+
+/**
+ * Features that need a TYNN ACCOUNT, which is optional.
+ *
+ * Owner decision, asked directly: *"fully local mode — everything local works, Tynn features say
+ * 'sign in to use this'."* Until then Tynn was a hard gate on the whole app — signed out,
+ * `master.tsx` rendered a sign-in prompt instead of Genie, so a workstation with no account could
+ * not open a workspace, run an agent or see the Deck, none of which needs one.
+ *
+ * These rows are KEPT and ANNOTATED rather than dropped, and the distinction from
+ * `LOCAL_ONLY_FEATURES` is the reason: a feature belonging to another machine is nothing a person
+ * can act on from here, while signing in is. A dropped row teaches that the feature does not
+ * exist, which is the one wrong lesson available.
+ */
+const TYNN_BACKED_FEATURES = new Set(['sites', 'remote-host', 'issuewatch', 'sharing']);
+
+/** Appended rather than replacing: a contextual hint is a real route and worth more than this. */
+const NEEDS_ACCOUNT = 'sign in to Tynn to use this';
+
 export function dropUndeliverable(
     items: readonly CommandItem[],
-    ctx: { hasTerminal: boolean },
+    ctx: { hasTerminal: boolean; remote?: boolean; tynn?: boolean },
 ): CommandItem[] {
-    if (ctx.hasTerminal) return [...items];
-    return items.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
+    const kept = ctx.remote
+        ? items.filter((i) => !(i.featureId && LOCAL_ONLY_FEATURES.has(i.featureId)))
+        : [...items];
+
+    // `tynn === false` only. Omitted means the caller does not know — a remote window, a test — and
+    // marking a row on a guess would be an accusation about an account nobody checked.
+    const marked = ctx.tynn === false
+        ? kept.map((i) =>
+              i.featureId && TYNN_BACKED_FEATURES.has(i.featureId)
+                  ? { ...i, hint: i.hint ? `${i.hint} · ${NEEDS_ACCOUNT}` : NEEDS_ACCOUNT }
+                  : i,
+          )
+        : kept;
+
+    if (ctx.hasTerminal) return marked;
+    return marked.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
 }

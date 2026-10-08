@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { OVERLAY_ROOT_CLASS } from '../overlay-root';
+import { cssTokenValue, cssZIndexOf } from '../css-rules';
 
 /**
  * genie #66 part 1 — Fancy's PORTALED overlays must paint above Genie's chrome.
@@ -28,20 +29,18 @@ const GLOBALS = fs.readFileSync(
     'utf8',
 );
 
-/** The `z-index` declared in the first rule block for `selector`. */
-function zIndexOf(css: string, selector: string): number | null {
-    const at = css.indexOf(`${selector} {`);
-    if (at < 0) return null;
-    const block = css.slice(at, css.indexOf('}', at));
-    const m = /z-index:\s*([0-9]+)\s*;/.exec(block);
-    return m ? Number(m[1]) : null;
-}
+/**
+ * The `z-index` a selector ends up with, through `cssZIndexOf` — which follows the one level of
+ * `var()` the ladder is expressed in now.
+ *
+ * This file read raw digits until P7 made every rung a token, which took five cases here red
+ * while the assertions themselves stayed right. The reader lives in `lib/css-rules.ts` because
+ * three test files needed the same fix.
+ */
+const zIndexOf = (css: string, selector: string): number | null => cssZIndexOf(css, `${selector} `);
 
 /** The value of a `--custom-property: N;` declaration anywhere in the sheet. */
-function tokenValue(css: string, name: string): number | null {
-    const m = new RegExp(`${name}:\\s*([0-9]+)\\s*;`).exec(css);
-    return m ? Number(m[1]) : null;
-}
+const tokenValue = cssTokenValue;
 
 /**
  * Every top-level rule in a sheet, as `{ selector, body }`. Only rules whose

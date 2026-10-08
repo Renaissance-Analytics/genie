@@ -14,7 +14,7 @@ import type { AgentSession } from './model';
  * "nothing". `plan: []` declares that there is no plan; `plan: null` is the agent never
  * having mentioned plans. The first must win over the floor; the second must not erase it.
  *
- * Two fields need more than that rule, and both for the same reason — the floor sees things
+ * Three fields need more than that rule, and all for the same reason — the floor sees things
  * the agent cannot:
  *
  * - **`error`** comes from `diagnoseAgent`: a lost host, a dead transport. An agent that is
@@ -22,6 +22,9 @@ import type { AgentSession } from './model';
  * - **`approvals`** are UNIONED. A pending ForceTheQuestion and a mid-turn tool permission
  *   come from different places and both block a human; treating them as alternatives would
  *   hide one.
+ * - **`transcript`** is INTERLEAVED, because a measured ACP session reports the agent's voice
+ *   and nothing else — no echo of the owner's prompt, and no replay on resume. The human half
+ *   of the conversation exists only on the floor side. See `mergeTranscripts`.
  *
  * And `turn` is special in the other direction: `emptyAgentSession` starts at `idle`, so a
  * freshly-connected session reports idle before the agent has said anything. Letting that
@@ -31,6 +34,97 @@ import type { AgentSession } from './model';
 
 /** A declared value counts when it is not null/undefined — `[]` is a declaration. */
 const said = <T>(v: T | null | undefined): v is T => v !== null && v !== undefined;
+
+/**
+ * ONE CONVERSATION out of two streams — P7's *"human↔agent DMs fold into the Agent
+ * Conversation"*.
+ *
+ * ## What this replaces, and what measuring changed
+ *
+ * The rule was `declared.transcript.length > 0 ? declared.transcript : floor.transcript`: the
+ * declared conversation REPLACES the projected one. Stated as "a real conversation beats
+ * projected mail" that reads as obviously right. A real claude ACP session says otherwise
+ * (`handshake.real.test.ts`, logged on every run):
+ *
+ * ```
+ * [acp transcript] live=agent_message_chunk,notice,usage_update | replay=(0) none
+ * ```
+ *
+ * The declared stream is the **agent's voice only**. The owner's prompt is never echoed back as
+ * `user_message_chunk` during a session, and `session/load` on the CLI's own session id replays
+ * nothing whatsoever. The two streams are not rival accounts of one conversation — they are its
+ * two halves, and the old rule threw one half away the moment the agent spoke.
+ *
+ * The same measurement removes the reason replacement looked safe. A DM to an ACP agent is
+ * delivered as a prompt (`acpMailSender`), so concatenating looked certain to show every DM
+ * twice. There is no second copy for it to collide with.
+ *
+ * ## Ordering
+ *
+ * By `at`, because mail arriving MID-SESSION is the normal case for a working agent and
+ * appending either stream would put an interruption after the reply it provoked.
+ *
+ * A message with no `at` — a `reportState` harness need not keep times — sorts LAST rather than
+ * first. "I do not know when" has one honest position among times that are known, and placing
+ * it at the end is also what the surface did before, so no ordering is lost. On a tie the floor
+ * comes first: mail is stamped when it ARRIVES and a reply when Genie sees it, so at equal
+ * resolution the prompt was the earlier of the two.
+ */
+function mergeTranscripts(floor: AgentSession, declared: AgentSession): AgentSession['transcript'] {
+    // A session that has connected but not spoken must not blank the surface, and the floor's
+    // mail plus last handoff is the most useful thing on it at that moment.
+    if (declared.transcript.length === 0) return floor.transcript;
+    if (floor.transcript.length === 0) return declared.transcript;
+
+    /**
+     * A CODEX ECHO MUST NOT DOUBLE A DM.
+     *
+     * The fear C23 dismissed is false for claude and TRUE for codex. Measured
+     * (`handshake-codex.real.test.ts`): codex reports the user's turn as `user_message_chunk` — once
+     * per turn on prism-acp 0.5.3, twice before that, which was prism's own missing lifecycle guard
+     * and not codex's doing. One copy lands in the declared transcript either way, and a DM delivered
+     * through `acpMailSender` is ALSO in the AgentInbox thread, hence in the floor one. Two streams,
+     * one message, both legitimate — and no fix on either side changes that.
+     *
+     * The FLOOR copy wins, and that is what makes this resolvable rather than a coin toss: it carries
+     * `author`, so it can say a sibling agent sent it. ACP has no notion of an author, so the echo is
+     * anonymous and strictly the poorer record of the same text.
+     *
+     * ONE-TO-ONE, by consuming a count rather than testing set membership: two separate DMs of the
+     * same text are two messages, and a set would keep one and swallow the rest.
+     *
+     * Scoped to `user`, because roles are not interchangeable — an agent quoting the owner back is the
+     * agent speaking.
+     */
+    const floorSaid = new Map<string, number>();
+    for (const m of floor.transcript) {
+        if (m.role !== 'user') continue;
+        floorSaid.set(m.content, (floorSaid.get(m.content) ?? 0) + 1);
+    }
+    const unechoed = declared.transcript.filter((m) => {
+        if (m.role !== 'user') return true;
+        const left = floorSaid.get(m.content) ?? 0;
+        if (left === 0) return true;
+        floorSaid.set(m.content, left - 1);
+        return false;
+    });
+
+    // Floor first, so an equal stamp resolves in its favour. `i` carries the original position
+    // because the comparator must not rely on `sort` being stable OR on arithmetic: two unstamped
+    // messages give `Infinity - Infinity`, which is NaN, and a comparator returning NaN makes
+    // `Array.prototype.sort` implementation-defined by spec. V8 treats it as 0 and stays stable,
+    // so the ordering was correct by accident — the kind that holds until an engine changes.
+    const keyed = [...floor.transcript, ...unechoed].map((m, i) => ({ m, i }));
+    const at = (m: AgentSession['transcript'][number]) => m.at ?? Number.POSITIVE_INFINITY;
+    return keyed
+        .sort((a, b) => {
+            const av = at(a.m);
+            const bv = at(b.m);
+            if (av === bv) return a.i - b.i;
+            return av < bv ? -1 : 1;
+        })
+        .map((k) => k.m);
+}
 
 export function mergeDeclared(
     floor: AgentSession,
@@ -57,9 +151,9 @@ export function mergeDeclared(
                 ? floor.turn
                 : declared.turn,
 
-        // A real conversation replaces projected mail; an empty one leaves it, so a session
-        // that has connected but not spoken does not go blank.
-        transcript: declared.transcript.length > 0 ? declared.transcript : floor.transcript,
+        // ONE conversation, not two. See `mergeTranscripts` — and the measurement that put
+        // it there, which is that an ACP session's transcript holds no human messages at all.
+        transcript: mergeTranscripts(floor, declared),
 
         // Declared-only and streaming. The floor sets neither (measured: zero assignments),
         // so the declared value is simply the value — including `[]`, which says the agent

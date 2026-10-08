@@ -14,6 +14,7 @@ import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import ShareWorkspaceModal from '../components/Master/ShareWorkspaceModal';
 import SharingFlyout from '../components/Master/SharingFlyout';
 import NewAgentModal from '../components/Master/NewAgentModal';
+import { FirstRunOnboarding } from '../components/Master/FirstRunOnboarding';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import {
     restartOptionsFor,
@@ -71,7 +72,6 @@ import {
 } from '../lib/hibernated-visibility';
 import { gappLaunchLabel, gappLaunchTargets } from '../lib/gapp-launch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
-import SignInPrompt from '../components/SignInPrompt';
 import type {
     AgentType,
     BackendUser,
@@ -180,13 +180,16 @@ import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
 import { replacePageQuery, usePageQuery } from '../lib/page-query';
-import { mergeViewRoute, parseViewRoute, type GenieView } from '../lib/view-route';
+import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
 import { AgentView } from '../components/Master/AgentView';
+import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
+import { attentionItems, moveQueueFocus } from '../lib/attention-queue';
 import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
-import { focusOwnerOf } from '../lib/master-shortcuts';
+import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
 import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
+import { probeTynnAuth } from '../lib/auth-probe';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -324,6 +327,8 @@ function specWorkspaceId(s: TerminalSpec): string | null {
 function MasterInner() {
     const [authChecked, setAuthChecked] = useState(false);
     const [signedIn, setSignedIn] = useState(false);
+    /** The account's NAME, for the menu. Null signed out, which is a legitimate state now. */
+    const [tynnAccountName, setTynnAccountName] = useState<string | null>(null);
     const [hosts, setHosts] = useState<{ tynn: string }>({
         tynn: 'https://tynn.ai',
     });
@@ -704,6 +709,41 @@ function MasterInner() {
     // There is no interval anywhere in this path. A poller would both lag the
     // thing it reports and keep waking the renderer to be told nothing happened.
     const [flowsOpen, setFlowsOpen] = useState(false);
+    /**
+     * A VIRTUAL WORKSTATION CAME ONLINE since you last looked.
+     *
+     * This effect was inside `HostsButton`, glowing its icon. That icon is gone with the rest of
+     * the cluster, and this is the signal with the longest wait behind it — spawning takes minutes,
+     * and without it the owner re-opens a popover to catch the moment a workstation becomes
+     * connectable. So it moved up here and feeds the Deck's strip.
+     *
+     * It POLLS, which it also did before, and that is not an improvement: `api().workstations`
+     * has no push for this transition. Left as it was rather than quietly changed — a 20s interval
+     * on an existing path is a different conversation from deleting an icon.
+     */
+    const [workstationCameOnline, setWorkstationCameOnline] = useState(false);
+    const seenConnectableRef = useRef<Set<string> | null>(null);
+    useEffect(() => {
+        // A remote Floor does not spawn workstations, so it has nothing to be told about.
+        if (isRemoteWindow()) return;
+        let cancelled = false;
+        const poll = async () => {
+            const ws = await api()
+                .workstations.connectable()
+                .catch(() => [] as ConnectableWorkstation[]);
+            if (cancelled) return;
+            const fresh = newlyConnectableWorkstationIds(seenConnectableRef.current, ws);
+            seenConnectableRef.current = connectableWorkstationIds(ws);
+            if (fresh.length > 0) setWorkstationCameOnline(true);
+        };
+        void poll(); // the first poll seeds the baseline — no signal for already-online
+        const t = setInterval(() => void poll(), 20_000);
+        return () => {
+            cancelled = true;
+            clearInterval(t);
+        };
+    }, []);
+
     const [flowsBusy, setFlowsBusy] = useState(false);
     useEffect(() => {
         if (!hasGenieBridge()) return;
@@ -732,6 +772,16 @@ function MasterInner() {
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
     const [questionsOpen, setQuestionsOpen] = useState(false);
+    /**
+     * Which Needs-you row has its answer form open.
+     *
+     * Here rather than inside `NeedsYou` so the expanded shape is assertable — the renderer's
+     * test environment has no DOM and cannot click — and so answering survives the band
+     * re-rendering as questions arrive.
+     */
+    const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
+    /** The Needs-you row the keyboard is on — `J`/`K` move it (`moveQueueFocus`). */
+    const [focusedQueueKey, setFocusedQueueKey] = useState<string | null>(null);
     // The workspace lists (genie#556): a header icon, and a PIN that docks the
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
@@ -1443,12 +1493,26 @@ function MasterInner() {
         void api().terminalSpec.reorder(orderedIds).catch(() => {});
     }, []);
 
+    /**
+     * CANNOT FAIL, and that is the whole point — see `probeTynnAuth`.
+     *
+     * This was `await Promise.all([whoami, tynnHost.get()])` with no catch, and the effect below
+     * sets `authChecked` AFTER it. The window renders "Checking sign-in…" until that flag flips, so
+     * a rejected probe left Genie on that screen permanently: offline, a bad `tynnHost`, Tynn down.
+     * The sign-in wall the owner asked to be removed, reached by failure instead of by being signed
+     * out — which is worse, because being signed out at least looked deliberate.
+     */
     const refreshAuth = useCallback(async () => {
-        const [t, tHost] = await Promise.all([api().auth.whoami('tynn'), api().tynnHost.get()]);
-        setHosts({ tynn: tHost });
-        const any = !!(t as BackendUser | null);
-        setSignedIn(any);
-        return any;
+        const probe = await probeTynnAuth({
+            whoami: () => api().auth.whoami('tynn') as Promise<BackendUser | null>,
+            host: () => api().tynnHost.get(),
+        });
+        setHosts({ tynn: probe.host });
+        setSignedIn(probe.signedIn);
+        // The NAME, for the menu. A workstation can be signed into the wrong account and nothing
+        // else in the window says so.
+        setTynnAccountName(probe.name);
+        return probe.signedIn;
     }, []);
 
     useEffect(() => {
@@ -1456,8 +1520,14 @@ function MasterInner() {
         (async () => {
             const any = await refreshAuth();
             if (cancelled) return;
+            // BEFORE anything that can throw. This flag is what dismisses "Checking sign-in…", so
+            // every failure after it is a failure in a window the owner can see and use.
             setAuthChecked(true);
-            if (any) await refresh();
+            // REFRESH EITHER WAY. Tynn is optional, so a signed-out workstation has local
+            // workspaces to list and a Deck to fill — gating the read on an account is what made
+            // "fully local mode" impossible, one layer below the sign-in wall itself.
+            void any;
+            await refresh().catch(() => {});
         })();
         const off = api().on.authChanged(async () => {
             const any = await refreshAuth();
@@ -2489,6 +2559,158 @@ function MasterInner() {
     // (⌘1–9 / ⌘\ / ⌘W) were removed: a focused terminal swallowed them, so they
     // were unreliable and their status-bar hint misled.
     //
+    /**
+     * EVERYTHING THE KEYBOARD LISTENER NEEDS, in a ref refreshed every render.
+     *
+     * The listener below is mounted ONCE (`[]` deps) and that is deliberate — re-subscribing a
+     * window keydown handler on every state change is how a chord gets delivered twice. The cost
+     * is that it closes over the first render's state, so anything it reads has to come through
+     * here. Reading `view` or `sessions` directly would act on what was true when the window
+     * opened, which in a long-lived window is any amount of wrong.
+     *
+     * `overlayOpen` is the OR of every flyout's own flag. It reads as a list because that is
+     * genuinely the state today; P7's single `openDrawer` is what turns it into one comparison,
+     * and until then an incomplete OR is the honest risk — a missing flag means Escape navigates
+     * out from under an open panel.
+     */
+    const keys = useRef({
+        view: 'deck' as 'deck' | 'grid' | 'workbench' | 'agent',
+        overlayOpen: false,
+        query: {} as RouteQuery,
+        sessions: [] as AgentSessionSpec[],
+        queue: [] as Array<{ key: string }>,
+        agentId: null as string | null,
+        agentSpecId: null as string | null,
+        parkedApprovalId: null as string | null,
+    });
+    keys.current = {
+        view: view.kind,
+        overlayOpen:
+            sharingOpen
+            || paletteOpen
+            || recipeLauncherOpen
+            || onboardingOpen
+            || genieOsOpen
+            || docsOpen
+            || issueWatchOpen
+            || taskManagerOpen
+            || agentInboxOpen
+            || flowsOpen
+            || questionsOpen
+            || listsOpen
+            || appStoreOpen
+            || githubCapsOpen,
+        query: pageQuery,
+        sessions,
+        // The SAME ranking the band renders, from the same function — a second ordering here
+        // would mean `J` moved to a row that was not the next one on screen.
+        queue: attentionItems({ questions: deckQuestions, listItems: deckListItems }),
+        agentId: view.kind === 'agent' ? view.agentId : null,
+        agentSpecId:
+            view.kind === 'agent'
+                ? (sessions.find((x) => x.agentId === view.agentId)?.specId ?? null)
+                : null,
+        parkedApprovalId: (() => {
+            if (view.kind !== 'agent') return null;
+            const s = sessions.find((x) => x.agentId === view.agentId);
+            // `parkedApproval` takes a session, not a maybe-session: a route can name an agent
+            // that has gone, and inventing an empty session to ask about would answer a question
+            // about nothing.
+            return s ? (parkedApproval(s)?.id ?? null) : null;
+        })(),
+    };
+
+    /**
+     * OPEN A FEATURE BY ID — one route, two callers.
+     *
+     * It was inline on the palette's `onActivateFeature`, which was fine while the palette was
+     * the only way in. The Deck's signal strip is the second (owner: *"move the signals to the
+     * Deck, then delete the icons"*), and the signals are ABOUT features — a running Flow opens
+     * Flows, unread agent mail opens AgentInbox. Two copies of this switch would be two answers
+     * to "where does this feature live", and the one nobody updated would be the one a badge
+     * used.
+     *
+     * Ids come from `FEATURE_SURFACES` in `lib/feature-reachability`, which the reachability
+     * guard also reads — so a feature cannot be contracted there and silently unreachable here.
+     */
+    const activateFeature = (featureId: string): void => {
+        /**
+         * NO ACCOUNT? Offer the account, not a dead surface.
+         *
+         * Tynn is optional (owner), so these four surfaces exist and cannot work without one.
+         * Opening the Site Manager signed out would show an empty list that looks like "you have no
+         * sites" rather than "Genie cannot see them", which is the confident-zero mistake in a new
+         * costume. The same list is in `lib/command-window.ts`, where it annotates the row.
+         */
+        if (!signedIn && ['sites', 'remote-host', 'issuewatch', 'sharing'].includes(featureId)) {
+            void api().auth.startSignIn('tynn').catch(() => {});
+            return;
+        }
+                // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
+                // reachability guard also reads -- so a feature cannot be contracted
+                // there and silently unreachable here.
+                const ws = activeWorkspaceId;
+                switch (featureId) {
+                    case 'remote-host':
+                    case 'sharing':
+                        setSharingOpen(true);
+                        break;
+                    case 'plugins-appstore':
+                        setAppStoreOpen(true);
+                        break;
+                    case 'knowledge-graph':
+                        // A main-owned window, not a flyout. Guarded so it no-ops if
+                        // the preload bridge is not wired yet.
+                        if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
+                        break;
+                    case 'agent-inbox':
+                        setAgentInboxOpen(true);
+                        break;
+                    case 'issuewatch':
+                        setIssueWatchOpen(true);
+                        break;
+                    case 'flows':
+                        setFlowsOpen(true);
+                        break;
+                    case 'lists':
+                        setListsOpen(true);
+                        break;
+                    case 'questions':
+                        setQuestionsOpen(true);
+                        break;
+                    case 'docs':
+                        setDocsOpen(true);
+                        break;
+                    case 'tasks':
+                        setTaskManagerOpen(true);
+                        break;
+                    case 'github-caps':
+                        setGithubCapsOpen(true);
+                        break;
+                    case 'genie-os':
+                        setGenieOsOpen(true);
+                        break;
+                    // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
+                    // that the Deck is the default. `mergeViewRoute` rather than
+                    // replacing the query, for the same reason as every other
+                    // navigation here -- `host` and `stage` decide whether this window
+                    // points at a remote machine, and dropping them would silently make
+                    // a remote window local.
+                    case 'grid':
+                        replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
+                        break;
+                    // Workspace-SCOPED: these take a workspace, not a toggle. With no
+                    // active workspace there is nothing to open them against, so they
+                    // no-op rather than opening against a guess.
+                    case 'sites':
+                        if (ws) setSiteManagerWsId(ws);
+                        break;
+                    case 'processes':
+                        if (ws) setProcessManagerWsId(ws);
+                        break;
+                }
+    };
+
     // Guard against stealing the keystroke while the user is typing in a real text
     // input — the in-app prompt modal, the editor's fields, any <input>/<textarea>/
     // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
@@ -2515,6 +2737,9 @@ function MasterInner() {
         const onKeyDown = (e: KeyboardEvent) => {
             const intent = resolveShortcut(e, ownerOf(document.activeElement));
             if (!intent) return;
+            // Read through the ref: this listener is mounted ONCE, so closing over state
+            // directly would act on whatever was true when the window opened.
+            const now = keys.current;
             if (intent.kind === 'settings') {
                 e.preventDefault();
                 api().app.showSettings(isRemoteWindow()).catch(() => {});
@@ -2528,56 +2753,110 @@ function MasterInner() {
                 setPaletteOpen(true);
                 return;
             }
-            // ESCAPE IS DELIBERATELY NOT WIRED TO THE DECK YET, and E2E is why.
-            //
-            // Wiring it navigated away from the grid on every Escape — and Escape already
-            // means something here: it closes a flyout, dismisses a panel, leaves a docked
-            // layout. preventDefault on top of that stole it from the app's own handling.
-            // Four specs failed IDENTICALLY on all three platforms (a dismissed panel that
-            // stayed, an "empty floor" holding one, a hibernated floor, a docked lists
-            // header) because the grid was hidden underneath them.
-            //
-            // Escape goes UP a level once the Deck IS the default surface — then there is a
-            // level to go up to. Until then the Deck is reached explicitly with
-            // `?view=deck`, which is what "parallel surface" means.
-            //
-            // The remaining intents — agent slots, take-over, queue movement, approvals —
-            // are resolved and likewise not acted on. They need surfaces that do not exist
-            // yet, and acting now would be a silent no-op, which this repo treats as a bug.
-            // `palette` is no longer in that list: its surface DOES exist, and is wired
-            // above.
+            /**
+             * ESCAPE GOES UP A LEVEL — now that there is a level to go up to.
+             *
+             * This was deliberately unwired, and the reason is worth keeping: the naive version
+             * navigated on EVERY Escape, and Escape already means something here — it closes a
+             * flyout, dismisses a panel, leaves a docked layout. `preventDefault` on top of that
+             * stole the key from the app's own handling and four E2E specs failed identically on
+             * all three platforms.
+             *
+             * `escapeLeavesForDeck` is that lesson as a rule: an open overlay owns Escape, the
+             * grid and the Workbench own it (that is where panels live, and all four failures
+             * were panels), and the Deck has no level above it. What is left is an agent view,
+             * which is exactly where "up" means something.
+             */
+            if (intent.kind === 'deck') {
+                if (!escapeLeavesForDeck({ view: now.view, overlayOpen: now.overlayOpen })) return;
+                e.preventDefault();
+                replacePageQuery(mergeViewRoute(now.query, { kind: 'deck' }));
+                return;
+            }
+
+            /**
+             * ⌘1..9 — jump to the nth agent, in the order the Deck lists them.
+             *
+             * The ROSTER's order, not a saved slot map: the number means "the nth agent I can
+             * see", so the key and the screen cannot disagree. Out of range is a no-op rather
+             * than a clamp — ⌘7 with four agents means nothing, and jumping to the fourth would
+             * be a guess at what was meant.
+             */
+            if (intent.kind === 'agent-slot') {
+                const target = now.sessions[intent.slot - 1];
+                if (!target) return;
+                e.preventDefault();
+                replacePageQuery(
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null }),
+                );
+                return;
+            }
+
+            // J / K through the Needs-you queue. `moveQueueFocus` owns the wrapping rule (it does
+            // not wrap) and the vanished-row rule, both tested.
+            if (intent.kind === 'queue-move') {
+                e.preventDefault();
+                setFocusedQueueKey((current) => moveQueueFocus(now.queue, current, intent.delta));
+                return;
+            }
+
+            /**
+             * A / D — allow or deny the approval the TURN IS PARKED ON.
+             *
+             * Only in an agent view, and only when that agent actually has one. A letter that
+             * resolves a permission has to be unambiguous about which: on the Deck there is no
+             * single agent in view, and acting on "the first parked one anywhere" is how the
+             * wrong tool call gets approved.
+             */
+            if (intent.kind === 'approval') {
+                if (now.view !== 'agent' || !now.agentSpecId || !now.parkedApprovalId) return;
+                e.preventDefault();
+                void api()
+                    .agentSession.decide(
+                        now.agentSpecId,
+                        now.parkedApprovalId,
+                        intent.decision === 'allow' ? 'allow-once' : 'deny-once',
+                    )
+                    .then(() => loadSessions())
+                    .catch(() => {});
+                return;
+            }
+
+            // ⌘⇧T — take over. A PLACE, not a mode: the agent's own pty, with the url recording
+            // it so refresh and back land in the same place.
+            if (intent.kind === 'take-over') {
+                if (now.view !== 'agent' || !now.agentId) return;
+                e.preventDefault();
+                replacePageQuery(
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: now.agentId, tab: 'terminal' }),
+                );
+                return;
+            }
         };
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
 
-    if (authChecked && !signedIn) {
-        return (
-            <div className="gwrap" id="app">
-                {/* Signed out: no left column, so the frame stacks
-                    vertically and the title bar spans the full width (it
-                    paints the corner itself — see AppCorner). */}
-                <div className="winframe stacked">
-                    <TitleBar isStage={false} />
-                    <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-0)' }} />
-                </div>
-                <div style={{ position: 'absolute', inset: 40, display: 'grid', placeItems: 'center' }}>
-                        <div style={{ maxWidth: 720, width: '100%' }}>
-                            <SignInPrompt
-                                tynnHost={hosts.tynn}
-                                onSignedIn={async () => {
-                                    await refreshAuth();
-                                    await refresh();
-                                }}
-                            />
-                        </div>
-                    </div>
-                <PromptHost />
-            </div>
-        );
-    }
-
+    /**
+     * NO SIGN-IN GATE. Tynn is OPTIONAL.
+     *
+     * This returned `SignInPrompt` instead of the app whenever `authChecked && !signedIn`, so a
+     * workstation with no Tynn account could not open a workspace, run an agent or see the Deck —
+     * none of which needs one. Owner decision, asked directly, 2026-10-08: *"fully local mode —
+     * everything local works, Tynn features say 'sign in to use this'."*
+     *
+     * What replaces it, rather than nothing:
+     *
+     *  - the four Tynn-backed ⌘K rows say what they need (`TYNN_BACKED_FEATURES` in
+     *    `lib/command-window.ts`), and activating one starts the sign-in instead of opening a
+     *    surface that cannot work;
+     *  - first run reports the account as OFF with a route, never as a fault
+     *    (`workstationReadiness`);
+     *  - `Sign in to Tynn` is in the system menu, which is where an account lives.
+     *
+     * `signedIn` is still read — it is what tells those three what to say.
+     */
     if (!authChecked) {
         return (
             <div
@@ -2727,53 +3006,29 @@ function MasterInner() {
                                 ? workspacesById.get(stageSeedWorkspace)?.project_name
                                 : undefined
                         }
+                        // FOURTEEN PROPS LESS. Everything that fed an icon or a badge went with
+                        // the icon cluster — the features are ⌘K rows and the live signals are on
+                        // the Deck (`stationSignals`). What is left is what this bar still does: a
+                        // Docs menu item, the App Tray's store link, and the setup item while
+                        // first run is unfinished.
                         onShowDocs={() => setDocsOpen((o) => !o)}
-                        onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
-                        agentInboxLag={agentInboxLag}
-                        {...(isRemoteWindow()
-                            ? {}
-                            : { onShowSharing: () => setSharingOpen((o) => !o) })}
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
-                        questionCount={questionCount}
-                        onShowLists={() => setListsOpen((o) => !o)}
-                        listsUserCount={listsUserCount}
-                        onShowKnowledge={() => {
-                            // Header button → open the standalone Knowledge Graph
-                            // window (main-owned, via knowledge.openWindow). Guarded
-                            // so it no-ops if the preload bridge isn't wired yet.
-                            if (hasGenieBridge()) {
-                                void api().knowledge.openWindow().catch(() => {});
-                            }
-                        }}
-                        onShowFlows={() => setFlowsOpen((o) => !o)}
-                        flowsBusy={flowsBusy}
-                        onShowIssueWatch={() =>
-                            activeWorkspaceId && openIssueWatch(activeWorkspaceId)
-                        }
-                        issueWatchUnread={issueWatchBadge(
-                            activeWorkspaceId
-                                ? issueWatchCounts[activeWorkspaceId]
-                                : undefined,
-                        ).count ?? 0}
-                        issueWatchUnknown={issueWatchBadge(
-                            activeWorkspaceId
-                                ? issueWatchCounts[activeWorkspaceId]
-                                : undefined,
-                        ).unknown}
-                        githubNeedsResolve={githubNeedsResolve}
-                        onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
-                        // STREAMING, not `activeIds`. `activeIds` is "this spec
-                        // has a live pty", which is true for the whole time the
-                        // OSA is open — so the icon pulsed at being OPEN, which
-                        // the user can already see. It now pulses only while the
-                        // agent is actually producing output.
-                        genieOsActive={!!genieOsSpec && streamingTerms.has(genieOsSpec.id)}
-                        genieOsOpen={genieOsOpen}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                         setupIncomplete={onboardingOpen}
+                        tynnAccount={tynnAccountName}
+                        onSignInTynn={() => void api().auth.startSignIn('tynn').catch(() => {})}
                     />
                     <UpgradeModal />
-                    <Toolbar
+                    {/* THE GRID'S OWN CHROME, with the grid.
+                        It rendered unconditionally, so the Deck — the default surface — carried a
+                        layout picker for a grid that was not on screen, beside Add buttons that
+                        act on `activeWorkspaceId` while the Deck is cross-workspace by
+                        definition. `showGridChrome` is the rule and it is tested; this is the one
+                        place it is read.
+                        A conditional RENDER, not a hidden one: nothing here owns a pty. That is
+                        the whole reason `hideGrid` exists for the grid itself and does not apply
+                        to its toolbar. */}
+                    {surface.showGridChrome && <Toolbar
                         activeWorkspace={
                             activeWorkspaceId
                                 ? workspacesById.get(activeWorkspaceId)
@@ -2796,8 +3051,8 @@ function MasterInner() {
                         onLastTerminalType={setLastTerminalType}
                         onAgentCreated={selectAgentSpec}
                         agentCustomCommand={agentCustomCommand}
-                    />
-                    {/* The Floor — the grid plus its status bar, now ONE component
+                    />}
+                    {/* The Floor — the grid, now ONE component
                         the GApp window's Agent tab mounts too. The state stays
                         here because this window derives it across every workspace
                         (background specs keep off-workspace ptys alive); a GApp
@@ -2811,10 +3066,90 @@ function MasterInner() {
                                     // A route naming an agent that no longer exists resolves
                                     // to a SENTENCE, not a blank surface: an empty view would
                                     // read as Genie breaking rather than as a stale link.
+                                    /**
+                                     * A DORMANT agent has no terminal spec, and there is nothing
+                                     * to write to. The write handlers are withheld rather than
+                                     * guarded inside, which also means no composer is rendered —
+                                     * a box that cannot send is worse than no box, because it
+                                     * invites typing and swallows it.
+                                     */
+                                    const writable = found?.specId ?? null;
                                     return found ? (
                                         <AgentView
                                             session={found}
                                             {...(view.kind === 'agent' && view.tab ? { tab: view.tab } : {})}
+                                            /**
+                                             * THE WRITE PATH, finally connected.
+                                             *
+                                             * `AgentView` has taken `onApprove` and `onTakeOver`
+                                             * since it was written and master passed NEITHER, and
+                                             * there was no composer at all — so the default
+                                             * surface could show an agent and not speak to it.
+                                             * `terminal:write` does not help: it reaches a pty,
+                                             * and an ACP agent's pty is an empty shell.
+                                             *
+                                             * Each handler re-reads the sessions afterwards rather
+                                             * than mutating local state: the host is the record,
+                                             * and a hopeful local edit would show a prompt as sent
+                                             * when the channel had gone.
+                                             */
+                                            {...(writable ? { onSend: (text: string) => {
+                                                void api()
+                                                    .agentSession.prompt(writable, text)
+                                                    .then((r) => {
+                                                        // A named refusal is worth saying out
+                                                        // loud: `parked` means the agent is over
+                                                        // its own daily cap and the gate has
+                                                        // already asked the owner, so silence here
+                                                        // would look like Genie dropping the
+                                                        // message.
+                                                        if (!r.ok) {
+                                                            console.warn(
+                                                                `[agent] prompt not sent (${r.reason})`,
+                                                            );
+                                                        }
+                                                        loadSessions();
+                                                    })
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            {...(writable ? { onCancel: () => {
+                                                void api()
+                                                    .agentSession.cancel(writable)
+                                                    .then((r) => {
+                                                        // `session/cancel` only ASKS. An agent that
+                                                        // keeps going is a fact to report, not a
+                                                        // failure to retry.
+                                                        if (r.ok && !r.honoured) {
+                                                            console.warn(
+                                                                '[agent] the agent did not stop when asked',
+                                                            );
+                                                        }
+                                                        loadSessions();
+                                                    })
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            {...(writable ? { onApprove: (
+                                                approvalId: string,
+                                                decision: 'allow-once' | 'allow-always' | 'deny-once',
+                                            ) => {
+                                                void api()
+                                                    .agentSession.decide(writable, approvalId, decision)
+                                                    .then(() => loadSessions())
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            onTakeOver={() => {
+                                                // The pty is one click away and it is the SAME
+                                                // terminal the agent's session belongs to — "take
+                                                // over" is a place to go, not a mode to enter, so
+                                                // it is the Terminal tab and the url records it.
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId: surface.showAgent!,
+                                                        tab: 'terminal',
+                                                    }),
+                                                );
+                                            }}
                                             onTab={(t) => {
                                                 // The tab lives in the URL, so refresh, back and a
                                                 // shared link all land in the same place.
@@ -2855,7 +3190,61 @@ function MasterInner() {
                                             .then(() => loadAttention())
                                             .catch(() => {});
                                     }}
+                                    /**
+                                     * A FORWARDED question only. Everything else is answered on
+                                     * the row itself now — `NeedsYou` grew the form — so the
+                                     * flyout is no longer the way to answer a multi-part,
+                                     * multi-select or free-text question.
+                                     */
                                     onOpenQuestion={() => setQuestionsOpen(true)}
+                                    /**
+                                     * THE SIGNALS THE ICONS CARRIED.
+                                     *
+                                     * Owner decision: *"move the signals to the Deck, then delete
+                                     * the icons."* The same facts the title bar read — a running
+                                     * Flow, agent mail nobody has collected, GitHub permissions
+                                     * blocking features, the OS agent working, IssueWatch unable
+                                     * to tell. `stationSignals` decides which are worth saying
+                                     * and keeps quiet otherwise.
+                                     */
+                                    signals={{
+                                        flowsRunning: flowsBusy,
+                                        mailBehind: agentInboxLag,
+                                        githubBlocked: githubNeedsResolve,
+                                        osWorking:
+                                            !!genieOsSpec && streamingTerms.has(genieOsSpec.id),
+                                        issueWatchUnknown: issueWatchBadge(
+                                            activeWorkspaceId
+                                                ? issueWatchCounts[activeWorkspaceId]
+                                                : undefined,
+                                        ).unknown,
+                                        workstationCameOnline,
+                                    }}
+                                    // A signal is still a DOOR: it opens what the icon opened, by
+                                    // the same `featureId` the palette dispatches on, so there is
+                                    // one route to each feature rather than two that can drift.
+                                    onSignal={(featureId) => {
+                                        // Acting on the signal ACKNOWLEDGES it, exactly as opening
+                                        // the Hosts popover used to clear its glow. A signal that
+                                        // survives being acted on is a signal people learn to
+                                        // ignore.
+                                        if (featureId === 'remote-host') {
+                                            setWorkstationCameOnline(false);
+                                        }
+                                        activateFeature(featureId);
+                                    }}
+                                    focusedKey={focusedQueueKey}
+                                    expandedQuestionId={expandedQuestionId}
+                                    onExpandQuestion={setExpandedQuestionId}
+                                    onSubmitAnswer={(questionId, answers) => {
+                                        // Already COMPLETE — `buildAnswer` refuses to produce a
+                                        // partial — so this is the same call the one-click path
+                                        // makes, with every part filled in.
+                                        void api()
+                                            .questions.answer(questionId, answers)
+                                            .then(() => loadAttention())
+                                            .catch(() => {});
+                                    }}
                                     onResolveListItem={(todoId, action) => {
                                         void api()
                                             .lists.resolveUser(todoId, action, '')
@@ -2941,6 +3330,40 @@ function MasterInner() {
                         />
                     </aside>
                 </div>
+            )}
+
+            {/* FIRST RUN — pick a folder, then meet an agent (P7, owner-approved 2026-10-08).
+                MOUNTED, which it was not: P7 described rewriting a seven-gate wizard and that
+                component had no mount site at all, so the "7 gates" were true of a file and not of
+                the product. The owner's call was asked for and given — *"build that — folder, then
+                'what I found' + start an agent"* — after reading how Paperclip onboards.
+
+                Gated on there being NO workspace, which is the one state where the folder question
+                has an answer worth asking for. An existing install never sees it; `canFinishFirstRun`
+                is the same gate the component closes itself with.
+
+                `onFix` routes a reported gap through the SAME `activateFeature` the palette and the
+                Deck's signals use, so there is one answer to "where does this feature live". Tynn is
+                the exception and has no feature id — it is an auth flow, so it is called directly. */}
+            {!isRemoteWindow() && workspaces.length === 0 && (
+                <FirstRunOnboarding
+                    open={!localStorage.getItem('genie-onboarding-complete')}
+                    existingWorkspaceCount={workspaces.length}
+                    // `refresh` is the page's own workspace re-read — the same one every
+                    // other path calls after a workspace changes.
+                    onComplete={() => void refresh()}
+                    onWorkspaceAdded={(ws) => {
+                        void refresh();
+                        setActiveWorkspaceId(ws.id);
+                    }}
+                    onFix={(route) => {
+                        if (route === 'tynn-signin') {
+                            void api().auth.startSignIn('tynn').catch(() => {});
+                            return;
+                        }
+                        activateFeature(route);
+                    }}
+                />
             )}
 
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
@@ -3152,71 +3575,10 @@ function MasterInner() {
                     setCommandWindowFor(null);
                 }}
                 terminalId={commandWindowFor}
-                onActivateFeature={(featureId) => {
-                    // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
-                    // reachability guard also reads -- so a feature cannot be contracted
-                    // there and silently unreachable here.
-                    const ws = activeWorkspaceId;
-                    switch (featureId) {
-                        case 'remote-host':
-                        case 'sharing':
-                            setSharingOpen(true);
-                            break;
-                        case 'plugins-appstore':
-                            setAppStoreOpen(true);
-                            break;
-                        case 'knowledge-graph':
-                            // A main-owned window, not a flyout. Guarded so it no-ops if
-                            // the preload bridge is not wired yet.
-                            if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
-                            break;
-                        case 'agent-inbox':
-                            setAgentInboxOpen(true);
-                            break;
-                        case 'issuewatch':
-                            setIssueWatchOpen(true);
-                            break;
-                        case 'flows':
-                            setFlowsOpen(true);
-                            break;
-                        case 'lists':
-                            setListsOpen(true);
-                            break;
-                        case 'questions':
-                            setQuestionsOpen(true);
-                            break;
-                        case 'docs':
-                            setDocsOpen(true);
-                            break;
-                        case 'tasks':
-                            setTaskManagerOpen(true);
-                            break;
-                        case 'github-caps':
-                            setGithubCapsOpen(true);
-                            break;
-                        case 'genie-os':
-                            setGenieOsOpen(true);
-                            break;
-                        // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
-                        // that the Deck is the default. `mergeViewRoute` rather than
-                        // replacing the query, for the same reason as every other
-                        // navigation here -- `host` and `stage` decide whether this window
-                        // points at a remote machine, and dropping them would silently make
-                        // a remote window local.
-                        case 'grid':
-                            replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
-                            break;
-                        // Workspace-SCOPED: these take a workspace, not a toggle. With no
-                        // active workspace there is nothing to open them against, so they
-                        // no-op rather than opening against a guess.
-                        case 'sites':
-                            if (ws) setSiteManagerWsId(ws);
-                            break;
-                        case 'processes':
-                            if (ws) setProcessManagerWsId(ws);
-                            break;
-                    }
-                }}
+                onActivateFeature={activateFeature}
+                // Tynn is OPTIONAL, so the rows that need it say so. `signedIn` rather than a
+                // guess: the palette must not accuse an account it never checked.
+                tynnConnected={signedIn}
                 workspaces={workspaces.map((w) => ({ id: w.id, name: w.project_name }))}
                 terminals={specs.map((sp) => ({
                     id: sp.id,
@@ -4467,57 +4829,40 @@ function TitleBar({
     isStage,
     stageWorkspaceName,
     onShowDocs,
-    onShowAgentInbox,
-    agentInboxLag = 0,
-    onShowSharing,
-    questionCount = 0,
-    onShowLists,
-    listsUserCount = 0,
     onShowAppStore,
-    onShowKnowledge,
-    onShowFlows,
-    flowsBusy = false,
-    onShowIssueWatch,
-    issueWatchUnread = 0,
-    issueWatchUnknown = false,
-    githubNeedsResolve = false,
-    onShowGithubCaps,
     cornerInRail = false,
-    genieOsActive = false,
-    genieOsOpen = false,
     setupIncomplete = false,
     onShowGenieOs,
+    tynnAccount = null,
+    onSignInTynn,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
+    /**
+     * FOURTEEN PROPS ARE GONE with the icon cluster: `onShowAgentInbox`, `agentInboxLag`,
+     * `onShowSharing`, `questionCount`, `onShowLists`, `listsUserCount`, `onShowKnowledge`,
+     * `onShowFlows`, `flowsBusy`, `onShowIssueWatch`, `issueWatchUnread`, `issueWatchUnknown`,
+     * `githubNeedsResolve`, `onShowGithubCaps`, `genieOsActive`, `genieOsOpen`.
+     *
+     * Every one of them existed to render or badge an icon. The features are reached through ⌘K
+     * (`FEATURE_SURFACES`, with a CI guard), and the four that were also live SIGNALS —
+     * a running Flow, agent mail nobody collected, GitHub blocking features, the OS agent
+     * working — are on the Deck now (`stationSignals`). Owner: *"move the signals to the Deck,
+     * then delete the icons."*
+     *
+     * The three that remain are the ones this bar still does something with.
+     */
+    /** A system-MENU item, not an icon. */
     onShowDocs?: () => void;
-    onShowAgentInbox?: () => void;
-    /** Messages the AGENTS haven't received/ACKed — see the master's lag effect. */
-    agentInboxLag?: number;
-    /** Open the Sharing flyout. Absent in a remote window — the links belong to
-     *  the workstation that OWNS the workspaces, not the one driving it. */
-    onShowSharing?: () => void;
-    questionCount?: number;
-    onShowLists?: () => void;
-    /** Items on the workspace UserList waiting on the PERSON. An agent's own
-     *  checklist is deliberately NOT counted here. */
-    listsUserCount?: number;
+    /** The App Tray's "open the store" — the tray lists installed GApps and stays. */
     onShowAppStore?: () => void;
-    onShowKnowledge?: () => void;
-    onShowFlows?: () => void;
-    /** A Flow is running RIGHT NOW — animates the Flows icon. Pushed from the
-     *  Flow runtime's start/finish callbacks; nothing here polls. */
-    flowsBusy?: boolean;
-    onShowIssueWatch?: () => void;
-    issueWatchUnread?: number;
-    issueWatchUnknown?: boolean;
-    /** True when GitHub permissions are missing — shows a persistent warning. */
-    githubNeedsResolve?: boolean;
-    onShowGithubCaps?: () => void;
-    genieOsActive?: boolean;
-    genieOsOpen?: boolean;
+    /** Shows "Continue workstation setup" in the menu while first-run is unfinished. */
     setupIncomplete?: boolean;
     onShowGenieOs?: () => void;
+    /** The signed-in Tynn account's name, or null. Named in the menu, because a workstation can be
+     *  signed into the WRONG account and nothing else says so. */
+    tynnAccount?: string | null;
+    onSignInTynn?: () => void;
     /**
      * True in the master layout, where this bar is the RIGHT column's header
      * and the LEFT column already owns the window's top-left corner (traffic
@@ -4592,130 +4937,25 @@ function TitleBar({
                 spacer, so installing an app never shifts the icons the user aims
                 at. Its own layout is row-reverse; see AppTray. */}
             {!isStage && <AppTray onOpenStore={() => onShowAppStore?.()} />}
-            {!isStage && onShowGenieOs && (
-                <button
-                    type="button"
-                    className={`gicon genie-os-button${genieOsActive ? ' is-active' : ''}${genieOsOpen ? ' is-open' : ''}`}
-                    title="Genie OS — operate this workstation"
-                    aria-label="Open Genie OS agent"
-                    aria-pressed={genieOsOpen}
-                    onClick={onShowGenieOs}
-                >
-                    <IconWand size={16} />
-                </button>
-            )}
-            <SitesButton />
-            <HostsButton />
-            {githubNeedsResolve && (
-                <button
-                    type="button"
-                    className="gicon gh-warn-btn"
-                    title="GitHub permissions needed — some features are disabled. Click to resolve."
-                    aria-label="Resolve GitHub permissions"
-                    onClick={() => onShowGithubCaps?.()}
-                >
-                    <IconAlert size={16} />
-                </button>
-            )}
-            <button
-                type="button"
-                className="gicon"
-                title="Knowledge Graph — your workstation memory store"
-                aria-label="Knowledge Graph"
-                onClick={() => onShowKnowledge?.()}
-            >
-                <IconGraph size={16} />
-            </button>
-            {/* Flows — Genie's automation. Animates while one is RUNNING, off
-                real run state pushed from main, so the movement means a body is
-                executing on this machine right now and nothing else. */}
-            <button
-                type="button"
-                className={`gicon flows-button${flowsBusy ? ' is-running' : ''}`}
-                title={
-                    flowsBusy
-                        ? 'Flows — a Flow is running now'
-                        : 'Flows — Genie’s automation'
-                }
-                aria-label="Flow Manager"
-                data-running={flowsBusy ? 'true' : undefined}
-                onClick={() => onShowFlows?.()}
-            >
-                <IconFlow size={16} />
-            </button>
-            <button
-                type="button"
-                className="gicon agentinbox-btn"
-                title={
-                    agentInboxLag > 0
-                        ? `AgentInbox — ${agentInboxLag} message${agentInboxLag === 1 ? '' : 's'} your agents haven't picked up`
-                        : 'AgentInbox — talk to & between your agents'
-                }
-                aria-label="AgentInbox"
-                onClick={() => onShowAgentInbox?.()}
-            >
-                <IconMessage size={16} />
-                {agentInboxLag > 0 && (
-                    <span className="iw-btn-badge">
-                        {agentInboxLag > 99 ? '99+' : agentInboxLag}
-                    </span>
-                )}
-            </button>
-            {/* SHARING. The global counterpart to the workspace right-click: what
-                is already given away, workstation-wide links, and the inbound
-                "Connect to…". Not in a remote window — the links belong to the
-                workstation that OWNS the workspaces, not the one driving it. */}
-            {onShowSharing && (
-                <button
-                    type="button"
-                    className="gicon sharing-btn"
-                    title="Sharing — what you have shared, and how to connect to someone else"
-                    aria-label="Sharing"
-                    onClick={() => onShowSharing()}
-                >
-                    <IconShare size={16} />
-                </button>
-            )}
-            <button
-                type="button"
-                /* NOT `lists-btn` — that is the Lists FLYOUT's Done/Refuse
-                   action-button class (border, filled background, 4px 9px
-                   padding), and wearing it by name collision drew a bordered
-                   pill around this one icon in a row of flat ones. */
-                className="gicon lists-hdr-btn"
-                title={
-                    listsUserCount > 0
-                        ? `Lists — ${listsUserCount} item${listsUserCount === 1 ? '' : 's'} waiting on you`
-                        : 'Lists — what agents are tracking, and what is waiting on you'
-                }
-                aria-label="Lists"
-                onClick={() => onShowLists?.()}
-            >
-                <IconListTree size={16} />
-                {listsUserCount > 0 && (
-                    <span className="iw-btn-badge">
-                        {listsUserCount > 99 ? '99+' : listsUserCount}
-                    </span>
-                )}
-            </button>
-            <button
-                type="button"
-                className="gicon iw-btn"
-                title={issueWatchUnknown
-                    ? 'Issue Watch — unknown / not tracking this workspace yet'
-                    : 'Issue Watch — GitHub issues, PRs & security alerts'}
-                onClick={() => onShowIssueWatch?.()}
-            >
-                <IconEye />
-                {issueWatchUnread > 0 && (
-                    <span className="iw-btn-badge">
-                        {issueWatchUnread > 99 ? '99+' : issueWatchUnread}
-                    </span>
-                )}
-                {issueWatchUnknown && (
-                    <span className="iw-btn-badge unknown">?</span>
-                )}
-            </button>
+            {/* THE ICON CLUSTER IS GONE — ten of them (Genie OS, Sites, Hosts, the GitHub
+                warning, Knowledge, Flows, AgentInbox, Sharing, Lists, IssueWatch).
+
+                P7: "8 icons → 0 icons, 0 features lost". The features are reached through ⌘K,
+                built from `FEATURE_SURFACES` with a CI guard that refuses to let one become
+                unreachable — so that half was already true and is checked.
+
+                The half that was NOT true is that several icons also carried a live SIGNAL:
+                Flows animated while one ran, AgentInbox badged mail agents had not collected,
+                the GitHub glyph warned that permissions were switching features off, Genie OS
+                pulsed while the operator was producing output, IssueWatch could say "cannot
+                tell". A palette row says none of that. Owner decision, asked directly: *"move
+                the signals to the Deck, then delete the icons"* — so they are on the Deck
+                (`stationSignals`, silent unless something is true, each still a door through
+                the same `activateFeature` the palette uses), and only then did these come out.
+
+                The APP TRAY above stays: it lists the GApps this workstation has installed,
+                which is content rather than a feature door. The menu below stays for the same
+                reason it always did — Settings, Docs and What's New live in it. */}
             <div className="system-menu-wrap">
                 <button
                     type="button"
@@ -4740,6 +4980,20 @@ function TitleBar({
                         <button type="button" role="menuitem" onClick={() => void openWhatsNew()}>
                             What&apos;s new
                         </button>
+                        {/* THE ACCOUNT. Tynn is optional (owner, 2026-10-08), so this is the one
+                            place a person goes to connect it rather than a wall in front of the
+                            app. It names the account when there is one, because a workstation can
+                            be signed into the wrong one and that is otherwise invisible. */}
+                        {tynnAccount ? (
+                            <button type="button" role="menuitem" disabled>
+                                Tynn: {tynnAccount}
+                            </button>
+                        ) : (
+                            <button type="button" role="menuitem" onClick={() => {
+                                setSystemMenuOpen(false);
+                                onSignInTynn?.();
+                            }}>Sign in to Tynn…</button>
+                        )}
                         {/* Workstation setup lives in the MENU, not as a chip
                             floating over the header. It only appears while setup
                             is unfinished, so it disappears once it is done
@@ -4879,73 +5133,6 @@ function RemoteIndicator() {
     );
 }
 
-/**
- * `.gen` sites picker — a titlebar affordance that, on hover/click, lists the
- * enabled `.gen` dev sites of the machine THIS window represents: a local Genie
- * window shows THIS machine's own sites (loopback-backed browser); a host window
- * shows the HOST's exposed sites (over the tunnel). Clicking opens the site in
- * the Testing Browser. Contextual by design — never a mix.
- */
-function SitesButton() {
-    const [open, setOpen] = useState(false);
-    const [hovering, setHovering] = useState(false);
-    const rootRef = useRef<HTMLDivElement>(null);
-    const show = open || hovering;
-
-    // Standard popover dismissal (mirrors ProjectSelector / the Processes Chooser):
-    // an outside-click or Esc fully closes — clearing BOTH the sticky click state
-    // and the hover state, so it can't linger open. The globe's own onClick still
-    // toggles it (a mousedown INSIDE rootRef is ignored here, then the click fires).
-    useEffect(() => {
-        if (!show) return;
-        const onDocClick = (e: MouseEvent) => {
-            if (!rootRef.current) return;
-            if (e.target instanceof Node && !rootRef.current.contains(e.target)) {
-                setOpen(false);
-                setHovering(false);
-            }
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                setOpen(false);
-                setHovering(false);
-            }
-        };
-        document.addEventListener('mousedown', onDocClick);
-        document.addEventListener('keydown', onKey);
-        return () => {
-            document.removeEventListener('mousedown', onDocClick);
-            document.removeEventListener('keydown', onKey);
-        };
-    }, [show]);
-
-    return (
-        <div
-            ref={rootRef}
-            style={{ position: 'relative', display: 'inline-flex' }}
-            onMouseEnter={() => setHovering(true)}
-            onMouseLeave={() => setHovering(false)}
-        >
-            <button
-                type="button"
-                className="gicon"
-                title="Browse your hosted .gen sites — local and from connected hosts"
-                aria-label=".gen sites"
-                aria-expanded={show}
-                onClick={() => setOpen((o) => !o)}
-            >
-                {/* globe glyph */}
-                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M3 12h18" />
-                    <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
-                </svg>
-            </button>
-            {show && <SitesPanel onClose={() => { setOpen(false); setHovering(false); }} />}
-        </div>
-    );
-}
-
 function SitesPanel({ onClose }: { onClose: () => void }) {
     const [data, setData] = useState<GenSitesAll | null>(null);
 
@@ -5056,75 +5243,6 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                     ))}
                 </>
             )}
-        </div>
-    );
-}
-
-/**
- * Hosts picker (LOCAL window only). A titlebar affordance to open OTHER machines'
- * native Genie Floors — each host gets its OWN window driven over the remote
- * bridge, while THIS local window keeps full local functionality. Lists tailnet-
- * discovered hosts + the persisted known-hosts list; first-time pairs collect a
- * PIN inline. Hidden inside a host window (a remote Floor doesn't open further
- * hosts from here).
- */
-function HostsButton() {
-    const isHostWindow =
-        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
-    const [open, setOpen] = useState(false);
-    // Glow the button when a Virtual Workstation transitions provisioning→online,
-    // so the owner doesn't have to keep re-opening this popover after a spawn to
-    // catch the moment it's connectable. Fires only on the transition (see
-    // newlyConnectableWorkstationIds), and clears when the popover is opened.
-    const [cameOnline, setCameOnline] = useState(false);
-    const seenConnectableRef = useRef<Set<string> | null>(null);
-    useEffect(() => {
-        if (isHostWindow) return; // remote Floors don't spawn workstations from here
-        let cancelled = false;
-        const poll = async () => {
-            const ws = await api()
-                .workstations.connectable()
-                .catch(() => [] as ConnectableWorkstation[]);
-            if (cancelled) return;
-            const fresh = newlyConnectableWorkstationIds(seenConnectableRef.current, ws);
-            seenConnectableRef.current = connectableWorkstationIds(ws);
-            if (fresh.length > 0) setCameOnline(true);
-        };
-        void poll(); // first poll seeds the baseline (no glow for already-online)
-        const t = setInterval(() => void poll(), 20_000);
-        return () => {
-            cancelled = true;
-            clearInterval(t);
-        };
-    }, [isHostWindow]);
-    if (isHostWindow) return null;
-    const toggle = () => {
-        setOpen((o) => !o);
-        setCameOnline(false); // opening acknowledges the "came online" glow
-    };
-    return (
-        <div style={{ position: 'relative', display: 'inline-flex' }}>
-            <button
-                type="button"
-                className={`gicon${cameOnline ? ' ws-online-glow' : ''}`}
-                title={
-                    cameOnline
-                        ? 'A workstation just came online — click to connect'
-                        : 'Connect to a host Genie — opens its desktop in a new window'
-                }
-                aria-label="Hosts"
-                aria-expanded={open}
-                onClick={toggle}
-            >
-                {/* stacked-servers glyph */}
-                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <rect x="3" y="3" width="18" height="7" rx="1.5" />
-                    <rect x="3" y="14" width="18" height="7" rx="1.5" />
-                    <line x1="7" y1="6.5" x2="7.01" y2="6.5" />
-                    <line x1="7" y1="17.5" x2="7.01" y2="17.5" />
-                </svg>
-            </button>
-            {open && <HostsPanel onClose={() => setOpen(false)} />}
         </div>
     );
 }

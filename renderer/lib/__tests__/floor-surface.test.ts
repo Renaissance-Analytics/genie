@@ -7,11 +7,22 @@ describe('floorSurface', () => {
     it('shows the grid for the DEFAULT view', () => {
         // The default must not hide the grid. An earlier version defaulted the route to
         // the Deck and every panel test on every platform failed.
-        expect(floorSurface({ kind: 'grid' })).toEqual({ showDeck: false, hideGrid: false, showAgent: null });
+        expect(floorSurface({ kind: 'grid' })).toEqual({
+            showDeck: false,
+            hideGrid: false,
+            showAgent: null,
+            showGridChrome: true,
+        });
     });
 
     it('shows the Deck and hides the grid for the Deck view', () => {
-        expect(floorSurface({ kind: 'deck' })).toEqual({ showDeck: true, hideGrid: true, showAgent: null });
+        expect(floorSurface({ kind: 'deck' })).toEqual({
+            showDeck: true,
+            hideGrid: true,
+            showAgent: null,
+            // The grid's own chrome goes with the grid — see `showGridChrome`.
+            showGridChrome: false,
+        });
     });
 
     it('shows the grid for the Workbench', () => {
@@ -19,6 +30,7 @@ describe('floorSurface', () => {
             showDeck: false,
             hideGrid: false,
             showAgent: null,
+            showGridChrome: true,
         });
     });
 
@@ -29,6 +41,7 @@ describe('floorSurface', () => {
             showDeck: false,
             hideGrid: true,
             showAgent: 'a1',
+            showGridChrome: false,
         });
     });
 
@@ -42,7 +55,15 @@ describe('floorSurface', () => {
             { kind: 'agent', agentId: 'a', tab: null } as const,
         ]) {
             const s = floorSurface(view);
-            expect(Object.keys(s).sort()).toEqual(['hideGrid', 'showAgent', 'showDeck']);
+            // The CLOSED LIST is the assertion: a new flag has to be added here, in a diff a
+            // human reads, which is how `showGridChrome` arrived. A flag named anything like
+            // `unmountGrid` could not be added without this line changing.
+            expect(Object.keys(s).sort()).toEqual([
+                'hideGrid',
+                'showAgent',
+                'showDeck',
+                'showGridChrome',
+            ]);
         }
     });
 });
@@ -92,6 +113,7 @@ describe('the agent route now RENDERS the agent view', () => {
             showDeck: false,
             hideGrid: true,
             showAgent: 'a1',
+            showGridChrome: false,
         });
     });
 
@@ -105,5 +127,63 @@ describe('the agent route now RENDERS the agent view', () => {
         expect(floorSurface({ kind: 'grid' }).showAgent).toBeNull();
         expect(floorSurface({ kind: 'deck' }).showAgent).toBeNull();
         expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showAgent).toBeNull();
+    });
+});
+
+describe('the GRID TOOLBAR belongs to the grid', () => {
+    /**
+     * P7: *"the layout control off the default path."* Measured, it is worse than one control —
+     * the whole `Toolbar` renders unconditionally, so on the Deck (the default surface since P6)
+     * a person sees the layout picker, Add view, Add terminal and Run recipe for a grid that is
+     * not on screen. Every one of those acts on `activeWorkspaceId`, and the Deck is
+     * cross-workspace by definition.
+     *
+     * The rule is the obvious one and it is already derivable: grid chrome appears with the grid.
+     * It is a THIRD flag rather than `!hideGrid` at the call site, because the two existing flags
+     * answer "what to add" and "what to conceal" and neither of them means "what to offer" — and
+     * because a flag can be tested where a negated expression inside a 5,000-line component
+     * cannot.
+     *
+     * It does NOT unmount the grid. That distinction is the whole reason `hideGrid` exists: every
+     * panel owns a live xterm bound to a pty, and remounting resets the terminal.
+     */
+    it('offers the toolbar on the grid and the Workbench', () => {
+        expect(floorSurface({ kind: 'grid' }).showGridChrome).toBe(true);
+        expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showGridChrome).toBe(true);
+    });
+
+    it('does NOT offer it on the Deck', () => {
+        expect(floorSurface({ kind: 'deck' }).showGridChrome).toBe(false);
+    });
+
+    it('does NOT offer it on an Agent view', () => {
+        // The Agent view has its own header, with the controls that act on an agent. A layout
+        // picker for a grid behind it is chrome for somewhere else.
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null }).showGridChrome).toBe(false);
+    });
+
+    it('tracks the grid exactly — it is never offered while the grid is concealed', () => {
+        // The property, stated once rather than per case: chrome for a surface nobody can see is
+        // the defect, whichever route produced it.
+        for (const view of [
+            { kind: 'grid' } as const,
+            { kind: 'deck' } as const,
+            { kind: 'workbench', workspaceId: 'w1' } as const,
+            { kind: 'agent', agentId: 'a1', tab: null } as const,
+        ]) {
+            const surface = floorSurface(view);
+            expect(surface.showGridChrome).toBe(!surface.hideGrid);
+        }
+    });
+
+    it('still never unmounts the grid, on any route', () => {
+        // The one thing this must not become. `hideGrid` conceals; nothing here destroys.
+        for (const view of [
+            { kind: 'grid' } as const,
+            { kind: 'deck' } as const,
+            { kind: 'agent', agentId: 'a1', tab: null } as const,
+        ]) {
+            expect(Object.keys(floorSurface(view))).not.toContain('unmountGrid');
+        }
     });
 });

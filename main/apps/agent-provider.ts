@@ -74,4 +74,4 @@ export function gappPersonaPath(workspaceRoot: string, persona: string): string 
  * `agents/startup.ts` rather than being a second copy of the shell-quoting here.
  * Re-exported so the GApp call sites keep reading in GApp terms.
  */
-export { withPersonaBriefing } from '../agents/startup';
+export { personaBriefing } from '../agents/startup';

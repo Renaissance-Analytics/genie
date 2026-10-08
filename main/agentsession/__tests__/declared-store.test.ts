@@ -202,6 +202,86 @@ describe('endTurn', () => {
         expect(s.get('ag-1')!.live).toBeNull();
     });
 
+    /**
+     * COMMITS the reply instead of deleting it — and the test above is why this went unnoticed
+     * for so long. It asserts that `live` is cleared, which is right (nothing is streaming any
+     * more) and says nothing about where the words went. They went nowhere: `endTurn` set
+     * `live: null` and the mapper only moves `live` into the transcript when a DIFFERENT message
+     * id arrives, so the last message of every turn — which for a one-reply turn is the whole
+     * reply — was discarded the instant the turn finished.
+     *
+     * Visible only after P7 made Conversation the surface: the agent's answer appeared while it
+     * streamed and vanished when it finished. It also explains why clearing looked necessary at
+     * all. With `messageId` absent the mapper ids every chunk `live`, so the NEXT turn's first
+     * chunk matches the previous turn's id and appends to it — two unrelated replies becoming one
+     * paragraph. Clearing fixed that symptom by throwing the message away.
+     */
+    it('COMMITS the agent\'s last message to the transcript rather than discarding it', () => {
+        const { s } = store();
+        s.open(identity);
+        s.apply('ag-1', chunk('on '));
+        s.apply('ag-1', chunk('it'));
+        s.endTurn('ag-1');
+        expect(s.get('ag-1')!.transcript.map((m) => m.content)).toEqual(['on it']);
+        expect(s.get('ag-1')!.live).toBeNull();
+    });
+
+    it('keeps two turns\' replies as two messages, not one paragraph', () => {
+        // The reason the discard looked right. Every chunk of an un-ided message is `live`, so
+        // without a commit at the turn boundary turn two appends to turn one.
+        const { s } = store();
+        s.open(identity);
+        s.apply('ag-1', chunk('first answer'));
+        s.endTurn('ag-1');
+        s.apply('ag-1', chunk('second answer'));
+        s.endTurn('ag-1');
+        expect(s.get('ag-1')!.transcript.map((m) => m.content)).toEqual(['first answer', 'second answer']);
+    });
+
+    /**
+     * UNIQUE IDS on commit, and this one was introduced by the commit fix itself.
+     *
+     * `applySessionUpdate` ids an un-ided message `live` — a placeholder, not an identity, because
+     * ACP's `messageId` is optional and claude does not always send one. Committing it verbatim at
+     * every turn boundary therefore produces **two transcript entries both ided `live`**, which
+     * `AgentView` uses as its React `key`. Duplicate keys are the class of bug where the screen is
+     * right until a re-render, and then one message shows the other's content.
+     *
+     * Renamed HERE rather than in the mapper on purpose. The mapper cannot mint a stable id without
+     * state — deriving one from `transcript.length` looks fine until `recordHumanPromptForSpec`
+     * appends mid-turn, at which point the id changes under a streaming message and the partial
+     * commits as if finished. At the boundary the message is complete and a fresh id is free.
+     */
+    it('gives each committed turn its OWN id, never two ided `live`', () => {
+        const { s } = store();
+        s.open(identity);
+        s.apply('ag-1', chunk('first answer'));
+        s.endTurn('ag-1');
+        s.apply('ag-1', chunk('second answer'));
+        s.endTurn('ag-1');
+        const ids = s.get('ag-1')!.transcript.map((m) => m.id);
+        expect(new Set(ids).size, ids.join(',')).toBe(2);
+    });
+
+    it('keeps a REAL message id when the agent sent one', () => {
+        // Only the placeholder is renamed. An agent that ids its messages is telling us something
+        // and overwriting it would discard the one handle a client has on a specific reply.
+        const { s } = store();
+        s.open(identity);
+        s.apply('ag-1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' }, messageId: 'm7' } as never);
+        s.endTurn('ag-1');
+        expect(s.get('ag-1')!.transcript.map((m) => m.id)).toEqual(['m7']);
+    });
+
+    it('commits nothing when the turn produced no message', () => {
+        // A turn whose only acts were tool calls. An empty row would render as a blank bubble.
+        const { s } = store();
+        s.open(identity);
+        s.apply('ag-1', toolCall('Read'));
+        s.endTurn('ag-1');
+        expect(s.get('ag-1')!.transcript).toEqual([]);
+    });
+
     it('is a no-op when no turn is in flight, so a duplicate resolve records nothing', () => {
         // `session/prompt` resolving twice, or a cancel racing a completion, must not
         // produce two turn-ended rows and double the day's turn count.
@@ -274,5 +354,195 @@ describe('capturing the CLI session id', () => {
         s.open(identity);
         s.apply('ag-1', chunk('hi'));
         expect(captured).toEqual([]);
+    });
+});
+
+describe('APPROVALS reach the session — the half that was never wired', () => {
+    /**
+     * `session/request_permission` is not a `session/update`: it is a REQUEST the agent makes of
+     * us, held open by `AcpSessionDriver.holdPermission` until a human decides. The driver has
+     * `onApproval` to announce it and `decide` to answer it, both tested — and in production
+     * `onApproval` was called by NOTHING.
+     *
+     * So an ACP agent that asked permission parked forever and no surface said why: the agent is
+     * alive, the turn never ends, and the only symptom is an agent that went quiet. Same defect
+     * shape as the mapper having no caller — built, tested, not wired.
+     *
+     * An approval therefore enters the session HERE rather than through `apply`, because there
+     * is no update to fold.
+     */
+    const approval = (id: string) =>
+        ({ id, name: 'Edit src/index.ts', detail: null, options: [] }) as never;
+
+    /** A store that can resolve a SPEC to this identity, as `bindings.ts` does in production. */
+    function specStore() {
+        const rows: Array<{ kind: string }> = [];
+        const s = new DeclaredSessionStore({
+            record: (e) => rows.push(e),
+            now: () => NOW,
+            identityForSpec: (specId) => (specId === 'spec-1' ? identity : null),
+        });
+        return { s, rows };
+    }
+
+    it('adds an approval to the session, addressed by SPEC', () => {
+        const { s } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals.map((a) => a.id)).toEqual(['p1']);
+    });
+
+    it('OPENS the session when the permission arrives first', () => {
+        // The agent can ask before it has said anything else — a first turn whose first act is
+        // an edit. Dropping it because no session was open yet would park the agent silently,
+        // which is the exact failure this closes.
+        const { s } = specStore();
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(1);
+    });
+
+    it('records approval-asked, so a blocked human is COUNTABLE', () => {
+        // The measure that compares honestly across engines: not how fast an agent is, but how
+        // often it stops and waits for a person.
+        const { s, rows } = specStore();
+        s.open(identity);
+        rows.length = 0;
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(rows.map((r) => r.kind)).toEqual(['approval-asked']);
+    });
+
+    it('holds SEVERAL at once, because one turn can ask more than once', () => {
+        const { s } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        s.addApprovalForSpec('spec-1', approval('p2'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(2);
+    });
+
+    it('does not DOUBLE one it already holds', () => {
+        // The driver disambiguates colliding ids, so two rows under one id can only be a
+        // re-announcement — of which the obvious cause is a listener attached twice.
+        const { s, rows } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        rows.length = 0;
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(1);
+        // And nothing is recorded, or one decision would be counted as two blocks.
+        expect(rows).toEqual([]);
+    });
+
+    it('clears one once it is decided, and records that too', () => {
+        const { s, rows } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        s.addApprovalForSpec('spec-1', approval('p2'));
+        rows.length = 0;
+        s.clearApprovalForSpec('spec-1', 'p1');
+        expect(s.get('ag-1')?.approvals.map((a) => a.id)).toEqual(['p2']);
+        expect(rows.map((r) => r.kind)).toEqual(['approval-decided']);
+    });
+
+    it('is a no-op for an id it does not hold, rather than throwing', () => {
+        // Called straight from an IPC handler after a human clicked. A stale click — the agent
+        // cancelled the turn, which settles every held request — must not take the handler down.
+        const { s, rows } = specStore();
+        s.open(identity);
+        rows.length = 0;
+        expect(() => s.clearApprovalForSpec('spec-1', 'nope')).not.toThrow();
+        expect(rows).toEqual([]);
+    });
+
+    it('ignores a spec it cannot resolve to an agent', () => {
+        // Opening a session from an unresolvable spec would invent an agent out of a permission
+        // request nobody is tracking.
+        const { s } = specStore();
+        expect(() => s.addApprovalForSpec('spec-unknown', approval('p1'))).not.toThrow();
+        expect(s.get('ag-1')).toBeNull();
+    });
+});
+
+/**
+ * WHAT GENIE SENT is part of the conversation — and nothing recorded it.
+ *
+ * Measured against a real claude ACP session (`handshake.real.test.ts`, logged every run):
+ *
+ * ```
+ * [acp transcript] live=agent_message_chunk,notice,usage_update | replay=(0) none
+ * ```
+ *
+ * The agent does **not** echo the client's prompt back as `user_message_chunk` while the session
+ * runs, and `session/load` on the CLI's own session id replays nothing at all. So after the owner
+ * typed into the Conversation composer and `master.tsx` re-read the sessions, the declared
+ * transcript held the agent's reply and **no record of what was asked** — a conversation of
+ * answers to invisible questions, on the surface P7 makes the place you talk to an agent.
+ *
+ * Genie knows what it sent, so Genie declares it. Folded through `apply` rather than spliced into
+ * `transcript` directly, so chunk coalescing, id handling and the `at` stamp are the mapper's one
+ * implementation and cannot drift from the agent's own messages.
+ */
+describe('the OWNER\'S OWN prompt is recorded, because the agent never echoes it', () => {
+    function specStore() {
+        const rows: Array<{ kind: string }> = [];
+        const s = new DeclaredSessionStore({
+            record: (e) => rows.push(e),
+            now: () => NOW,
+            identityForSpec: (specId) => (specId === 'spec-1' ? identity : null),
+        });
+        return { s, rows };
+    }
+
+    it('appends what the owner sent as a user message', () => {
+        const { s } = specStore();
+        s.open(identity);
+        s.recordHumanPromptForSpec('spec-1', 'start on the lists dock');
+        expect(s.get('ag-1')?.transcript).toEqual([
+            { id: expect.any(String), role: 'user', author: null, content: 'start on the lists dock', at: NOW },
+        ]);
+    });
+
+    it('sits BEFORE the reply, given the order production records in', () => {
+        // Honest about what this proves and what it does not. The STORE appends in call order, which
+        // is all this asserts; the order itself is `promptSession`'s guarantee and is tested there
+        // (`records it BEFORE the session sees it`). The first draft of this case staged the order it
+        // wanted and read as evidence about the sequence that happens — it is not. `session/prompt`
+        // resolves at the END of a turn, so recording on its outcome put the question below its own
+        // answer, and the test here stayed green throughout.
+        const { s } = specStore();
+        s.open(identity);
+        s.recordHumanPromptForSpec('spec-1', 'go');
+        s.apply('ag-1', chunk('on it'));
+        s.endTurn('ag-1');
+        expect(s.get('ag-1')!.transcript.map((m) => m.content)).toEqual(['go', 'on it']);
+    });
+
+    it('gives each prompt its own id, so two do not coalesce into one', () => {
+        // `user_message_chunk` APPENDS to the previous message when the id matches — correct for
+        // a streamed chunk, wrong for two separate things the owner said.
+        const { s } = specStore();
+        s.open(identity);
+        s.recordHumanPromptForSpec('spec-1', 'first');
+        s.recordHumanPromptForSpec('spec-1', 'second');
+        expect(s.get('ag-1')?.transcript.map((m) => m.content)).toEqual(['first', 'second']);
+    });
+
+    it('is a no-op for a spec with no session, rather than opening one', () => {
+        // Unlike an approval, which must open a session because a parked agent is invisible
+        // otherwise. A prompt with no session to be part of has nothing to record against, and
+        // `promptSession` only reaches this once its three pre-send gates pass — non-empty text, a
+        // live session, and the budget.
+        const { s } = specStore();
+        s.recordHumanPromptForSpec('spec-1', 'hello');
+        expect(s.get('ag-1')).toBeNull();
+    });
+
+    it('records no usage event — the owner typing is not a turn', () => {
+        // `turn-started` comes from the AGENT moving out of idle. Counting a keystroke as a turn
+        // would inflate every per-agent figure the Deck shows.
+        const { s, rows } = specStore();
+        s.open(identity);
+        rows.length = 0;
+        s.recordHumanPromptForSpec('spec-1', 'hello');
+        expect(rows).toEqual([]);
     });
 });

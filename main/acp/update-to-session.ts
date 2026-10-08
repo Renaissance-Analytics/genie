@@ -105,6 +105,18 @@ function planStatus(status: string | undefined): PlanEntry['status'] {
 }
 
 /**
+ * The id a streaming message wears when the agent sent none — ACP's `messageId` is optional and
+ * claude does not always send one.
+ *
+ * A PLACEHOLDER, not an identity, and exported so nothing has to re-guess the literal. It is only
+ * ever correct for the ONE message currently streaming: committing it verbatim at every turn
+ * boundary produces two transcript entries with the same id, and `AgentView` uses the id as its
+ * React key. `DeclaredSessionStore.endTurn` renames it on commit, where the message is finished and
+ * a fresh id is free — the mapper cannot, because minting a stable one needs state it does not have.
+ */
+export const LIVE_MESSAGE_ID = 'live';
+
+/**
  * Fold one update into the session.
  *
  * Returns a NEW session; never mutates. A surface re-rendering from a mutated object
@@ -143,7 +155,7 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
         case 'session_message': {
             const chunk = textOf(u.content);
             if (chunk === null) return s;
-            const id = u.messageId ?? 'live';
+            const id = u.messageId ?? LIVE_MESSAGE_ID;
             // A DIFFERENT id means the previous message is finished. Committing it is
             // the real streaming semantic — overwriting instead would drop a reply
             // mid-turn with nothing reporting it.
@@ -151,13 +163,16 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
                 return {
                     ...s,
                     transcript: [...s.transcript, s.live],
-                    live: { id, role: 'agent', author: null, content: chunk },
+                    live: { id, role: 'agent', author: null, content: chunk, at: now },
                     turn: { state: 'thinking', since: now },
                 };
             }
+            // `at` is stamped when the message STARTS and carried through every chunk, so a
+            // long reply is ordered by when the agent began speaking rather than by when it
+            // stopped. `mergeDeclared` interleaves on it — see `Message.at`.
             const live: Message = s.live
                 ? { ...s.live, content: s.live.content + chunk }
-                : { id, role: 'agent', author: null, content: chunk };
+                : { id, role: 'agent', author: null, content: chunk, at: now };
             return { ...s, live, turn: { state: 'thinking', since: now } };
         }
 
@@ -167,13 +182,49 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
             // Already committed: the human sent it.
             const id = u.messageId ?? `user-${s.transcript.length}`;
             const last = s.transcript[s.transcript.length - 1];
-            if (last && last.id === id && last.role === 'user') {
+            // AN ID is the agent saying these belong together, and the only case where
+            // concatenation is a fact rather than a guess.
+            if (u.messageId && last && last.id === u.messageId && last.role === 'user') {
                 return {
                     ...s,
                     transcript: [...s.transcript.slice(0, -1), { ...last, content: last.content + chunk }],
                 };
             }
-            return { ...s, transcript: [...s.transcript, { id, role: 'user', author: null, content: chunk }] };
+            /**
+             * AN UN-IDED REPEAT OF THE TAIL IS A DUPLICATE, not a new message.
+             *
+             * ## Why, after the loud reason stopped being true
+             *
+             * Measured against a real codex child on prism-acp 0.5.2, this fired twice —
+             * **two identical frames, each carrying the FULL text, with no `messageId`.** That turned
+             * out to be prism's own defect, not codex's: `#mapItem` runs at both `item/started` and
+             * `item/completed`, and the `userMessage` branch was missing the `if (replay || completed)`
+             * guard its sibling branches have. Fixed in 0.5.3 and re-measured here — `prompt echoes=1`.
+             *
+             * So this guard is NOT here for that, and saying so matters: a rule justified by a defect
+             * somebody else has fixed is a rule nobody can evaluate.
+             *
+             * It is here for the smaller and permanent reason. codex genuinely reports the user's turn
+             * as `user_message_chunk`, and Genie genuinely records the owner's prompt itself
+             * (`recordHumanPromptForSpec`) because claude never echoes and never replays one. One
+             * honest echo plus one honest record is still **two renderings of one message**, and that
+             * does not go away with any amount of fixing on either side.
+             *
+             * Keyed on the TEXT rather than the id, because that is the pair that collides: Genie's
+             * record carries a `human:` id an echo cannot match by construction. Worth keeping for its
+             * own sake — `user-${transcript.length}` GROWS as messages are appended, so an id built
+             * that way can never match what was just appended and was guaranteed never to coalesce.
+             *
+             * Dropping is the lesser error, and the judgement is worth stating rather than leaving as
+             * a silent heuristic. For an un-ided chunk there is NO information distinguishing "that
+             * message again" from "the owner typed the same word twice". A duplicated message reads as
+             * a bug in Genie; a collapsed exact repeat reads as the owner having typed once.
+             */
+            if (!u.messageId && last && last.role === 'user' && last.content === chunk) return s;
+            return {
+                ...s,
+                transcript: [...s.transcript, { id, role: 'user', author: null, content: chunk, at: now }],
+            };
         }
 
         case 'agent_thought_chunk':

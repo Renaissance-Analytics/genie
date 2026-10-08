@@ -5,25 +5,48 @@ import { ACP_PROVIDERS } from '../acp/agent-spec';
  *
  * ## ACP IS NOT OPTIONAL
  *
- * Owner directive, 2026-10-07: *"acp is the core of our agent communications, this is not
- * optional."* There is no global flag. A provider that can speak ACP speaks ACP.
+ * Owner directive: *"acp is the core of our agent communications, this is not optional."*
+ * There is no global flag. A provider that can speak ACP speaks it.
  *
  * This REPLACES the previous rule, which was its opposite and was pinned by a test as "the
- * default does not move": an agent ran on the pty unless something explicitly said
- * otherwise, because Genie 2 was a parallel surface whose default flipped at the end. That
- * was correct while it was true, and it stopped being true when the owner decided ACP is
- * the mechanism rather than a mode — the same way the Deck stopped being opt-in.
+ * default does not move" — an agent ran on the pty unless something said otherwise, because
+ * Genie 2 was a parallel surface whose default flipped at the end. That was correct while it
+ * was true.
+ *
+ * ## Why it is safe NOW and was not an hour ago
+ *
+ * The flip was written, measured, and REVERTED once before landing, because it turned 8 test
+ * files red and those tests were right: an ACP session could not resume a conversation, so
+ * making it the default would have discarded one on every Genie restart. A restart on the
+ * owner's machine wedged 21 of 32 agents the same day, so that was not hypothetical.
+ *
+ * Four things had to be true first, and now are:
+ *
+ *  - **`session/load` works from a client.** prism-acp 0.3.0, after its author found three
+ *    stacked defects while confirming his own "yes" — chiefly that the CLI's session id was
+ *    recorded as unmapped and reached no client at all.
+ *  - **Genie captures and persists that id** (`META_CLI_SESSION_ID` → `meta.chat_session_id`),
+ *    the same field the pty path writes, so a restart resumes through existing machinery.
+ *  - **`restartOptionsFor` is engine-aware.** It keyed `canResume` on whether the provider's
+ *    CLI has a `--resume` FLAG — true for claude and codex, FALSE for gemini and kimi, all of
+ *    which are ACP-capable. Keying on the grammar hid the control that preserves a gemini
+ *    conversation.
+ *  - **`ACP_PROVIDERS` means capability.** codex was in the list and `acpLaunch` refuses it,
+ *    so every codex agent was routed to an engine that declined it and never started.
  *
  * ## Capability is not a flag
  *
- * The capability check still comes FIRST. A provider with no ACP mode has nothing to
- * connect to; forcing one would spawn something that is not an ACP server and then hang in
- * the handshake, which reads as a wedged agent. That is not a refusal to report — aider
- * keeps working exactly as it does today.
+ * The capability check still comes FIRST. A provider with no ACP mode has nothing to connect
+ * to; forcing one would spawn something that is not an ACP server and hang in the handshake,
+ * which reads as a wedged agent. That is not a refusal to report — aider keeps working
+ * exactly as it does today.
  *
- * The capability list lives in `main/acp/agent-spec.ts` as one closed set rather than a
- * field repeated across twenty-one registry rows, because four values duplicated
- * twenty-one times is an invitation to drift.
+ * ## What this does NOT give back
+ *
+ * A resumed conversation replays no history: `session/load` returns `{}` and sends no
+ * updates, because the CLI replays nothing. The conversation continues on the provider's
+ * side and nothing reappears on screen. Honest rather than complete — the alternative is
+ * re-prompting the agent with a transcript it never had, which looks resumed and is not.
  */
 export type AgentEngine = 'pty' | 'acp';
 
@@ -31,24 +54,12 @@ export interface EngineInput {
     /** The provider id, or null when the record does not say. */
     provider: string | null;
     /**
-     * The global setting.
-     *
-     * HELD, not wanted. The owner's direction is that ACP is the mechanism rather than a mode
-     * (*"acp is the core of our agent communications, this is not optional"*), and the flag is
-     * removed the moment that is SAFE. It is not safe yet: an ACP session cannot resume a
-     * conversation, because `prism-acp`'s `session/load` cannot be handed the id it needs
-     * (`session/new` returns a minted id, not the CLI's). Making ACP mandatory today would
-     * discard a conversation on every Genie restart — and a restart on this machine wedged 21
-     * of 32 agents. Eight tests catch exactly that, and they are right.
-     */
-    acpEnabled: boolean;
-    /**
      * This agent's own choice.
      *
-     * Kept, and NOT a reintroduction of the global flag: one agent pinned to the pty for a
-     * reason is a per-agent fact. The direction that matters now is holding back, since ACP
-     * is what a capable provider gets. An ACP override cannot conjure a server that does
-     * not exist — capability is still checked first.
+     * Kept, and NOT a global flag: one agent pinned to the pty for a reason is a per-agent
+     * fact. The direction that matters now is holding BACK, since ACP is what a capable
+     * provider gets. An ACP override cannot conjure a server that does not exist —
+     * capability is checked first.
      */
     agentOverride?: AgentEngine;
 }
@@ -64,5 +75,6 @@ export function engineFor(input: EngineInput): AgentEngine {
     // Capability first: an override is a preference, not a capability.
     if (!canDoAcp(input.provider)) return 'pty';
     if (input.agentOverride) return input.agentOverride;
-    return input.acpEnabled ? 'acp' : 'pty';
+    // No flag. ACP is the mechanism — see the header.
+    return 'acp';
 }

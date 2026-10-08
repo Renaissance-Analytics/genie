@@ -27,10 +27,36 @@ interface QueuedDelivery {
     reject(error: Error): void;
 }
 
+/** The redacted shape of an overage rate-limit frame. Numbers and enums, nothing that names anyone. */
+export interface CodexRateLimitSample {
+    windows: Array<{ name: string; usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }>;
+    planType: string | null;
+    spendControlReached: boolean;
+    rateLimitReachedType: string | null;
+    /** Whether `credits` was in the payload. Its VALUE is deliberately not carried. */
+    creditsPresent: boolean;
+}
+
 export interface CodexAgentInboxSessionOptions {
     requestTimeoutMs?: number;
     maxQueuedMessages?: number;
     maxQueuedBytes?: number;
+    /**
+     * CAPTURE AN OVERAGE RATE-LIMIT FRAME — once, redacted, and only when it is interesting.
+     *
+     * Asked for by prism while deciding whether a codex reading may exceed 100%. Their claude parser
+     * accepts over-allowance because the provider models it; their codex parser refused it, and a
+     * refusal is total — one bad field rejects the payload and the gauge disappears. Neither of us
+     * has ever captured an overage frame, so the bound was a guess either way, except that **an
+     * empty gauge reads as plenty of headroom**, which makes the two guesses cost different
+     * amounts. They removed the bound on that argument and recorded the question as undetermined.
+     *
+     * This is Genie's half: if it ever happens here, keep the shape.
+     *
+     * Absent means the frame is dropped, exactly as every other unhandled notification is — which
+     * is what it did before this existed.
+     */
+    onRateLimitSample?: (sample: CodexRateLimitSample) => void;
 }
 
 /**
@@ -51,6 +77,11 @@ export class CodexAgentInboxSession {
     private busy = true;
     private currentThreadId: string | null = null;
 
+    /** ONCE. A notification that repeats every turn would fill the log with the same sample and
+     *  teach the owner to skip the line that matters. */
+    private rateLimitSampled = false;
+    private readonly onRateLimitSample: CodexAgentInboxSessionOptions['onRateLimitSample'];
+
     private readonly requestTimeoutMs: number;
     private readonly maxQueuedMessages: number;
     private readonly maxQueuedBytes: number;
@@ -59,6 +90,7 @@ export class CodexAgentInboxSession {
         private readonly socket: CodexAppServerSocket,
         options: CodexAgentInboxSessionOptions = {},
     ) {
+        this.onRateLimitSample = options.onRateLimitSample;
         this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 10_000);
         this.maxQueuedMessages = Math.max(1, options.maxQueuedMessages ?? 100);
         this.maxQueuedBytes = Math.max(1, options.maxQueuedBytes ?? 1024 * 1024);
@@ -82,7 +114,15 @@ export class CodexAgentInboxSession {
         this.notify('notifications/initialized', {});
         const result = await this.request(
             resumeThreadId ? 'thread/resume' : 'thread/start',
-            resumeThreadId ? { threadId: resumeThreadId, cwd } : { cwd },
+            resumeThreadId
+                // `excludeTurns`: this session reads exactly one field off the answer — the thread
+                // id — so the full history was being built, serialised and thrown away on every
+                // resume. prism measured the server emitting a `deprecationNotice` for the
+                // hydrated form, pointing at this flag plus `thread/turns/list` /
+                // `thread/items/list`, so excluding it is both cheaper and the direction the
+                // server is going.
+                ? { threadId: resumeThreadId, cwd, excludeTurns: true }
+                : { cwd },
         ) as {
             thread?: { id?: string };
         };
@@ -157,7 +197,52 @@ export class CodexAgentInboxSession {
         } catch {
             return;
         }
+        /**
+         * A REQUEST FROM THE SERVER — answer it, always.
+         *
+         * Codex asks for command approval this way (`item/commandExecution/requestApproval`, an
+         * `id` and a `method` together), and prism measured that **nothing times it out**: at ~47
+         * seconds unanswered the thread still held an active writer and emitted no expiry frame.
+         * An unanswered request HANGS rather than failing safe — and this adapter used to ignore
+         * requests entirely, so `turn/completed` never arrived, `busy` stayed true for the life of
+         * the session, and every later DM queued until the cap rejected it. The owner would read
+         * that as "my agent stopped getting mail", nowhere near the cause.
+         *
+         * An approval is DECLINED. This socket is a mail-delivery boundary: approving a command on
+         * a human's behalf because a message arrived is not a thing it may do, and the agent's own
+         * surface is where a person says yes. Declining ends the turn (prism recorded
+         * `item/completed` `declined` then `turn/completed` `interrupted`), which releases the
+         * queue instead of stalling it.
+         *
+         * Anything else gets `-32601`. The failure mode is "a request with an id went unanswered",
+         * not "an approval did" — so a method this adapter has never heard of must not be the thing
+         * that wedges a thread, and a server that adds one should not need a Genie release to stay
+         * unwedged. An error rather than an invented `decision`, because answering a question we
+         * did not read is how the wrong command gets approved.
+         */
+        if (typeof message.id === 'number' && typeof message.method === 'string') {
+            const isApproval = message.method.endsWith('requestApproval');
+            this.socket.send(
+                JSON.stringify(
+                    isApproval
+                        ? { jsonrpc: '2.0', id: message.id, result: { decision: 'cancel' } }
+                        : {
+                              jsonrpc: '2.0',
+                              id: message.id,
+                              error: {
+                                  code: -32601,
+                                  message: `genie-agentinbox does not serve ${message.method}`,
+                              },
+                          },
+                ),
+            );
+            return;
+        }
+
         if (typeof message.id === 'number') {
+            // A RESPONSE to something we sent. Reached only after the request branch above, which
+            // is the ordering that matters: a server REQUEST also carries a numeric id, so this
+            // lookup found no pending entry and returned — swallowing it.
             const request = this.pending.get(message.id);
             if (!request) return;
             this.pending.delete(message.id);
@@ -169,11 +254,71 @@ export class CodexAgentInboxSession {
             }
             return;
         }
+        if (message.method === 'account/rateLimits/updated') {
+            this.maybeSampleRateLimit(message.params);
+            return;
+        }
+
         if (message.method === 'turn/started') {
             this.busy = true;
         } else if (message.method === 'turn/completed') {
             this.busy = false;
             this.flushOne();
+        }
+    }
+
+    /**
+     * Is this frame worth keeping, and if so what survives redaction?
+     *
+     * The gate is prism's: `usedPercent >= 90`, or `spendControlReached`, or `rateLimitReachedType`
+     * set. The last two matter because codex may express overage in THOSE rather than in a figure
+     * above 100 — which is the open question this capture exists to answer.
+     *
+     * Redaction is allow-list, not deny-list: the sample is BUILT from the fields prism named rather
+     * than copied and pruned. A deny-list forwards whatever a future field is called.
+     */
+    private maybeSampleRateLimit(params: unknown): void {
+        const sink = this.onRateLimitSample;
+        if (!sink || this.rateLimitSampled) return;
+        if (typeof params !== 'object' || params === null) return;
+
+        const p = params as Record<string, unknown>;
+        const limits = (p.rateLimits ?? {}) as Record<string, unknown>;
+        const windows = Object.entries(limits)
+            .filter(([, w]) => typeof w === 'object' && w !== null)
+            .map(([name, w]) => {
+                const win = w as Record<string, unknown>;
+                return {
+                    name,
+                    usedPercent: typeof win.usedPercent === 'number' ? win.usedPercent : -1,
+                    windowDurationMins:
+                        typeof win.windowDurationMins === 'number' ? win.windowDurationMins : null,
+                    resetsAt: typeof win.resetsAt === 'number' ? win.resetsAt : null,
+                };
+            });
+
+        const spendControlReached = p.spendControlReached === true;
+        const rateLimitReachedType =
+            typeof p.rateLimitReachedType === 'string' ? p.rateLimitReachedType : null;
+        const interesting =
+            spendControlReached
+            || rateLimitReachedType !== null
+            || windows.some((w) => w.usedPercent >= 90);
+        if (!interesting) return;
+
+        this.rateLimitSampled = true;
+        try {
+            sink({
+                windows,
+                planType: typeof p.planType === 'string' ? p.planType : null,
+                spendControlReached,
+                rateLimitReachedType,
+                // The PRESENCE of credits, never the balance.
+                creditsPresent: p.credits !== undefined && p.credits !== null,
+            });
+        } catch {
+            // A capture must never take a delivery down with it. A lost sample is a gap in an
+            // answer; a throw inside a notification handler kills the subscription.
         }
     }
 

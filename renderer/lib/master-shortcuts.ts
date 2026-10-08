@@ -146,3 +146,33 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
             return null;
     }
 }
+
+/** What the window is showing, for {@link escapeLeavesForDeck}. */
+export interface EscapeContext {
+    view: 'deck' | 'grid' | 'workbench' | 'agent';
+    /** Is any overlay up — a flyout, the palette, a modal, a drawer? */
+    overlayOpen: boolean;
+}
+
+/**
+ * May Escape NAVIGATE, or does something else own it?
+ *
+ * `resolveShortcut` answers what the human asked for; this answers whether asking it HERE
+ * means navigating. The split exists because the naive wiring cost four E2E specs, identically
+ * on all three platforms — a dismissed panel that stayed, an "empty floor" holding one, a
+ * hibernated floor, a docked lists header — all of them panels whose Escape was taken by a
+ * window-level `preventDefault`.
+ *
+ * So going up a level is the LAST claim on Escape:
+ *
+ *  - **An open overlay owns it.** Closing the overlay IS the up-a-level action, and there is no
+ *    second level to climb in one keystroke.
+ *  - **The grid and the Workbench own it**, because that is where panels live, and every one of
+ *    those four failures was a panel losing this key.
+ *  - **The Deck has no level above it**, so Escape there does nothing rather than re-navigating
+ *    the view you are already on.
+ */
+export function escapeLeavesForDeck(ctx: EscapeContext): boolean {
+    if (ctx.overlayOpen) return false;
+    return ctx.view === 'agent';
+}

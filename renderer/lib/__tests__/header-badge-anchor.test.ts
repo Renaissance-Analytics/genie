@@ -3,30 +3,34 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * A HEADER BADGE LANDS ON ITS OWN BUTTON.
+ * THE HEADER CARRIES NO BADGES — and that is this file's whole contract now.
  *
- * `.iw-btn-badge` is `position: absolute; top: -2px; right: -2px`, so it anchors
- * to the nearest POSITIONED ancestor. `.gicon` — the class every header icon
- * button wears — did not establish one, so the badge resolved against something
- * far up the title bar and painted where nobody could see it.
+ * ## What it used to be about
  *
- * Two buttons were unaffected and that is exactly what hid the bug for so long:
- * `.iw-btn` and `.agentinbox-btn` each declare `position: relative` themselves.
- * So IssueWatch and AgentInbox showed their counts while Questions and Lists —
- * whose buttons declare no rule — silently showed nothing, with correct numbers
- * in state the whole time and every unit test green. The owner: *"the count
- * indicators for pending questions and users list still does not work at all. I
- * never see any indication that I have items waiting for me."*
+ * `.iw-btn-badge` is `position: absolute; top: -2px; right: -2px`, so it anchored to the nearest
+ * POSITIONED ancestor. `.gicon` — the class every header icon button wore — established none, so
+ * a badge resolved against something far up the title bar and painted where nobody could see it.
+ * Two buttons were unaffected because they declared `position: relative` themselves, which is
+ * exactly what hid it: IssueWatch and AgentInbox showed their counts while Questions and Lists
+ * silently showed nothing, with correct numbers in state and every test green. The owner: *"the
+ * count indicators for pending questions and users list still does not work at all."*
  *
- * Per-button `position: relative` is the bandaid; the contract is "a `.gicon` can
- * carry an `.iw-btn-badge`", so `.gicon` is where the containing block belongs.
- * This asserts the contract rather than the two historical exceptions — adding a
- * third badge to a fourth header button must not need anyone to remember this.
+ * The fix put the containing block on `.gicon`, and this file asserted the contract "a `.gicon`
+ * can carry an `.iw-btn-badge`" rather than the two historical exceptions.
+ *
+ * ## Why it is now the opposite assertion
+ *
+ * That file also recorded the design this was heading for: *"the Deck owns that queue now, and the
+ * Deck is meant to be the ONLY place badges exist. So this number going DOWN is the design
+ * working; if a badge ever reappears elsewhere, that is the failure to look for."*
+ *
+ * P7 finished it. The icon cluster is gone and the live signals moved to the Deck
+ * (`lib/station-signals.ts`, owner: *"move the signals to the Deck, then delete the icons"*), so
+ * the count is zero and the anchoring bug has no surface left to occur on. Rewritten rather than
+ * deleted, because the regression it guards against is real and now stateable directly: a badge
+ * reappearing in the title bar.
  */
-const CSS = fs.readFileSync(
-    path.resolve(__dirname, '../../styles/master.css'),
-    'utf8',
-);
+const CSS = fs.readFileSync(path.resolve(__dirname, '../../styles/master.css'), 'utf8');
 const MASTER = fs.readFileSync(path.resolve(__dirname, '../../pages/master.tsx'), 'utf8');
 
 /** The declarations of a rule whose selector is exactly `sel`. */
@@ -35,48 +39,50 @@ function rule(sel: string): string {
     return CSS.match(new RegExp(`(?:^|\\})\\s*${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
 }
 
-describe('header icon badges', () => {
-    it('anchors to the button, because .gicon establishes a containing block', () => {
-        // THE fix. Without it `top: -2px; right: -2px` is measured against
-        // whatever happens to be positioned further up the tree.
+/** Every `<button>` in the master page, as its own source block. */
+function buttons(): string[] {
+    return MASTER.split('<button')
+        .slice(1)
+        .map((seg) => seg.slice(0, seg.indexOf('</button>')));
+}
+
+describe('the title bar carries no badges', () => {
+    it('POSITIVE CONTROL: the scan finds the buttons that ARE there', () => {
+        // Every assertion below is of the form "nothing matches", which passes beautifully
+        // against a scan that found nothing. The menu button and the window controls remain.
+        const found = buttons();
+        expect(found.length).toBeGreaterThan(3);
+        expect(found.some((b) => b.includes('Genie menu'))).toBe(true);
+    });
+
+    it('has no button carrying a count badge', () => {
+        // The design, completed: the Deck is the only place a number waits for you. A badge here
+        // would mean two places to look, and the one people stop looking at is the one that
+        // matters on the day it changes.
+        expect(buttons().filter((b) => b.includes('iw-btn-badge'))).toEqual([]);
+    });
+
+    it('has no badge-carrying header CLASSES left in the sheet either', () => {
+        // Dead CSS for a badge nobody renders is an invitation to render one again.
+        expect(rule('.iw-btn-badge')).toBe('');
+        expect(rule('.iw-btn')).toBe('');
+    });
+
+    it('KEEPS the containing block on .gicon, which costs nothing and is still correct', () => {
+        // `.gicon` survives on the menu button and the window controls. Keeping `position:
+        // relative` means the next thing anyone absolutely-positions inside one lands on the
+        // button — the fix this file was written for, left in place rather than reverted along
+        // with its reason.
         expect(rule('.gicon')).toMatch(/position:\s*relative/);
     });
 
-    it('still positions the badge absolutely — the anchor is the only half that moved', () => {
-        // POSITIVE CONTROL. If the badge stopped being absolute this would all
-        // pass while the badge sat inline, pushing the icon sideways.
-        expect(rule('.iw-btn-badge')).toMatch(/position:\s*absolute/);
-    });
-
-    it('gives every badge-carrying header button the .gicon class', () => {
-        // The anchor lives on `.gicon`, so a button that carries a badge without
-        // it is back in the broken state. Checked against the source because the
-        // markup is the only place the pairing exists.
-        const withBadge = MASTER.split('<button')
-            .slice(1)
-            .map((seg) => seg.slice(0, seg.indexOf('</button>')))
-            .filter((seg) => seg.includes('iw-btn-badge'));
-        // THREE today: AgentInbox, Lists, IssueWatch. It was four until P7 removed the
-        // Questions icon — the Deck owns that queue now, and the Deck is meant to be the
-        // ONLY place badges exist. So this number going DOWN is the design working; if a
-        // badge ever reappears elsewhere, that is the failure to look for.
-        //
-        // The floor still guards against a selector that quietly matches nothing and passes
-        // vacuously, which is why it is a floor rather than an exact count.
-        expect(withBadge.length).toBeGreaterThanOrEqual(3);
-        for (const block of withBadge) {
-            expect(block).toMatch(/className=[^\n]*gicon/);
-        }
-    });
-
-    it('does not dress the Lists header icon as a flyout action button', () => {
-        // `.lists-btn` is the Lists FLYOUT's Done/Refuse action-button class —
-        // `border: 1px solid`, `background: var(--bg-2)`, `padding: 4px 9px`. The
-        // header icon wore it by name collision, which painted a stray bordered
-        // pill around one icon in a row of flat ones.
+    it('does not dress a header icon as a flyout action button', () => {
+        // `.lists-btn` is the Lists FLYOUT's Done/Refuse action-button class — `border: 1px
+        // solid`, `background: var(--bg-2)`, `padding: 4px 9px`. A header icon wore it by name
+        // collision, which painted a stray bordered pill around one icon in a row of flat ones.
         expect(MASTER).not.toMatch(/className="gicon lists-btn"/);
-        // And the flyout's own class keeps its look — this is a rename at the
-        // header, not a restyle of the panel.
+        // And the flyout's own class keeps its look — this was a rename at the header, not a
+        // restyle of the panel.
         expect(rule('.lists-btn')).toMatch(/border:/);
     });
 });

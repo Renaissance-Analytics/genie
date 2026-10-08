@@ -3,9 +3,34 @@ import type { AgentTuiId } from '../agents/registry';
 
 export type HarnessAgentProvider = AgentTuiId;
 
+/**
+ * Which transport this agent is REQUIRED to have, given its provider and — when the caller
+ * knows it — its ENGINE.
+ *
+ * The engine answers first, because a transport belongs to the connection and not to the
+ * binary. `claude-channel` is a Claude CODE transport: a bridge Claude Code spawns, loaded
+ * only when the launch line carries `--dangerously-load-development-channels`. An ACP session
+ * has no launch line at all — claude's ACP launch is prism's adapter under node — so that
+ * transport cannot exist for one, and its session is the push transport instead
+ * (`main/acp/mail-transport.ts`).
+ *
+ * Getting this wrong is not cosmetic. `thumbsUp` refuses to boot the OS agent until its
+ * required transport is verified, so naming an impossible one would make the OS agent
+ * unbootable; `registerTransport` refuses anything that is not the required transport, which
+ * is what turns away a bridge that starts inside an ACP session instead of letting it swallow
+ * the agent's mail.
+ *
+ * The engine is OPTIONAL because most callers know only the provider, and the old answer stays
+ * the default — claiming `acp-session` by omission would assert a transport for every pty
+ * agent in the product.
+ */
 export function requiredHarnessTransport(
     provider: HarnessAgentProvider | string | null | undefined,
+    engine?: 'pty' | 'acp' | null,
 ): WorkspaceAgentTransport | null {
+    // gemini and kimi have no native transport of their own, so for them an ACP session is
+    // the first push transport either has ever had.
+    if (engine === 'acp' && provider) return 'acp-session';
     if (provider === 'claude') return 'claude-channel';
     if (provider === 'codex') return 'codex-app-server';
     // Reserved provider names are not readiness claims. They become available

@@ -180,10 +180,15 @@ test('the empty floor', async () => {
     await expect(onFloor, 'the floor did not clear — see 05-empty-floor.png').toHaveCount(0, {
         timeout: 10_000,
     });
-    // CORROBORATION, from the app rather than from the DOM: the status bar counts
-    // the specs the floor is actually driving. If these two ever disagree — no
-    // visible panel but a non-zero count, or the reverse — that gap IS the bug.
-    await expect(page.locator('.gstatus')).toContainText('0 panels', { timeout: 10_000 });
+    // CORROBORATION, from the app rather than from the DOM: the count the floor itself keeps of
+    // the specs it is driving. If these two ever disagree — no visible panel but a non-zero
+    // count, or the reverse — that gap IS the bug.
+    //
+    // It used to read the status bar's text. P7 deleted that bar and KEPT the numbers as data on
+    // `.gbody` precisely so this assertion did not have to go with it.
+    await expect(page.locator('.gbody')).toHaveAttribute('data-panel-count', '0', {
+        timeout: 10_000,
+    });
     // POSITIVE CONTROL: an empty floor must actually RENDER its empty state. Zero
     // visible panels alone would also pass against a floor that failed to draw.
     await expect(page.getByText('Nothing is on the floor right now')).toBeVisible({

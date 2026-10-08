@@ -62,7 +62,7 @@ import {
 import {
     gappPersonaPath,
     resolveGappProvider,
-    withPersonaBriefing,
+    personaBriefing,
     type GappProvider,
 } from './agent-provider';
 import { ensureAgentPanels, type AgentPanelSeeding, type PlannedPanel } from './panels';
@@ -507,7 +507,21 @@ function createGappPanel(
         label: panel.label,
         agentMeta: {
             agent: launch.provider,
-            command: withPersonaBriefing(launch.base, persona, panel.agent.name),
+            /**
+             * THE BASE COMMAND, with the briefing as INSTRUCTIONS rather than folded in.
+             *
+             * This used to call `withPersonaBriefing`, which composed the launch line here.
+             * `createAgentTerminal` already folds `agentMeta.instructions` into the command for
+             * the pty — so passing both briefed the agent TWICE, in one line, which is how this
+             * was found. One representation now, and each engine delivers it its own way: the
+             * pty types it, an ACP session takes it as its first prompt.
+             *
+             * Two things improve by consequence. Codex gets its `--` separator, which the GApp
+             * composition did not add. And `meta.agent_instructions` becomes the single
+             * persisted record of the persona, which is the field a revive re-applies.
+             */
+            command: launch.base,
+            instructions: personaBriefing(persona, panel.agent.name),
         },
         // The APP asked for this, not the person who clicked its pill. Stamped so
         // the cap and the terminal list both attribute it to the thing that spent
