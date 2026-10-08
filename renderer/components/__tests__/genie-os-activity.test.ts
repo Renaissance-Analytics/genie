@@ -57,13 +57,29 @@ describe('the flyout shimmer', () => {
     });
 });
 
-describe('the header icon', () => {
-    it('pulses on is-active, and nothing else does', () => {
-        expect(declarationsFor(css, '.genie-os-button.is-active')).toContain('genie-os-pulse');
-        // `is-open` on the button is a state, not an animation — it must not
-        // have quietly acquired one, or the icon is back to meaning "open".
-        const open = declarationsFor(css, '.genie-os-button.is-open') ?? '';
+describe('the header icon is GONE, and its signal is on the Deck', () => {
+    /**
+     * This described the icon's pulse, keyed on `is-active` so it meant WORKING rather than OPEN.
+     * P7 deleted the icon cluster and the signal moved to the Deck, where it is the words "Genie is
+     * working" from the same fact (`stationSignals`, owner: *"move the signals to the Deck, then
+     * delete the icons"*).
+     *
+     * The LAYER's own activity animation is unaffected and still asserted above — it is keyed on
+     * `.genie-os-layer.is-active`, which `master.tsx` still computes from streaming output.
+     */
+    it('has no button rule left to pulse', () => {
+        expect(declarationsFor(css, '.genie-os-button.is-active')).toBeNull();
+    });
+
+    it('still distinguishes WORKING from OPEN on the surface that remains', () => {
+        // The point the icon existed to make, now made by the layer: `is-open` is the slide-in and
+        // `is-active` is the work. If these ever collapse into one, a working agent and an open
+        // panel look the same again.
+        const open = declarationsFor(css, '.genie-os-layer.is-open .genie-os-flyout') ?? '';
+        const active =
+            declarationsFor(css, '.genie-os-layer.is-open.is-active .genie-os-flyout') ?? '';
         expect(open).not.toContain('animation');
+        expect(active).toContain('animation');
     });
 });
 
@@ -73,7 +89,9 @@ describe('reduced motion still wins', () => {
         // a new selector outside an accessibility override.
         const reduced = css.slice(css.indexOf('prefers-reduced-motion'));
         expect(reduced).toContain('.genie-os-flyout');
-        expect(reduced).toContain('.genie-os-button');
+        // `.genie-os-button` was named here too and is gone with the icon. One surface now, and
+        // the override still has to cover it — splitting a rule in two is exactly how a new
+        // selector ends up outside an accessibility override.
         expect(reduced).toContain('animation: none !important');
     });
 });

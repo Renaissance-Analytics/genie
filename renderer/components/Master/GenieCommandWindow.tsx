@@ -9,6 +9,7 @@ import {
     type CommandItem,
 } from '../../lib/command-window';
 import { FEATURE_SURFACES } from '../../lib/feature-reachability';
+import { isRemoteWindow } from '../../lib/genie';
 
 /**
  * Genie's Command Window — Ctrl+K (Tynn story #247).
@@ -107,7 +108,14 @@ export default function GenieCommandWindow({
                         ...(t.hint ? { hint: t.hint } : {}),
                     })),
                 ],
-                { hasTerminal: terminalId !== null },
+                {
+                    hasTerminal: terminalId !== null,
+                    // A REMOTE window is driving somebody else's machine, and three features
+                    // belong to the workstation a window IS rather than the one it drives — see
+                    // `LOCAL_ONLY_FEATURES`. The title-bar icons enforced this by being withheld;
+                    // the palette has to enforce it now that it is the way in.
+                    remote: isRemoteWindow(),
+                },
             ),
         [prompts, actions, workspaces, terminals, terminalId],
     );

@@ -80,29 +80,49 @@ describe('the Share modal mints through the real path', () => {
 });
 
 const FLYOUT = read('components/Master/SharingFlyout.tsx');
+const PALETTE = read('components/Master/GenieCommandWindow.tsx');
 
 /**
- * The GLOBAL half of the owner's sharing spec — the header icon that opens *"a
- * global overview of all shared workspaces and link lists with actions, plus
- * workstation sharing controls, plus a Connect to.. button"*.
+ * The GLOBAL half of the owner's sharing spec — *"a global overview of all shared workspaces and
+ * link lists with actions, plus workstation sharing controls, plus a Connect to.. button"*.
  *
- * Guarded in source for the same reason as the right-click: `onShowSharing` is
- * optional on the title bar (a remote window must not offer it — the links
- * belong to the workstation that OWNS the workspaces), so deleting the one line
- * that passes it compiles clean and leaves no icon.
+ * ## It used to be a header ICON, and these cases used to assert that
+ *
+ * P7 deleted the icon cluster. The flyout is reached through ⌘K now, from a row built out of
+ * `FEATURE_SURFACES` with its own CI guard — so "is it reachable" is answered there rather than
+ * here, and these cases moved to the two things that are specific to SHARING and would otherwise
+ * have been lost with the icon:
+ *
+ *  1. the flyout is still MOUNTED by master, and
+ *  2. a REMOTE window still cannot reach it.
+ *
+ * The second is the one that nearly went. `onShowSharing` was optional precisely so a remote
+ * window could be denied it — *"a share link is scoped to the workstation that OWNS the
+ * workspace"* — and moving the feature behind a palette that had no notion of a remote window
+ * would have let one mint a link for the wrong host. The filter is `LOCAL_ONLY_FEATURES` in
+ * `lib/command-window.ts`, and `command-window.test.ts` holds the behaviour.
  */
 describe('the Sharing flyout is reachable and complete', () => {
-    it('has a header button', () => {
-        expect(MASTER).toMatch(/aria-label="Sharing"/);
+    it('is still mounted by master', () => {
+        // The flyout itself, not its door: a feature whose component is gone is not reachable
+        // however many rows point at it.
         expect(MASTER).toMatch(/<SharingFlyout/);
+        expect(MASTER).toMatch(/const \[sharingOpen, setSharingOpen\]/);
     });
 
-    it('is actually passed a handler by master', () => {
-        expect(MASTER).toMatch(/onShowSharing:\s*\(\)\s*=>\s*setSharingOpen/);
+    it('is opened by the ONE feature router, not a second path of its own', () => {
+        // `activateFeature` is what the palette dispatches and what a Deck signal calls. Two ways
+        // to open one feature is two answers to where it lives, and the one nobody updates is the
+        // one a badge uses.
+        expect(MASTER).toMatch(/case 'sharing':\s*\n\s*setSharingOpen\(true\);/);
     });
 
-    it('withholds it in a remote window', () => {
-        expect(MASTER).toMatch(/isRemoteWindow\(\)\s*\n?\s*\?\s*\{\}\s*\n?\s*:\s*\{\s*onShowSharing/);
+    it('is withheld in a REMOTE window — now in the palette, where the way in is', () => {
+        // The rule survives the icon: a link minted from a window driving somebody else's machine
+        // would hand out a link to the wrong workspace on the wrong host.
+        const COMMANDS = read('lib/command-window.ts');
+        expect(COMMANDS).toMatch(/LOCAL_ONLY_FEATURES\s*=\s*new Set\(\[[^\]]*'sharing'/);
+        expect(PALETTE).toMatch(/remote:\s*isRemoteWindow\(\)/);
     });
 
     it('covers all three things the owner asked for', () => {

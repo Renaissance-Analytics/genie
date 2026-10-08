@@ -1270,13 +1270,6 @@
     box-shadow: var(--shadow-xl);
 }
 /* ===== Issue Watch ====================================================== */
-.iw-btn {
-    position: relative;
-}
-.iw-btn-badge {
-    position: absolute;
-    top: -2px;
-    right: -2px;
     min-width: 15px;
     height: 15px;
     padding: 0 4px;
@@ -1287,12 +1280,6 @@
     font-weight: 700;
     line-height: 15px;
     text-align: center;
-}
-.iw-btn-badge.unknown {
-    /* A fixed neutral, stated as one. It was written `var(--zinc-600, #52525b)`,
-       which reads as themed but is not — Genie defines no `--zinc-*` scale, so
-       the fallback was always what painted. Same colour, no longer disguised. */
-    background: #52525b;
 }
 .iw-rail-dot {
     position: absolute;
@@ -1633,23 +1620,6 @@ button.iw-feedback-note.as-link:hover {
 /* ===== GitHub permissions (capability gate) ============================= */
 /* Persistent titlebar warning — amber so it reads as "needs attention", with
    a soft pulse to draw the eye without being a hard alarm. */
-.gh-warn-btn {
-    color: var(--amber-400);
-    animation: gh-warn-pulse 2.4s ease-in-out infinite;
-}
-.gh-warn-btn:hover {
-    color: var(--amber-300);
-    background: color-mix(in srgb, #f59e0b 14%, transparent);
-}
-@keyframes gh-warn-pulse {
-    0%,
-    100% {
-        opacity: 1;
-    }
-    50% {
-        opacity: 0.55;
-    }
-}
 .ghcap-intro {
     font-size: 12.5px;
     line-height: 1.5;
@@ -3395,11 +3365,6 @@ body.gutter-dragging .grid-gutter {
    provisioning → connectable, so the owner doesn't have to keep re-opening the
    popover after a spawn to catch the moment it's ready. Clears on open. Reuses
    the imDone attention-glow aesthetic for consistency. */
-.gicon.ws-online-glow {
-    animation: attention-rail-glow 1.6s ease-in-out infinite;
-    border-radius: var(--radius-sm, 6px);
-}
-
 /* Agent-integration MCP: a workspace-level "something finished here" pulse,
    fired when a terminal in the workspace calls imDone. Unlike the persistent
    .attention glow above, this is a brief one-shot (a single soft violet swell
@@ -5191,9 +5156,6 @@ body.gutter-dragging .grid-gutter {
    inbox status, message stream, fixed footer). Sender identity is carried by
    colour throughout — claude purple, codex cyan, anything else neutral — so
    the tones live as tokens here rather than as per-rule hexes. */
-.agentinbox-btn {
-    position: relative;
-}
 .agentinbox-flyout {
     width: min(1040px, 92vw);
 }
@@ -6675,11 +6637,9 @@ body.gutter-dragging .grid-gutter {
    actually meant "you opened this", which the user could already see. */
 .genie-os-layer.is-open .genie-os-flyout { transform: translateX(0); opacity: 1; }
 .genie-os-layer.is-open.is-active .genie-os-flyout { animation: genie-os-chase 1.45s linear infinite; }
-.genie-os-button.is-active { animation: genie-os-pulse 1.4s ease-in-out infinite; }
 @property --genie-os-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
 @keyframes genie-os-chase { to { --genie-os-angle: 360deg; } }
-@keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
-@media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout { animation: none !important; } }
 .agent-panel-shell { position: relative; }
 .agent-panel-menu { min-width: 180px; padding: 6px; z-index: var(--z-chrome-menu); background: var(--bg-0); border: 1px solid var(--border-1); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
 .agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--fg-1); text-align: left; cursor: pointer; }
@@ -7164,10 +7124,6 @@ body.gutter-dragging .grid-gutter {
    A slow breathing pulse rather than a spinner. A spinner reads as "the UI is
    waiting for something", which is not what this says — Genie is fine, and a
    Flow is working in the background. */
-.gicon.flows-button.is-running {
-    color: var(--blue-500);
-    animation: flows-running 1.9s var(--ease-out, ease-in-out) infinite;
-}
 @keyframes flows-running {
     0%,
     100% {
@@ -7182,10 +7138,7 @@ body.gutter-dragging .grid-gutter {
 /* Reduced motion still has to SAY something is running — the state is
    information, not decoration — so the movement goes and the colour stays. */
 @media (prefers-reduced-motion: reduce) {
-    .gicon.flows-button.is-running {
-        animation: none;
     }
-}
 
 .flowmgr-empty {
     display: flex;

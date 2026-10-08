@@ -20,6 +20,7 @@ const quiet: StationFacts = {
     githubBlocked: false,
     osWorking: false,
     issueWatchUnknown: false,
+    workstationCameOnline: false,
 };
 
 describe('stationSignals', () => {
@@ -60,6 +61,16 @@ describe('stationSignals', () => {
         expect(stationSignals({ ...quiet, osWorking: true })[0]!.id).toBe('os-working');
     });
 
+    it('reports a workstation that came online, which the Hosts icon GLOWED for', () => {
+        // The signal with the longest wait behind it — spawning takes minutes — and the one whose
+        // absence would send the owner back to re-opening a popover to catch the moment.
+        const signal = stationSignals({ ...quiet, workstationCameOnline: true })[0]!;
+        expect(signal.id).toBe('workstation-online');
+        // ATTENTION, not busy: something finished and is waiting to be used.
+        expect(signal.tone).toBe('attention');
+        expect(signal.featureId).toBe('remote-host');
+    });
+
     it('puts what is BLOCKED before what is unknown, and both before what is merely busy', () => {
         // Ordered by what to act on first. Busy is information, not a request.
         const signals = stationSignals({
@@ -68,11 +79,13 @@ describe('stationSignals', () => {
             githubBlocked: true,
             osWorking: true,
             issueWatchUnknown: true,
+            workstationCameOnline: true,
         });
         expect(signals.map((s) => s.id)).toEqual([
             'github-blocked',
             'mail-behind',
             'issuewatch-unknown',
+            'workstation-online',
             'flows-running',
             'os-working',
         ]);
@@ -87,8 +100,16 @@ describe('stationSignals', () => {
             githubBlocked: true,
             osWorking: true,
             issueWatchUnknown: true,
+            workstationCameOnline: true,
         }).map((s) => s.featureId);
-        expect(ids).toEqual(['github-caps', 'agent-inbox', 'issuewatch', 'flows', 'genie-os']);
+        expect(ids).toEqual([
+            'github-caps',
+            'agent-inbox',
+            'issuewatch',
+            'remote-host',
+            'flows',
+            'genie-os',
+        ]);
     });
 
     it('never invents a signal from a NEGATIVE count', () => {

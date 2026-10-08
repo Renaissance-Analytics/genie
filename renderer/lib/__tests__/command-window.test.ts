@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     COMMAND_PREFIXES,
     filterCommandItems,
+    dropUndeliverable,
     groupCommandItems,
     parseCommandQuery,
     type CommandItem,
@@ -161,5 +162,64 @@ describe('filtering', () => {
     it('keeps the given order, so the list does not reshuffle as you type', () => {
         const shown = filterCommandItems(ITEMS, parseCommandQuery(''));
         expect(shown.map((i) => i.id)).toEqual(ITEMS.map((i) => i.id));
+    });
+});
+
+describe('a REMOTE window is offered only what belongs to the machine it is driving', () => {
+    /**
+     * The rule the title-bar icons enforced, and nearly lost with them.
+     *
+     * `onShowSharing` was deliberately optional and withheld in a remote window — *"a share link is
+     * scoped to the workstation that OWNS the workspace. Minting one from a window driving somebody
+     * else's machine would hand out a link to the wrong workspace on the wrong host."* The Hosts
+     * button refused to render at all in a host window, and `master.tsx` skips the Genie OS
+     * first-run effect there for the same reason.
+     *
+     * Deleting the icons moved every one of those behind ⌘K, which had no notion of a remote
+     * window — so a remote window could have minted a link for the wrong host from the palette.
+     * `share-workspace-wiring.test.ts` caught it, which is exactly what it was written for.
+     */
+    const feature = (id: string): CommandItem => ({
+        id: `feature:${id}`,
+        category: 'panel',
+        label: id,
+        featureId: id,
+    });
+
+    const local = { hasTerminal: true, remote: false };
+    const remote = { hasTerminal: true, remote: true };
+
+    it('drops SHARING in a remote window', () => {
+        const items = [feature('sharing'), feature('lists')];
+        expect(dropUndeliverable(items, remote).map((i) => i.featureId)).toEqual(['lists']);
+    });
+
+    it('drops the HOSTS surface in a remote window', () => {
+        // You are already driving someone else's machine; the host list is the local
+        // workstation's, and the button it replaced refused to render there at all.
+        expect(dropUndeliverable([feature('remote-host')], remote)).toEqual([]);
+    });
+
+    it('drops GENIE OS in a remote window', () => {
+        // The operator agent runs on THIS workstation. `master.tsx`'s first-run effect already
+        // returns early in a remote window for the same reason.
+        expect(dropUndeliverable([feature('genie-os')], remote)).toEqual([]);
+    });
+
+    it('keeps everything else, which is most of them', () => {
+        const ids = ['lists', 'questions', 'flows', 'issuewatch', 'docs', 'tasks', 'knowledge-graph'];
+        expect(dropUndeliverable(ids.map(feature), remote).map((i) => i.featureId)).toEqual(ids);
+    });
+
+    it('keeps ALL of them in a local window', () => {
+        const ids = ['sharing', 'remote-host', 'genie-os', 'lists'];
+        expect(dropUndeliverable(ids.map(feature), local).map((i) => i.featureId)).toEqual(ids);
+    });
+
+    it('does not touch non-feature rows', () => {
+        // A workspace row has no `featureId`. Dropping one because a remote window is open would
+        // remove the thing a person most wants there.
+        const workspace: CommandItem = { id: 'ws:1', category: 'workspace', label: 'tynn' };
+        expect(dropUndeliverable([workspace], remote)).toEqual([workspace]);
     });
 });

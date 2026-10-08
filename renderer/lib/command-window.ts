@@ -153,10 +153,26 @@ export function featureCommandItems(features: readonly FeatureSurface[]): Comman
  * Workspaces, features and actions are unaffected: none of them needs a shell, and the
  * Deck is exactly where someone reaches for Hosts, Knowledge or the App Store.
  */
+/**
+ * Features that belong to the workstation this window IS, not the one it is driving.
+ *
+ * The title-bar icons enforced this and nearly took it with them when they were deleted:
+ * `onShowSharing` was withheld in a remote window because *"a share link is scoped to the
+ * workstation that OWNS the workspace"*, the Hosts button refused to render in a host window at
+ * all, and `master.tsx` skips the Genie OS first-run effect there for the same reason. Moving
+ * every feature behind ⌘K moved them behind a surface that had no notion of a remote window — so
+ * a remote window could have minted a link for the wrong host. `share-workspace-wiring.test.ts`
+ * caught it, which is what it was written for.
+ */
+const LOCAL_ONLY_FEATURES = new Set(['sharing', 'remote-host', 'genie-os']);
+
 export function dropUndeliverable(
     items: readonly CommandItem[],
-    ctx: { hasTerminal: boolean },
+    ctx: { hasTerminal: boolean; remote?: boolean },
 ): CommandItem[] {
-    if (ctx.hasTerminal) return [...items];
-    return items.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
+    const kept = ctx.remote
+        ? items.filter((i) => !(i.featureId && LOCAL_ONLY_FEATURES.has(i.featureId)))
+        : [...items];
+    if (ctx.hasTerminal) return kept;
+    return kept.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
 }

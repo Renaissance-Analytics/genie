@@ -691,7 +691,21 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * `main/__tests__/flow-ipc-channels.test.ts`.
  */
 
-const flowsButton = () => page.locator('.gicon.flows-button');
+/**
+ * THE FLOWS ICON IS GONE (P7). The palette is the way in now.
+ *
+ * `openFlows` goes through ⌘K, which is the route a person has — the icon cluster was deleted once
+ * every feature had a row built from `FEATURE_SURFACES` and the four live SIGNALS had moved to the
+ * Deck. The icon's own animation assertions moved with the signal, to `deck-signals.spec.ts`,
+ * where they are measured against the Deck's strip instead of a CSS animation.
+ */
+const openPalette = async (): Promise<void> => {
+    await page.keyboard.press('ControlOrMeta+KeyK');
+    await expect(page.locator('.genie-cmdk')).toBeVisible();
+};
+
+const paletteRow = (label: string) =>
+    page.locator('.genie-cmdk').getByText(label, { exact: true }).first();
 
 /**
  * The flyout ROOT, not the dialog.
@@ -729,45 +743,6 @@ async function openFlowEditor(open: () => Promise<void>): Promise<Page> {
     return win;
 }
 
-/**
- * What is animating on the Flows icon, split by KIND.
- *
- * `getAnimations()` returns CSS **transitions** as well as CSS animations, and
- * `.gicon` transitions two properties — `background` and `color`, 150ms each —
- * on hover. The first version of this counted everything and went red with
- * `Received: 2`, seven milliseconds after the previous test had clicked the
- * button and left the pointer on it. Two transitioned properties, two effects,
- * 7ms into a 150ms transition: the icon was not animating, it was finishing a
- * hover.
- *
- * Asking the compositor is still the right instrument — it is the only thing
- * that knows whether a rule actually applied, which a class check cannot see —
- * but the question has to name the KIND, or the answer includes everything the
- * element happens to be doing for unrelated reasons.
- *
- * Both lists are returned so a failure says WHAT was running rather than only
- * that something was. That is what turned the last failure from a guess into a
- * measurement, and the next person should not have to re-derive it.
- */
-async function flowIconEffects(): Promise<{ animations: string[]; transitions: string[] }> {
-    return page.evaluate(() => {
-        const el = document.querySelector('.gicon.flows-button');
-        if (!el) return { animations: ['NO ELEMENT MATCHED'], transitions: [] };
-        const live = el.getAnimations().filter((a) => a.playState === 'running');
-        return {
-            animations: live
-                .filter((a): a is Animation & { animationName: string } => 'animationName' in a)
-                .map((a) => a.animationName)
-                .sort(),
-            transitions: live
-                .filter((a): a is Animation & { transitionProperty: string } =>
-                    'transitionProperty' in a,
-                )
-                .map((a) => a.transitionProperty)
-                .sort(),
-        };
-    });
-}
 
 /** Push run state from main, exactly as the runtime's callbacks do. */
 async function setFlowsRunning(running: string[]): Promise<void> {
@@ -782,19 +757,23 @@ async function setFlowsRunning(running: string[]): Promise<void> {
 
 async function openFlows(): Promise<void> {
     const cls = (await flowsRoot().getAttribute('class')) ?? '';
-    if (!cls.includes('open')) await flowsButton().click();
+    if (!cls.includes('open')) {
+        await openPalette();
+        await paletteRow('Flows').click();
+    }
     await expect(flowsRoot()).toHaveClass(/\bopen\b/);
 }
 
-test('the Flows button sits in the icon cluster and opens the manager', async () => {
+test('Flows opens from the command palette, now that the icon is gone', async () => {
+    // P7 deleted the icon cluster. This is the route that replaced it — a ⌘K row built from
+    // `FEATURE_SURFACES`, which is also what the reachability guard reads, so a feature cannot be
+    // dropped from the contract and silently unreachable here.
     await setFlowsRunning([]);
-    await expect(flowsButton()).toHaveAttribute('aria-label', 'Flow Manager');
-    // Same treatment as its neighbours: it IS a `.gicon`, not a lookalike.
-    await expect(flowsButton()).toHaveClass(/\bgicon\b/);
-
     await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
     await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'true');
-    await flowsButton().click();
+
+    await openPalette();
+    await paletteRow('Flows').click();
     await expect(flowsRoot()).toHaveClass(/\bopen\b/);
     await expect(flowsRoot()).toHaveAttribute('aria-hidden', 'false');
 
@@ -802,38 +781,25 @@ test('the Flows button sits in the icon cluster and opens the manager', async ()
     await expect(flowsRoot()).not.toHaveClass(/\bopen\b/);
 });
 
-test('the Flows icon is still while nothing runs, and animates while one does', async () => {
-    await setFlowsRunning([]);
-    await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // EMPTY, not "does not contain flows-running": an unexpected animation on
-    // this icon should fail here too. The transitions are reported in the
-    // message so a failure names what was running instead of implying it.
-    const still = await flowIconEffects();
-    expect(still.animations, `transitions also live: ${still.transitions.join(', ')}`).toEqual([]);
-
-    await setFlowsRunning(['e2e-flow-manual']);
-    await expect(flowsButton()).toHaveClass(/is-running/);
-    // The control, and it NAMES the animation — "something is animating" is
-    // satisfied by the hover transition this test previously mistook for one.
-    //
-    // Polled rather than sampled: the class lands one style recalc before the
-    // animation object exists, and a single read can arrive in the gap.
-    await expect
-        .poll(async () => (await flowIconEffects()).animations, {
-            message: 'the flows-running animation should start when a Flow runs',
-        })
-        .toEqual(['flows-running']);
-
-    await setFlowsRunning([]);
-    await expect(flowsButton()).not.toHaveClass(/is-running/);
-    // A stuck badge is worse than no badge. This is what catches one — and it
-    // asserts EMPTY rather than "no flows-running", so anything unexpected that
-    // starts animating this icon fails here too.
-    await expect
-        .poll(async () => (await flowIconEffects()).animations, {
-            message: 'the flows-running animation must STOP when the run ends',
-        })
-        .toEqual([]);
+test('the title bar has no icon cluster left to click', async () => {
+    // The deletion, asserted directly. Ten buttons were there; what remains is the menu and the
+    // window controls, so a count floor would pass against the cluster coming back — these name
+    // the labels that must NOT be there.
+    for (const label of [
+        'Flow Manager',
+        'Sharing',
+        'Knowledge Graph',
+        'Open Genie OS agent',
+        'Resolve GitHub permissions',
+    ]) {
+        await expect(
+            page.locator(`.titlebar [aria-label="${label}"]`),
+            `${label} should be a palette row now, not a title-bar icon`,
+        ).toHaveCount(0);
+    }
+    // POSITIVE CONTROL: the bar is still there and still has the menu, so the assertions above
+    // are about a deletion rather than about a title bar that failed to render.
+    await expect(page.locator('.titlebar [aria-label="Genie menu"]')).toBeVisible();
 });
 
 test('the Flow Manager lists the seeded Flows, and warns about the one that cannot fire', async () => {
@@ -1387,7 +1353,17 @@ test('no upgrade is in progress, so no modal covers the window', async () => {
  * check and not a screenshot. A screenshot would go red for a font change; this
  * goes red for exactly one thing.
  */
-const listsButton = () => page.locator('.gicon.lists-hdr-btn');
+/**
+ * THE LISTS ICON IS GONE (P7) — the palette opens it.
+ *
+ * The geometry assertion below does not care which control opens the panel; it cares that pinning
+ * the panel does not move the header. So it measures what is still in the header (the menu) rather
+ * than the button that used to be there.
+ */
+const openLists = async (): Promise<void> => {
+    await openPalette();
+    await paletteRow('Lists').click();
+};
 const listsDock = () => page.locator('.lists-dock');
 const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
 const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
@@ -1431,7 +1407,10 @@ async function headerGeometry() {
             icons[`${i}:${el.className.replace(/\s+/g, '.')}`] = { x: Math.round(r.x + sx), w: Math.round(r.width) };
         });
         return {
-            button: box('.gicon.lists-hdr-btn'),
+            // The MENU button, which survives the icon deletion. Any header element would do —
+            // the assertion is that this one does not move — but the menu is the one guaranteed
+            // to be there on every route.
+            button: box('.titlebar [aria-label="Genie menu"]'),
             titlebar: box('.titlebar'),
             toolbar: box('.gtoolbar'),
             body: box('.gbody'),
@@ -1444,10 +1423,10 @@ async function headerGeometry() {
 
 test('docking the lists panel leaves the header exactly where it was', async () => {
     const before = await headerGeometry();
-    expect(before.button, 'the lists button must be on screen to measure it').not.toBeNull();
+    expect(before.button, 'the header menu must be on screen to measure it').not.toBeNull();
     expect(before.toolbar).not.toBeNull();
 
-    await listsButton().click();
+    await openLists();
     // The PIN, not `[aria-label="Lists"]` — that label is on the header button
     // AND on the panel, so waiting on it is a strict-mode violation rather than
     // a wait. The pin only exists once the panel has rendered, which is the
@@ -1517,7 +1496,7 @@ ${JSON.stringify({ before, after }, null, 2)}`)
 
     // Leave the floor as it was found — every test after this one sees it.
     await listsUnpin().click();
-    await listsButton().click();
+    await openLists();
     await expect(listsDock()).toHaveCount(0);
 });
 
@@ -1737,13 +1716,16 @@ async function chaseAnimationsRunning(): Promise<string[]> {
 }
 
 test('the Genie OS shimmer does not run just because the panel is open', async () => {
-    const button = page.locator('.gicon.genie-os-button');
+    // OPENED FROM THE PALETTE. The icon it used to be opened from is gone with the rest of the
+    // cluster (P7); its pulse — the OTHER read-out this spec checked — is now the Deck's "Genie is
+    // working" signal, asserted in `deck-signals.spec.ts`. What remains here is the flyout's own
+    // chase, which is unchanged and still keyed on `.genie-os-layer.is-active`.
     const layer = page.locator('.genie-os-layer');
-    await expect(button).toHaveCount(1);
+    await openPalette();
+    await paletteRow('Genie OS').click();
 
-    // IDLE AND OPEN — the state the owner reported. Nothing is streaming into
-    // the OSA terminal in this fixture, so neither read-out may be running.
-    await button.click();
+    // IDLE AND OPEN — the state the owner reported. Nothing is streaming into the OSA terminal in
+    // this fixture, so the read-out may not be running.
     await expect(layer).toHaveClass(/\bis-open\b/);
 
     expect(
@@ -1751,15 +1733,15 @@ test('the Genie OS shimmer does not run just because the panel is open', async (
         'the flyout chase must not run while the panel merely sits open',
     ).toEqual([]);
     await expect(layer).not.toHaveClass(/\bis-active\b/);
-    await expect(button).not.toHaveClass(/\bis-active\b/);
 
-    // POSITIVE CONTROL: the panel really did open. Without it, every assertion
-    // above passes for a flyout that never rendered — and "no animation" on a
-    // missing element is the emptiest possible green.
+    // POSITIVE CONTROL: the panel really did open. Without it, every assertion above passes for a
+    // flyout that never rendered — and "no animation" on a missing element is the emptiest
+    // possible green.
     await expect(page.locator('.genie-os-flyout')).toBeVisible();
 
-    // Leave the floor as it was found.
-    await button.click();
+    // Leave the floor as it was found. Escape closes the layer, which is how a person closes it
+    // now that there is no icon to toggle.
+    await page.keyboard.press('Escape');
     await expect(layer).not.toHaveClass(/\bis-open\b/);
 });
 

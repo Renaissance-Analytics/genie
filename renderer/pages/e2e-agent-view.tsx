@@ -64,6 +64,16 @@ const base: AgentSessionSpec = {
 /** The same agent with NOTHING declared — every pty provider. */
 const observed: AgentSessionSpec = {
     ...base,
+    /**
+     * `rateLimit` HAS to be cleared here, and it is not cosmetic: it is one of
+     * `DECLARED_ONLY_FIELDS`, so inheriting the base fixture's reading makes this session
+     * DECLARED and the "different shape" assertion reads `data-fidelity="declared"`.
+     *
+     * Caught on CI on all three platforms the moment the base fixture gained a reading. It is
+     * also true to life — a pty agent reports no rate limit, which is the whole reason the
+     * field counts as a declaration.
+     */
+    rateLimit: null,
     composer: null,
     plan: null,
     usage: null,

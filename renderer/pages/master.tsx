@@ -706,6 +706,41 @@ function MasterInner() {
     // There is no interval anywhere in this path. A poller would both lag the
     // thing it reports and keep waking the renderer to be told nothing happened.
     const [flowsOpen, setFlowsOpen] = useState(false);
+    /**
+     * A VIRTUAL WORKSTATION CAME ONLINE since you last looked.
+     *
+     * This effect was inside `HostsButton`, glowing its icon. That icon is gone with the rest of
+     * the cluster, and this is the signal with the longest wait behind it — spawning takes minutes,
+     * and without it the owner re-opens a popover to catch the moment a workstation becomes
+     * connectable. So it moved up here and feeds the Deck's strip.
+     *
+     * It POLLS, which it also did before, and that is not an improvement: `api().workstations`
+     * has no push for this transition. Left as it was rather than quietly changed — a 20s interval
+     * on an existing path is a different conversation from deleting an icon.
+     */
+    const [workstationCameOnline, setWorkstationCameOnline] = useState(false);
+    const seenConnectableRef = useRef<Set<string> | null>(null);
+    useEffect(() => {
+        // A remote Floor does not spawn workstations, so it has nothing to be told about.
+        if (isRemoteWindow()) return;
+        let cancelled = false;
+        const poll = async () => {
+            const ws = await api()
+                .workstations.connectable()
+                .catch(() => [] as ConnectableWorkstation[]);
+            if (cancelled) return;
+            const fresh = newlyConnectableWorkstationIds(seenConnectableRef.current, ws);
+            seenConnectableRef.current = connectableWorkstationIds(ws);
+            if (fresh.length > 0) setWorkstationCameOnline(true);
+        };
+        void poll(); // the first poll seeds the baseline — no signal for already-online
+        const t = setInterval(() => void poll(), 20_000);
+        return () => {
+            cancelled = true;
+            clearInterval(t);
+        };
+    }, []);
+
     const [flowsBusy, setFlowsBusy] = useState(false);
     useEffect(() => {
         if (!hasGenieBridge()) return;
@@ -2943,48 +2978,13 @@ function MasterInner() {
                                 ? workspacesById.get(stageSeedWorkspace)?.project_name
                                 : undefined
                         }
+                        // FOURTEEN PROPS LESS. Everything that fed an icon or a badge went with
+                        // the icon cluster — the features are ⌘K rows and the live signals are on
+                        // the Deck (`stationSignals`). What is left is what this bar still does: a
+                        // Docs menu item, the App Tray's store link, and the setup item while
+                        // first run is unfinished.
                         onShowDocs={() => setDocsOpen((o) => !o)}
-                        onShowAgentInbox={() => setAgentInboxOpen((o) => !o)}
-                        agentInboxLag={agentInboxLag}
-                        {...(isRemoteWindow()
-                            ? {}
-                            : { onShowSharing: () => setSharingOpen((o) => !o) })}
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
-                        questionCount={questionCount}
-                        onShowLists={() => setListsOpen((o) => !o)}
-                        listsUserCount={listsUserCount}
-                        onShowKnowledge={() => {
-                            // Header button → open the standalone Knowledge Graph
-                            // window (main-owned, via knowledge.openWindow). Guarded
-                            // so it no-ops if the preload bridge isn't wired yet.
-                            if (hasGenieBridge()) {
-                                void api().knowledge.openWindow().catch(() => {});
-                            }
-                        }}
-                        onShowFlows={() => setFlowsOpen((o) => !o)}
-                        flowsBusy={flowsBusy}
-                        onShowIssueWatch={() =>
-                            activeWorkspaceId && openIssueWatch(activeWorkspaceId)
-                        }
-                        issueWatchUnread={issueWatchBadge(
-                            activeWorkspaceId
-                                ? issueWatchCounts[activeWorkspaceId]
-                                : undefined,
-                        ).count ?? 0}
-                        issueWatchUnknown={issueWatchBadge(
-                            activeWorkspaceId
-                                ? issueWatchCounts[activeWorkspaceId]
-                                : undefined,
-                        ).unknown}
-                        githubNeedsResolve={githubNeedsResolve}
-                        onShowGithubCaps={() => setGithubCapsOpen((o) => !o)}
-                        // STREAMING, not `activeIds`. `activeIds` is "this spec
-                        // has a live pty", which is true for the whole time the
-                        // OSA is open — so the icon pulsed at being OPEN, which
-                        // the user can already see. It now pulses only while the
-                        // agent is actually producing output.
-                        genieOsActive={!!genieOsSpec && streamingTerms.has(genieOsSpec.id)}
-                        genieOsOpen={genieOsOpen}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                         setupIncomplete={onboardingOpen}
                     />
@@ -3188,11 +3188,21 @@ function MasterInner() {
                                                 ? issueWatchCounts[activeWorkspaceId]
                                                 : undefined,
                                         ).unknown,
+                                        workstationCameOnline,
                                     }}
                                     // A signal is still a DOOR: it opens what the icon opened, by
                                     // the same `featureId` the palette dispatches on, so there is
                                     // one route to each feature rather than two that can drift.
-                                    onSignal={(featureId) => activateFeature(featureId)}
+                                    onSignal={(featureId) => {
+                                        // Acting on the signal ACKNOWLEDGES it, exactly as opening
+                                        // the Hosts popover used to clear its glow. A signal that
+                                        // survives being acted on is a signal people learn to
+                                        // ignore.
+                                        if (featureId === 'remote-host') {
+                                            setWorkstationCameOnline(false);
+                                        }
+                                        activateFeature(featureId);
+                                    }}
                                     focusedKey={focusedQueueKey}
                                     expandedQuestionId={expandedQuestionId}
                                     onExpandQuestion={setExpandedQuestionId}
@@ -4752,55 +4762,32 @@ function TitleBar({
     isStage,
     stageWorkspaceName,
     onShowDocs,
-    onShowAgentInbox,
-    agentInboxLag = 0,
-    onShowSharing,
-    questionCount = 0,
-    onShowLists,
-    listsUserCount = 0,
     onShowAppStore,
-    onShowKnowledge,
-    onShowFlows,
-    flowsBusy = false,
-    onShowIssueWatch,
-    issueWatchUnread = 0,
-    issueWatchUnknown = false,
-    githubNeedsResolve = false,
-    onShowGithubCaps,
     cornerInRail = false,
-    genieOsActive = false,
-    genieOsOpen = false,
     setupIncomplete = false,
     onShowGenieOs,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
+    /**
+     * FOURTEEN PROPS ARE GONE with the icon cluster: `onShowAgentInbox`, `agentInboxLag`,
+     * `onShowSharing`, `questionCount`, `onShowLists`, `listsUserCount`, `onShowKnowledge`,
+     * `onShowFlows`, `flowsBusy`, `onShowIssueWatch`, `issueWatchUnread`, `issueWatchUnknown`,
+     * `githubNeedsResolve`, `onShowGithubCaps`, `genieOsActive`, `genieOsOpen`.
+     *
+     * Every one of them existed to render or badge an icon. The features are reached through ⌘K
+     * (`FEATURE_SURFACES`, with a CI guard), and the four that were also live SIGNALS —
+     * a running Flow, agent mail nobody collected, GitHub blocking features, the OS agent
+     * working — are on the Deck now (`stationSignals`). Owner: *"move the signals to the Deck,
+     * then delete the icons."*
+     *
+     * The three that remain are the ones this bar still does something with.
+     */
+    /** A system-MENU item, not an icon. */
     onShowDocs?: () => void;
-    onShowAgentInbox?: () => void;
-    /** Messages the AGENTS haven't received/ACKed — see the master's lag effect. */
-    agentInboxLag?: number;
-    /** Open the Sharing flyout. Absent in a remote window — the links belong to
-     *  the workstation that OWNS the workspaces, not the one driving it. */
-    onShowSharing?: () => void;
-    questionCount?: number;
-    onShowLists?: () => void;
-    /** Items on the workspace UserList waiting on the PERSON. An agent's own
-     *  checklist is deliberately NOT counted here. */
-    listsUserCount?: number;
+    /** The App Tray's "open the store" — the tray lists installed GApps and stays. */
     onShowAppStore?: () => void;
-    onShowKnowledge?: () => void;
-    onShowFlows?: () => void;
-    /** A Flow is running RIGHT NOW — animates the Flows icon. Pushed from the
-     *  Flow runtime's start/finish callbacks; nothing here polls. */
-    flowsBusy?: boolean;
-    onShowIssueWatch?: () => void;
-    issueWatchUnread?: number;
-    issueWatchUnknown?: boolean;
-    /** True when GitHub permissions are missing — shows a persistent warning. */
-    githubNeedsResolve?: boolean;
-    onShowGithubCaps?: () => void;
-    genieOsActive?: boolean;
-    genieOsOpen?: boolean;
+    /** Shows "Continue workstation setup" in the menu while first-run is unfinished. */
     setupIncomplete?: boolean;
     onShowGenieOs?: () => void;
     /**
@@ -4877,130 +4864,25 @@ function TitleBar({
                 spacer, so installing an app never shifts the icons the user aims
                 at. Its own layout is row-reverse; see AppTray. */}
             {!isStage && <AppTray onOpenStore={() => onShowAppStore?.()} />}
-            {!isStage && onShowGenieOs && (
-                <button
-                    type="button"
-                    className={`gicon genie-os-button${genieOsActive ? ' is-active' : ''}${genieOsOpen ? ' is-open' : ''}`}
-                    title="Genie OS — operate this workstation"
-                    aria-label="Open Genie OS agent"
-                    aria-pressed={genieOsOpen}
-                    onClick={onShowGenieOs}
-                >
-                    <IconWand size={16} />
-                </button>
-            )}
-            <SitesButton />
-            <HostsButton />
-            {githubNeedsResolve && (
-                <button
-                    type="button"
-                    className="gicon gh-warn-btn"
-                    title="GitHub permissions needed — some features are disabled. Click to resolve."
-                    aria-label="Resolve GitHub permissions"
-                    onClick={() => onShowGithubCaps?.()}
-                >
-                    <IconAlert size={16} />
-                </button>
-            )}
-            <button
-                type="button"
-                className="gicon"
-                title="Knowledge Graph — your workstation memory store"
-                aria-label="Knowledge Graph"
-                onClick={() => onShowKnowledge?.()}
-            >
-                <IconGraph size={16} />
-            </button>
-            {/* Flows — Genie's automation. Animates while one is RUNNING, off
-                real run state pushed from main, so the movement means a body is
-                executing on this machine right now and nothing else. */}
-            <button
-                type="button"
-                className={`gicon flows-button${flowsBusy ? ' is-running' : ''}`}
-                title={
-                    flowsBusy
-                        ? 'Flows — a Flow is running now'
-                        : 'Flows — Genie’s automation'
-                }
-                aria-label="Flow Manager"
-                data-running={flowsBusy ? 'true' : undefined}
-                onClick={() => onShowFlows?.()}
-            >
-                <IconFlow size={16} />
-            </button>
-            <button
-                type="button"
-                className="gicon agentinbox-btn"
-                title={
-                    agentInboxLag > 0
-                        ? `AgentInbox — ${agentInboxLag} message${agentInboxLag === 1 ? '' : 's'} your agents haven't picked up`
-                        : 'AgentInbox — talk to & between your agents'
-                }
-                aria-label="AgentInbox"
-                onClick={() => onShowAgentInbox?.()}
-            >
-                <IconMessage size={16} />
-                {agentInboxLag > 0 && (
-                    <span className="iw-btn-badge">
-                        {agentInboxLag > 99 ? '99+' : agentInboxLag}
-                    </span>
-                )}
-            </button>
-            {/* SHARING. The global counterpart to the workspace right-click: what
-                is already given away, workstation-wide links, and the inbound
-                "Connect to…". Not in a remote window — the links belong to the
-                workstation that OWNS the workspaces, not the one driving it. */}
-            {onShowSharing && (
-                <button
-                    type="button"
-                    className="gicon sharing-btn"
-                    title="Sharing — what you have shared, and how to connect to someone else"
-                    aria-label="Sharing"
-                    onClick={() => onShowSharing()}
-                >
-                    <IconShare size={16} />
-                </button>
-            )}
-            <button
-                type="button"
-                /* NOT `lists-btn` — that is the Lists FLYOUT's Done/Refuse
-                   action-button class (border, filled background, 4px 9px
-                   padding), and wearing it by name collision drew a bordered
-                   pill around this one icon in a row of flat ones. */
-                className="gicon lists-hdr-btn"
-                title={
-                    listsUserCount > 0
-                        ? `Lists — ${listsUserCount} item${listsUserCount === 1 ? '' : 's'} waiting on you`
-                        : 'Lists — what agents are tracking, and what is waiting on you'
-                }
-                aria-label="Lists"
-                onClick={() => onShowLists?.()}
-            >
-                <IconListTree size={16} />
-                {listsUserCount > 0 && (
-                    <span className="iw-btn-badge">
-                        {listsUserCount > 99 ? '99+' : listsUserCount}
-                    </span>
-                )}
-            </button>
-            <button
-                type="button"
-                className="gicon iw-btn"
-                title={issueWatchUnknown
-                    ? 'Issue Watch — unknown / not tracking this workspace yet'
-                    : 'Issue Watch — GitHub issues, PRs & security alerts'}
-                onClick={() => onShowIssueWatch?.()}
-            >
-                <IconEye />
-                {issueWatchUnread > 0 && (
-                    <span className="iw-btn-badge">
-                        {issueWatchUnread > 99 ? '99+' : issueWatchUnread}
-                    </span>
-                )}
-                {issueWatchUnknown && (
-                    <span className="iw-btn-badge unknown">?</span>
-                )}
-            </button>
+            {/* THE ICON CLUSTER IS GONE — ten of them (Genie OS, Sites, Hosts, the GitHub
+                warning, Knowledge, Flows, AgentInbox, Sharing, Lists, IssueWatch).
+
+                P7: "8 icons → 0 icons, 0 features lost". The features are reached through ⌘K,
+                built from `FEATURE_SURFACES` with a CI guard that refuses to let one become
+                unreachable — so that half was already true and is checked.
+
+                The half that was NOT true is that several icons also carried a live SIGNAL:
+                Flows animated while one ran, AgentInbox badged mail agents had not collected,
+                the GitHub glyph warned that permissions were switching features off, Genie OS
+                pulsed while the operator was producing output, IssueWatch could say "cannot
+                tell". A palette row says none of that. Owner decision, asked directly: *"move
+                the signals to the Deck, then delete the icons"* — so they are on the Deck
+                (`stationSignals`, silent unless something is true, each still a door through
+                the same `activateFeature` the palette uses), and only then did these come out.
+
+                The APP TRAY above stays: it lists the GApps this workstation has installed,
+                which is content rather than a feature door. The menu below stays for the same
+                reason it always did — Settings, Docs and What's New live in it. */}
             <div className="system-menu-wrap">
                 <button
                     type="button"
@@ -5164,73 +5046,6 @@ function RemoteIndicator() {
     );
 }
 
-/**
- * `.gen` sites picker — a titlebar affordance that, on hover/click, lists the
- * enabled `.gen` dev sites of the machine THIS window represents: a local Genie
- * window shows THIS machine's own sites (loopback-backed browser); a host window
- * shows the HOST's exposed sites (over the tunnel). Clicking opens the site in
- * the Testing Browser. Contextual by design — never a mix.
- */
-function SitesButton() {
-    const [open, setOpen] = useState(false);
-    const [hovering, setHovering] = useState(false);
-    const rootRef = useRef<HTMLDivElement>(null);
-    const show = open || hovering;
-
-    // Standard popover dismissal (mirrors ProjectSelector / the Processes Chooser):
-    // an outside-click or Esc fully closes — clearing BOTH the sticky click state
-    // and the hover state, so it can't linger open. The globe's own onClick still
-    // toggles it (a mousedown INSIDE rootRef is ignored here, then the click fires).
-    useEffect(() => {
-        if (!show) return;
-        const onDocClick = (e: MouseEvent) => {
-            if (!rootRef.current) return;
-            if (e.target instanceof Node && !rootRef.current.contains(e.target)) {
-                setOpen(false);
-                setHovering(false);
-            }
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                setOpen(false);
-                setHovering(false);
-            }
-        };
-        document.addEventListener('mousedown', onDocClick);
-        document.addEventListener('keydown', onKey);
-        return () => {
-            document.removeEventListener('mousedown', onDocClick);
-            document.removeEventListener('keydown', onKey);
-        };
-    }, [show]);
-
-    return (
-        <div
-            ref={rootRef}
-            style={{ position: 'relative', display: 'inline-flex' }}
-            onMouseEnter={() => setHovering(true)}
-            onMouseLeave={() => setHovering(false)}
-        >
-            <button
-                type="button"
-                className="gicon"
-                title="Browse your hosted .gen sites — local and from connected hosts"
-                aria-label=".gen sites"
-                aria-expanded={show}
-                onClick={() => setOpen((o) => !o)}
-            >
-                {/* globe glyph */}
-                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M3 12h18" />
-                    <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
-                </svg>
-            </button>
-            {show && <SitesPanel onClose={() => { setOpen(false); setHovering(false); }} />}
-        </div>
-    );
-}
-
 function SitesPanel({ onClose }: { onClose: () => void }) {
     const [data, setData] = useState<GenSitesAll | null>(null);
 
@@ -5341,75 +5156,6 @@ function SitesPanel({ onClose }: { onClose: () => void }) {
                     ))}
                 </>
             )}
-        </div>
-    );
-}
-
-/**
- * Hosts picker (LOCAL window only). A titlebar affordance to open OTHER machines'
- * native Genie Floors — each host gets its OWN window driven over the remote
- * bridge, while THIS local window keeps full local functionality. Lists tailnet-
- * discovered hosts + the persisted known-hosts list; first-time pairs collect a
- * PIN inline. Hidden inside a host window (a remote Floor doesn't open further
- * hosts from here).
- */
-function HostsButton() {
-    const isHostWindow =
-        typeof window !== 'undefined' && /[?&]host=/.test(window.location.search);
-    const [open, setOpen] = useState(false);
-    // Glow the button when a Virtual Workstation transitions provisioning→online,
-    // so the owner doesn't have to keep re-opening this popover after a spawn to
-    // catch the moment it's connectable. Fires only on the transition (see
-    // newlyConnectableWorkstationIds), and clears when the popover is opened.
-    const [cameOnline, setCameOnline] = useState(false);
-    const seenConnectableRef = useRef<Set<string> | null>(null);
-    useEffect(() => {
-        if (isHostWindow) return; // remote Floors don't spawn workstations from here
-        let cancelled = false;
-        const poll = async () => {
-            const ws = await api()
-                .workstations.connectable()
-                .catch(() => [] as ConnectableWorkstation[]);
-            if (cancelled) return;
-            const fresh = newlyConnectableWorkstationIds(seenConnectableRef.current, ws);
-            seenConnectableRef.current = connectableWorkstationIds(ws);
-            if (fresh.length > 0) setCameOnline(true);
-        };
-        void poll(); // first poll seeds the baseline (no glow for already-online)
-        const t = setInterval(() => void poll(), 20_000);
-        return () => {
-            cancelled = true;
-            clearInterval(t);
-        };
-    }, [isHostWindow]);
-    if (isHostWindow) return null;
-    const toggle = () => {
-        setOpen((o) => !o);
-        setCameOnline(false); // opening acknowledges the "came online" glow
-    };
-    return (
-        <div style={{ position: 'relative', display: 'inline-flex' }}>
-            <button
-                type="button"
-                className={`gicon${cameOnline ? ' ws-online-glow' : ''}`}
-                title={
-                    cameOnline
-                        ? 'A workstation just came online — click to connect'
-                        : 'Connect to a host Genie — opens its desktop in a new window'
-                }
-                aria-label="Hosts"
-                aria-expanded={open}
-                onClick={toggle}
-            >
-                {/* stacked-servers glyph */}
-                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <rect x="3" y="3" width="18" height="7" rx="1.5" />
-                    <rect x="3" y="14" width="18" height="7" rx="1.5" />
-                    <line x1="7" y1="6.5" x2="7.01" y2="6.5" />
-                    <line x1="7" y1="17.5" x2="7.01" y2="17.5" />
-                </svg>
-            </button>
-            {open && <HostsPanel onClose={() => setOpen(false)} />}
         </div>
     );
 }

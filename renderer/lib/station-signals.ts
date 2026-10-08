@@ -33,7 +33,8 @@ export type StationSignalId =
     | 'mail-behind'
     | 'github-blocked'
     | 'os-working'
-    | 'issuewatch-unknown';
+    | 'issuewatch-unknown'
+    | 'workstation-online';
 
 /** How loudly a signal reads. The Deck maps this to colour; nothing else does. */
 export type SignalTone = 'busy' | 'attention' | 'unknown';
@@ -63,6 +64,15 @@ export interface StationFacts {
     osWorking: boolean;
     /** IssueWatch cannot say whether this workspace is tracked. */
     issueWatchUnknown: boolean;
+    /**
+     * A Virtual Workstation went provisioning → online since you last looked.
+     *
+     * The Hosts icon GLOWED for this, and that icon is gone. Kept because it is the signal with
+     * the longest wait behind it: spawning a workstation takes minutes, and without it the owner
+     * re-opens the popover to catch the moment it becomes connectable. Hosts are also the feature
+     * the owner called out as "super important".
+     */
+    workstationCameOnline: boolean;
 }
 
 /**
@@ -105,6 +115,17 @@ export function stationSignals(facts: StationFacts): StationSignal[] {
             label: 'IssueWatch cannot tell whether this workspace is tracked',
             tone: 'unknown',
             featureId: 'issuewatch',
+        });
+    }
+
+    if (facts.workstationCameOnline) {
+        out.push({
+            id: 'workstation-online',
+            // ATTENTION rather than busy: something finished and is now waiting to be used, which
+            // is a thing to act on. Busy would read as "still working".
+            label: 'A workstation came online',
+            tone: 'attention',
+            featureId: 'remote-host',
         });
     }
 
