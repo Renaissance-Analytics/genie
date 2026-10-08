@@ -267,9 +267,11 @@ export function AgentView({
                                         Deny
                                     </Button>
                                 </div>
-                                {/* The turn has STOPPED. Saying so is why approvals are
-                                    inline rather than hidden behind a modal. */}
-                                <Text size="xs">turn parked {elapsed(now, session.turn.since)}</Text>
+                                {/* THE STREAM SAYS THIS NOW, once, as its tail divider.
+                                    Saying it here too was a real regression: `getByText(/turn
+                                    parked/)` matched two elements and failed Playwright's strict
+                                    mode, which is how E2E caught it on two platforms. The turn
+                                    must still visibly park (§6.4) — it does, one row below. */}
                             </Card>
                         ) : null}
 

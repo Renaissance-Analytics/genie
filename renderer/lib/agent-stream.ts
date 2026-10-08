@@ -198,12 +198,21 @@ export function agentStream(session: AgentSession, input: { now: number }): Stre
             level: 'bad',
         });
     } else if (session.turn.state === 'awaiting-input' || session.turn.state === 'awaiting-approval') {
+        /**
+         * `8s`, `2m 14s` — not a `0:08` clock.
+         *
+         * Two reasons. A clock reads as a countdown, and nothing here is counting down: the
+         * number only grows until a human acts. And `agent-view.spec.ts` already asserts this
+         * duration's shape, so a clock would have been a silent contract change to satisfy a
+         * mockup's punctuation.
+         */
         const seconds = Math.max(0, Math.round((input.now - session.turn.since) / 1000));
+        const waited = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
         rows.push({
             id: 'divider:parked',
             type: 'divider',
             kind: null,
-            main: `turn parked · waiting on you ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
+            main: `turn parked · waiting on you ${waited}`,
             meta: null,
             at: null,
             live: false,

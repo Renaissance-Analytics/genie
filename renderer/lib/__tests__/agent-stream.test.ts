@@ -223,6 +223,32 @@ describe('what the stream says when it is empty or broken', () => {
         expect(last.level).toBe('attention');
     });
 
+    it('writes the wait as SECONDS, which is the shape e2e already asserts', () => {
+        /**
+         * `8s` and `2m 14s`, not `0:08`.
+         *
+         * Encoded here rather than left to `agent-view.spec.ts` because that is the only place
+         * it was asserted, and an E2E takes ten minutes to tell you. It cost exactly that: the
+         * Stream's first version used a clock, and the spec expecting `8s` failed on two
+         * platforms — alongside a DUPLICATE "turn parked" that the Stream and the approval card
+         * were each rendering, which tripped Playwright's strict mode.
+         *
+         * A clock is also wrong on its own terms: it reads as a countdown, and nothing here
+         * counts down — the number only grows until a human acts.
+         */
+        const short = agentStream(
+            session({ turn: { state: 'awaiting-input', since: NOW - 8_000 }, tools: [tool()] }),
+            { now: NOW },
+        );
+        expect(short[short.length - 1]!.main).toBe('turn parked · waiting on you 8s');
+
+        const long = agentStream(
+            session({ turn: { state: 'awaiting-input', since: NOW - 134_000 }, tools: [tool()] }),
+            { now: NOW },
+        );
+        expect(long[long.length - 1]!.main).toBe('turn parked · waiting on you 2m 14s');
+    });
+
     it('does not park a turn that is merely idle', () => {
         // The positive control: every finished turn would otherwise end with a parked divider.
         const s = session({ turn: { state: 'idle', since: NOW }, tools: [tool()] });
