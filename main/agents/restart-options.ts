@@ -37,6 +37,8 @@ export interface AgentSpecLike {
         agent?: string;
         agent_command?: string;
         chat_session_id?: string;
+        /** `chat_session_id` was minted for a launch flag and no session exists under it. */
+        chat_session_id_minted?: boolean;
         /**
          * `'acp'` for a structured session, written by `createAgentTerminal` once
          * `launchPlan` has decided — see the note in {@link restartOptionsFor} for why the
@@ -82,6 +84,29 @@ export function capturedSessionId(spec: AgentSpecLike | null): string | null {
     const stored = meta.chat_session_id?.trim();
     if (stored) return stored;
     return extractSessionId(meta.agent_command ?? '');
+}
+
+/**
+ * The session id an ACP launch may CONTINUE — which is not the same question as
+ * {@link capturedSessionId}.
+ *
+ * `renderAgentLaunch` MINTS a uuid for claude's `--session-id` flag and it is stored on the
+ * spec before the agent has run. For a pty that id is real as soon as the launch line is
+ * typed, because `--session-id` means "create a session with this id". ACP never sends a
+ * launch line, so nothing creates it — and the ACP path was reading `capturedSessionId` to
+ * decide whether to `session/load`.
+ *
+ * Measured in `main/apps/__tests__/gapp-agents-launch.test.ts`: the FIRST launch of a GApp
+ * claude agent attempted to resume a uuid no conversation had ever had. It recovered, since
+ * the driver falls back to a fresh session — which is precisely what kept it invisible, and
+ * that same fallback is what would hide a real resume failure later.
+ *
+ * Narrower than `capturedSessionId` on purpose, and only here: the restart MENU should still
+ * offer resume for a minted id, because the pty grammar works with it.
+ */
+export function acpResumeSessionId(spec: AgentSpecLike | null): string | null {
+    if (spec?.meta?.chat_session_id_minted) return null;
+    return capturedSessionId(spec ?? null);
 }
 
 /** Which restarts a terminal can be offered. */

@@ -3,9 +3,23 @@ import { describe, expect, it } from 'vitest';
 import {
     GAPP_PROVIDERS,
     gappPersonaPath,
+    personaBriefing,
     resolveGappProvider,
-    withPersonaBriefing,
 } from '../agent-provider';
+import { withProviderStartupInstructions } from '../../agents/startup';
+
+/**
+ * The composition `createAgentTerminal` performs for the pty, as one helper so these cases keep
+ * reading in GApp terms.
+ *
+ * `withPersonaBriefing` used to be a function of its own and these cases called it directly. It
+ * is gone: it composed the launch line at the GApp call site while `createAgentTerminal` folds
+ * `agentMeta.instructions` in as well, so a GApp agent was briefed TWICE in one line. The
+ * quoting under test is unchanged — it was always `withStartupInstructions` doing it.
+ */
+function briefedCommand(base: string, personaPath: string, name: string): string {
+    return withProviderStartupInstructions('claude', base, personaBriefing(personaPath, name));
+}
 import { PROVIDER_IDS } from '../../agents/registry';
 
 /**
@@ -72,7 +86,7 @@ describe('where a declared persona actually lives', () => {
 
 describe('handing the persona to the TUI', () => {
     it('briefs the agent with the persona path, so it is not a bare shell', () => {
-        const cmd = withPersonaBriefing(
+        const cmd = briefedCommand(
             'claude --dangerously-skip-permissions',
             '/w/t/.agents/s.md',
             'Strategist',
@@ -83,7 +97,7 @@ describe('handing the persona to the TUI', () => {
     });
 
     it('quotes the briefing, so a workspace path with spaces still launches', () => {
-        const cmd = withPersonaBriefing('claude', 'C:/My Apps/t/.agents/s.md', 'Strategist');
+        const cmd = briefedCommand('claude', 'C:/My Apps/t/.agents/s.md', 'Strategist');
         // Everything after the command is ONE argument. A path with a space that
         // arrived as two words would make the TUI open with a truncated prompt and
         // an unrelated second positional — silently the wrong agent.
@@ -97,7 +111,7 @@ describe('handing the persona to the TUI', () => {
         // The name comes from a manifest and the path from a folder on disk, so
         // neither is trusted to be quote-free — a `"` that survived would close the
         // argument and turn the rest of the briefing into shell words.
-        const cmd = withPersonaBriefing('claude', 'C:/a"b/.agents/s.md', 'He said "hi"');
+        const cmd = briefedCommand('claude', 'C:/a"b/.agents/s.md', 'He said "hi"');
         expect(cmd.slice('claude '.length).slice(1, -1)).not.toContain('"');
     });
 
@@ -107,7 +121,7 @@ describe('handing the persona to the TUI', () => {
         // and `!` history-expands in an interactive bash — where a FAILED expansion
         // rejects the entire line, so an agent named "Fix It!" would never launch
         // at all rather than launch slightly wrong.
-        const cmd = withPersonaBriefing(
+        const cmd = briefedCommand(
             'claude',
             'C:/%USERPROFILE%/$HOME/.agents/s.md',
             'Fix It! `whoami`',
@@ -121,7 +135,7 @@ describe('handing the persona to the TUI', () => {
     it('leaves the path readable after the strip, on Windows too', () => {
         // Backslashes become forward slashes rather than vanishing: a trailing one
         // escapes the closing quote, and every TUI opens the file either way.
-        expect(withPersonaBriefing('claude', 'C:\\Apps\\t\\.agents\\s.md', 'S')).toContain(
+        expect(briefedCommand('claude', 'C:\\Apps\\t\\.agents\\s.md', 'S')).toContain(
             'C:/Apps/t/.agents/s.md',
         );
     });

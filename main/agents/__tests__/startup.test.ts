@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+    personaBriefing,
     chatIdBinding,
     quotable,
-    withPersonaBriefing,
     withStartupInstructions,
     withProviderStartupInstructions,
     providerInstructionFiles,
@@ -138,11 +138,54 @@ describe('pre-loaded instructions', () => {
 
 describe('a GApp persona briefing', () => {
     it('is the same mechanism with the app supplying the text', () => {
-        const line = withPersonaBriefing('claude', '/ws/.agents/strategist.md', 'Strategist');
+        // The composition `createAgentTerminal` performs for the pty. There is no GApp-specific
+        // builder any more: one sentence, and the generic folding puts it on the line.
+        const line = withProviderStartupInstructions(
+            'claude',
+            'claude',
+            personaBriefing('/ws/.agents/strategist.md', 'Strategist'),
+        );
         expect(line.startsWith('claude "You are Strategist,')).toBe(true);
         expect(line).toContain('/ws/.agents/strategist.md');
         // One argument, so exactly two quotes — the shell-quoting lives in one
         // place now and this is what proves the GApp path goes through it.
         expect(line.split('"')).toHaveLength(3);
+    });
+});
+
+/**
+ * The persona briefing as TEXT, so either engine can deliver it.
+ *
+ * The briefing used to be built as a COMMAND LINE, which only a pty can type.
+ * An ACP session has no command line, so a GApp agent under ACP started with no persona at
+ * all — a "Strategist" that had never been told it was one.
+ *
+ * Extracted rather than duplicated: one sentence, two deliveries. Writing the briefing out
+ * again for the ACP path is how the two would drift, and the drift would be invisible —
+ * both agents would start, and only one would know who it was.
+ */
+describe('personaBriefing', () => {
+    it('is the briefing sentence on its own, with no shell quoting', () => {
+        const text = personaBriefing('/w/.agents/strategist.md', 'Strategist');
+        expect(text).toContain('You are Strategist');
+        expect(text).toContain('/w/.agents/strategist.md');
+        expect(text).toContain('persona');
+        // No quotes, no flags: this is a PROMPT, not a fragment of a command line.
+        expect(text).not.toMatch(/["']|--/);
+    });
+
+    it('is the SAME sentence the command line carries', () => {
+        // The property that matters. If these drift, a pty agent and an ACP agent with the same
+        // persona are briefed differently and nothing says so. Structural now rather than
+        // merely checked — the pty line is composed FROM this text — and the assertion stays as
+        // the guard against anyone reintroducing a second builder.
+        const text = personaBriefing('/w/.agents/strategist.md', 'Strategist');
+        const command = withProviderStartupInstructions('claude', 'claude', text);
+        expect(command).toContain(text);
+    });
+
+    it('names the persona by PATH rather than inlining it', () => {
+        // Personas are often more than one file and the folder travels whole (genie#245).
+        expect(personaBriefing('/w/.agents/team/lead.md', 'Lead')).toContain('/w/.agents/team/lead.md');
     });
 });

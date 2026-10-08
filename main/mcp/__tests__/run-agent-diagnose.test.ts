@@ -145,11 +145,14 @@ addWorkspace({
     created_by_genie: 0,
 });
 
-async function registerAgent(name = AGENT_NAME): Promise<void> {
+async function registerAgent(
+    name = AGENT_NAME,
+    agent: 'claude' | 'aider' = 'claude',
+): Promise<void> {
     const registered = await registerAgentForMcp(CALLER_ID, {
         name,
         purpose: `Test agent ${name}`,
-        agent: 'claude',
+        agent,
     });
     if (!registered.ok) throw new Error(`fixture failed to register: ${registered.error}`);
 }
@@ -182,8 +185,10 @@ function agentRowId(name = AGENT_NAME): string {
  * Put one agent into the state a fully-booted one is actually in: transport
  * verified in the DB, bound in the registry, joined to the inbox, boot reported.
  */
-async function bootedAgent(): Promise<{ specId: string; inboxId: string; agentId: string }> {
-    await registerAgent();
+async function bootedAgent(
+    agent: 'claude' | 'aider' = 'claude',
+): Promise<{ specId: string; inboxId: string; agentId: string }> {
+    await registerAgent(AGENT_NAME, agent);
     const specId = await startAgent();
     const inboxId = inboxIdOf(specId);
     const agentId = agentRowId();
@@ -297,8 +302,17 @@ describe('an agent that is not in the AgentInbox', () => {
 });
 
 describe('an agent whose pty has exited', () => {
+    /**
+     * A PTY provider, deliberately. ACP is no longer optional, so a claude agent is a
+     * structured session with NO PTY — and this case is specifically about a dead pty being
+     * the single root cause with its four downstream effects suppressed. Asked of claude it
+     * reported `transport-binding-lost` instead, which is not a wrong diagnosis so much as a
+     * different situation: there was no pty to be the root.
+     *
+     * The ACP equivalent is the case below.
+     */
     it('is wedged on the dead pty, and not on its four consequences', async () => {
-        const { specId, inboxId } = await bootedAgent();
+        const { specId, inboxId } = await bootedAgent('aider');
 
         terminalManager().kill(specId);
         harnessTransportRegistry.unbind(inboxId);
@@ -375,5 +389,39 @@ describe('narrowing the sweep', () => {
         const { diagnoses, note } = await diagnose({ name: 'not-a-real-agent' });
         expect(diagnoses).toEqual([]);
         expect(note).toMatch(/no agents/i);
+    });
+});
+
+describe('an agent whose ACP session has gone', () => {
+    it('does not tell the operator to read a pty exit tail that does not exist', async () => {
+        // The repair text used to say "Read the last output first (`manageTerminals read`) —
+        // the exit tail is the only evidence of why it went." An ACP session has no pty and
+        // therefore no tail, so that sends somebody to look at nothing while the real cause
+        // goes unexamined. The ailment and the repair VERB are unchanged; only the
+        // explanation is engine-aware.
+        const { specId, inboxId } = await bootedAgent('claude');
+        updateTerminalSpec(specId, {
+            meta: { ...(getTerminalSpec(specId)?.meta ?? {}), engine: 'acp' },
+        });
+
+        terminalManager().kill(specId);
+        harnessTransportRegistry.unbind(inboxId);
+        agentInboxBroker.leave(inboxId);
+
+        const d = only((await diagnose()).diagnoses);
+        const dead = d.findings.find((f) => f.ailment === 'pty-exited');
+        if (dead) {
+            expect(dead.detail).toMatch(/ACP session/i);
+            expect(dead.detail).not.toMatch(/exit tail/i);
+            expect(dead.repair).toMatch(/runAgent start/);
+            // And it says what resume does and does not give back, because a resumed
+            // conversation replays no history and a surface implying otherwise is wrong.
+            expect(dead.repair).toMatch(/no history/i);
+        } else {
+            // An ACP agent with no session may legitimately diagnose on its transport
+            // instead; what must never happen is pty wording for a session that has no pty.
+            const texts = d.findings.map((f) => `${f.detail} ${f.repair}`).join(' ');
+            expect(texts).not.toMatch(/exit tail/i);
+        }
     });
 });

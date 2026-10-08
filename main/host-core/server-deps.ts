@@ -158,8 +158,14 @@ export function buildHostServerDeps(
         },
         onThumbsUp: async (terminalId, reason, to) => {
             if (terminalId === GENIE_OS_TERMINAL_ID) {
-                const provider = String(getTerminalSpec(terminalId)?.meta?.agent ?? '');
-                const required = requiredHarnessTransport(provider);
+                const spec = getTerminalSpec(terminalId);
+                const provider = String(spec?.meta?.agent ?? '');
+                // Engine-aware, or the OS agent could never boot on ACP: its required
+                // transport would be the Claude Channel, which an ACP session cannot have.
+                const required = requiredHarnessTransport(
+                    provider,
+                    spec?.meta?.engine === 'acp' ? 'acp' : 'pty',
+                );
                 const authorization = authorizeOsAgentBoot(
                     provider,
                     required ? harnessTransportRegistry.isVerified('genie:workstation', required) : true,

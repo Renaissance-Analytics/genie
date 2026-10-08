@@ -4,6 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
+ * PINNED TO THE PTY, 2026-10-07.
+ *
+ * ACP is no longer optional, so a claude agent is a structured session with no pty — and
+ * these cases are about PTY MECHANICS, which remain real for every pty provider and most of
+ * the twenty-one are. `engineOverride: 'pty'` keeps the behaviour under test on the engine
+ * that has it, rather than deleting coverage or asserting it of a transport that has no pty.
+ *
+ * `engineOverride` is a supported configuration, not a test affordance: it is the only way
+ * to hold an agent on the pty now that ACP is the default, and it was unreachable until the
+ * same change — `engineFor` honoured it and nothing could set it.
+ */
+/**
  * A GApp's DECLARED agents actually launching (genie#245).
  *
  * The defect this pins: a GApp could declare agents in its manifest, ship the
@@ -65,6 +77,35 @@ vi.mock('../../tray', () => ({
 }));
 
 vi.mock('../../ask/force-question', () => ({ forceQuestion: vi.fn() }));
+
+/**
+ * The ACP START, recorded rather than performed.
+ *
+ * Mocked for two measured reasons. Unmocked, this file SPAWNED A REAL `claude`: the run
+ * logged `ACP request initialize timed out after 60000ms`, a timeout `vi.runAllTimers()` had
+ * fast-forwarded, so the suite was starting provider processes on whatever machine ran it.
+ * And it is the only way to observe what the GApp path HANDS to a structured session — the
+ * pty recorder cannot, because an ACP agent has no launch line.
+ */
+const acpStarts: Array<{
+    specId: string;
+    provider: string;
+    cwd: string;
+    instructions?: string;
+    resumeSessionId?: string | null;
+}> = [];
+vi.mock('../../acp/start', () => ({
+    startAcpForSpec: (input: {
+        specId: string;
+        provider: string;
+        cwd: string;
+        instructions?: string;
+        resumeSessionId?: string | null;
+    }) => {
+        acpStarts.push(input);
+        return { driver: {}, pid: 4242 };
+    },
+}));
 
 import { app, dialog } from 'electron';
 import {
@@ -183,6 +224,7 @@ beforeEach(() => {
     terminalManager().killAll();
     writes.length = 0;
     boxes.length = 0;
+    acpStarts.length = 0;
     setSettings({
         gapp_ai_provider: '',
         agent_default: '',
@@ -225,20 +267,38 @@ describe('a GApp that declares an agent', () => {
             expect(spec.meta.agent).toBe('claude');
             expect(typeof spec.meta.agent_id).toBe('string');
             expect(spec.meta.agent_command).toContain('claude');
-            expect(spec.meta.agent_command).toContain('strategist.md');
+            // THE PERSONA IS PERSISTED AS INSTRUCTIONS, not folded into the command.
+            //
+            // It used to be asserted of `agent_command`, and that was how a double briefing was
+            // found: the GApp composed the launch line itself while `createAgentTerminal` folds
+            // `instructions` in too, so the line carried the sentence twice. One record now, and
+            // it is the field a revive re-applies (`maybeRelaunchAgent`) — so this is also the
+            // assertion that a restarted GApp agent still knows who it is.
+            expect(spec.meta.agent_instructions).toContain('Strategist');
+            expect(spec.meta.agent_instructions).toContain('strategist.md');
 
-            // ...and the TUI was actually launched into the pty. A spec that merely
-            // CLAIMS an agent is the same lie one panel further down.
+            // ...and the agent was actually STARTED. A spec that merely CLAIMS an agent is
+            // the same lie one panel further down.
+            //
+            // On ACP, which is where a claude agent runs now that ACP is not optional. This
+            // used to assert the launch line typed into the pty, and that was right for the
+            // engine it was written against. Rewritten rather than loosened: the property is
+            // that the persona REACHES the agent, and an ACP session has no command line to
+            // fold it into, so it travels as the session's instructions. Weakened to "a
+            // terminal is live" instead, every GApp agent could have come up with no persona
+            // at all and this would still have passed.
             expect(terminalManager().isLive(spec.id)).toBe(true);
             vi.runAllTimers();
-            expect(delivered()).toContain('claude');
-            // Forward slashes on the COMMAND LINE even on Windows: the line is typed
-            // into a shell that reads `\` as an escape, and every TUI Genie launches
-            // opens the file either way. The spec's `gapp_persona` above keeps the
-            // native form, because that one is a path, not a shell word.
-            expect(delivered()).toContain(
-                path.join(folder, '.agents', 'strategist.md').replace(/\\/g, '/'),
+            expect(acpStarts).toHaveLength(1);
+            expect(acpStarts[0]!.specId).toBe(spec.id);
+            expect(acpStarts[0]!.provider).toBe('claude');
+            expect(acpStarts[0]!.instructions).toContain('Strategist');
+            expect(acpStarts[0]!.instructions).toContain(
+                path.join(folder, '.agents', 'strategist.md'),
             );
+            // A FRESH conversation. Nothing has been captured yet, so there is nothing to
+            // continue, and resuming an id this agent has never had would be a guess.
+            expect(acpStarts[0]!.resumeSessionId ?? null).toBeNull();
         } finally {
             vi.useRealTimers();
         }
@@ -363,7 +423,7 @@ describe('a GApp meeting the agent-terminal cap', () => {
             workspaceId,
             cwd: folder,
             label: 'the user’s own agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
         const before = panelSpecs(workspaceId).map((s) => s.id);
 
@@ -395,7 +455,7 @@ describe('a GApp meeting the agent-terminal cap', () => {
             workspaceId,
             cwd: folder,
             label: 'the user’s own agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
 
         // No roster, so no agent terminal is being asked for — the Files/Terminal

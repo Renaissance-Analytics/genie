@@ -1,6 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * PINNED TO THE PTY, 2026-10-07.
+ *
+ * ACP is no longer optional, so a claude agent is a structured session with no pty — and
+ * these cases are about PTY MECHANICS, which remain real for every pty provider and most of
+ * the twenty-one are. `engineOverride: 'pty'` keeps the behaviour under test on the engine
+ * that has it, rather than deleting coverage or asserting it of a transport that has no pty.
+ *
+ * `engineOverride` is a supported configuration, not a test affordance: it is the only way
+ * to hold an agent on the pty now that ACP is the default, and it was unreachable until the
+ * same change — `engineFor` honoured it and nothing could set it.
+ */
+/**
  * genie #63 Phase 0 — the HOST launches an agent-created terminal, not the renderer.
  *
  * The proof-bug: an agent-created terminal's pty/CLI launch was effectively tied to
@@ -143,7 +155,7 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
             workspaceId: 'ws-1',
             cwd: process.cwd(),
             label: 'claude agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
 
         // The pty is LIVE in the Host the instant the agent created it.
@@ -164,6 +176,7 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
             label: 'codex agent',
             agentMeta: {
                 agent: 'codex',
+                engineOverride: 'pty',
                 command: 'codex --yolo -c model_reasoning_effort="high"',
                 instructions: '--read AGENTS.md first',
             },
@@ -182,7 +195,7 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
             workspaceId: 'ws-1',
             cwd: process.cwd(),
             label: 'claude agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
         vi.runAllTimers();
         const afterFirst = writes.length;
@@ -194,7 +207,7 @@ describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0
             workspaceId: 'ws-1',
             cwd: process.cwd(),
             label: 'claude agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
         vi.runAllTimers();
 
@@ -259,7 +272,7 @@ describe('createAgentTerminal refuses a FRESH launch the boot pass already knows
             workspaceId: 'ws-1',
             cwd: process.cwd(),
             label: 'claude agent',
-            agentMeta: { agent: 'claude', command: 'claude' },
+            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
         });
         vi.runAllTimers();
         expect(terminalManager().isLive(r.id)).toBe(true);

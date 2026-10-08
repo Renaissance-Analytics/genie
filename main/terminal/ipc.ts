@@ -122,7 +122,8 @@ import { listAllProcesses } from './process-list';
 import { logPtyOsc } from './osc-debug';
 import { acpRegistry, terminalIsLive } from '../acp/registry';
 import { startAcpForSpec } from '../acp/start';
-import { capturedSessionId } from '../agents/restart-options';
+import { bindAcpMailTransport } from '../acp/mail-transport';
+import { acpResumeSessionId, capturedSessionId } from '../agents/restart-options';
 import { declaredSessions } from '../agentsession/bindings';
 import { launchPlan } from '../agents/launch-plan';
 import { agentPulse } from './agent-pulse';
@@ -633,6 +634,21 @@ export function createAgentTerminal(opts: {
     agentMeta?: {
         agent: AgentTuiId;
         command: string;
+        /**
+         * PIN this agent to one engine, overriding capability.
+         *
+         * The escape hatch, and it was unreachable: `engineFor` has always honoured
+         * `agentOverride` and NOTHING passed one, so the per-agent choice was declared,
+         * respected, and unsettable. That was survivable while ACP was opt-in. With ACP as
+         * the mechanism it is the only way to hold an agent on the pty, which is exactly
+         * when somebody needs it — a provider behaving oddly under ACP, or a conversation
+         * worth keeping on a transport that is known to work.
+         *
+         * Persisted as `meta.engine_override` so it survives a restart. Distinct from
+         * `meta.engine`, which RECORDS what the agent is actually running as: reading one
+         * field for both would make a recorded value force itself on every relaunch.
+         */
+        engineOverride?: 'acp' | 'pty';
         /** Positional opening prompt, rendered only after all provider options. */
         instructions?: string;
     };
@@ -741,6 +757,9 @@ export function createAgentTerminal(opts: {
                 ? { agent_instructions: opts.agentMeta.instructions.trim() }
                 : {}),
             agent_id: agentId,
+            ...(opts.agentMeta.engineOverride
+                ? { engine_override: opts.agentMeta.engineOverride }
+                : {}),
             // BACK-COMPAT: stored `whisper_*` meta keys are kept after the
             // WhisperChat → AgentInbox rename (renaming them needs a data migration).
             whisper_purpose: normalizePurpose(opts.agentInbox?.purpose),
@@ -757,6 +776,9 @@ export function createAgentTerminal(opts: {
                 ? { issuewatch_action: opts.issuewatch.action }
                 : {}),
             ...(chatSessionId ? { chat_session_id: chatSessionId } : {}),
+            // PROVENANCE. A minted id is a promise the pty's launch line keeps; ACP has no
+            // launch line, so it must not treat one as a conversation to continue.
+            ...(rendered.minted ? { chat_session_id_minted: true } : {}),
         };
     }
 
@@ -898,16 +920,47 @@ export function createAgentTerminal(opts: {
         // which is tested; this file is 115 KB, imports electron and the database, and has
         // no test of its own, so it gets a branch and not a rule.
         //
-        // The owner's direction is that ACP is the mechanism, not a mode. The flag is still
-        // read because ACP cannot resume a conversation yet (prism-acp's `session/load`
-        // cannot be given the id it needs), so making it mandatory would discard a
-        // conversation on every Genie restart. Flipped the moment that is fixed.
+        // ACP IS NOT OPTIONAL (owner). No setting is read: a provider that can speak ACP
+        // speaks it, and one that cannot — aider, goose, codex until prism ships a driver —
+        // stays on the pty because it has nothing to connect to. `engineFor` checks
+        // capability first, and `ACP_PROVIDERS` lists only what can actually launch.
+        // The pin, from this call or from the spec a revive is reattaching to. Read from the
+        // spec too, or a restart would silently move a pinned agent back onto ACP.
+        const pinned = opts.agentMeta?.engineOverride
+            ?? (getTerminalSpec(id)?.meta?.engine_override as 'acp' | 'pty' | undefined);
+        // The instructions are passed so the engine decision can tell Genie's OWN addition to
+        // the launch line from a user's custom command: `withStartupInstructions` folds them in
+        // as a quoted positional argument, and ACP carries the same text as its first prompt.
+        // Without this every GApp agent — whose persona is folded in exactly that way — fell
+        // back to the pty, and the persona assertion still passed, because the pty carries it.
+        const plannedInstructions =
+            (getTerminalSpec(id)?.meta?.agent_instructions as string | undefined)
+            ?? opts.agentMeta?.instructions;
         const plan = launchPlan({
             provider: opts.agentMeta?.agent ?? null,
             command: launchCommand ?? null,
-            acpEnabled: dbSettingsProvider().get('acp_engine') === 'on',
+            ...(pinned ? { agentOverride: pinned } : {}),
+            ...(plannedInstructions ? { instructions: plannedInstructions } : {}),
         });
         if (plan?.kind === 'acp') {
+            /**
+             * THE CLAUDE CHANNEL IS NOT LOADED — a known NO, not an unknown.
+             *
+             * `launchedWithChannel` is otherwise written only by `deliverAgentLaunch`, which
+             * an ACP session never reaches: there is no launch line, and claude's ACP launch
+             * is prism's adapter under node (`main/acp/agent-spec.ts`), carrying no Claude
+             * Code CLI flags at all. So `--dangerously-load-development-channels` is
+             * definitively absent.
+             *
+             * Saying so matters because `undefined` means "Genie cannot tell" and
+             * `registerTransport` permits a binding it cannot rule out. The bridge is an
+             * ordinary MCP server in `.mcp.json`, so it can still start inside an ACP
+             * session, register, and poll — while every notification it writes is dropped
+             * with no error. Binding it would tell AgentInbox the agent's mail was being
+             * delivered and suppress the one notice that could reach it. That is genie#528
+             * exactly, reached by a new route.
+             */
+            launchedWithChannel.set(id, false);
             /**
              * RECORD THE ENGINE ON THE SPEC.
              *
@@ -947,6 +1000,21 @@ export function createAgentTerminal(opts: {
                 // Without this, telemetry records turns that start and never finish: no
                 // duration, no cost, and every agent looks permanently busy.
                 onTurnEnded: () => declaredSessions.endTurnForSpec(id),
+                /**
+                 * THE PARKED PERMISSION.
+                 *
+                 * `AcpSessionDriver.onApproval` existed, was tested, and was called by nothing —
+                 * so an ACP agent that asked permission waited forever and no surface said why:
+                 * alive, mid-turn, and indistinguishable from an agent that had gone quiet.
+                 *
+                 * Not a `session/update`, so it cannot travel through `applyForSpec`; the store
+                 * takes it directly and records `approval-asked`, which is the measure that
+                 * compares honestly across engines — not how fast an agent is, but how often it
+                 * stops and waits for a person.
+                 */
+                onApproval: (approval) => declaredSessions.addApprovalForSpec(id, approval),
+                onApprovalSettled: (approvalId) =>
+                    declaredSessions.clearApprovalForSpec(id, approvalId),
                 // CONTINUE the conversation when Genie holds the provider's own id.
                 //
                 // `capturedSessionId` reads `meta.chat_session_id` — the SAME field the pty
@@ -956,12 +1024,43 @@ export function createAgentTerminal(opts: {
                 // comes back to its conversation instead of a blank one.
                 //
                 // Absent on a first launch, which is the normal case and starts fresh.
-                resumeSessionId: capturedSessionId(getTerminalSpec(id) ?? null),
+                resumeSessionId: acpResumeSessionId(getTerminalSpec(id) ?? null),
+                // The persona. `meta.agent_instructions` is PERSISTED so a revive can
+                // re-apply it, and the pty path types it into the launch line — an ACP
+                // session has no launch line, so it is sent as the first prompt of a fresh
+                // session instead. Without this every ACP agent starts with no persona.
+                ...(plannedInstructions ? { instructions: plannedInstructions } : {}),
             });
             if ('error' in started) {
                 // Named, and surfaced the same way a refused pty launch is: an agent that
                 // could not start must say why rather than sit there looking idle.
                 console.warn(`[acp] ${plan.provider} session for ${id} did not start: ${started.error}`);
+            } else {
+                /**
+                 * THE SESSION IS THIS AGENT'S MAIL TRANSPORT.
+                 *
+                 * AgentInbox has two harness-native transports and both are properties of a
+                 * provider's CLI: the Claude Channel needs
+                 * `--dangerously-load-development-channels` on the launch line, and the Codex
+                 * App Server is codex's. An ACP session has no launch line, so the channel can
+                 * never bind for one — which means making ACP the default removed the push
+                 * transport from every claude agent, SILENTLY. Mail still queued durably and
+                 * the agent still found it on its next `receive`; it simply stopped arriving.
+                 *
+                 * The session is the better replacement: a PUSH, so the agent ACKs what it was
+                 * handed, where the channel could only ever prove a write (genie#549).
+                 *
+                 * Addressed by the terminal's own `meta.agent_id` — THE TWO IDS. The broker
+                 * answers to that and never to `workspace_agents.id`.
+                 */
+                const inboxId = getTerminalSpec(id)?.meta?.agent_id;
+                bindAcpMailTransport(
+                    {
+                        promptFor: (specId) => acpRegistry.promptFor(specId),
+                        bind: (agent, kind, send) => harnessTransportRegistry.bind(agent, kind, send),
+                    },
+                    { specId: id, agentId: typeof inboxId === 'string' ? inboxId : null },
+                );
             }
         } else if (plan?.kind === 'pty') {
             deliverAgentLaunch(id, plan.command);
@@ -993,7 +1092,9 @@ export function createAgentTerminal(opts: {
                     if (!sid) return;
                     const cur = getTerminalSpec(id);
                     if (!cur) return;
-                    updateTerminalSpec(id, { meta: { ...cur.meta, chat_session_id: sid } });
+                    updateTerminalSpec(id, {
+                        meta: { ...cur.meta, chat_session_id: sid, chat_session_id_minted: false },
+                    });
                     agentInboxBroker.setChatSession(agentId!, sid);
                     broadcastTerminalSpecsChanged();
                 })
