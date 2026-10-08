@@ -252,7 +252,18 @@ export async function warmElectronRuntime(
     try {
         app = await effects.launch({
             /**
-             * `--enable-logging=stderr` — WITHOUT IT THERE IS NOTHING TO CAPTURE (genie#667).
+             * `--enable-logging` — WITHOUT IT THERE IS NOTHING TO CAPTURE (genie#667).
+             *
+             * BARE, not `=stderr`. Electron documents the switch as `--enable-logging` for stderr and
+             * `--enable-logging=file` to write a file; `=stderr` is Chromium's form, and an
+             * unrecognised value may be read as a filename or ignored. Measured: with `=stderr` a
+             * renderer crash produced ZERO captured lines while the capture reported itself attached
+             * on all 35 spec files.
+             *
+             * This comment said `=stderr` for one commit after the code stopped doing it — a comment
+             * contradicting the code it documents, which is the exact defect class that cost a day
+             * on `acp_engine` earlier (`db.ts` claimed `engineFor` read a key it never mentions).
+             * Fixed rather than left, because the next reader believes the prose.
              *
              * Measured: occurrence 8 crashed the renderer with the stderr capture confirmed
              * `attached`, and produced ZERO lines. The capture was correct; Chromium simply had not
