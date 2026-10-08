@@ -166,6 +166,17 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
      * palette carries it like any other feature.
      */
     { id: 'grid', label: 'The grid (all workspaces)', entry: { paletteId: 'grid' } },
+
+    /**
+     * THE WORKFLOW DASHBOARD — and it is registered here for the reason the comment above
+     * records rather than as a formality.
+     *
+     * The grid became unreachable the moment the Deck took the default, because `?view=grid`
+     * "in a desktop app with no address bar is not a route a person has". A brand-new surface
+     * reachable only by URL is the same defect arriving the other way round — not a feature
+     * LOST but a feature never found. So it gets a palette row like everything else.
+     */
+    { id: 'dashboard', label: 'Workflow Dashboard', entry: { paletteId: 'dashboard' } },
 ];
 
 export interface FoundEntryPoints {

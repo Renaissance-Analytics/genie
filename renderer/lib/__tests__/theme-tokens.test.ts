@@ -428,6 +428,19 @@ describe('Genie stylesheet tokens', () => {
             '--agent-accent': '.agent-panel',
             // Per-item index on the nudge dots, set on the element that uses it.
             '--nq': '.agent-nudge-questions',
+            /**
+             * The Workflow Dashboard's state palette. `--dash-state-fill` and
+             * `--dash-state-ink` are set by `.dash-row[data-state]` (and by the header strip's
+             * own dots) and read by the dot and the status word inside that row.
+             *
+             * One token per ROLE rather than per state is what keeps the row's CSS from
+             * branching five ways in three places: the state selector sets the pair once, and
+             * the parts that need a colour read the role they need. FILL and INK are separate
+             * because they are different requirements — a mid-tone reads as a dot on either
+             * ground and fails as 12px text, which is the pairing `--amber-400`/`--amber-500`
+             * already exists for in this sheet.
+             */
+            '--dash-': '.dash',
         };
 
         /**

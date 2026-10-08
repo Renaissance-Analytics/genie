@@ -7581,6 +7581,7 @@ body.gutter-dragging .grid-gutter {
    wrong three times. */
 .gwrap.lists-docked .gbody,
 .gwrap.lists-docked .deck,
+.gwrap.lists-docked .dashboard,
 .gwrap.lists-docked .agent-view,
 .gwrap.lists-docked .agent-view-missing {
     margin-right: var(--lists-dock-w);
@@ -8583,5 +8584,243 @@ body.gutter-dragging .grid-gutter {
 /* OFF is not a fault. Same weight as ready, so an optional service reads as a choice rather than
    as an error waiting to be cleared. */
 .firstrun-readiness-line[data-state='off'] {
+    color: var(--fg-3);
+}
+
+/* ===== The Workflow Dashboard ===========================================
+   `genie://dashboard?group=workspace` — the owner's spec board surface.
+
+   GEOMETRY IS FROM THE BOARD, not chosen here: a 28px column header, 28px
+   group headers, 32px agent rows, and the column template below. The row
+   height is the reason twenty agents fit one screen without scrolling, which
+   is the board's own busy-state claim — so it is a number with a requirement
+   behind it rather than a taste.
+
+   Every colour is a token. The status hues come from the SAME pairs the rest
+   of the shell uses (`--emerald-500` as a fill, `--emerald-400` as ink), so a
+   dot here and a dot on the Deck cannot drift apart. */
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.dash-head {
+    height: 56px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 20px 0 28px;
+    border-bottom: 1px solid var(--border-1);
+}
+.dash-title {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+.dash-figures {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.dash-figure {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg-2);
+}
+
+.dash-table {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* THE COLUMN TEMPLATE, from the board. `minmax(0, …)` on the three elastic
+   columns is what lets a long target or a long commit subject ellipsize
+   instead of forcing the row wider than the pane — without the `0` floor a
+   grid item's min-content width wins and the table overflows. */
+.dash-row {
+    height: 32px;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 150px minmax(190px, 1.15fr) minmax(0, 1.1fr) minmax(0, 1.45fr) 60px 84px;
+    gap: 16px;
+    align-items: center;
+    padding: 0 20px 0 28px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.dash-col-head {
+    height: 28px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--fg-4);
+    position: sticky;
+    top: 0;
+    background: var(--bg-0);
+    z-index: 1;
+}
+
+.dash-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* ── the fidelity dot ───────────────────────────────────────────────────
+   SHAPE carries fidelity and COLOUR carries state, which keeps the two
+   independent: a broken Observed agent is a red ring, and both facts are
+   readable at once. A filled-vs-hollow distinction survives at 8px where a
+   hue difference alone would not. */
+.dash-dot {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.dash-dot[data-shape='filled'] {
+    background: var(--dash-state-fill);
+}
+.dash-dot[data-shape='ring'] {
+    border: 1.5px solid var(--dash-state-fill);
+}
+.dash-row[data-state='working'],
+.dash-figure .dash-dot[data-state='working'] {
+    --dash-state-fill: var(--emerald-500);
+}
+.dash-row[data-state='waiting'],
+.dash-figure .dash-dot[data-state='waiting'] {
+    --dash-state-fill: var(--amber-500);
+}
+.dash-row[data-state='broken'],
+.dash-figure .dash-dot[data-state='broken'] {
+    --dash-state-fill: var(--red-500);
+}
+.dash-row[data-state='idle'],
+.dash-figure .dash-dot[data-state='idle'] {
+    /* `--fg-3`, not `var(--zinc-400)`. The board writes the ramp literal, and Genie's token
+       guard refuses it — a fixed grey is the same grey on both themes, so it reads as muted on
+       dark and as emphasis on light. `--fg-3` IS zinc-400 in dark, so this renders exactly as
+       the mockup does there and stays legible when the theme flips. */
+    --dash-state-fill: var(--fg-3);
+}
+
+.dash-name {
+    font-weight: 500;
+    white-space: nowrap;
+}
+.dash-prov,
+.dash-step,
+.dash-group-path,
+.dash-comms-count,
+.dash-ctx-label {
+    font-family: var(--font-mono);
+    color: var(--fg-4);
+    white-space: nowrap;
+}
+
+/* The status WORD is coloured; its detail is not. The word is the fact being
+   reported, and tinting the question text as well would make a waiting row
+   shout as loudly as a broken one. */
+.dash-status-word {
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--dash-state-ink);
+}
+.dash-row[data-state='working'] {
+    --dash-state-ink: var(--emerald-400);
+}
+.dash-row[data-state='waiting'] {
+    --dash-state-ink: var(--amber-400);
+}
+.dash-row[data-state='broken'] {
+    --dash-state-ink: var(--red-500);
+}
+.dash-row[data-state='idle'] {
+    --dash-state-ink: var(--fg-3);
+}
+
+.dash-status-detail,
+.dash-target-text,
+.dash-del-sub {
+    color: var(--fg-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dash-del-sub {
+    color: var(--fg-3);
+}
+.dash-del-main {
+    color: var(--fg-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 60%;
+}
+.dash-del-main[data-mono] {
+    font-family: var(--font-mono);
+}
+
+/* ── context, which appears only near compaction ───────────────────────── */
+.dash-ctx-bar {
+    width: 36px;
+    height: 4px;
+    flex: none;
+    border-radius: 2px;
+    background: var(--bg-3);
+    overflow: hidden;
+    display: block;
+}
+.dash-ctx-bar > span {
+    display: block;
+    height: 100%;
+}
+.dash-ctx-bar[data-level='warn'] > span {
+    background: var(--amber-500);
+}
+.dash-ctx-bar[data-level='critical'] > span {
+    background: var(--red-500);
+}
+.dash-ctx-label[data-level='warn'] {
+    color: var(--amber-400);
+}
+.dash-ctx-label[data-level='critical'] {
+    color: var(--red-500);
+}
+
+/* ── group headers ─────────────────────────────────────────────────────── */
+.dash-group-head {
+    height: 28px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px 0 28px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border-1);
+}
+.dash-group-name {
+    font-weight: 600;
+    color: var(--fg-1);
+}
+.dash-group-summary {
+    color: var(--fg-3);
+}
+.dash-empty-row {
+    height: 32px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px 0 28px;
+    border-bottom: 1px solid var(--border-1);
     color: var(--fg-3);
 }

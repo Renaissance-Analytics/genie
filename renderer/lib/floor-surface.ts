@@ -20,6 +20,15 @@ import type { GenieView } from './view-route';
 export interface FloorSurface {
     /** Mount the Deck above the grid. */
     showDeck: boolean;
+    /**
+     * Mount the WORKFLOW DASHBOARD above the grid.
+     *
+     * Its own flag rather than a widened `showDeck`, because the two are different surfaces
+     * answering different questions — the Deck is a queue you clear, the Dashboard a board you
+     * read — and a single "show the cross-workspace thing" boolean would make the route unable
+     * to say which. They are also never both mounted: the route names one subject.
+     */
+    showDashboard: boolean;
     /** Conceal the grid with CSS. NOT a licence to unmount it. */
     hideGrid: boolean;
     /**
@@ -52,17 +61,24 @@ export interface FloorSurface {
 export function floorSurface(view: GenieView): FloorSurface {
     switch (view.kind) {
         case 'grid':
-            return { showDeck: false, hideGrid: false, showAgent: null, showGridChrome: true };
+            return { showDeck: false, showDashboard: false, hideGrid: false, showAgent: null, showGridChrome: true };
         case 'deck':
-            return { showDeck: true, hideGrid: true, showAgent: null, showGridChrome: false };
+            return { showDeck: true, showDashboard: false, hideGrid: true, showAgent: null, showGridChrome: false };
+        case 'dashboard':
+            // Conceals the grid exactly as the Deck does, and for the same reason: every panel
+            // owns a live xterm bound to a pty, so a surface shown above it may never unmount
+            // it. The grid's own chrome goes with the grid — a layout picker above a board
+            // about agents is chrome for somewhere else.
+            return { showDeck: false, showDashboard: true, hideGrid: true, showAgent: null, showGridChrome: false };
         case 'workbench':
-            return { showDeck: false, hideGrid: false, showAgent: null, showGridChrome: true };
+            return { showDeck: false, showDashboard: false, hideGrid: false, showAgent: null, showGridChrome: true };
         case 'agent':
             // The Agent view EXISTS now, so an agent route resolves to that agent instead
             // of falling back to the grid. The grid is concealed, never unmounted -- the
             // same live-xterm hazard the Deck carries.
             return {
                 showDeck: false,
+                showDashboard: false,
                 hideGrid: true,
                 showAgent: view.agentId,
                 // The Agent view has its own header with the controls that act on an agent. A

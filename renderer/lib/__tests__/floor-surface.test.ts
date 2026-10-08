@@ -9,6 +9,7 @@ describe('floorSurface', () => {
         // the Deck and every panel test on every platform failed.
         expect(floorSurface({ kind: 'grid' })).toEqual({
             showDeck: false,
+            showDashboard: false,
             hideGrid: false,
             showAgent: null,
             showGridChrome: true,
@@ -18,6 +19,7 @@ describe('floorSurface', () => {
     it('shows the Deck and hides the grid for the Deck view', () => {
         expect(floorSurface({ kind: 'deck' })).toEqual({
             showDeck: true,
+            showDashboard: false,
             hideGrid: true,
             showAgent: null,
             // The grid's own chrome goes with the grid — see `showGridChrome`.
@@ -28,6 +30,7 @@ describe('floorSurface', () => {
     it('shows the grid for the Workbench', () => {
         expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' })).toEqual({
             showDeck: false,
+            showDashboard: false,
             hideGrid: false,
             showAgent: null,
             showGridChrome: true,
@@ -39,6 +42,7 @@ describe('floorSurface', () => {
         // It exists now, so the link resolves to what it names.
         expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
             showDeck: false,
+            showDashboard: false,
             hideGrid: true,
             showAgent: 'a1',
             showGridChrome: false,
@@ -51,16 +55,19 @@ describe('floorSurface', () => {
         for (const view of [
             { kind: 'grid' } as const,
             { kind: 'deck' } as const,
+            { kind: 'dashboard' } as const,
             { kind: 'workbench', workspaceId: 'w' } as const,
             { kind: 'agent', agentId: 'a', tab: null } as const,
         ]) {
             const s = floorSurface(view);
             // The CLOSED LIST is the assertion: a new flag has to be added here, in a diff a
-            // human reads, which is how `showGridChrome` arrived. A flag named anything like
-            // `unmountGrid` could not be added without this line changing.
+            // human reads, which is how `showGridChrome` arrived — and how `showDashboard`
+            // arrived, because this line went red the moment it was added. A flag named
+            // anything like `unmountGrid` could not get in without this changing.
             expect(Object.keys(s).sort()).toEqual([
                 'hideGrid',
                 'showAgent',
+                'showDashboard',
                 'showDeck',
                 'showGridChrome',
             ]);
@@ -111,6 +118,7 @@ describe('the agent route now RENDERS the agent view', () => {
         // now, so a link to an agent resolves to that agent.
         expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
             showDeck: false,
+            showDashboard: false,
             hideGrid: true,
             showAgent: 'a1',
             showGridChrome: false,
@@ -184,6 +192,40 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
             { kind: 'agent', agentId: 'a1', tab: null } as const,
         ]) {
             expect(Object.keys(floorSurface(view))).not.toContain('unmountGrid');
+        }
+    });
+});
+
+
+describe('the Workflow Dashboard surface', () => {
+    it('mounts the Dashboard and conceals — never unmounts — the grid', () => {
+        /**
+         * The same contract as the Deck, and the same reason: a panel's xterm is bound to a
+         * live pty, so a surface shown above the grid conceals it. `showDashboard` is its own
+         * flag rather than a widened `showDeck` because the two surfaces answer different
+         * questions and the route has to be able to say which one it means.
+         */
+        expect(floorSurface({ kind: 'dashboard' })).toEqual({
+            showDeck: false,
+            showDashboard: true,
+            hideGrid: true,
+            showAgent: null,
+            showGridChrome: false,
+        });
+    });
+
+    it('is never mounted at the same time as the Deck', () => {
+        // They are siblings, not layers. A route names one subject, and a state where both are
+        // mounted would be two cross-workspace surfaces competing for the same space.
+        for (const view of [
+            { kind: 'deck' } as const,
+            { kind: 'dashboard' } as const,
+            { kind: 'grid' } as const,
+            { kind: 'workbench', workspaceId: 'w1' } as const,
+            { kind: 'agent', agentId: 'a1', tab: null } as const,
+        ]) {
+            const surface = floorSurface(view);
+            expect(surface.showDeck && surface.showDashboard).toBe(false);
         }
     });
 });

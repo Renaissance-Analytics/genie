@@ -176,3 +176,33 @@ describe('mergeViewRoute', () => {
         expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'deck' })).toEqual({ tags: ['a', 'b'] });
     });
 });
+
+
+/**
+ * THE DASHBOARD ROUTE — `?view=dashboard`.
+ *
+ * Added with the surface itself. Named rather than made the default: the Deck is what opens,
+ * and the board's own title bars read `genie://dashboard?group=workspace`, so the Dashboard is
+ * a view you ask for. Making it the default is the owner's call and a separate change — the
+ * comment on `GenieView['grid']` records what happened the last time a default moved before
+ * the surface behind it was ready (E2E red on all three platforms).
+ */
+describe('the Dashboard route', () => {
+    it('parses ?view=dashboard', () => {
+        expect(parseViewRoute({ view: 'dashboard' })).toEqual({ kind: 'dashboard' });
+    });
+
+    it('round-trips through viewRouteQuery', () => {
+        // The two halves must agree or a link built by one is misread by the other — the
+        // failure mode the `grid` comment in `view-route.ts` warns about by name.
+        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({ view: 'dashboard' });
+        expect(parseViewRoute(viewRouteQuery({ kind: 'dashboard' }))).toEqual({ kind: 'dashboard' });
+    });
+
+    it('is beaten by an explicit agent, like every other named view', () => {
+        // A deep link naming an agent is the more specific subject. Asserted so the new branch
+        // cannot be inserted ahead of that rule by accident.
+        expect(parseViewRoute({ view: 'dashboard', agent: 'a1' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null });
+    });
+});
