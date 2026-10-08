@@ -190,6 +190,12 @@ import { Deck } from '../components/Master/Deck';
 import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
 import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
 import { probeTynnAuth } from '../lib/auth-probe';
+import {
+    closeDrawerNext,
+    isDrawerOpen,
+    somethingCoversTheFloor,
+    type DrawerId,
+} from '../lib/drawers';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -479,7 +485,6 @@ function MasterInner() {
     /** Which workspace the Share modal is open for (right-click → Share workspace). */
     const [shareWsId, setShareWsId] = useState<string | null>(null);
     /** The global Sharing flyout — what is shared, workstation links, Connect to…. */
-    const [sharingOpen, setSharingOpen] = useState(false);
     /** The workspace whose AGENT ROSTER is open — the registry plus the
      *  `.agents/*` files Genie has not registered (genie#465). */
     const [agentsWsId, setAgentsWsId] = useState<string | null>(null);
@@ -577,6 +582,18 @@ function MasterInner() {
     // workspace so a recipe's git/gh terminal steps default their cwd to the
     // repo — see recipeLaunchScope + RecipeLauncher.
     const [recipeLauncherOpen, setRecipeLauncherOpen] = useState(false);
+    /**
+     * ONE DRAWER AT A TIME — P7, and the owner's ruling on the conflict with the Lists dock.
+     *
+     * This replaces ELEVEN independent booleans that were OR-ed by hand to answer one question. The
+     * old comment on that OR said what was wrong with it: *"a missing flag means Escape navigates out
+     * from under an open panel."* Two-open-at-once is now unrepresentable rather than merely absent.
+     *
+     * The palette, first run and the recipe launcher keep their own state DELIBERATELY — see
+     * `lib/drawers.ts`. ⌘K must open over a flyout (genie#820 was that bug), first run must not be
+     * cancellable by a flyout, and neither competes for the right edge.
+     */
+    const [openDrawer, setOpenDrawer] = useState<DrawerId | null>(null);
     // Launchable plugin PANELS (enabled + `ui.panel`-granted plugins). Client-local
     // (like editorFor): the panel renders in whichever window the user sits at.
     const [pluginPanels, setPluginPanels] = useState<PluginPanelView[]>([]);
@@ -594,9 +611,8 @@ function MasterInner() {
     const [devSites, setDevSites] = useState<Record<string, DevSiteInfo[]>>({});
 
     const [onboardingOpen, setOnboardingOpen] = useState(false);
-    const [genieOsOpen, setGenieOsOpen] = useState(false);
     // The System Workspace row is hidden by default; the sidebar's chip toggles
-    // it. Distinct from `genieOsOpen`, which is the full-screen Genie OS layer.
+    // it. Distinct from the `genie-os` DRAWER, which is the full-screen Genie OS layer.
     const [systemRevealed, setSystemRevealed] = useState(false);
     // Hibernated workspaces are hidden by default (genie#705) — the point of
     // hibernating one is to get it out of the way. Persisted, so the choice
@@ -619,7 +635,7 @@ function MasterInner() {
         if (isRemoteWindow()) return;
         void api().app.genieOsStatus().then(({ setup }) => {
             setOnboardingOpen(!setup);
-            if (!setup) setGenieOsOpen(true);
+            if (!setup) setOpenDrawer('genie-os');
         });
     }, []);
     useEffect(() => {
@@ -642,10 +658,8 @@ function MasterInner() {
     }, [workspaces]);
     // Docs flyout (the ? titlebar button toggles this in-window panel rather
     // than opening a separate BrowserWindow).
-    const [docsOpen, setDocsOpen] = useState(false);
     // Issue Watch: the flyout (scoped to a chosen workspace) + per-workspace
     // unread counts by type (the sidebar 3-dot pill: Issues · PRs · Dependabot).
-    const [issueWatchOpen, setIssueWatchOpen] = useState(false);
     const [issueWatchWsId, setIssueWatchWsId] = useState<string | null>(null);
     const [issueWatchCounts, setIssueWatchCounts] = useState<
         Record<string, WatchTypeCounts>
@@ -661,16 +675,14 @@ function MasterInner() {
     }, []);
     const openIssueWatch = useCallback((wsId: string) => {
         setIssueWatchWsId(wsId);
-        setIssueWatchOpen(true);
+        setOpenDrawer('issuewatch');
     }, []);
     // Task Manager: cross-workspace view of every spawned background process.
-    const [taskManagerOpen, setTaskManagerOpen] = useState(false);
     // Opening from the tray sends a one-shot event; mirror it into the flyout.
     useEffect(() => {
-        return api().on.openTaskManager?.(() => setTaskManagerOpen(true));
+        return api().on.openTaskManager?.(() => setOpenDrawer('tasks'));
     }, []);
     // AgentInbox: the human panel + an AGENT-LAG badge on its titlebar button.
-    const [agentInboxOpen, setAgentInboxOpen] = useState(false);
     const [agentInboxLag, setAgentInboxLag] = useState(0);
     // genie #64 — the badge counts messages the AGENTS haven't received/ACKed, not
     // messages the human hasn't read. It used to bump on every `agentinbox:message`
@@ -708,7 +720,6 @@ function MasterInner() {
     //
     // There is no interval anywhere in this path. A poller would both lag the
     // thing it reports and keep waking the renderer to be told nothing happened.
-    const [flowsOpen, setFlowsOpen] = useState(false);
     /**
      * A VIRTUAL WORKSTATION CAME ONLINE since you last looked.
      *
@@ -771,7 +782,6 @@ function MasterInner() {
     // PendingQuestions inbox: the top-bar question icon + its live pending count.
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
-    const [questionsOpen, setQuestionsOpen] = useState(false);
     /**
      * Which Needs-you row has its answer form open.
      *
@@ -786,7 +796,6 @@ function MasterInner() {
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
     // unlike a setting it has no business reaching another workstation.
-    const [listsOpen, setListsOpen] = useState(false);
     const [listsPinned, setListsPinned] = useState(false);
     useEffect(() => {
         try {
@@ -795,16 +804,21 @@ function MasterInner() {
                 // A panel that was docked when the window closed comes back
                 // docked. Restoring the preference but not the panel would
                 // leave the pin set with nothing on screen to show for it.
-                setListsOpen(true);
+                setOpenDrawer('lists');
             }
         } catch {
             /* a browser with storage blocked simply starts unpinned */
         }
     }, []);
-    // The two flags stay separate on purpose: `listsOpen` is "the panel is
+    // The two stay separate on purpose: `openDrawer === 'lists'` is "the panel is
     // showing", `listsPinned` is "when it shows, dock it rather than float it".
     // Folding them together is what made the header icon a dead control while
     // the panel was docked — it toggled a state nothing rendered.
+    //
+    // And the pin is why Lists is not simply a drawer like the other ten. Owner's
+    // ruling, asked directly: "a pinned dock is NOT a drawer" — a pin exists so the
+    // panel stays up WHILE you work, so `somethingCoversTheFloor` excludes a pinned
+    // Lists from the overlay question even though it occupies the drawer slot.
     const toggleListsPin = useCallback(() => {
         setListsPinned((was) => {
             const now = !was;
@@ -815,7 +829,7 @@ function MasterInner() {
             }
             // Pinning is done FROM the open panel, so it stays open: changing
             // HOW it is shown must never be a way to lose it.
-            setListsOpen(true);
+            setOpenDrawer('lists');
             return now;
         });
     }, []);
@@ -847,7 +861,6 @@ function MasterInner() {
         });
     }, [activeWorkspaceId]);
     // The GApp Store drawer, opened from the App Tray's icon in the header.
-    const [appStoreOpen, setAppStoreOpen] = useState(false);
     const [questionCount, setQuestionCount] = useState(0);
     useEffect(() => {
         // #60: badge how many QUESTIONS are waiting (incl. DND-deferred) — not how
@@ -942,7 +955,6 @@ function MasterInner() {
     // boot when something's missing).
     const { caps: githubCaps, hasMissing: githubNeedsResolve } =
         useGithubCapabilities();
-    const [githubCapsOpen, setGithubCapsOpen] = useState(false);
     // Auto-raise the resolve flyout ONCE per session the first time the boot
     // check reports a missing permission. Dismissible — the header warning
     // stays for resolving later. The ref guards against re-raising on every
@@ -958,7 +970,7 @@ function MasterInner() {
             new URLSearchParams(window.location.search).has('stage');
         if (onStage) return;
         bootCapModalShown.current = true;
-        setGithubCapsOpen(true);
+        setOpenDrawer('github-caps');
     }, [githubNeedsResolve]);
     // Max panels visible per workspace (Settings → max_views, default 4).
     const [maxViews, setMaxViews] = useState(DEFAULT_MAX_VIEWS);
@@ -2290,7 +2302,7 @@ function MasterInner() {
                         setFocusId(id);
                         setMaximizedId((cur) => surfaceMaximized(cur, id));
                     },
-                    revealSystem: () => setGenieOsOpen(true),
+                    revealSystem: () => setOpenDrawer('genie-os'),
                     emitOpenInPanel,
                 });
                 void api().editor.openFileResult(requestId, result);
@@ -2585,21 +2597,17 @@ function MasterInner() {
     });
     keys.current = {
         view: view.kind,
-        overlayOpen:
-            sharingOpen
-            || paletteOpen
-            || recipeLauncherOpen
-            || onboardingOpen
-            || genieOsOpen
-            || docsOpen
-            || issueWatchOpen
-            || taskManagerOpen
-            || agentInboxOpen
-            || flowsOpen
-            || questionsOpen
-            || listsOpen
-            || appStoreOpen
-            || githubCapsOpen,
+        // ONE CALL, not a fourteen-term OR maintained by hand. The three non-drawers are passed
+        // explicitly, so adding a fourth is a type error rather than a forgotten clause — and a
+        // PINNED Lists panel deliberately does not count, because it sits beside the content rather
+        // than over it (`master.css`: the reserve exists "so a pinned panel covers nothing").
+        overlayOpen: somethingCoversTheFloor({
+            openDrawer,
+            listsPinned,
+            paletteOpen,
+            onboardingOpen,
+            recipeLauncherOpen,
+        }),
         query: pageQuery,
         sessions,
         // The SAME ranking the band renders, from the same function — a second ordering here
@@ -2653,10 +2661,10 @@ function MasterInner() {
                 switch (featureId) {
                     case 'remote-host':
                     case 'sharing':
-                        setSharingOpen(true);
+                        setOpenDrawer('sharing');
                         break;
                     case 'plugins-appstore':
-                        setAppStoreOpen(true);
+                        setOpenDrawer('appstore');
                         break;
                     case 'knowledge-graph':
                         // A main-owned window, not a flyout. Guarded so it no-ops if
@@ -2664,31 +2672,31 @@ function MasterInner() {
                         if (hasGenieBridge()) void api().knowledge.openWindow().catch(() => {});
                         break;
                     case 'agent-inbox':
-                        setAgentInboxOpen(true);
+                        setOpenDrawer('agent-inbox');
                         break;
                     case 'issuewatch':
-                        setIssueWatchOpen(true);
+                        setOpenDrawer('issuewatch');
                         break;
                     case 'flows':
-                        setFlowsOpen(true);
+                        setOpenDrawer('flows');
                         break;
                     case 'lists':
-                        setListsOpen(true);
+                        setOpenDrawer('lists');
                         break;
                     case 'questions':
-                        setQuestionsOpen(true);
+                        setOpenDrawer('questions');
                         break;
                     case 'docs':
-                        setDocsOpen(true);
+                        setOpenDrawer('docs');
                         break;
                     case 'tasks':
-                        setTaskManagerOpen(true);
+                        setOpenDrawer('tasks');
                         break;
                     case 'github-caps':
-                        setGithubCapsOpen(true);
+                        setOpenDrawer('github-caps');
                         break;
                     case 'genie-os':
-                        setGenieOsOpen(true);
+                        setOpenDrawer('genie-os');
                         break;
                     // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
                     // that the Deck is the default. `mergeViewRoute` rather than
@@ -2875,7 +2883,7 @@ function MasterInner() {
     }
 
     return (
-        <div className={`gwrap${listsPinned && listsOpen ? ' lists-docked' : ''}`} id="app">
+        <div className={`gwrap${listsPinned && isDrawerOpen(openDrawer, 'lists') ? ' lists-docked' : ''}`} id="app">
             {/* TWO FULL-HEIGHT COLUMNS:
                   LEFT  — the workspace chooser (icon rail + search/list
                           sidebar), under a drag strip that owns the window's
@@ -3011,9 +3019,9 @@ function MasterInner() {
                         // the Deck (`stationSignals`). What is left is what this bar still does: a
                         // Docs menu item, the App Tray's store link, and the setup item while
                         // first run is unfinished.
-                        onShowDocs={() => setDocsOpen((o) => !o)}
-                        onShowAppStore={() => setAppStoreOpen((o) => !o)}
-                        onShowGenieOs={() => setGenieOsOpen((open) => !open)}
+                        onShowDocs={() => setOpenDrawer((d) => (d === 'docs' ? null : 'docs'))}
+                        onShowAppStore={() => setOpenDrawer((d) => (d === 'appstore' ? null : 'appstore'))}
+                        onShowGenieOs={() => setOpenDrawer((d) => (d === 'genie-os' ? null : 'genie-os'))}
                         setupIncomplete={onboardingOpen}
                         tynnAccount={tynnAccountName}
                         onSignInTynn={() => void api().auth.startSignIn('tynn').catch(() => {})}
@@ -3196,7 +3204,7 @@ function MasterInner() {
                                      * flyout is no longer the way to answer a multi-part,
                                      * multi-select or free-text question.
                                      */
-                                    onOpenQuestion={() => setQuestionsOpen(true)}
+                                    onOpenQuestion={() => setOpenDrawer('questions')}
                                     /**
                                      * THE SIGNALS THE ICONS CARRIED.
                                      *
@@ -3309,20 +3317,20 @@ function MasterInner() {
                     // `is-active` is the SHIMMER; `is-open` is only the slide-in.
                     // The chase used to key on is-open, so it ran for as long as
                     // the panel was up — an activity animation that meant "open".
-                    className={`genie-os-layer${genieOsOpen ? ' is-open' : ''}${
+                    className={`genie-os-layer${isDrawerOpen(openDrawer, 'genie-os') ? ' is-open' : ''}${
                         genieOsSpec && streamingTerms.has(genieOsSpec.id) ? ' is-active' : ''
                     }`}
-                    aria-hidden={!genieOsOpen}
+                    aria-hidden={!isDrawerOpen(openDrawer, 'genie-os')}
                 >
-                    <button className="genie-os-backdrop" aria-label="Close Genie OS" onClick={() => setGenieOsOpen(false)} />
+                    <button className="genie-os-backdrop" aria-label="Close Genie OS" onClick={() => setOpenDrawer((d) => closeDrawerNext(d, 'genie-os'))} />
                     <aside className="genie-os-flyout" aria-label="Genie OS agent">
                         <AgentTerminal
                             spec={genieOsSpec}
                             workspace={systemWorkspace}
-                            focused={genieOsOpen}
+                            focused={isDrawerOpen(openDrawer, 'genie-os')}
                             attention={attentionIds.has(genieOsSpec.id)}
                             onAttentionClear={() => clearAttention(genieOsSpec.id)}
-                            onClose={() => setGenieOsOpen(false)}
+                            onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'genie-os'))}
                             onAgentSettings={() => setAgentEditSpec(genieOsSpec)}
                             onRestartAgent={(mode) => void restartAgentSpec(genieOsSpec, mode)}
                             onMarkActive={() => markActive(genieOsSpec.id)}
@@ -3366,40 +3374,41 @@ function MasterInner() {
                 />
             )}
 
-            <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
+            <DocsFlyout open={isDrawerOpen(openDrawer, 'docs')} onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'docs'))} />
             <IssueWatchFlyout
-                open={issueWatchOpen}
+                open={isDrawerOpen(openDrawer, 'issuewatch')}
                 workspaceId={issueWatchWsId}
-                onClose={() => setIssueWatchOpen(false)}
-                onResolveGithub={() => {
-                    setIssueWatchOpen(false);
-                    setGithubCapsOpen(true);
-                }}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'issuewatch'))}
+                // ONE call, where it used to take two. Closing IssueWatch before opening
+                // GitHub capabilities was necessary while each had its own boolean; with a
+                // single slot the open IS the close, and a stale second setState could only
+                // ever race it. A small demonstration of what the refactor buys.
+                onResolveGithub={() => setOpenDrawer('github-caps')}
             />
             <TaskManagerFlyout
-                open={taskManagerOpen}
-                onClose={() => setTaskManagerOpen(false)}
+                open={isDrawerOpen(openDrawer, 'tasks')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'tasks'))}
             />
             <AgentInboxFlyout
-                open={agentInboxOpen}
-                onClose={() => setAgentInboxOpen(false)}
+                open={isDrawerOpen(openDrawer, 'agent-inbox')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'agent-inbox'))}
             />
-            <FlowManagerFlyout open={flowsOpen} onClose={() => setFlowsOpen(false)} />
+            <FlowManagerFlyout open={isDrawerOpen(openDrawer, 'flows')} onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'flows'))} />
             {/* The store lists installed apps AND a ribboned launcher for every
                 workspace that BUILDS one, so a developer finds their own app
                 where they already look for everyone else's. It is handed the
                 SAME `launchGapp` the workspace row and the Command Window use —
                 one launch, one busy state, one toast. */}
             <AppStoreFlyout
-                open={appStoreOpen}
-                onClose={() => setAppStoreOpen(false)}
+                open={isDrawerOpen(openDrawer, 'appstore')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'appstore'))}
                 workspaces={workspaces}
                 onLaunchGapp={launchGapp}
                 launchingGappWsId={launchingGappWsId}
             />
             <QuestionInboxFlyout
-                open={questionsOpen}
-                onClose={() => setQuestionsOpen(false)}
+                open={isDrawerOpen(openDrawer, 'questions')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'questions'))}
             />
             {/* Renders in one of two shapes, chosen inside the component:
                 floating over the Floor, or docked in the right-hand gutter that
@@ -3408,16 +3417,16 @@ function MasterInner() {
                 is pulled back out of it, so pinning never moves the header
                 icons. */}
             <ListsFlyout
-                open={listsOpen}
-                onClose={() => setListsOpen(false)}
+                open={isDrawerOpen(openDrawer, 'lists')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'lists'))}
                 workspaceId={activeWorkspaceId}
                 pinned={listsPinned}
                 onTogglePin={toggleListsPin}
             />
             <GithubCapabilitiesFlyout
-                open={githubCapsOpen}
+                open={isDrawerOpen(openDrawer, 'github-caps')}
                 caps={githubCaps}
-                onClose={() => setGithubCapsOpen(false)}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'github-caps'))}
             />
 
             <PromptHost />
@@ -3537,12 +3546,12 @@ function MasterInner() {
             })()}
 
             <SharingFlyout
-                open={sharingOpen}
-                onClose={() => setSharingOpen(false)}
+                open={isDrawerOpen(openDrawer, 'sharing')}
+                onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'sharing'))}
                 workspaces={workspaces}
                 tynnHost={hosts.tynn}
                 onShareWorkspace={(id) => {
-                    setSharingOpen(false);
+                    setOpenDrawer((d) => closeDrawerNext(d, 'sharing'));
                     setShareWsId(id);
                 }}
             />
@@ -4842,7 +4851,7 @@ function TitleBar({
      * FOURTEEN PROPS ARE GONE with the icon cluster: `onShowAgentInbox`, `agentInboxLag`,
      * `onShowSharing`, `questionCount`, `onShowLists`, `listsUserCount`, `onShowKnowledge`,
      * `onShowFlows`, `flowsBusy`, `onShowIssueWatch`, `issueWatchUnread`, `issueWatchUnknown`,
-     * `githubNeedsResolve`, `onShowGithubCaps`, `genieOsActive`, `genieOsOpen`.
+     * `githubNeedsResolve`, `onShowGithubCaps`, `genieOsActive`, and the Genie OS open flag.
      *
      * Every one of them existed to render or badge an icon. The features are reached through ⌘K
      * (`FEATURE_SURFACES`, with a CI guard), and the four that were also live SIGNALS —
