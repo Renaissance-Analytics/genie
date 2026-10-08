@@ -51,16 +51,6 @@ describe('mergeDeclared — a declared field wins', () => {
         expect(m.turn).toEqual({ state: 'tool', since: NOW });
     });
 
-    it('takes a declared transcript over the projected mail', () => {
-        // The floor fills `transcript` from the AgentInbox thread and the last handoff. Once
-        // a real conversation arrives, showing mail instead would be showing the wrong thing.
-        const m = mergeDeclared(
-            floor(),
-            declared({ transcript: [{ id: 'd1', role: 'user', content: 'the real turn' }] }),
-        );
-        expect(m.transcript).toEqual([{ id: 'd1', role: 'user', content: 'the real turn' }]);
-    });
-
     it('takes declared usage, plan and commands, which the floor never has', () => {
         const m = mergeDeclared(
             floor(),
@@ -80,6 +70,203 @@ describe('mergeDeclared — a declared field wins', () => {
         // declared the Agent view shows the Conversation tab instead.
         expect(sessionFidelity(floor())).toBe('observed');
         expect(sessionFidelity(mergeDeclared(floor(), declared({ plan: [] })))).toBe('declared');
+    });
+});
+
+/**
+ * THE TRANSCRIPT IS ONE CONVERSATION, not two — P7's *"human↔agent DMs fold into the Agent
+ * Conversation"*.
+ *
+ * ## The defect this replaces
+ *
+ * The rule used to be `declared.transcript.length > 0 ? declared.transcript : floor.transcript`
+ * — the declared conversation REPLACES the projected one. Read as "a real conversation beats
+ * projected mail", that sounds right. It is not, and **measuring a real claude ACP session is
+ * what settled it** (`handshake.real.test.ts`, logged on every run):
+ *
+ * ```
+ * [acp transcript] live=agent_message_chunk,notice,usage_update | replay=(0) none
+ * ```
+ *
+ * The declared stream carries the **agent's voice only**. The owner's prompt is never echoed
+ * as `user_message_chunk` while the session runs, and `session/load` on the CLI's own session
+ * id replays **nothing at all**. So the old rule deleted the entire human half of the
+ * conversation the moment the agent said one word — and it deleted it from the one surface P7
+ * makes the place you talk to an agent.
+ *
+ * It also settles the fear that argued for replacement in the first place. A DM to an ACP agent
+ * is delivered as a prompt (`acpMailSender`), so concatenating looked like it would show every
+ * DM twice. It cannot: there is no second copy to collide with.
+ *
+ * ## Ordering, which is why `Message.at` exists
+ *
+ * Mail arriving DURING a session is the normal case for a working agent, so appending one
+ * stream to the other would put the owner's interruption above the reply it provoked. Both
+ * producers stamp `at`, and the merge is by time.
+ */
+describe('mergeDeclared — the human half of the conversation survives', () => {
+    const at = (n: number) => NOW + n;
+
+    it('INTERLEAVES the DM thread with the declared turn, by time', () => {
+        const m = mergeDeclared(
+            floor({
+                transcript: [
+                    { id: 'm1', role: 'user', content: 'start on the lists dock', at: at(0) },
+                    { id: 'm2', role: 'user', content: 'actually do the icons first', at: at(20) },
+                ],
+            }),
+            declared({
+                transcript: [
+                    { id: 'd1', role: 'agent', content: 'reading master.tsx', at: at(10) },
+                    { id: 'd2', role: 'agent', content: 'switching to the icons', at: at(30) },
+                ],
+            }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'd1', 'm2', 'd2']);
+    });
+
+    it('keeps a sibling agent\'s DM and its author, which ACP cannot express at all', () => {
+        // The sharpest case: ACP has no notion of an author, so a message from another agent
+        // exists ONLY on the floor side. Replacing the floor transcript lost it outright.
+        const m = mergeDeclared(
+            floor({
+                transcript: [{ id: 'm1', role: 'user', author: 'prism', content: '0.5.0 is up', at: at(0) }],
+            }),
+            declared({ transcript: [{ id: 'd1', role: 'agent', content: 'installing', at: at(5) }] }),
+        );
+        expect(m.transcript).toEqual([
+            { id: 'm1', role: 'user', author: 'prism', content: '0.5.0 is up', at: at(0) },
+            { id: 'd1', role: 'agent', content: 'installing', at: at(5) },
+        ]);
+    });
+
+    it('keeps the handoff, which is the floor\'s and never the session\'s', () => {
+        // `handoff:<agentId>` is written by `imDone` and projected by the floor. A resumed
+        // session replays nothing, so this is the only record of what the last run did.
+        const m = mergeDeclared(
+            floor({
+                transcript: [{ id: 'handoff:ag-1', role: 'agent', content: 'left the dock undone', at: at(0) }],
+            }),
+            declared({ transcript: [{ id: 'd1', role: 'agent', content: 'picking it up', at: at(1) }] }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['handoff:ag-1', 'd1']);
+    });
+
+    it('appends an UNSTAMPED declared stream rather than guessing where it goes', () => {
+        // A `reportState` harness need not carry timestamps. "I do not know when" has one
+        // honest position relative to times we do know, and that is last — which is also what
+        // the surface did before, so no ordering information is lost.
+        const m = mergeDeclared(
+            floor({ transcript: [{ id: 'm1', role: 'user', content: 'hello', at: at(500) }] }),
+            declared({ transcript: [{ id: 'd1', role: 'agent', content: 'hi' }] }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'd1']);
+    });
+
+    it('keeps BOTH streams in order when neither is stamped at all', () => {
+        // The comparator's sharp edge: `Infinity - Infinity` is NaN, and a comparator returning NaN
+        // makes `Array.prototype.sort` implementation-defined by spec. V8 happens to treat it as 0
+        // and stay stable, which is exactly the kind of accident that holds until it does not.
+        const m = mergeDeclared(
+            floor({
+                transcript: [
+                    { id: 'm1', role: 'user', content: 'one' },
+                    { id: 'm2', role: 'user', content: 'two' },
+                ],
+            }),
+            declared({
+                transcript: [
+                    { id: 'd1', role: 'agent', content: 'three' },
+                    { id: 'd2', role: 'agent', content: 'four' },
+                ],
+            }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'm2', 'd1', 'd2']);
+    });
+
+    /**
+     * A CODEX ECHO MUST NOT DOUBLE A DM — the case C23's original reasoning worried about, which is
+     * false for claude and TRUE for codex.
+     *
+     * Measured (`handshake-codex.real.test.ts`): codex reports the user's turn as
+     * `user_message_chunk` — once per turn on prism-acp 0.5.3, and twice before it, which was prism's
+     * own missing lifecycle guard rather than codex's doing. Either way one copy lands in the DECLARED
+     * transcript, and a DM delivered through `acpMailSender` is ALSO in the AgentInbox thread, hence
+     * in the floor one. Two streams, one message, both legitimate — which no fix on either side
+     * changes.
+     *
+     * The FLOOR copy wins, and that is the whole reason this is resolvable: it carries `author`, so
+     * it can say a sibling agent sent it. ACP has no notion of an author, so the echo is anonymous
+     * and strictly the poorer record of the same text.
+     *
+     * One-to-one, so two genuinely identical messages still show as two.
+     */
+    it('drops a declared echo of a message the FLOOR already has', () => {
+        const m = mergeDeclared(
+            floor({
+                transcript: [{ id: 'm1', role: 'user', author: 'kora', content: 'rebase onto main', at: at(0) }],
+            }),
+            declared({
+                transcript: [
+                    { id: 'u-0', role: 'user', author: null, content: 'rebase onto main', at: at(1) },
+                    { id: 'd1', role: 'agent', author: null, content: 'rebasing', at: at(2) },
+                ],
+            }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'd1']);
+        // And the one kept is the one that knows WHO.
+        expect(m.transcript[0]!.author).toBe('kora');
+    });
+
+    it('keeps a declared user message the floor does NOT have', () => {
+        // The positive control: suppression is about the floor already holding that text, not about a
+        // declared message being `user`. The owner's Conversation prompt has no mail behind it.
+        const m = mergeDeclared(
+            floor({ transcript: [{ id: 'm1', role: 'user', content: 'one thing', at: at(0) }] }),
+            declared({ transcript: [{ id: 'h1', role: 'user', content: 'another thing', at: at(1) }] }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'h1']);
+    });
+
+    it('collapses ONE echo per floor message, not every repeat', () => {
+        // Two separate DMs of the same text are two messages, and two echoes of them are two echoes.
+        // A set-membership test would keep one and drop the rest.
+        const m = mergeDeclared(
+            floor({
+                transcript: [
+                    { id: 'm1', role: 'user', content: 'again', at: at(0) },
+                    { id: 'm2', role: 'user', content: 'again', at: at(2) },
+                ],
+            }),
+            declared({
+                transcript: [
+                    { id: 'u1', role: 'user', content: 'again', at: at(1) },
+                    { id: 'u2', role: 'user', content: 'again', at: at(3) },
+                    { id: 'u3', role: 'user', content: 'again', at: at(4) },
+                ],
+            }),
+        );
+        // Two floor messages absorb two echoes; the third has nothing left to match.
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'm2', 'u3']);
+    });
+
+    it('never drops an AGENT message that happens to repeat a human one', () => {
+        // Roles are not interchangeable: an agent quoting the owner back is the agent speaking.
+        const m = mergeDeclared(
+            floor({ transcript: [{ id: 'm1', role: 'user', content: 'ship it', at: at(0) }] }),
+            declared({ transcript: [{ id: 'd1', role: 'agent', content: 'ship it', at: at(1) }] }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'd1']);
+    });
+
+    it('puts the floor first when two messages share a timestamp', () => {
+        // Mail is stamped when it ARRIVES and the agent's reply when Genie sees it; at equal
+        // resolution the prompt came first, and a stable answer beats a coin toss.
+        const m = mergeDeclared(
+            floor({ transcript: [{ id: 'm1', role: 'user', content: 'go', at: at(7) }] }),
+            declared({ transcript: [{ id: 'd1', role: 'agent', content: 'ok', at: at(7) }] }),
+        );
+        expect(m.transcript.map((x) => x.id)).toEqual(['m1', 'd1']);
     });
 });
 

@@ -1,8 +1,9 @@
-import { applySessionUpdate, type AcpSessionUpdate } from '../acp/update-to-session';
+import { applySessionUpdate, LIVE_MESSAGE_ID, type AcpSessionUpdate } from '../acp/update-to-session';
 import {
     emptyAgentSession,
     type AgentSession,
     type AgentSessionIdentity,
+    type Message,
     type PendingApproval,
 } from './model';
 import type { AgentEngine } from '../agents/budget';
@@ -74,6 +75,11 @@ interface TurnInFlight {
 export class DeclaredSessionStore {
     private readonly sessions = new Map<string, AgentSession>();
     private readonly turns = new Map<string, TurnInFlight>();
+    /** A counter, not a timestamp, so two prompts inside the same millisecond still get
+     *  distinct ids — see `recordHumanPromptForSpec` on why they must not coalesce. */
+    private humanPrompts = 0;
+    /** The same counter trick for a committed message with no id of its own — see `committed`. */
+    private mintedIds = 0;
 
     constructor(private readonly ports: DeclaredStorePorts) {}
 
@@ -110,7 +116,30 @@ export class DeclaredSessionStore {
         this.turns.delete(agentId);
 
         const now = this.ports.now();
-        const next: AgentSession = { ...current, turn: { state: 'idle', since: now }, live: null };
+        /**
+         * COMMIT the streaming message, do not delete it.
+         *
+         * This line used to be `live: null` with no commit, and the agent's last message of every
+         * turn was thrown away — for a one-reply turn, the entire reply. The test beside it
+         * asserted only that `live` was cleared, which is true and says nothing about where the
+         * words went, so the loss sat behind a green assertion. It became visible once P7 made
+         * Conversation the default surface: the answer appeared while it streamed and vanished
+         * when it finished.
+         *
+         * Clearing is still right — nothing is streaming any more — and it was load-bearing for a
+         * second reason that explains why the discard looked deliberate: the mapper ids an un-ided
+         * chunk `live`, so the NEXT turn's first chunk matches the previous turn's id and appends
+         * to it. Committing at the boundary closes the turn's message properly and keeps the two
+         * replies apart, which clearing only ever did by losing one of them.
+         */
+        const next: AgentSession = {
+            ...current,
+            turn: { state: 'idle', since: now },
+            transcript: current.live
+                ? [...current.transcript, this.committed(current.live)]
+                : current.transcript,
+            live: null,
+        };
         this.sessions.set(agentId, next);
         this.ports.record({
             agentId,
@@ -125,6 +154,23 @@ export class DeclaredSessionStore {
             tokensIn: null,
             tokensOut: null,
         });
+    }
+
+    /**
+     * A finished message, with a real id.
+     *
+     * `LIVE_MESSAGE_ID` is a placeholder the mapper uses when the agent sent no `messageId`, and it
+     * is only ever correct for the ONE message streaming right now. Committing it verbatim at each
+     * turn boundary gives two transcript entries the same id — and `AgentView` keys its rows on the
+     * id, so duplicate keys are the class of bug where the screen is right until a re-render and
+     * then one message shows another's content.
+     *
+     * A real `messageId` is left alone: the agent is telling us something, and overwriting it would
+     * discard the one handle a client has on a specific reply.
+     */
+    private committed(live: Message): Message {
+        if (live.id !== LIVE_MESSAGE_ID) return live;
+        return { ...live, id: `turn:${this.ports.now()}:${this.mintedIds++}` };
     }
 
     /** Forget an agent's session — the child exited, or the agent was deleted. */
@@ -197,6 +243,44 @@ export class DeclaredSessionStore {
             tokensIn: null,
             tokensOut: null,
         });
+    }
+
+    /**
+     * WHAT GENIE SENT — the owner's own prompt, which the agent never sends back.
+     *
+     * Measured against a real claude ACP session (`handshake.real.test.ts` logs it on every run):
+     * `live=agent_message_chunk,notice,usage_update`, and `session/load` on the CLI's own session
+     * id replays `(0) none`. The declared stream is the agent's voice and nothing else. So after
+     * the owner typed into the Conversation composer and the view re-read the sessions, the
+     * transcript held the reply and no record of the question — a surface showing answers to
+     * invisible prompts, which is the one P7 makes the place you talk to an agent.
+     *
+     * Folded through `apply` as a `user_message_chunk` rather than spliced into `transcript`
+     * directly: the mapper already owns id handling, chunk coalescing and the `at` stamp, and a
+     * second implementation of those would drift from the agent's own messages. It is also true
+     * on its face — Genie is reporting something it knows, in the protocol's own vocabulary.
+     *
+     * Called BEFORE the send, which is `promptSession`'s doing and matters here: `session/prompt`
+     * resolves at the END of a turn, so recording on its outcome would put the owner's question
+     * below its own answer — and against codex, which echoes the prompt mid-turn, a third copy where
+     * no tail-match could collapse it.
+     *
+     * A NO-OP when no session is open, unlike `addApprovalForSpec` which opens one. A parked agent is
+     * invisible unless the approval opens a session; a prompt with no session has nothing to be part
+     * of, and `promptSession` only reaches this once its three pre-send gates pass.
+     */
+    recordHumanPromptForSpec(specId: string, text: string): void {
+        const identity = this.ports.identityForSpec?.(specId) ?? null;
+        if (!identity) return;
+        if (!this.sessions.has(identity.agentId)) return;
+        this.apply(identity.agentId, {
+            sessionUpdate: 'user_message_chunk',
+            // Its OWN id, because `user_message_chunk` appends to the previous message when the
+            // ids match. That is right for a streamed chunk and wrong for two separate things the
+            // owner said — they would become one paragraph with no boundary.
+            messageId: `human:${this.ports.now()}:${this.humanPrompts++}`,
+            content: { type: 'text', text },
+        } as unknown as AcpSessionUpdate);
     }
 
     /**

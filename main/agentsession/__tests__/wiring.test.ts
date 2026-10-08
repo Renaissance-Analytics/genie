@@ -52,3 +52,30 @@ describe('the agentsession IPC seam', () => {
         expect(read('main/preload.ts')).not.toContain("ipcRenderer.invoke('agentsession:nonexistent')");
     });
 });
+
+/**
+ * THE RECORDER IS WIRED — the one port whose absence is invisible.
+ *
+ * Every other `SessionWritePorts` member fails loudly when unwired: no `promptFor` and the send
+ * reports `no-session`. `recordPrompt` is OPTIONAL, because a remote window may have no declared
+ * store, so forgetting it in `main/ipc.ts` costs nothing at the type level and nothing at runtime
+ * — the prompt still lands, the agent still answers, and the owner's half of the conversation is
+ * simply missing. That is the shape of defect this whole phase has been clearing out: built,
+ * tested, not wired.
+ */
+describe('the Conversation records what the owner said', () => {
+    it('supplies recordPrompt from the declared store', () => {
+        const src = read('main/ipc.ts');
+        expect(src).toContain('recordPrompt: (specId, text) => declaredSessions.recordHumanPromptForSpec(specId, text)');
+    });
+
+    it('imports the store it records into', () => {
+        expect(read('main/ipc.ts')).toMatch(/import \{[^}]*declaredSessions[^}]*\} from '\.\/agentsession\/bindings'/);
+    });
+
+    it('positive control: the guard can tell a present wire from an absent one', () => {
+        // A method nobody calls must NOT match, or both assertions above would pass against any
+        // file that merely mentions the store.
+        expect(read('main/ipc.ts')).not.toContain('declaredSessions.recordNothingAtAll(');
+    });
+});

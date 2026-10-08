@@ -102,6 +102,129 @@ describe('promptSession', () => {
     });
 });
 
+/**
+ * THE PROMPT IS PART OF THE CONVERSATION, and nothing was recording it.
+ *
+ * Measured against a real claude ACP session (`handshake.real.test.ts`, logged on every run):
+ * `live=agent_message_chunk,notice,usage_update`, and `session/load` on the CLI's own session id
+ * replays `(0) none`. The agent never echoes the client's prompt and never replays it, so after
+ * the owner typed into the Conversation composer and `master.tsx` re-read the sessions, the
+ * transcript held the reply and no record of the question.
+ *
+ * Genie knows what it sent, so Genie declares it — but ONLY once the session has taken it, because
+ * a transcript claiming a prompt the agent never saw is the exact failure `no-session` exists to
+ * report.
+ */
+describe('promptSession records what the owner said', () => {
+    const recording = (over: Partial<SessionWritePorts> = {}) => {
+        const recorded: Array<[string, string]> = [];
+        const p = ports({ recordPrompt: (specId, text) => recorded.push([specId, text]), ...over });
+        return { p, recorded };
+    };
+
+    it('records a DELIVERED prompt against its spec', async () => {
+        const { p, recorded } = recording();
+        await promptSession(p, { specId: 's1', text: '  carry on  ' });
+        // The TRIMMED text, the same string the session was given -- not the raw composer value.
+        expect(recorded).toEqual([['s1', 'carry on']]);
+    });
+
+    it('records NOTHING when there is no session', async () => {
+        const { p, recorded } = recording({ promptFor: () => null });
+        await promptSession(p, { specId: 's1', text: 'hi' });
+        expect(recorded).toEqual([]);
+    });
+
+    it('records NOTHING when the budget gate parked the turn', async () => {
+        const { p, recorded } = recording({ allowTurn: () => false });
+        await promptSession(p, { specId: 's1', text: 'hi' });
+        expect(recorded).toEqual([]);
+    });
+
+    it('records NOTHING for an empty prompt', async () => {
+        const { p, recorded } = recording();
+        await promptSession(p, { specId: 's1', text: '   ' });
+        expect(recorded).toEqual([]);
+    });
+
+    /**
+     * RECORDED BEFORE THE SEND, and the first version of this got it backwards.
+     *
+     * `session/prompt` resolves when the TURN COMPLETES, not when the agent receives the text — so
+     * recording on a delivered outcome recorded it after every reply the turn produced. The owner's
+     * question appeared BELOW its own answer, and against codex (which echoes the prompt during the
+     * turn) a third copy landed at the end where no tail-match could collapse it.
+     *
+     * My own test for the ordering passed, because it called `recordHumanPromptForSpec` before
+     * `apply` — the order I assumed rather than the order production produces. A test that stages the
+     * sequence it wants is not evidence about the sequence that happens.
+     *
+     * So the three "never reached the agent" cases are exactly the three settled BEFORE the send —
+     * empty text, no session, budget parked — and each is already a `return` above. Once the call is
+     * made, the message is out: `delivered: false` means Genie could not CONFIRM it, not that the
+     * agent did not get it, and erasing what the owner typed on an unconfirmed send is worse than
+     * showing it. The composer keeps the text too, which is the separate half of the same decision.
+     */
+    it('records a prompt the channel could not CONFIRM, because it was still sent', async () => {
+        const { p, recorded } = recording({
+            promptFor: () => async () => ({ delivered: false, submitted: false }),
+        });
+        await promptSession(p, { specId: 's1', text: 'hi' });
+        expect(recorded).toEqual([['s1', 'hi']]);
+    });
+
+    it('records a prompt whose send THREW, for the same reason', async () => {
+        const { p, recorded } = recording({
+            promptFor: () => async () => {
+                throw new Error('socket closed');
+            },
+        });
+        expect((await promptSession(p, { specId: 's1', text: 'hi' })).ok).toBe(false);
+        expect(recorded).toEqual([['s1', 'hi']]);
+    });
+
+    it('records it BEFORE the session sees it, so the reply cannot land first', async () => {
+        // The ordering, asserted on the sequence rather than assumed. `session/prompt` resolves at
+        // the END of the turn, so anything recorded after it awaits sits below the whole reply.
+        const order: string[] = [];
+        const p = ports({
+            recordPrompt: () => order.push('recorded'),
+            promptFor: () => async () => {
+                order.push('sent');
+                return { delivered: true, submitted: true };
+            },
+        });
+        await promptSession(p, { specId: 's1', text: 'go' });
+        expect(order).toEqual(['recorded', 'sent']);
+    });
+
+    it('still sends when no recorder is wired at all', async () => {
+        // Optional on purpose: a remote window or a test harness may have no declared store, and a
+        // missing recorder must cost the owner a transcript line, never the message.
+        const sent: string[] = [];
+        const r = await promptSession(
+            ports({ promptFor: () => async (t) => (sent.push(t), { delivered: true, submitted: true }) }),
+            { specId: 's1', text: 'hi' },
+        );
+        expect(sent).toEqual(['hi']);
+        expect(r.ok).toBe(true);
+    });
+
+    it('a THROWING recorder does not lose the send', async () => {
+        // The order matters: the message is already with the agent by the time this runs, so a
+        // failure to record must not turn a delivered prompt into a reported failure.
+        const r = await promptSession(
+            ports({
+                recordPrompt: () => {
+                    throw new Error('store gone');
+                },
+            }),
+            { specId: 's1', text: 'hi' },
+        );
+        expect(r).toEqual({ ok: true, delivered: true, submitted: true });
+    });
+});
+
 describe('cancelSession', () => {
     it('asks the agent to stop, and reports whether it complied', async () => {
         expect(await cancelSession(ports(), { specId: 's1' })).toEqual({ ok: true, honoured: true });

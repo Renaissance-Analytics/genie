@@ -134,7 +134,7 @@ import { broadcastListsChanged } from './lists/announce';
 import { onListsChanged } from './lists/changed';
 import { type UserListAction } from './lists/service';
 import { readWorkspaceLists, resolveUserListItemOnHost } from './lists/wiring';
-import { agentSessions, budgetGatePorts } from './agentsession/bindings';
+import { agentSessions, budgetGatePorts, declaredSessions } from './agentsession/bindings';
 import {
     cancelSession,
     decideApproval,
@@ -2325,6 +2325,11 @@ export function registerIpcHandlers(): void {
      */
     const sessionWritePorts = (): SessionWritePorts => ({
         promptFor: (specId) => acpRegistry.promptFor(specId),
+        // What the owner said belongs in the transcript, and the agent never puts it there:
+        // measured, an ACP session reports its own voice only and replays nothing on resume.
+        recordPrompt: (specId, text) => declaredSessions.recordHumanPromptForSpec(specId, text),
+        // What the owner said belongs in the transcript, and the agent never puts it there:
+        // measured, an ACP session reports its own voice only and replays nothing on resume.
         cancelFor: (specId) => acpRegistry.cancelFor(specId),
         decideFor: (specId) => acpRegistry.decideFor(specId),
         allowTurn: (specId) => {

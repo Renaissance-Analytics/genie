@@ -35,6 +35,19 @@ export interface SessionWritePorts {
      * running agents".
      */
     allowTurn: (specId: string) => boolean;
+    /**
+     * `DeclaredSessionStore.recordHumanPromptForSpec` — put what the owner said into the
+     * transcript, because the agent never will.
+     *
+     * Measured against a real claude ACP session (`handshake.real.test.ts`, logged every run):
+     * the declared stream is `agent_message_chunk,notice,usage_update` and nothing else, and
+     * `session/load` on the CLI's own session id replays `(0) none`. The prompt is neither echoed
+     * nor replayed. So the Conversation showed the reply and no record of the question.
+     *
+     * Optional: a remote window or a harness may have no declared store, and a missing recorder
+     * must cost a transcript line, never the message.
+     */
+    recordPrompt?: (specId: string, text: string) => void;
 }
 
 export type PromptResult =
@@ -64,6 +77,27 @@ export async function promptSession(
     if (!prompt) return { ok: false, reason: 'no-session' };
 
     if (!ports.allowTurn(input.specId)) return { ok: false, reason: 'parked' };
+
+    /**
+     * RECORD BEFORE SENDING, and the ORDER is the whole point.
+     *
+     * `session/prompt` resolves when the TURN COMPLETES, not when the agent receives the text. The
+     * first version of this recorded on a delivered outcome — i.e. after every reply the turn
+     * produced — so the owner's question appeared BELOW its own answer, and against codex (which
+     * echoes the prompt mid-turn, measured) a third copy landed at the end where no tail-match could
+     * collapse it.
+     *
+     * The three cases where nothing reached the agent are exactly the three settled ABOVE this line:
+     * empty text, no session, budget parked. Past here the message is out, and `delivered: false`
+     * means Genie could not CONFIRM it rather than that the agent did not get it — so erasing what
+     * the owner typed on an unconfirmed send would be the worse error. The composer keeps the text
+     * too, which is the other half of the same decision.
+     */
+    try {
+        ports.recordPrompt?.(input.specId, text);
+    } catch {
+        // A transcript line is worth less than the message. Never let recording stop the send.
+    }
 
     try {
         const outcome = await prompt(text);

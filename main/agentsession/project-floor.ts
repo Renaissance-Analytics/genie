@@ -138,7 +138,11 @@ export function projectFloorSession(inputs: FloorInputs): AgentSession {
     return {
         ...base,
         turn: turnOf(inputs, now),
-        transcript: messages.map(({ at: _at, ...m }) => m),
+        // `at` is KEPT, not stripped. It used to be dropped here as an internal sort key, and
+        // that is what left `mergeDeclared` with no way to interleave this stream with a
+        // declared one — so it replaced it instead, deleting the human half of the
+        // conversation. See `Message.at`.
+        transcript: messages,
         // Deliberately NOT populated from the question queue. `PendingApproval` is a
         // TOOL approval; a ForceTheQuestion has options, a priority, DND deferral,
         // an age and a host, and flattening one into the other would discard all of

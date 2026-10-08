@@ -242,3 +242,67 @@ describe('the Conversation can be TALKED TO', () => {
         expect(html).toContain('Deny');
     });
 });
+
+/**
+ * WHO SAID IT — P7 folds human<->agent DMs into this surface, and a DM thread is MULTI-PARTY.
+ *
+ * `mergeDeclared` now interleaves the floor's AgentInbox thread with the declared session
+ * instead of replacing it, because a measured ACP session reports the agent's voice and nothing
+ * else. So the Conversation carries three speakers where it used to carry two: the agent, the
+ * owner, and a SIBLING AGENT that messaged this one.
+ *
+ * `Message.author` exists for precisely that -- *"a message from a sibling agent is neither this
+ * agent speaking nor the owner speaking... encoding the sender into `content` as a prefix would
+ * be munging somebody's text, so it gets a field"*. The view rendered `m.role` and dropped it,
+ * which labels another agent's message "user" and makes it read as the owner's own instruction.
+ * On a surface whose whole job is deciding what to do next, that is the worst possible confusion.
+ */
+describe('the Conversation says WHO, not just what role', () => {
+    /**
+     * The author NAME shares no substring with any message body, and that is deliberate: the
+     * first draft of these tests used an author of `prism` alongside the text *"prism-acp 0.5.0
+     * is up"*, so `toContain('prism')` passed against the UNCHANGED view. A test that cannot
+     * tell the fix from its absence is worse than no test, because it reads as covered.
+     */
+    const SIBLING = 'kora';
+    const thread = () =>
+        declared({
+            transcript: [
+                { id: 'm1', role: 'user', author: null, content: 'start on the lists dock', at: NOW },
+                { id: 'm2', role: 'user', author: SIBLING, content: 'the adapter release is up', at: NOW + 1 },
+                { id: 'd1', role: 'agent', author: null, content: 'installing it', at: NOW + 2 },
+            ],
+        });
+
+    /** The `agent-msg-who` labels, in order, with no message bodies in the way. */
+    const whoLabels = (html: string): string[] =>
+        [...html.matchAll(/class="[^"]*agent-msg-who[^"]*"[^>]*>([^<]*)</g)].map((m) => m[1]!);
+
+    it('NAMES a sibling agent that sent a DM', () => {
+        expect(whoLabels(render(thread()))).toContain(SIBLING);
+    });
+
+    it('does not label another agent\'s message as the owner', () => {
+        // The failure mode as an assertion: before this, all three rows read role-only, so the
+        // sibling's row said "user" -- the same word as the owner's -- and another agent's
+        // request became indistinguishable from an instruction from the person in charge.
+        const labels = whoLabels(render(thread()));
+        expect(labels).toHaveLength(3);
+        expect(labels.filter((l) => l === SIBLING)).toHaveLength(1);
+        expect(labels.filter((l) => l === 'user')).toHaveLength(0);
+    });
+
+    it('labels the owner and the agent plainly, having no author to name', () => {
+        const labels = whoLabels(render(thread()));
+        expect(labels[0]).toBe('you');
+        expect(labels[2]).toBe('agent');
+    });
+
+    it('still labels a tool or error row by its role', () => {
+        // `author` is null for these and there is nobody to name; the role IS the answer.
+        const labels = whoLabels(
+            render(declared({ transcript: [{ id: 'e1', role: 'error', content: 'host lost', at: NOW }] })),
+        );
+        expect(labels).toEqual(['error']);
+    });
+});

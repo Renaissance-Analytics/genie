@@ -41,6 +41,28 @@ import {
     useAgentChromeMenu,
 } from './AgentChrome';
 
+/**
+ * WHO SPOKE — the author when there is one, otherwise the role.
+ *
+ * P7 folds human↔agent DMs into this surface, and `mergeDeclared` now interleaves the
+ * AgentInbox thread with the declared session rather than replacing it, because a measured ACP
+ * session reports the agent's voice and nothing else. So this transcript has THREE speakers
+ * where it had two: the agent, the owner, and a sibling agent that messaged this one.
+ *
+ * Rendering `role` alone labelled a sibling's message `user` — the same word as the owner's own
+ * — on the one screen whose job is deciding what to do next. `Message.author` exists for exactly
+ * this: *"a message from a sibling agent is neither this agent speaking nor the owner speaking…
+ * encoding the sender into `content` as a prefix would be munging somebody's text, so it gets a
+ * field."* It was simply never read here.
+ *
+ * `you` rather than `user` for the owner, because this transcript is now read alongside named
+ * agents and `user` beside `kora` reads as a second anonymous party rather than as the reader.
+ */
+function speakerOf(m: { role: string; author?: string | null }): string {
+    if (m.author) return m.author;
+    return m.role === 'user' ? 'you' : m.role;
+}
+
 export interface AgentViewProps {
     session: AgentSession;
     tab?: AgentViewTab;
@@ -211,9 +233,16 @@ export function AgentView({
                 {active === 'session' ? (
                     <div className="agent-conversation">
                         {session.transcript.map((m) => (
-                            <div className="agent-msg" key={m.id} data-role={m.role}>
+                            <div
+                                className="agent-msg"
+                                key={m.id}
+                                data-role={m.role}
+                                // A styling hook, and the only visual difference between the
+                                // owner's instruction and another agent's request.
+                                data-from={m.author ? 'peer' : undefined}
+                            >
                                 <Text size="xs" className="agent-msg-who">
-                                    {m.role}
+                                    {speakerOf(m)}
                                 </Text>
                                 <Text size="sm">{m.content}</Text>
                             </div>

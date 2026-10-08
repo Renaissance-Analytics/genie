@@ -64,6 +64,27 @@ export interface Message {
      * a prefix would be munging somebody's text, so it gets a field.
      */
     author?: string | null;
+    /**
+     * When Genie saw it, so TWO STREAMS can become one conversation.
+     *
+     * Also a host-side addition, and for the same reason as `author`: the lifted protocol
+     * describes a single-agent harness, where the transcript is whatever that one harness
+     * remembers and there is nothing to merge it with. Genie has two producers — the floor,
+     * which projects the AgentInbox DM thread and the last `imDone` handoff, and a declared
+     * transport reporting the live session — and `mergeDeclared` has to put them in order.
+     *
+     * Measured (`handshake.real.test.ts` logs it on every run): a claude ACP session's
+     * declared stream carries the **agent's voice only** — the owner's prompt is never echoed
+     * back, and `session/load` replays nothing. So the two streams hold DIFFERENT halves of
+     * one conversation, and mail arriving mid-session is the normal case for a working agent.
+     * Appending either stream to the other would put the owner's interruption after the reply
+     * it provoked.
+     *
+     * Optional because a `reportState` harness need not carry timestamps, and inventing one
+     * would be asserting a time Genie does not know. `mergeDeclared` places unstamped
+     * messages last rather than guessing.
+     */
+    at?: number | null;
 }
 
 export interface ToolCall {
