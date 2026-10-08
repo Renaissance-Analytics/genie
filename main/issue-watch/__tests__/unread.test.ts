@@ -6,7 +6,7 @@ vi.mock('electron', () => ({
     BrowserWindow: { getAllWindows: () => [] },
     ipcMain: { handle: () => {} },
 }));
-vi.mock('simple-git', () => ({ default: () => ({ getRemotes: async () => [] }) }));
+vi.mock('simple-git', () => ({ simpleGit: () => ({ getRemotes: async () => [] }) }));
 vi.mock('../../db', () => ({
     getWorkspace: () => null,
     listIssueWatches: () => [],

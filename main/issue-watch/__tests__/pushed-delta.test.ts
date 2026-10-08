@@ -14,7 +14,7 @@ vi.mock('electron', () => ({
     BrowserWindow: { getAllWindows: () => [] },
     ipcMain: { handle: () => {} },
 }));
-vi.mock('simple-git', () => ({ default: () => ({ getRemotes: async () => [] }) }));
+vi.mock('simple-git', () => ({ simpleGit: () => ({ getRemotes: async () => [] }) }));
 let DESIGNATED: string[] = [];
 let AGENTS: Array<{ terminalId: string; label: string; handle: boolean; action: 'notify' | 'wake' }> = [];
 vi.mock('../../db', () => ({

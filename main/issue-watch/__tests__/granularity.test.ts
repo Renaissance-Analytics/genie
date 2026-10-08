@@ -70,7 +70,7 @@ vi.mock('electron', () => ({
     ipcMain: { handle: () => {} },
 }));
 vi.mock('simple-git', () => ({
-    default: () => ({
+    simpleGit: () => ({
         getRemotes: async () => [
             { name: 'origin', refs: { fetch: 'git@github.com:o/r.git' } },
         ],
