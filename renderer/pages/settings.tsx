@@ -67,7 +67,6 @@ import {
     uninstallConfirmation,
 } from '../lib/apps-view';
 import { isolationNote } from '../lib/dev-server';
-import { acpEngineRow } from '../lib/acp-engine-setting';
 import { gappProviderOptions, providerSettingsGroups } from '../lib/provider-settings';
 import {
     newPromptId,
@@ -364,37 +363,6 @@ export default function SettingsPage() {
                         )}
                         {show('agent-providers') && (
                             <SearchGroup label="Providers" searching={searching}>
-
-            <SetSection
-                title="How agents run"
-                desc="Whether an ACP-capable agent runs as a structured session or in a terminal"
-                host={restricted}
-            >
-                {/*
-                 * THE GENIE 2 SWITCH, which had no control at all until now.
-                 *
-                 * `main/db.ts` says the setting "stays the default until the owner moves it" — and
-                 * `acp_engine` reached ZERO renderer files and zero IPC definitions, so moving it meant
-                 * editing SQLite by hand. Every mechanism already worked: `engineFor` reads it,
-                 * `settings:set` persists any key, the column is typed. Wired and unreachable.
-                 *
-                 * The copy comes from `acpEngineRow` rather than being written inline, because what it
-                 * CLAIMS is the part that can be wrong — running agents do not move until relaunched,
-                 * and a provider with no ACP mode stays on the terminal. Both are asserted.
-                 */}
-                <SettingRow
-                    label={acpEngineRow(s.acp_engine === 'on').label}
-                    desc={acpEngineRow(s.acp_engine === 'on').desc}
-                    keywords={acpEngineRow(s.acp_engine === 'on').keywords}
-                >
-                    <Switch
-                        checked={s.acp_engine === 'on'}
-                        onCheckedChange={(on: boolean) =>
-                            patch({ acp_engine: on ? 'on' : 'off' })
-                        }
-                    />
-                </SettingRow>
-            </SetSection>
 
             <SetSection
                 title="Specialized terminals"

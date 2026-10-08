@@ -3422,12 +3422,23 @@ export function setAgentAvatar(
 
 export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
     /**
-     * Run ACP-capable agents as structured sessions instead of TUIs in a pty.
+     * VESTIGIAL — nothing reads this. Kept only so an existing row does not fail to parse.
      *
-     * Absent or 'off' means the pty, which is the DEFAULT and stays the default until
-     * the owner moves it — Genie 2 is a parallel surface. `engineFor` reads this, and a
-     * provider with no ACP mode stays on the pty regardless, so turning it on is
-     * permission rather than a promise.
+     * It used to gate the ACP engine, and this comment used to say *"`engineFor` reads this,
+     * and a provider with no ACP mode stays on the pty regardless, so turning it on is
+     * permission rather than a promise."* **That is no longer true and the comment outlived the
+     * behaviour**, which is a worse failure than the behaviour changing: `agents/engine.ts`
+     * removed the flag on a direct owner directive — *"acp is the core of our agent
+     * communications, this is not optional"* — so a provider that can speak ACP speaks it, and
+     * `engineFor` contains no reference to this key at all.
+     *
+     * The stale comment cost real work: it was read as authoritative, a Settings switch was
+     * built for a setting nothing consults, and the release was reported as blocked on a
+     * decision the owner had already made in the opposite direction. **A comment asserting that
+     * something reads a value is a claim about code, and nothing checks it.**
+     *
+     * Holding ONE agent on the pty is still supported and is a per-agent fact, not a global
+     * one: `EngineInput.agentOverride`.
      */
     acp_engine?: 'on' | 'off';
     primary_workspace?: string;
