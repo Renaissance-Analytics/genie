@@ -6,6 +6,7 @@ class FakeSocket implements CodexAppServerSocket {
     private listener: ((data: string) => void) | null = null;
     private closeListener: ((error?: Error) => void) | null = null;
 
+    progressStatus: unknown = { type: 'idle' };
     constructor(public respond = true) {}
 
     send(data: string): void {
@@ -20,7 +21,7 @@ class FakeSocket implements CodexAppServerSocket {
               ? { thread: { id: 'thread-1' } }
               : method === 'thread/resume'
                 ? { thread: { id: 'saved-thread' } }
-              : {};
+              : method === 'thread/read' ? { thread: { id: 'thread-1', status: this.progressStatus } } : {};
         queueMicrotask(() => this.emit({ jsonrpc: '2.0', id, result }));
     }
 
@@ -449,5 +450,44 @@ describe('an OVERAGE rate-limit frame is captured, once, and redacted', () => {
         const session = new CodexAgentInboxSession(socket);
         await session.initialize('/repo');
         expect(() => socket.emit(frame())).not.toThrow();
+    });
+});
+
+describe('read-only Codex progress observation', () => {
+    it.each(['waitingOnApproval', 'waitingOnUserInput'])('detects %s without starting or resuming a turn', async (flag) => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+        await session.initialize('C:/workspace');
+        socket.progressStatus = { type: 'active', activeFlags: [flag] };
+        const progress = await session.readProgress('thread-1');
+        expect(progress).toEqual({ state: 'blocked', reason: flag });
+        expect(socket.sent.at(-1)).toMatchObject({ method: 'thread/read', params: { threadId: 'thread-1', includeTurns: false } });
+        expect(socket.sent.filter(m => m.method === 'turn/start')).toHaveLength(0);
+    });
+    it('reports unknown instead of reading a different conversation', async () => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+        await session.initialize('C:/workspace');
+        expect(await session.readProgress('another-thread')).toEqual({ state: 'unknown' });
+        expect(socket.sent.filter(m => m.method === 'thread/read')).toHaveLength(0);
+    });
+    it('reports a rate-limit failure until a new turn starts, ignoring other threads', async () => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+        await session.initialize('C:/workspace');
+        socket.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { status: 'failed', error: { codexErrorInfo: 'usageLimitExceeded' } } } });
+        expect(await session.readProgress('thread-1')).toEqual({ state: 'blocked', reason: 'usage-limit' });
+        socket.emit({ method: 'turn/started', params: { threadId: 'another-thread' } });
+        expect((await session.readProgress('thread-1')).state).toBe('blocked');
+        socket.emit({ method: 'turn/started', params: { threadId: 'thread-1' } });
+        socket.progressStatus = { type: 'active', activeFlags: [] };
+        expect(await session.readProgress('thread-1')).toEqual({ state: 'active' });
+    });
+    it('does not turn a failed status query into a healthy agent', async () => {
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket, { requestTimeoutMs: 5 });
+        await session.initialize('C:/workspace');
+        socket.respond = false;
+        expect(await session.readProgress('thread-1')).toEqual({ state: 'unknown' });
     });
 });

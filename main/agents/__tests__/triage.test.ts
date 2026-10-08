@@ -51,6 +51,8 @@ const running = (over: Partial<AgentObservation> = {}): AgentObservation => ({
     oldestUnreadMailAt: null,
     lastOutputAt: 999_000,
     observedAt: 1_000_000,
+    progress: { state: 'active' },
+    unreadMessages: 0,
     ...over,
 });
 
@@ -481,5 +483,93 @@ describe('an agent that is reachable but not progressing', () => {
         const both = ailments(stalled({ joinedInbox: false }));
 
         expect(both[0]).toBe('not-joined-to-inbox');
+    });
+});
+
+describe('runtime progress, independently of healthy plumbing', () => {
+    it('reports a harness waiting for model selection as blocked', () => {
+        const d = diagnoseAgent(running({
+            progress: { state: 'blocked', reason: 'usage-limit' }, unreadMessages: 2,
+        }));
+        expect(d.condition).toBe('wedged');
+        expect(d.findings[0]?.ailment).toBe('harness-blocked');
+        expect(d.summary).toMatch(/usage-limit/);
+        expect(d.findings[0]?.repair).toMatch(/read|inspect/i);
+        expect(d.findings[0]?.repair).not.toMatch(/restart/);
+    });
+    it('does not certify progress from wiring alone', () => {
+        const d = diagnoseAgent(running({ progress: { state: 'unknown' }, unreadMessages: 2 }));
+        expect(d.condition).toBe('unverified');
+        expect(d.summary).toMatch(/2 unread/);
+        expect(d.summary).toMatch(/progress.*unverified/i);
+    });
+    it('distinguishes an idle agent with mail from an idle agent with nothing pending', () => {
+        expect(diagnoseAgent(running({ progress: { state: 'idle' }, unreadMessages: 1 })).condition).toBe('unverified');
+        expect(diagnoseAgent(running({ progress: { state: 'idle' }, unreadMessages: 0 })).condition).toBe('healthy');
+    });
+    it('does not diagnose silence or pending mail as a hung active turn', () => {
+        const d = diagnoseAgent(running({ progress: { state: 'active' }, unreadMessages: 3, observedAt: 999999999 }));
+        expect(d.condition).toBe('healthy');
+        expect(d.summary).toMatch(/active turn/);
+        expect(d.summary).toMatch(/3 unread/);
+    });
+});
+
+/**
+ * THE TWO STALL REPORTS ARE MUTUALLY EXCLUSIVE, which neither side's own tests pinned.
+ *
+ * Rebasing this work onto a main that had grown its own stall detector put two findings
+ * in reach of one agent. They answer the same question from opposite ends:
+ *
+ *  - `not-progressing` INFERS a stall, from mail going unread while the pty stays silent.
+ *    It cannot fire at all for an agent with no mail waiting — which is exactly the agent
+ *    parked on its own input box, the case this branch exists for.
+ *  - `harness-blocked` is the harness's OWN report, with a reason it supplied.
+ *
+ * A harness stuck on a model picker looks silent with unread mail too, so both would fire
+ * on the same agent and hand the operator two repairs for one fault — and the two repairs
+ * disagree about whether to touch the screen. The diagnosis promises causal order:
+ * "the first is the thing to fix."
+ *
+ * Neither test set covered the overlap. #748's case asserts `findings[0]`, which stays
+ * correct even with a spurious second finding behind it; main's fixture carries no
+ * `progress` at all, so its detector never competed. An undefended resolution is one the
+ * next reader "fixes".
+ */
+describe('a harness that reports blocked, while ALSO looking stalled', () => {
+    const stalledAndBlocked = (over: Partial<AgentObservation> = {}): AgentObservation =>
+        running({
+            observedAt: 1_000_000,
+            oldestUnreadMailAt: 1_000_000 - AGENT_STALLED_MAIL_MS - 1,
+            lastOutputAt: 1_000_000 - AGENT_STALLED_MAIL_MS - 60_000,
+            unreadMessages: 2,
+            ...over,
+        });
+
+    it('reports the harness ONCE, and does not also infer a stall', () => {
+        const d = diagnoseAgent(stalledAndBlocked({ progress: { state: 'blocked', reason: 'usage-limit' } }));
+
+        // A COUNT, not a check on the first element: `findings[0]` would be
+        // `harness-blocked` either way, so only the length can tell one repair from two.
+        expect(d.findings).toHaveLength(1);
+        expect(d.findings[0]?.ailment).toBe('harness-blocked');
+        expect(d.findings.map((f) => f.ailment)).not.toContain('not-progressing');
+    });
+
+    it('POSITIVE CONTROL: the same observation without a harness report still infers the stall', () => {
+        // Proves the case above is deciding between two live detectors rather than
+        // passing because `not-progressing` could never have fired on this fixture.
+        const d = diagnoseAgent(stalledAndBlocked());
+
+        expect(d.findings.map((f) => f.ailment)).toContain('not-progressing');
+    });
+
+    it('POSITIVE CONTROL: an ACTIVE harness does not suppress the inferred stall', () => {
+        // Only `blocked` takes precedence. A harness reporting `active` has told us
+        // nothing that explains unread mail, so silence spanning the wait still counts —
+        // otherwise any harness that answers at all would mask every stall.
+        const d = diagnoseAgent(stalledAndBlocked({ progress: { state: 'active' } }));
+
+        expect(d.findings.map((f) => f.ailment)).toContain('not-progressing');
     });
 });

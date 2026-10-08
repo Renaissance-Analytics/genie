@@ -446,6 +446,14 @@ Actions (\`action\`):
     grammar. It DISCARDS the conversation — use it to recover, not to reload.
 
   Either way it returns the NEW terminal \`id\`.
+**Execution evidence:** diagnosis reads Codex's live thread metadata without
+loading history or starting a turn. Approval/user-input waits and observed failed
+turns are blocked; an idle harness with unread mail, an unavailable status query,
+or a provider with no execution-state adapter is **unverified**, not healthy.
+An active turn is reported as such, not as a guarantee of continued progress.
+Silence, terminal repainting and a boot handshake do not establish progress.
+Inspect a blocked prompt before choosing a repair; diagnosis never answers it.
+
 **Approval:** creating an agent, a sidecar, \`send\`, and \`restart\` are GATED the same way
 (OFF runs immediately). \`list\`, \`read\`, and reattaching to an already-approved
 saved agent never prompt.
