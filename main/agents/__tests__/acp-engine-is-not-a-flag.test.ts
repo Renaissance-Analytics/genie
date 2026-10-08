@@ -74,27 +74,36 @@ describe('the dead setting stays dead', () => {
         }
     });
 
-    it('db.ts marks the key VESTIGIAL rather than claiming a reader', () => {
+    it('db.ts no longer declares the key AT ALL', () => {
         /**
-         * Asserted POSITIVELY, and the first draft of this test got it wrong in an instructive way.
+         * Owner's choice, asked directly: *"Delete the dead column entirely."* So the assertion moves
+         * from *the comment says nothing reads it* to *the key does not exist* — which is a stronger
+         * guarantee and needs no prose to stay true.
          *
-         * It asserted the absence of the stale sentence — `not.toContain('`engineFor` reads this')` —
-         * and promptly failed against the FIXED file, because the correction quotes the old claim as
-         * history before refuting it. A substring guard cannot tell an assertion from a quotation,
-         * and this codebase quotes its own mistakes on purpose; banning the words would forbid the
-         * documentation that stops the mistake recurring.
+         * Migration v80 removes the stored ROW as well, following v25's precedent for retired
+         * toggles: a key-value row that outlives its reader is exactly what let a stale comment about
+         * it stay believable for as long as it did.
          *
-         * Loosening the assertion to get green would have been the bandaid. Asserting the property
-         * actually wanted — that the comment says nothing reads it — is the fix.
+         * The earlier version of this test asserted the ABSENCE of one sentence and failed against the
+         * fixed file, because the correction quoted the old claim as history. Asserting the key's
+         * absence has no such ambiguity: there is nothing to quote.
          */
+        expect(read('main/db.ts')).not.toContain("acp_engine?:");
+    });
+
+    it('the migration that drops the stored row is present', () => {
+        // Removing the type without the row would leave the value in every existing profile, where a
+        // remote settings payload or a diagnostic could resurrect it as apparent product state.
         const src = read('main/db.ts');
-        const block = src.slice(src.indexOf('acp_engine?:') - 1600, src.indexOf('acp_engine?:'));
-        expect(block).toContain('VESTIGIAL');
-        expect(block.toLowerCase()).toContain('nothing reads this');
+        expect(src).toContain("DELETE FROM settings WHERE key = 'acp_engine'");
+        expect(src).toContain('version: 80,');
     });
 
     it('positive control: the guard reads the real files', () => {
         expect(read('main/agents/engine.ts')).toContain('export function engineFor');
-        expect(read('main/db.ts')).toContain('acp_engine?:');
+        // A marker that SURVIVES the deletion. This line used to assert `acp_engine?:` was present,
+        // which was right while the key existed and became false the moment it was removed — a
+        // positive control must not be anchored on the very thing under test.
+        expect(read('main/db.ts')).toContain('export function getAllSettings');
     });
 });
