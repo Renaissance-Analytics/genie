@@ -321,3 +321,133 @@ describe('thread/resume does not ask for history it never reads', () => {
         expect(start?.params).toEqual({ cwd: '/repo' });
     });
 });
+
+describe('an OVERAGE rate-limit frame is captured, once, and redacted', () => {
+    /**
+     * Asked for by prism while they were deciding whether a codex rate-limit reading may exceed
+     * 100%: their claude parser accepts `utilization > 1` because the provider models overage, and
+     * their codex parser refused `usedPercent > 100`, which deletes the whole payload and removes
+     * the gauge. Neither of us has ever captured an overage frame, so the bound was a guess in one
+     * direction and accepting it is a guess in the other — except that **an empty gauge reads as
+     * plenty of headroom**, which makes the two guesses cost different amounts.
+     *
+     * They removed the bound on that argument and recorded the question as UNDETERMINED. This is
+     * Genie's half: capture the shape if it ever happens.
+     *
+     * ## Three rules, each a reason
+     *
+     *  - **Silent until interesting.** `usedPercent >= 90`, or `spendControlReached`, or
+     *    `rateLimitReachedType` set. A log on every frame is a log nobody reads.
+     *  - **Once.** A notification that repeats every turn would fill the owner's log with the same
+     *    sample and teach him to ignore the line that matters.
+     *  - **Numbers and enums only.** prism's words: *"I want the numbers and the enums… and none of
+     *    the identifiers. Drop anything that names a person or an account, and the credit balance
+     *    too; the shape of that field is what I need, not its value."*
+     */
+    const frame = (over: Record<string, unknown> = {}) => ({
+        jsonrpc: '2.0',
+        method: 'account/rateLimits/updated',
+        params: {
+            rateLimits: {
+                primary: { usedPercent: 94.5, windowDurationMins: 300, resetsAt: 1791500000 },
+                secondary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: 1791900000 },
+            },
+            planType: 'pro',
+            spendControlReached: false,
+            rateLimitReachedType: null,
+            accountId: 'acct_SECRET',
+            email: 'someone@example.com',
+            credits: { balance: 4210 },
+            ...over,
+        },
+    });
+
+    const capture = (socket: FakeSocket, logged: string[]) => {
+        const session = new CodexAgentInboxSession(socket, {
+            onRateLimitSample: (sample) => logged.push(JSON.stringify(sample)),
+        });
+        return session;
+    };
+
+    it('captures a frame once it is INTERESTING', async () => {
+        const socket = new FakeSocket();
+        const logged: string[] = [];
+        const session = capture(socket, logged);
+        await session.initialize('/repo');
+
+        socket.emit(frame());
+        expect(logged).toHaveLength(1);
+    });
+
+    it('says NOTHING below the threshold', async () => {
+        // The ordinary case, which is every frame on an account that is fine. A log here is noise
+        // that trains the owner to skip the line.
+        const socket = new FakeSocket();
+        const logged: string[] = [];
+        const session = capture(socket, logged);
+        await session.initialize('/repo');
+
+        socket.emit(frame({ rateLimits: { primary: { usedPercent: 31, windowDurationMins: 300, resetsAt: 1 } } }));
+        expect(logged).toEqual([]);
+    });
+
+    it('captures on spendControlReached or rateLimitReachedType even when the percent is low', async () => {
+        // The two fields that mean overage WITHOUT the percent saying so — which is the shape prism
+        // suspects codex might use instead of a figure above 100.
+        for (const over of [{ spendControlReached: true }, { rateLimitReachedType: 'primary' }]) {
+            const socket = new FakeSocket();
+            const logged: string[] = [];
+            const session = capture(socket, logged);
+            await session.initialize('/repo');
+            socket.emit(
+                frame({
+                    rateLimits: { primary: { usedPercent: 4, windowDurationMins: 300, resetsAt: 1 } },
+                    ...over,
+                }),
+            );
+            expect(logged, JSON.stringify(over)).toHaveLength(1);
+        }
+    });
+
+    it('captures ONCE, however many frames arrive', async () => {
+        const socket = new FakeSocket();
+        const logged: string[] = [];
+        const session = capture(socket, logged);
+        await session.initialize('/repo');
+
+        socket.emit(frame());
+        socket.emit(frame({ spendControlReached: true }));
+        socket.emit(frame());
+        expect(logged).toHaveLength(1);
+    });
+
+    it('REDACTS every identifier, and the credit VALUE', async () => {
+        const socket = new FakeSocket();
+        const logged: string[] = [];
+        const session = capture(socket, logged);
+        await session.initialize('/repo');
+        socket.emit(frame());
+
+        const sample = logged[0]!;
+        // What prism asked for.
+        expect(sample).toContain('94.5');
+        expect(sample).toContain('windowDurationMins');
+        expect(sample).toContain('pro');
+        expect(sample).toContain('spendControlReached');
+        // Credits: the PRESENCE, never the balance.
+        expect(sample).toContain('creditsPresent');
+        expect(sample).not.toContain('4210');
+        // And nothing that names anyone.
+        expect(sample).not.toContain('acct_SECRET');
+        expect(sample).not.toContain('example.com');
+    });
+
+    it('captures nothing at all without a sink, and does not throw', async () => {
+        // The default. A session constructed with no `onRateLimitSample` must behave exactly as it
+        // did before this existed — the frame is dropped, as every other unhandled notification is.
+        const socket = new FakeSocket();
+        const session = new CodexAgentInboxSession(socket);
+        await session.initialize('/repo');
+        expect(() => socket.emit(frame())).not.toThrow();
+    });
+});

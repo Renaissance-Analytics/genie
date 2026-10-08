@@ -329,7 +329,26 @@ export class CodexAppServerManager {
         });
         try {
             const socket = await connect(address, token, child, () => stderr);
-            const session = new CodexAgentInboxSession(new WsSocket(socket));
+            const session = new CodexAgentInboxSession(new WsSocket(socket), {
+                /**
+                 * CAPTURE AN OVERAGE RATE-LIMIT FRAME, once, redacted.
+                 *
+                 * Asked for by prism: neither of us has ever seen one, and their two parsers
+                 * disagreed about whether a reading past the allowance is even valid — a refusal
+                 * removes the gauge entirely, and an empty gauge reads as plenty of headroom. The
+                 * question is recorded as undetermined rather than guessed; this is how it stops
+                 * being undetermined if it ever happens here.
+                 *
+                 * `console.warn` on purpose: it goes to the owner's log where he can find it and
+                 * hand it over. The sample is built from an allow-list of fields — no identifiers,
+                 * and the credit BALANCE is never carried, only whether the field was there.
+                 */
+                onRateLimitSample: (sample) => {
+                    console.warn(
+                        `[codex rate-limit sample — for prism, no identifiers] ${JSON.stringify(sample)}`,
+                    );
+                },
+            });
             await session.initialize(input.cwd, input.resumeThreadId);
             const owned: OwnedServer = { address, token, session, child, socket, tokenFile };
             this.servers.set(input.terminalId, owned);

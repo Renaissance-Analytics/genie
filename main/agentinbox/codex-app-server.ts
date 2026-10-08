@@ -27,10 +27,36 @@ interface QueuedDelivery {
     reject(error: Error): void;
 }
 
+/** The redacted shape of an overage rate-limit frame. Numbers and enums, nothing that names anyone. */
+export interface CodexRateLimitSample {
+    windows: Array<{ name: string; usedPercent: number; windowDurationMins: number | null; resetsAt: number | null }>;
+    planType: string | null;
+    spendControlReached: boolean;
+    rateLimitReachedType: string | null;
+    /** Whether `credits` was in the payload. Its VALUE is deliberately not carried. */
+    creditsPresent: boolean;
+}
+
 export interface CodexAgentInboxSessionOptions {
     requestTimeoutMs?: number;
     maxQueuedMessages?: number;
     maxQueuedBytes?: number;
+    /**
+     * CAPTURE AN OVERAGE RATE-LIMIT FRAME — once, redacted, and only when it is interesting.
+     *
+     * Asked for by prism while deciding whether a codex reading may exceed 100%. Their claude parser
+     * accepts over-allowance because the provider models it; their codex parser refused it, and a
+     * refusal is total — one bad field rejects the payload and the gauge disappears. Neither of us
+     * has ever captured an overage frame, so the bound was a guess either way, except that **an
+     * empty gauge reads as plenty of headroom**, which makes the two guesses cost different
+     * amounts. They removed the bound on that argument and recorded the question as undetermined.
+     *
+     * This is Genie's half: if it ever happens here, keep the shape.
+     *
+     * Absent means the frame is dropped, exactly as every other unhandled notification is — which
+     * is what it did before this existed.
+     */
+    onRateLimitSample?: (sample: CodexRateLimitSample) => void;
 }
 
 /**
@@ -51,6 +77,11 @@ export class CodexAgentInboxSession {
     private busy = true;
     private currentThreadId: string | null = null;
 
+    /** ONCE. A notification that repeats every turn would fill the log with the same sample and
+     *  teach the owner to skip the line that matters. */
+    private rateLimitSampled = false;
+    private readonly onRateLimitSample: CodexAgentInboxSessionOptions['onRateLimitSample'];
+
     private readonly requestTimeoutMs: number;
     private readonly maxQueuedMessages: number;
     private readonly maxQueuedBytes: number;
@@ -59,6 +90,7 @@ export class CodexAgentInboxSession {
         private readonly socket: CodexAppServerSocket,
         options: CodexAgentInboxSessionOptions = {},
     ) {
+        this.onRateLimitSample = options.onRateLimitSample;
         this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 10_000);
         this.maxQueuedMessages = Math.max(1, options.maxQueuedMessages ?? 100);
         this.maxQueuedBytes = Math.max(1, options.maxQueuedBytes ?? 1024 * 1024);
@@ -222,11 +254,71 @@ export class CodexAgentInboxSession {
             }
             return;
         }
+        if (message.method === 'account/rateLimits/updated') {
+            this.maybeSampleRateLimit(message.params);
+            return;
+        }
+
         if (message.method === 'turn/started') {
             this.busy = true;
         } else if (message.method === 'turn/completed') {
             this.busy = false;
             this.flushOne();
+        }
+    }
+
+    /**
+     * Is this frame worth keeping, and if so what survives redaction?
+     *
+     * The gate is prism's: `usedPercent >= 90`, or `spendControlReached`, or `rateLimitReachedType`
+     * set. The last two matter because codex may express overage in THOSE rather than in a figure
+     * above 100 — which is the open question this capture exists to answer.
+     *
+     * Redaction is allow-list, not deny-list: the sample is BUILT from the fields prism named rather
+     * than copied and pruned. A deny-list forwards whatever a future field is called.
+     */
+    private maybeSampleRateLimit(params: unknown): void {
+        const sink = this.onRateLimitSample;
+        if (!sink || this.rateLimitSampled) return;
+        if (typeof params !== 'object' || params === null) return;
+
+        const p = params as Record<string, unknown>;
+        const limits = (p.rateLimits ?? {}) as Record<string, unknown>;
+        const windows = Object.entries(limits)
+            .filter(([, w]) => typeof w === 'object' && w !== null)
+            .map(([name, w]) => {
+                const win = w as Record<string, unknown>;
+                return {
+                    name,
+                    usedPercent: typeof win.usedPercent === 'number' ? win.usedPercent : -1,
+                    windowDurationMins:
+                        typeof win.windowDurationMins === 'number' ? win.windowDurationMins : null,
+                    resetsAt: typeof win.resetsAt === 'number' ? win.resetsAt : null,
+                };
+            });
+
+        const spendControlReached = p.spendControlReached === true;
+        const rateLimitReachedType =
+            typeof p.rateLimitReachedType === 'string' ? p.rateLimitReachedType : null;
+        const interesting =
+            spendControlReached
+            || rateLimitReachedType !== null
+            || windows.some((w) => w.usedPercent >= 90);
+        if (!interesting) return;
+
+        this.rateLimitSampled = true;
+        try {
+            sink({
+                windows,
+                planType: typeof p.planType === 'string' ? p.planType : null,
+                spendControlReached,
+                rateLimitReachedType,
+                // The PRESENCE of credits, never the balance.
+                creditsPresent: p.credits !== undefined && p.credits !== null,
+            });
+        } catch {
+            // A capture must never take a delivery down with it. A lost sample is a gap in an
+            // answer; a throw inside a notification handler kills the subscription.
         }
     }
 
