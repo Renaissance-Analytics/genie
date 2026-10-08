@@ -40,6 +40,19 @@ import {
 const provider = (process.env.GENIE_ACP_PROVIDER ?? 'claude').trim();
 
 /**
+ * HOW THIS CHILD HANDLES PERMISSIONS, from the env `agent-spec.ts` built.
+ *
+ * Without it the claude CLI denies every tool call — see `CLAUDE_ACP_PERMISSION_MODE` there
+ * for the measurement and for why the mode is `bypassPermissions` rather than one that asks.
+ *
+ * In the env for the same reason the provider is: the argv is `[script]` and nothing else, so
+ * one place decides how this child is launched. Absent or empty reads as `undefined`, which
+ * omits the flag entirely and leaves the CLI's own default alone — the state this file
+ * shipped in, kept reachable rather than replaced by a second default here.
+ */
+const permissionMode = (process.env.GENIE_ACP_PERMISSION_MODE ?? '').trim() || undefined;
+
+/**
  * REFUSE A RESUME AT LOAD, rather than letting it die on the first prompt.
  *
  * `probeSession` turns a `session/load` for a conversation that does not exist into a named
@@ -79,8 +92,17 @@ const served = serve({
     output: process.stdout,
     driverFactory: (opts, events) =>
         provider === 'codex'
-            ? new CodexDriver(opts, events)
-            : new ClaudeDriver({ ...opts, cwd: opts.cwd }, events),
+            ? // NOT given a permissionMode. `CodexDriverOptions` has no such field, and codex
+              // does not need one: its driver starts threads with `approvalPolicy: 'on-request'`
+              // and RAISES `onRequestPermission`, which prism forwards to Genie as ACP's
+              // `session/request_permission` and `acp/permission.ts` answers. That is the
+              // human-in-the-loop path claude cannot offer, and overriding it would be a
+              // regression dressed as consistency.
+              new CodexDriver(opts, events)
+            : new ClaudeDriver(
+                  { ...opts, cwd: opts.cwd, ...(permissionMode ? { permissionMode } : {}) },
+                  events,
+              ),
     // Omitted for codex — see above. Passing `undefined` explicitly is the same as passing it, but
     // reads as though a probe was intended.
     ...(probeSession ? { probeSession } : {}),

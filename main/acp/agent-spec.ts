@@ -60,6 +60,43 @@
  * correct, because ACP cannot carry those flags.
  */
 export const ACP_PROVIDERS = ['claude', 'codex', 'gemini', 'kimi'] as const;
+
+/**
+ * HOW A CLAUDE ACP CHILD HANDLES PERMISSIONS — and why it needs telling at all (genie#838).
+ *
+ * Genie passed the claude CLI no `--permission-mode`, and without one it DENIES every tool
+ * call. Measured against a real child on 2026-10-08:
+ *
+ *   > Permission to use Write has been denied because Claude Code is running in
+ *   > don't ask mode.
+ *
+ * Three turns, three working directories: the two launched as Genie shipped left the
+ * directory EMPTY; the one launched with a mode left the file in it. So an ACP agent could
+ * not edit anything — the whole point of version 2 — while the pty path it replaced had
+ * always been able to, because `main/agents/os-agent.ts` appends
+ * `--dangerously-skip-permissions` and the normal agent launch does too.
+ *
+ * ## Why `bypassPermissions` and not a mode that asks
+ *
+ * Because asking is not reachable for this provider. prism's ACP layer forwards permission
+ * requests properly and **CodexDriver raises them** — but **ClaudeDriver has no permission
+ * plumbing at all**: no `onRequestPermission` in its events interface, nothing in its
+ * implementation. Zero requests arrived across three real turns. So claude's only two
+ * reachable states are "proceeds" and "denied":
+ *
+ *   - `manual` / `dontAsk` — denied, which is today's bug.
+ *   - `acceptEdits` — allows edits, denies `Bash`. Measured, a denied call makes the agent
+ *     THRASH: when `Write` was refused it immediately tried PowerShell instead. A
+ *     half-open mode buys no safety and costs a wasted tool call per attempt.
+ *   - `bypassPermissions` — parity with the pty path, which is the behaviour every Genie
+ *     agent has shipped with. Not a new exposure; the same one, restored.
+ *
+ * This is the root-cause fix available to GENIE. The better fix is prism's: a ClaudeDriver
+ * that can ask, so `manual` works and the inline-approval rail — which Genie already
+ * implements in `acp/permission.ts` — stops being dead code for the default provider.
+ * Filed upstream; when it lands, this constant is what changes.
+ */
+export const CLAUDE_ACP_PERMISSION_MODE = 'bypassPermissions';
 export type AcpProvider = (typeof ACP_PROVIDERS)[number];
 
 export interface AcpLaunch {
@@ -223,6 +260,18 @@ export function acpEnv(provider: string, host: HostEnv, opts: AcpAuth): Record<s
          * the env is already the allow-listed thing this function exists to build.
          */
         GENIE_ACP_PROVIDER: provider,
+
+        /**
+         * HOW TO HANDLE PERMISSIONS — claude only, deliberately.
+         *
+         * See {@link CLAUDE_ACP_PERMISSION_MODE} for why the mode is needed and why it is
+         * this one. The reason it is claude-ONLY is the asymmetry between the two drivers:
+         * **CodexDriver raises permission requests and Genie answers them**, so codex already
+         * has a human in the loop. Handing codex a mode would take that away to fix a problem
+         * it does not have — and gemini and kimi are in `ACP_PROVIDERS` without anyone having
+         * measured them, so silence is the right default and claude is the named exception.
+         */
+        ...(provider === 'claude' ? { GENIE_ACP_PERMISSION_MODE: CLAUDE_ACP_PERMISSION_MODE } : {}),
     };
 
     const take = (key: string) => {
