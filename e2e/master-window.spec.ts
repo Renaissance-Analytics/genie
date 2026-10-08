@@ -1380,6 +1380,12 @@ const openLists = async (): Promise<void> => {
 const listsDock = () => page.locator('.lists-dock');
 const listsPin = () => page.locator('[aria-label="Pin lists to the right"]');
 const listsUnpin = () => page.locator('[aria-label="Unpin lists"]');
+/** The flyout ROOT (where `open` lives) and its scrim — the only way to CLOSE Lists, since
+ *  `activateFeature` only ever opens. Scoped by the dialog inside it: `.docs-scrim` is shared by
+ *  eight flyouts, so an unscoped locator is a strict-mode violation rather than a target. */
+const listsRoot = () =>
+    page.locator('.docs-flyout-root').filter({ has: page.locator('[role="dialog"][aria-label="Lists"]') });
+const listsScrim = () => listsRoot().locator('.docs-scrim');
 
 /** One element's box, or null when it is not on screen. */
 async function boxOf(selector: string): Promise<{ x: number; right: number; bottom: number } | null> {
@@ -1507,10 +1513,20 @@ ${JSON.stringify({ before, after }, null, 2)}`)
     // different coordinate systems, which is what this spec kept getting wrong.)
     expect(Math.abs((before.body!.w - after.body!.w) - dock.width)).toBeLessThanOrEqual(1);
 
-    // Leave the floor as it was found — every test after this one sees it.
+    // Leave the floor as it was found — every test after this one sees it, and this cleanup did
+    // NOT. It used to re-run `openLists()` after unpinning, which cannot close anything:
+    // `activateFeature` is `setListsOpen(true)`, never a toggle. So it left the Lists FLYOUT open
+    // for the rest of the file, and that is what CI reported two tests later — *"<div
+    // class="docs-scrim"> … intercepts pointer events"*, because an open flyout's scrim covers the
+    // whole window. (The palette being under that scrim at all was a real defect and is fixed
+    // separately, in the z-ladder; this is the pollution that exposed it.)
+    //
+    // Closed the way a person closes it: the scrim. Clicked near its top-left for the same reason
+    // the Genie OS backdrop is — the panel sits ON the scrim, so its centre is the panel.
     await listsUnpin().click();
-    await openLists();
     await expect(listsDock()).toHaveCount(0);
+    await listsScrim().click({ position: { x: 6, y: 6 } });
+    await expect(listsRoot()).not.toHaveClass(/\bopen\b/);
 });
 
 /**
@@ -1756,7 +1772,15 @@ test('the Genie OS shimmer does not run just because the panel is open', async (
     // which is also why deleting the icon did not leave this layer unclosable. Escape does NOT
     // close it, measured on all three platforms: the layer stayed `is-open` and the assertion said
     // so, which is the guard working rather than a flake.
-    await page.getByRole('button', { name: 'Close Genie OS' }).click();
+    //
+    // CLICKED NEAR ITS TOP-LEFT, not at its centre, and CI is why: a bare `.click()` aims at the
+    // element's middle, the backdrop is `inset: 0`, and the flyout sits ON it — so Playwright
+    // reported *"<div class="xterm-screen"> from <aside class="genie-os-flyout"> … intercepts
+    // pointer events"* and retried for thirty seconds. The flyout is `right: 12px` and
+    // `width: min(760px, 100vw - 48px)`, so in this 884px window it starts at x≈112 and a few
+    // pixels in from the left is backdrop and nothing else. That is also what a person does: you
+    // dismiss a right-hand drawer by clicking the dimmed part, not through the drawer.
+    await page.getByRole('button', { name: 'Close Genie OS' }).click({ position: { x: 6, y: 6 } });
     await expect(layer).not.toHaveClass(/\bis-open\b/);
 });
 

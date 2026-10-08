@@ -45,11 +45,19 @@ test.afterAll(async () => {
 test('the workstation really is empty, so this file is testing the state it claims', async () => {
     // POSITIVE CONTROL for the rig flag. Without it every assertion below could pass on a seeded
     // workstation for reasons that have nothing to do with first run.
-    // Read from the RENDERER rather than from main: the rail lists one `.tproj` row per workspace,
-    // so zero rows is the same fact seen through the surface that depends on it — and it needs no
-    // dynamic import of a main module, which the e2e tsconfig cannot type.
+    // Read from the RENDERER rather than from main: the rail lists one row per workspace, so zero
+    // rows is the same fact seen through the surface that depends on it — and it needs no dynamic
+    // import of a main module, which the e2e tsconfig cannot type.
+    //
+    // `button.tproj-head`, NOT `.tproj`. The first version of this control asserted `.tproj` and
+    // CI reported 1 row on all three platforms — and it was right to, but about the wrong thing:
+    // `Chooser.tsx` renders a second `.tproj` for the **"Unattached"** group, which is exactly
+    // what clearing the workspaces produces, since their terminal specs are then orphaned. So the
+    // rig worked and the assertion did not. A workspace row's head is a `<button>` (it activates
+    // the workspace); the orphans group's is a plain `<div>`, so the tag is the structural
+    // difference rather than a text match on a heading that could be renamed.
     await expect(
-        page.locator('.tproj'),
+        page.locator('button.tproj-head'),
         'GENIE_E2E_EMPTY_WORKSTATION should have cleared the seed',
     ).toHaveCount(0);
 });

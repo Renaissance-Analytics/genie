@@ -191,10 +191,18 @@ function showE2EWindow(host: E2EHost): void {
          * different window.
          */
         if (process.env.GENIE_E2E_EMPTY_WORKSTATION) {
-            try {
-                for (const ws of listWorkspaces()) removeWorkspace(ws.id);
-            } catch (e) {
-                console.error('[e2e] clearing workspaces failed', e);
+            // ONE TRY PER ROW, not one around the loop. `removeWorkspaceIn` THROWS by design for
+            // the System Workspace — *"the workstation operator's own workspace and cannot be
+            // unregistered"* — and a `try` around the whole loop means the first such throw leaves
+            // every remaining workspace in place. `listWorkspaces()` excludes that row today, so
+            // this is latent rather than live; it costs a line, and the failure it prevents is a
+            // whole VM run spent on a first-run spec testing a seeded workstation.
+            for (const ws of listWorkspaces()) {
+                try {
+                    removeWorkspace(ws.id);
+                } catch (e) {
+                    console.error(`[e2e] clearing workspace ${ws.id} failed`, e);
+                }
             }
         } else {
             // Seed the fixture workspaces + terminals BEFORE the window loads: the

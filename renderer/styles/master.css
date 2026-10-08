@@ -77,6 +77,19 @@
     --z-boot: 9999;
 }
 [data-react-fancy-portal] > div:has([data-react-fancy-modal]),
+/* THE COMMAND PALETTE, added after CI caught it on all three platforms: Playwright said
+   *"<div class="docs-scrim"> … intercepts pointer events"* with the palette open and visible.
+   Fancy's `Command` portals into a container carrying Tailwind's `z-50`, and Genie's chrome
+   flyouts sit at `--z-chrome-flyout: 60` — so the palette painted UNDER the scrim of any of the
+   EIGHT flyouts that share `.docs-flyout-root`.
+
+   It belongs in this rule rather than a new one: #66's mechanism is "every Fancy portal surface,
+   lifted once", and `Command` was simply missed because its positioned portal child carries no
+   `data-react-fancy-*` of its own — it only CONTAINS `[data-react-fancy-command]`.
+
+   Harmless before P7, when the palette was one way in among eight title-bar icons. Now it IS the
+   way in, and what it reaches are flyouts, so ⌘K was unusable exactly when it was needed. */
+[data-react-fancy-portal] > div:has([data-react-fancy-command]),
 [data-react-fancy-portal] > [data-react-fancy-popover] {
     z-index: var(--z-fancy-overlay);
 }
@@ -8401,6 +8414,17 @@ body.gutter-dragging .grid-gutter {
     padding: 6px 10px;
     border-radius: 8px;
     background: rgba(124, 156, 255, 0.10);
+}
+
+/* A SIBLING AGENT'S DM, which is a `user` message that is not from you.
+   P7 folds the DM thread into this transcript, so the surface is now multi-party. Left-aligned
+   rather than right: the right edge means "you said this", and putting another agent's request
+   there is the confusion the `author` label exists to prevent. Tinted differently and marked
+   with a rule, so a skim for "what did I ask" does not pick it up. */
+.agent-msg[data-role='user'][data-from='peer'] {
+    align-self: flex-start;
+    background: rgba(160, 160, 176, 0.10);
+    border-left: 2px solid var(--fg-4, rgba(160, 160, 176, 0.5));
 }
 
 .agent-msg[data-role='error'] {

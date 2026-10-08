@@ -109,3 +109,59 @@ describe('the z-index ladder', () => {
         expect(CSS.length).toBeGreaterThan(10_000);
     });
 });
+
+/**
+ * THE COMMAND PALETTE MUST BE LIFTED — found by CI, and a severe defect since P7.
+ *
+ * E2E `master-window.spec.ts:1437` failed on all three platforms with Playwright naming the
+ * culprit outright: *"`<div class="docs-scrim">` from `<div id="root">…</div>` subtree intercepts
+ * pointer events"*. The palette was open and visible, and its rows could not be clicked.
+ *
+ * ## Why
+ *
+ * Fancy's `Command` portals into a container styled with Tailwind's `z-50` (read from
+ * `dist/chunk-YCV43A7D.js`: `className: "fixed inset-0 z-50 flex items-start justify-center"`).
+ * Genie's own chrome flyouts sit at `--z-chrome-flyout: 60`. So **the palette paints UNDER any
+ * open flyout's scrim** — and `.docs-flyout-root` is shared by eight of them (Lists, Docs, Flows,
+ * Sharing, IssueWatch, AgentInbox, Tasks, GitHub caps).
+ *
+ * genie#66 already built the mechanism for exactly this: lift every Fancy portal surface onto one
+ * rung. That rule matches `[data-react-fancy-modal]` and `[data-react-fancy-popover]` and was
+ * simply never extended to `Command`, whose positioned portal child carries neither marker — it
+ * only CONTAINS `[data-react-fancy-command]`.
+ *
+ * ## Why it only started mattering now
+ *
+ * Before P7 the palette was one way in among eight title-bar icons; now it IS the way in, and the
+ * features it reaches are flyouts. So "⌘K does nothing while a flyout is open" went from an
+ * annoyance to the palette being unusable precisely when it is needed.
+ *
+ * Asserted here rather than only in E2E because the ladder is this file's subject, and because a
+ * source assertion runs on every push while E2E runs on the VM.
+ */
+describe('every Fancy portal surface rides the Fancy rung', () => {
+    /** The one lift rule, as text — selectors and all. */
+    const LIFT = CSS.slice(CSS.indexOf('[data-react-fancy-portal]'));
+    const liftBlock = LIFT.slice(0, LIFT.indexOf('}') + 1);
+
+    it('lifts the MODAL portal, which is the rule genie#66 built', () => {
+        // The positive control: if this stops matching, the extraction below is reading the wrong
+        // block and every assertion here is vacuous.
+        expect(liftBlock).toContain('div:has([data-react-fancy-modal])');
+        expect(liftBlock).toContain('var(--z-fancy-overlay)');
+    });
+
+    it('lifts the POPOVER portal', () => {
+        expect(liftBlock).toContain('[data-react-fancy-popover]');
+    });
+
+    it('lifts the COMMAND portal, or ⌘K opens under every flyout scrim', () => {
+        expect(liftBlock).toContain('div:has([data-react-fancy-command])');
+    });
+
+    it('lifts it ABOVE the chrome flyout rung, which is the number that broke it', () => {
+        // Fancy's own `z-50` is below `--z-chrome-flyout: 60`. The lift is only a fix if the rung
+        // it lifts to actually outranks the thing that was covering it.
+        expect(rung('--z-fancy-overlay')!).toBeGreaterThan(rung('--z-chrome-flyout')!);
+    });
+});
