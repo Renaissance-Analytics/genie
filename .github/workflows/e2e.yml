@@ -177,6 +177,31 @@ jobs:
       #
       # `always()` because a FAILED run is when the evidence matters most --
       # that is the run whose error-context nobody could read.
+      # MINIDUMPS, for genie#667. Five renderer crashes across all three platforms have
+      # produced no cause, because the only evidence ever collected is Playwright's
+      # "Page crashed" -- which is the next command noticing, not the crash. Crashpad
+      # writes dumps under the profile the rig launches with (`--user-data-dir`), and
+      # they died on the runner with everything else before the upload existed.
+      #
+      # `|| true` and `continue-on-error` throughout: a missing dump directory is the
+      # NORMAL case, and a diagnostics step must never be the reason a green run reports
+      # failure. The path comes from `crashDumpDir()` in the launch helper, printed here
+      # so the two cannot drift.
+      - name: Collect renderer crash dumps (genie#667)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          DUMPS="$(node -e "const os=require('node:os'),path=require('node:path');process.stdout.write(path.join(os.tmpdir(),'genie-e2e-profile','Crashpad'))")"
+          echo "looking for minidumps in: $DUMPS"
+          if [ -d "$DUMPS" ]; then
+            mkdir -p test-results/crashdumps || true
+            cp -R "$DUMPS"/. test-results/crashdumps/ 2>/dev/null || true
+            find test-results/crashdumps -type f | head -20 || true
+          else
+            echo "no crash dump directory — this is the normal case"
+          fi
+
       - name: Publish what the run actually saw
         if: always()
         uses: actions/upload-artifact@v4

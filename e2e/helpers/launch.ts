@@ -284,6 +284,65 @@ export async function warmElectronRuntime(
     }
 }
 
+/**
+ * WHERE ELECTRON PUTS MINIDUMPS for this rig.
+ *
+ * Crashpad writes under the user-data dir, and the rig launches with
+ * `--user-data-dir=${E2E_USERDATA}`. Named here rather than spelled out in the workflow, so the
+ * path exists once and a step copying dumps into `test-results/` cannot drift from the launch.
+ */
+export function crashDumpDir(): string {
+    return path.join(E2E_USERDATA, 'Crashpad');
+}
+
+/**
+ * REPORT A RENDERER CRASH AT THE MOMENT IT HAPPENS.
+ *
+ * genie#667 has been open since run `34778060990` with one line of evidence — `page.reload: Page
+ * crashed` — and five occurrences have added rows to a table without producing a cause. That message
+ * is not the crash: it is whatever command ran NEXT noticing the renderer had gone, which is also why
+ * the tally reads as though the fault moves between specs.
+ *
+ * Five occurrences now, all three platforms, two specs, and one of them on a **docs-only diff** —
+ * which rules out every "a recent change caused it" explanation by construction. At roughly one job
+ * in three, the green that gates a release is being produced by re-running rather than earned, and
+ * this issue names that property as the reason it has survived.
+ *
+ * DIAGNOSTICS ONLY, deliberately. It changes no product code and no test behaviour, so it cannot
+ * mask what it reports — and it is not a fix. A `page.reload()` following an `app.evaluate()` state
+ * write is the one thing all five share, but that is a hypothesis: a `waitForLoadState` aimed at it
+ * would most likely hide the crash rather than explain it, and a flake that stops reproducing without
+ * a reason is worse than one that still does.
+ */
+/**
+ * Only the `crash` subscription, nothing else.
+ *
+ * The event name is the LITERAL `'crash'` rather than `string`, because Playwright's `Page.on` is an
+ * overload set: a `string` parameter makes TypeScript pick the first overload (`'close'`) and reject
+ * a real `Page` outright. Narrow is also honest — this helper has no business with any other event.
+ */
+type CrashSource = { on: (event: 'crash', listener: () => void) => unknown };
+
+export function attachCrashReporter<T extends CrashSource>(
+    page: T,
+    harness: string,
+    log: (message: string) => void = (m) => console.error(m),
+): T {
+    page.on('crash', () => {
+        try {
+            log(
+                `[e2e] RENDERER CRASHED — harness=${harness} at ${new Date().toISOString()}. `
+                    + `Minidumps (if Crashpad wrote any): ${crashDumpDir()}. `
+                    + 'See genie#667; the "Page crashed" error below is the next command noticing, not the crash.',
+            );
+        } catch {
+            // A diagnostic must never fail a launch. Turning a crash nobody has diagnosed into a
+            // launch nobody can perform would be strictly worse than the gap it is closing.
+        }
+    });
+    return page;
+}
+
 export async function launchGenieE2E(
     harness: E2EHarnessPage = 'issuewatch',
     /** Extra environment for this launch only — e.g. `GENIE_E2E_MCP_SHUTTLE`. */
@@ -317,6 +376,8 @@ export async function launchGenieE2E(
     let page: Page;
     try {
         page = await app.firstWindow();
+        // BEFORE the first wait, so a crash during initial load is reported too — see genie#667.
+        attachCrashReporter(page, harness);
         await page.waitForLoadState('domcontentloaded');
     } catch (e) {
         await closeGenieE2E(app).catch(() => {});
