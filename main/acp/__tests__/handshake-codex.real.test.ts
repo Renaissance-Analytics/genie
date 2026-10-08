@@ -202,6 +202,64 @@ describe.skipIf(pre.missing.length > 0)('a real ACP handshake against the Codex 
             // resume and telemetry off.
             // eslint-disable-next-line no-console
             console.log(`[codex turn] stopReason=${turn.stopReason ?? 'none'} updates=${updates.length}`);
+
+            /**
+             * DOES CODEX ECHO THE OWNER'S PROMPT? — measured, because prism asked us not to take
+             * their reading of their own code for it, and because a wrong answer costs a visible bug
+             * either way.
+             *
+             * claude does not (`handshake.real.test.ts`: no `user_message_chunk` live, and
+             * `session/load` replays nothing). prism's correction: *"the codex driver maps a
+             * `userMessage` item to `user_message_chunk` whenever it carries text, on replay and
+             * live… the same client code is lossy against one provider and duplicating against the
+             * other."* They were explicit that they had verified their MAPPING and not codex's live
+             * frames — *"I am not going to assert what codex emits on the strength of reading my own
+             * code; that is precisely the move that produced the approval bug."*
+             *
+             * It matters here because Genie now records the owner's own prompt itself
+             * (`recordHumanPromptForSpec`), the agent having no obligation to. If codex echoes, that
+             * record and the echo are the same message twice — the mirror image of the defect the
+             * record was added to fix.
+             *
+             * ## What the first run of this found, and why the COUNT is logged
+             *
+             * On 0.5.2 it was `prompt echoes=2` — two identical whole-text frames — and that was
+             * prism's defect rather than codex's: `#mapItem` runs at both `item/started` and
+             * `item/completed`, and the `userMessage` branch was missing the `if (replay || completed)`
+             * guard its sibling branches have. They shipped 0.5.3 with the guard and with tests that
+             * COUNT the frames, their own words being that *"the entire bug was a missing guard that
+             * any 'a user message was emitted' assertion would have sailed past"*.
+             *
+             * Which is why this logs a count and not a boolean. A regression of that guard restores a
+             * doubled prompt in the owner's own transcript, and `user_message_chunk` appearing at all
+             * is exactly the assertion that would miss it.
+             *
+             * Logged, not asserted: this is the reading, and an assertion would freeze whichever
+             * answer today's adapter happens to give.
+             */
+            const kinds = [
+                ...new Set(
+                    updates.map((f) => {
+                        try {
+                            const p = JSON.parse(f) as { update?: { sessionUpdate?: string } };
+                            return p.update?.sessionUpdate ?? 'unknown';
+                        } catch {
+                            return 'unparsed';
+                        }
+                    }),
+                ),
+            ].sort();
+            const echoes = updates.filter((f) => f.includes('user_message_chunk'));
+            // eslint-disable-next-line no-console
+            console.log(`[codex transcript] live=${kinds.join(',') || 'none'} | prompt echoes=${echoes.length}`);
+            // The FRAMES, not just the count. Two echoes could be two chunks of one message — which
+            // coalesce by `messageId` and need prefix matching to suppress — or two separate
+            // messages, which do not. The suppression Genie has to write depends on which, so the
+            // ids and the text go in the log rather than being guessed at from a number.
+            for (const f of echoes.slice(0, 4)) {
+                // eslint-disable-next-line no-console
+                console.log(`[codex echo] ${f.slice(0, 400)}`);
+            }
         } finally {
             started.kill();
         }

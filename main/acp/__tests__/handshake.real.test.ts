@@ -192,8 +192,124 @@ describe.skipIf(pre.missing.length > 0)('a real ACP handshake on the stored subs
             // theoretical.
             expect(turn).toBeTruthy();
             expect(typeof turn.stopReason === 'string' || updates.length > 0).toBe(true);
+
+            /**
+             * MEASURED HERE, on the same turn, because a design decision hangs on it:
+             * **does a declared transcript contain the owner's own prompts?**
+             *
+             * `mergeDeclared` has to decide what happens to the floor transcript, which is
+             * built from the AgentInbox DM thread, when a declared one exists. P7 folds
+             * human<->agent DMs into the Conversation, and an ACP agent's DMs are delivered
+             * as prompts (`acpMailSender`), so the two streams may hold the same text twice
+             * -- or the declared one may hold none of it. Concatenating is right in one case
+             * and duplicates every DM in the other, and the difference is a fact about the
+             * agent, not something to reason out.
+             *
+             * Two readings, both free once the turn above has run:
+             *
+             *  - LIVE: did the agent echo the prompt we just sent as `user_message_chunk`?
+             *  - REPLAY: does `session/load` replay the history, prompts included?
+             *
+             * Logged rather than asserted either way, because this is the measurement and an
+             * assertion here would freeze whichever answer today's adapter happens to give.
+             */
+            const kindsOf = (frames: string[]) =>
+                [
+                    ...new Set(
+                        frames.map((f) => {
+                            try {
+                                const p = JSON.parse(f) as { update?: { sessionUpdate?: string } };
+                                return p.update?.sessionUpdate ?? 'unknown';
+                            } catch {
+                                return 'unparsed';
+                            }
+                        }),
+                    ),
+                ].sort();
+
+            const liveKinds = kindsOf(updates);
+
+            // The replay reading needs a SECOND child: measured, `session/load` against the
+            // child that owns an open session is refused outright -- *"session ... is already
+            // open and its agent is still running (-32602)"* -- which is itself the answer to
+            // whether Genie may re-load a live session. Spawning another child costs no quota;
+            // only the turn above did, and it is not repeated.
+            //
+            // And the id to resume with is NOT the one `session/new` returned: prism refuses
+            // that one by name -- *"an ACP session id minted by this server and cannot be
+            // resumed by the provider. Resume with the CLI's own session id, sent as
+            // 'particle.academy/cli_session_id' in the _meta of the first session/update"* --
+            // which is the provenance distinction `acpResumeSessionId` already encodes, now
+            // confirmed by the adapter's own refusal rather than inferred from its source.
+            started.kill();
+            const cliSessionId = updates
+                .map((f) => {
+                    try {
+                        const p = JSON.parse(f) as { _meta?: Record<string, unknown>; update?: { _meta?: Record<string, unknown> } };
+                        const meta = p.update?._meta ?? p._meta;
+                        const v = meta?.['particle.academy/cli_session_id'];
+                        return typeof v === 'string' && v.trim() !== '' ? v : null;
+                    } catch {
+                        return null;
+                    }
+                })
+                .find((v): v is string => v !== null);
+            const replayKinds = cliSessionId
+                ? await loadReplayKinds(cliSessionId, kindsOf)
+                : 'no cli_session_id in any update _meta';
+
+            // eslint-disable-next-line no-console
+            console.log(
+                `[acp transcript] live=${liveKinds.join(',') || 'none'} | replay=${replayKinds}`,
+            );
         } finally {
             started.kill();
         }
     }, 180_000);
 });
+
+/**
+ * Resume `sessionId` in a FRESH child and report which `session/update` kinds replay.
+ *
+ * Separate because the reading is about a second process, and because the turn test above
+ * must not grow a second spawn inline where it would read as part of the proof.
+ */
+async function loadReplayKinds(
+    sessionId: string,
+    kindsOf: (frames: string[]) => string[],
+): Promise<string> {
+    const second = startAcpAgent(
+        { provider: 'claude', cwd: process.cwd(), auth: 'subscription' },
+        {
+            spawn: (command, args, env, cwd) =>
+                spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }) as unknown as ChildLike,
+            nodeVersion: () => process.version,
+            nodeExec: () => process.execPath,
+            hostScript: hostScriptOf,
+            hostEnv: () => process.env as Record<string, string | undefined>,
+        },
+    );
+    if ('error' in second) return `could not start a second child: ${second.error}`;
+
+    const replay: string[] = [];
+    try {
+        await second.client.request('initialize', {
+            protocolVersion: 1,
+            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+            clientInfo: { name: 'genie', version: '0.0.0-test' },
+        });
+        second.client.onNotification?.('session/update', (p: unknown) => {
+            replay.push(JSON.stringify(p));
+        });
+        await second.client.request('session/load', {
+            sessionId,
+            cwd: process.cwd(),
+            mcpServers: [],
+        });
+        return `(${replay.length}) ${kindsOf(replay).join(',') || 'none'}`;
+    } catch (e) {
+        return `session/load failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+        second.kill();
+    }
+}
