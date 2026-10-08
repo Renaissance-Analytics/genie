@@ -39,11 +39,35 @@ interface Preconditions {
     missing: string[];
 }
 
+/**
+ * The reasons a skip would be legitimate, derived from two facts and NOTHING ELSE.
+ *
+ * Pure and exported so the wording can be asserted in BOTH states on any machine. The previous
+ * assertion was `expect(Array.isArray(pre.missing)).toBe(true)`, which passes whatever the machine
+ * has — so the claim in the comment beside it, that this block proves the skip can say WHY, was
+ * never actually checked. prism hit the same class of defect reviewing this pattern and found the
+ * sharper version in their own copy: `expect(missing).toEqual(hasHome ? [] : [...])`, comparing a
+ * value to the expression that defined it three lines above. A tautology inside the one block whose
+ * entire purpose is to be able to fail.
+ *
+ * Their fix is the one adopted here — assert against a fixed sample in both states, so the
+ * formatting is proved everywhere rather than in whichever state this machine happens to be in.
+ */
+export function missingPreconditions(f: { adapter: string | null; credentials: string | null; configDir: string }): string[] {
+    const missing: string[] = [];
+    if (!f.adapter) {
+        missing.push(
+            `ACP host or prism-acp not present (looked for main/acp/prism-host.mjs + @particle-academy/prism-acp)`,
+        );
+    }
+    if (!f.credentials) missing.push(`no Claude subscription login found under ${f.configDir}`);
+    return missing;
+}
+
 function preconditions(): Preconditions {
     // From the package's `bin`, not from `node_modules/.bin`. The shim there is
     // `.cmd` on Windows, and running it would re-enter whatever `node` is on PATH.
     const adapter = hostScriptOf();
-    const adapterPath = adapter ?? 'main/acp/prism-host.mjs + @particle-academy/prism-acp';
 
     const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude');
     const credFile = [path.join(configDir, '.credentials.json'), path.join(configDir, 'credentials.json')].find((f) =>
@@ -53,19 +77,46 @@ function preconditions(): Preconditions {
     // and it IS a subscription credential, so it counts.
     const credentials = credFile ?? (process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'env:CLAUDE_CODE_OAUTH_TOKEN' : null);
 
-    const missing: string[] = [];
-    if (!adapter) missing.push(`ACP host or prism-acp not present (looked for ${adapterPath})`);
-    if (!credentials) missing.push(`no Claude subscription login found under ${configDir}`);
-    return { adapter, credentials, missing };
+    return { adapter, credentials, missing: missingPreconditions({ adapter, credentials, configDir }) };
 }
 
 const pre = preconditions();
 
 describe('preconditions', () => {
-    it('are answerable, so a skip below is a real skip and not a silent no-op', () => {
-        // The positive control for the whole file. If this ever stops being able to say
-        // what is missing, the skips underneath mean nothing.
-        expect(Array.isArray(pre.missing)).toBe(true);
+    /** A fixed sample, so these assertions say the same thing on the owner's desktop and on CI. */
+    const sample = { adapter: '/x/prism-host.mjs', credentials: '/home/me/.claude/.credentials.json', configDir: '/home/me/.claude' };
+
+    it('says NOTHING is missing when both facts are present', () => {
+        expect(missingPreconditions(sample)).toEqual([]);
+    });
+
+    it('NAMES THE PATH when the login is absent, which is what makes a skip readable', () => {
+        // "Skipped" tells a reader nothing. "no Claude subscription login found under
+        // /home/runner/.claude" distinguishes CI from a broken install on this machine, which is the
+        // entire reason this block is not itself skipped.
+        const r = missingPreconditions({ ...sample, credentials: null });
+        expect(r).toHaveLength(1);
+        expect(r[0]).toContain('/home/me/.claude');
+        expect(r[0]).toContain('login');
+    });
+
+    it('names the adapter when IT is the one missing, and both when both are', () => {
+        expect(missingPreconditions({ ...sample, adapter: null })[0]).toContain('prism-acp');
+        expect(missingPreconditions({ adapter: null, credentials: null, configDir: '/c' })).toHaveLength(2);
+    });
+
+    it('reports what THIS machine is missing, if anything', () => {
+        /**
+         * ASSERTS NOTHING, deliberately, and says so rather than dressing up as a check. Its job is
+         * to put the reason in the run output so a real skip is legible; the three cases above are
+         * what prove the reason can be produced at all.
+         *
+         * The first draft of this line DID assert — `expect(pre.missing).toEqual(
+         * missingPreconditions({ ...pre, configDir }))` — which compares a value to the function that
+         * produced it. That is precisely the tautology prism found in their copy of this gate, written
+         * here while fixing it. A line that cannot fail is worse inside a positive control than
+         * anywhere else, because the file's whole claim is that this block can fail.
+         */
         if (pre.missing.length > 0) {
             // eslint-disable-next-line no-console
             console.log(`[acp real handshake] SKIPPING: ${pre.missing.join('; ')}`);

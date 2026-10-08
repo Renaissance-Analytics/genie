@@ -43,6 +43,23 @@ interface Preconditions {
     missing: string[];
 }
 
+/**
+ * The reasons a skip would be legitimate, from two facts and NOTHING ELSE.
+ *
+ * Pure and exported so the WORDING can be asserted in both states on any machine. See the twin of
+ * this in `handshake.real.test.ts` for why: the old assertion was `expect(Array.isArray(missing))`,
+ * which passes whatever the machine has, so the claim that this block proves a skip can say WHY was
+ * never checked. prism found the sharper form of the same defect reviewing this pattern — an
+ * assertion comparing a value to the expression that defined it, inside the one block whose purpose
+ * is to be able to fail.
+ */
+export function missingPreconditions(f: { host: string | null; credentials: string | null; codexHome: string }): string[] {
+    const missing: string[] = [];
+    if (!f.host) missing.push('ACP host or prism-acp not present');
+    if (!f.credentials) missing.push(`no codex home found at ${f.codexHome}`);
+    return missing;
+}
+
 function preconditions(): Preconditions {
     const host = hostScriptOf();
 
@@ -56,17 +73,34 @@ function preconditions(): Preconditions {
     const codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex');
     const credentials = fs.existsSync(codexHome) ? codexHome : null;
 
-    const missing: string[] = [];
-    if (!host) missing.push('ACP host or prism-acp not present');
-    if (!credentials) missing.push(`no codex home found at ${codexHome}`);
-    return { host, credentials, missing };
+    return { host, credentials, missing: missingPreconditions({ host, credentials, codexHome }) };
 }
 
 const pre = preconditions();
 
 describe('codex preconditions', () => {
-    it('are answerable, so a skip below is a real skip and not a silent no-op', () => {
-        expect(Array.isArray(pre.missing)).toBe(true);
+    /** A fixed sample, so these say the same thing on the owner's desktop and on CI. */
+    const sample = { host: '/x/prism-host.mjs', credentials: '/home/me/.codex', codexHome: '/home/me/.codex' };
+
+    it('says NOTHING is missing when both facts are present', () => {
+        expect(missingPreconditions(sample)).toEqual([]);
+    });
+
+    it('NAMES THE PATH when the codex home is absent', () => {
+        // The point of the gate. "Skipped" tells a reader nothing; "no codex home found at
+        // /home/runner/.codex" distinguishes CI from a broken install here.
+        const r = missingPreconditions({ ...sample, credentials: null });
+        expect(r).toEqual(['no codex home found at /home/me/.codex']);
+    });
+
+    it('names the adapter when IT is missing, and both when both are', () => {
+        expect(missingPreconditions({ ...sample, host: null })).toEqual(['ACP host or prism-acp not present']);
+        expect(missingPreconditions({ host: null, credentials: null, codexHome: '/c' })).toHaveLength(2);
+    });
+
+    it('reports what THIS machine is missing, if anything', () => {
+        // Asserts nothing, deliberately: its job is to put the reason in the run output so a real
+        // skip is legible. The three cases above prove the reason can be produced at all.
         if (pre.missing.length > 0) {
             // eslint-disable-next-line no-console
             console.log(`[acp codex handshake] SKIPPING: ${pre.missing.join('; ')}`);
