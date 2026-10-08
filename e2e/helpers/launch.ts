@@ -550,6 +550,16 @@ export async function launchGenieE2E(
          * log; see that function for why `WARNING` is excluded and why the match is anchored.
          */
         const stderr = app.process().stderr;
+        /**
+         * SAY WHICH IT IS. Without this line, "no FATAL lines in the log" is ambiguous between
+         * *nothing fatal happened* and *the capture was inert because `stderr` was null* — and
+         * `if (stderr)` skips silently. That is exactly the distinction this codebase insists on
+         * everywhere else (`null` is "cannot see", `[]` is "none"), broken here in a diagnostic
+         * whose whole purpose is to make an absence meaningful. Measured: the first run reported
+         * zero captured lines on all three platforms and could not tell me which had happened.
+         */
+        // eslint-disable-next-line no-console
+        console.log(`[e2e] electron stderr: ${stderr ? 'attached' : 'NOT AVAILABLE — a FATAL line cannot be captured, see genie#667'} (${harness})`);
         if (stderr) {
             let pending = '';
             stderr.on('data', (chunk: Buffer | string) => {

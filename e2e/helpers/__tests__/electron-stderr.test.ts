@@ -100,6 +100,18 @@ describe('the launch path captures it', () => {
         expect(src).toContain('isFatalElectronLine(');
     });
 
+    it('REPORTS whether the capture is live, so silence is unambiguous', () => {
+        /**
+         * The first version logged nothing when `app.process().stderr` was null, and `if (stderr)`
+         * skips silently — so "zero FATAL lines" could mean *nothing fatal happened* or *the capture
+         * was inert*, and the first CI run could not tell me which. That is the `null` vs `none`
+         * rule this codebase states everywhere, broken inside a diagnostic whose entire job is to
+         * make an absence meaningful.
+         */
+        expect(src).toContain('electron stderr: ${stderr ? ');
+        expect(src).toContain('NOT AVAILABLE');
+    });
+
     it('positive control: the guard reads the real file', () => {
         expect(src).toContain('export async function launchGenieE2E');
         expect(src).not.toContain('isFatalElectronLineThatDoesNotExist');
