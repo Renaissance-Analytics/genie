@@ -49,6 +49,16 @@ const base: AgentSessionSpec = {
     rateLimitUnavailable: null,
     composer: { text: '', cursor: 0, busy: false },
     transcript: [{ id: 'm1', role: 'user', content: 'the pty host dies on upgrade' }],
+    // A SETTLED thought and nothing live: the fixture shows the readable state, because a
+    // live thought renders as "Thinking…" with its text withheld and would assert nothing.
+    thoughts: [
+        {
+            id: 'th1',
+            text: 'feedTerminalData is called from two places; the second one bypasses the guard…',
+            at: NOW - 4_000,
+        },
+    ],
+    liveThought: null,
     live: null,
     // A PENDING call genuinely has no arguments and no result yet: measured, `rawInput`
     // arrives on the `in_progress` frame and the result on the closing one. So the nulls here

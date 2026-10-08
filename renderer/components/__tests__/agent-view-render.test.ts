@@ -20,6 +20,8 @@ const session = (over: Partial<AgentSession> = {}): AgentSession => ({
     specId: 's1',
     session: { provider: 'claude', name: 'kai', cwd: 'repos/genie', workspaceId: 'w1', sessionId: 'sess' },
     turn: { state: 'idle', since: NOW },
+    thoughts: [],
+    liveThought: null,
     rateLimit: null,
     rateLimitUnavailable: null,
     composer: null,
@@ -274,9 +276,17 @@ describe('the Conversation says WHO, not just what role', () => {
             ],
         });
 
-    /** The `agent-msg-who` labels, in order, with no message bodies in the way. */
+    /**
+     * The speaker labels, in order, with no message bodies in the way.
+     *
+     * The CLASS moved from `agent-msg-who` to `stream-who` when §5.2's Stream replaced the raw
+     * transcript list. Every assertion below is UNCHANGED — the markup moved, the contract did
+     * not, and the contract is what these four cases are for. They also earned their keep in
+     * the move: the first version of the Stream projection dropped the ROLE fallback, so an
+     * agent's row and an error row came back unlabelled, and the last two cases caught it.
+     */
     const whoLabels = (html: string): string[] =>
-        [...html.matchAll(/class="[^"]*agent-msg-who[^"]*"[^>]*>([^<]*)</g)].map((m) => m[1]!);
+        [...html.matchAll(/class="[^"]*stream-who[^"]*"[^>]*>([^<]*)</g)].map((m) => m[1]!);
 
     it('NAMES a sibling agent that sent a DM', () => {
         expect(whoLabels(render(thread()))).toContain(SIBLING);

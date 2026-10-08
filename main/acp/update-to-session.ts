@@ -30,7 +30,7 @@ import {
  */
 
 import { applyPlanTool, isUnrecognisedPlanTool } from './plan-synthesis';
-import type { AgentSession, Message, PlanEntry, SlashCommand, ToolCall } from '../agentsession/model';
+import type { AgentSession, Message, PlanEntry, SlashCommand, Thought, ToolCall } from '../agentsession/model';
 
 /** Every `sessionUpdate` discriminant in the ACP stable schema. Compared against the
  *  shipped `schema.json` in both directions by the tests. */
@@ -165,6 +165,19 @@ export const LIVE_MESSAGE_ID = 'live';
  */
 export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: number): AgentSession {
     /**
+     * SETTLE THE LIVE THOUGHT, for any update that is not another thought chunk.
+     *
+     * A thought has no terminator on the wire: it ends when the agent does something else.
+     * Doing this ONCE here rather than in each branch is deliberate — there are eighteen
+     * handled kinds and a per-branch settle is a list someone forgets, which would leave a
+     * thought growing across a tool call and then across a reply, appearing as one run-on
+     * paragraph attached to the wrong moment.
+     */
+    if (u.sessionUpdate !== 'agent_thought_chunk' && s.liveThought) {
+        s = { ...s, thoughts: [...s.thoughts, s.liveThought], liveThought: null };
+    }
+
+    /**
      * THE CLI'S SESSION ID — captured from whichever update carries it first.
      *
      * ACP's `session/new` returns an id prism-acp MINTS; the provider's real id is a
@@ -267,10 +280,22 @@ export function applySessionUpdate(s: AgentSession, u: AcpSessionUpdate, now: nu
             };
         }
 
-        case 'agent_thought_chunk':
-            // Handled, not stored. The model has no field for reasoning, and appending
-            // it to `live` would splice private thinking into the visible reply.
-            return { ...s, turn: { state: 'thinking', since: now } };
+        case 'agent_thought_chunk': {
+            /**
+             * STORED NOW, in its own field (genie#848). The old handler discarded the text with
+             * a correct reason — it must not reach `live` — but the board needs thoughts as
+             * their own row kind, so the answer is a separate field rather than the bin.
+             *
+             * Accumulates like a message chunk, and `at` is stamped when the thought STARTED so
+             * a long piece of reasoning orders by when the agent began it.
+             */
+            const chunk = textOf(u.content);
+            if (chunk === null) return { ...s, turn: { state: 'thinking', since: now } };
+            const liveThought: Thought = s.liveThought
+                ? { ...s.liveThought, text: s.liveThought.text + chunk }
+                : { id: `thought:${now}`, text: chunk, at: now };
+            return { ...s, liveThought, turn: { state: 'thinking', since: now } };
+        }
 
         case 'tool_call': {
             if (!u.toolCallId) return s;

@@ -161,6 +161,17 @@ export function mergeDeclared(
         live: declared.live,
         tools: declared.tools,
 
+        /**
+         * REASONING IS DECLARED-ONLY, and more absolutely than anything else here: a pty
+         * floor cannot produce a thought even in principle. Genie sees bytes on a terminal;
+         * an agent's reasoning exists only because the agent reports it.
+         *
+         * So the declared value is simply the value, `[]` included — which says this agent
+         * has thought nothing yet, not that we cannot see its thinking.
+         */
+        thoughts: declared.thoughts,
+        liveThought: declared.liveThought,
+
         // Declared-only fields: the floor never sets any of these, so `said` is the whole
         // rule and an empty declared value is still a declaration.
         // Declared-only, like the rest: a pty agent never reports a rate limit, so the floor

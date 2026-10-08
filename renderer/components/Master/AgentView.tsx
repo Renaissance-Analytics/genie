@@ -3,7 +3,7 @@ import { Badge, Button, Card, Heading, Progress, Text, Textarea } from '@particl
 import type { AgentSession } from '../../../main/agentsession/model';
 import { knownFacts, sessionFidelity } from '../../../main/agentsession/model';
 import { agentViewTabs, defaultTabFor, parkedApproval, type AgentViewTab } from '../../lib/agent-view';
-import { toolSubject } from '../../lib/tool-subject';
+import { AgentStream } from './AgentStream';
 // The LEAF, not `./rate-limit` — that one imports prism's types and the renderer boundary
 // test refuses a `main/` module with a bare package specifier in it.
 import { rateLimitSummary } from '../../../main/agentsession/rate-limit-headroom';
@@ -233,50 +233,19 @@ export function AgentView({
             <div className="agent-view-body">
                 {active === 'session' ? (
                     <div className="agent-conversation">
-                        {session.transcript.map((m) => (
-                            <div
-                                className="agent-msg"
-                                key={m.id}
-                                data-role={m.role}
-                                // A styling hook, and the only visual difference between the
-                                // owner's instruction and another agent's request.
-                                data-from={m.author ? 'peer' : undefined}
-                            >
-                                <Text size="xs" className="agent-msg-who">
-                                    {speakerOf(m)}
-                                </Text>
-                                <Text size="sm">{m.content}</Text>
-                            </div>
-                        ))}
-
-                        {session.live ? (
-                            <div className="agent-msg live" data-role={session.live.role}>
-                                <Text size="sm">{session.live.content}</Text>
-                            </div>
-                        ) : null}
-
-                        {session.tools.map((t) => {
-                            /**
-                             * WHAT it is acting on, when the agent said — "Write · ipc.ts"
-                             * rather than "Write". The brief asks for exactly this phrasing
-                             * (*"it is editing `ipc.ts` right now"*), and genie#843 is what made
-                             * it answerable: the arguments used to be discarded on arrival.
-                             *
-                             * `null` renders NO separator and no word. Not "unknown" — a
-                             * provider shaping its arguments differently is not this row's
-                             * business to narrate, and the refusals are asserted in
-                             * `lib/__tests__/tool-subject.test.ts`.
-                             */
-                            const subject = toolSubject(t);
-                            return (
-                                <Card className="agent-tool" key={t.id} data-kind={t.kind ?? undefined}>
-                                    <Text size="xs">
-                                        {t.name}
-                                        {subject ? ` · ${subject}` : ''} · {t.status}
-                                    </Text>
-                                </Card>
-                            );
-                        })}
+                        {/**
+                          * THE STREAM (§5.2) replaces the raw transcript, the live message and
+                          * the tool-call list that used to be rendered here as three separate
+                          * runs. One ordered list is the point: a thought, the tool it led to,
+                          * and what the agent said about the result read as a sequence, which
+                          * three lists stacked in field order cannot show.
+                          *
+                          * The approval card and the composer below are deliberately left in
+                          * place. The board moves the composer into the chat flyout, and that
+                          * is a real change — but doing it here would leave this surface with
+                          * no way to type before the flyout is the default way in.
+                          */}
+                        <AgentStream session={session} now={now} />
 
                         {parked ? (
                             <Card className="agent-approval">
@@ -304,9 +273,6 @@ export function AgentView({
                             </Card>
                         ) : null}
 
-                        {session.transcript.length === 0 && !session.live ? (
-                            <Text size="sm">Nothing said yet.</Text>
-                        ) : null}
 
                         {canSend ? (
                             <div className="agent-composer" data-testid="agent-composer">

@@ -424,3 +424,122 @@ describe('a tool call keeps what the agent actually sent', () => {
         expect(call.result).toBeTruthy();
     });
 });
+
+/**
+ * THOUGHTS ARE KEPT — "oversight on every edit, every THOUGHT" (§5.2), genie#848.
+ *
+ * `agent_thought_chunk` was handled and discarded, and the reason recorded for discarding it
+ * was correct: *"appending it to `live` would splice the agent's private thinking into what it
+ * actually said."* Right conclusion, wrong remedy — the answer is a field of its own, not the
+ * bin. The board's Stream shows a thought as its own row kind, one line, never expanded.
+ *
+ * ## What is deliberately NOT here
+ *
+ * A per-thought TOKEN COUNT. The board's mockup shows `842 tok`, and that number is not on the
+ * wire — nothing in a thought chunk carries it. The surfaces designer reached the same place
+ * independently and refused to estimate it from character count, which is right: an estimate
+ * dressed as a measurement is the defect this repo keeps paying for. So `Thought` has no token
+ * field, and the closed key-set assertion below is what stops one appearing by guesswork.
+ */
+describe('thoughts are stored, separately from speech', () => {
+    const thought = (text: string) => ({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text },
+    });
+
+    it('starts a LIVE thought rather than a live message', () => {
+        const s = applySessionUpdate(base(), thought('Controller should only validate…'), NOW);
+        expect(s.liveThought?.text).toBe('Controller should only validate…');
+        // The whole point of the original refusal: it must not reach what the agent SAID.
+        expect(s.live).toBeNull();
+        expect(s.transcript).toEqual([]);
+    });
+
+    it('accumulates across chunks, like a message does', () => {
+        let s = applySessionUpdate(base(), thought('No sign-count column. '), NOW);
+        s = applySessionUpdate(s, thought('Either add a migration or ask wren…'), NOW + 10);
+        expect(s.liveThought?.text).toBe('No sign-count column. Either add a migration or ask wren…');
+        // Stamped when the thought STARTED, not when it last grew — the same rule as
+        // `Message.at`, so the stream orders by when the agent began thinking.
+        expect(s.liveThought?.at).toBe(NOW);
+    });
+
+    it('SETTLES into `thoughts` when something else happens', () => {
+        /**
+         * A thought ends when the agent does something — a tool call, a reply. There is no
+         * "thought finished" update, so the boundary is the next event, which is also exactly
+         * how the board draws it: a thought row followed by the tool row it led to.
+         */
+        let s = applySessionUpdate(base(), thought('webauthn-lib is not in composer.json yet…'), NOW);
+        s = applySessionUpdate(
+            s,
+            { sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Read', title: 'Read', status: 'pending' },
+            NOW + 20,
+        );
+        expect(s.liveThought).toBeNull();
+        expect(s.thoughts).toHaveLength(1);
+        expect(s.thoughts[0]!.text).toBe('webauthn-lib is not in composer.json yet…');
+        expect(s.thoughts[0]!.at).toBe(NOW);
+    });
+
+    it('settles when the agent SPEAKS, and the thought stays out of the speech', () => {
+        let s = applySessionUpdate(base(), thought('Keep the controller thin…'), NOW);
+        s = applySessionUpdate(
+            s,
+            { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' }, messageId: 'm1' },
+            NOW + 20,
+        );
+        expect(s.thoughts).toHaveLength(1);
+        expect(s.live?.content).toBe('Done.');
+        // The assertion the original comment was protecting. Still true, now by separation
+        // rather than by deletion.
+        expect(s.live?.content).not.toContain('controller thin');
+    });
+
+    it('keeps several thoughts in the order they were thought', () => {
+        let s = base();
+        for (const [i, text] of ['first', 'second', 'third'].entries()) {
+            s = applySessionUpdate(s, thought(text), NOW + i * 100);
+            s = applySessionUpdate(
+                s,
+                { sessionUpdate: 'tool_call', toolCallId: `t${i}`, name: 'Read', title: 'Read', status: 'pending' },
+                NOW + i * 100 + 10,
+            );
+        }
+        expect(s.thoughts.map((t) => t.text)).toEqual(['first', 'second', 'third']);
+    });
+
+    it('still moves the turn to thinking, which is what it did before', () => {
+        // The one behaviour the old handler had. Keeping it asserted means the rewrite cannot
+        // quietly drop it while adding storage.
+        const s = applySessionUpdate(base(), thought('…'), NOW);
+        expect(s.turn.state).toBe('thinking');
+    });
+
+    it('fabricates NO token count — a closed key set is what enforces that', () => {
+        /**
+         * The board shows `842 tok` on a thought row. That number is not on the wire, and the
+         * only way to produce one here would be to estimate it from the text — an estimate
+         * dressed as a measurement. A `Δctx` delta between two real `usage_update`s is the
+         * honest version and belongs to the stream projection, not to this type.
+         *
+         * So the shape is pinned: a field named anything like `tokens` cannot be added without
+         * this line changing, in a diff a human reads.
+         */
+        let s = applySessionUpdate(base(), thought('x'), NOW);
+        s = applySessionUpdate(
+            s,
+            { sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Read', title: 'Read', status: 'pending' },
+            NOW + 10,
+        );
+        expect(Object.keys(s.thoughts[0]!).sort()).toEqual(['at', 'id', 'text']);
+    });
+
+    it('is `[]` and not null, because Genie owns this list', () => {
+        // `[]` is "the agent has thought nothing yet", which is a FACT. `null` would mean
+        // "cannot see", and that is never true here: a declaring agent's thoughts arrive or
+        // they do not exist. Same distinction as `approvals`.
+        expect(base().thoughts).toEqual([]);
+        expect(base().liveThought).toBeNull();
+    });
+});
