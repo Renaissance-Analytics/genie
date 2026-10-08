@@ -8498,3 +8498,45 @@ body.gutter-dragging .grid-gutter {
         gap: 16px;
     }
 }
+
+/* ── First run ────────────────────────────────────────────────────────────────
+   "What I found" — four lines, none of them a gate. Owner: *"on a fresh workstation with no
+   workspaces, genie is just making sure the toolchain and environment is ready for development."*
+
+   The TONE carries the distinction that matters: `missing` is something that costs you, `off` is an
+   optional service that is simply not connected, and the two must not look alike — Tynn being
+   optional is the owner's rule, and a line that reads as a fault makes it feel mandatory. */
+.firstrun-readiness {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.firstrun-readiness-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.firstrun-readiness-line:last-child {
+    border-bottom: none;
+}
+
+/* READY says nothing loudly. Four green ticks is furniture. */
+.firstrun-readiness-line[data-state='ready'] {
+    color: var(--fg-3);
+}
+
+/* MISSING costs you something — a driver, or the ability to commit. */
+.firstrun-readiness-line[data-state='missing'] {
+    color: var(--amber-400);
+}
+
+/* OFF is not a fault. Same weight as ready, so an optional service reads as a choice rather than
+   as an error waiting to be cleared. */
+.firstrun-readiness-line[data-state='off'] {
+    color: var(--fg-3);
+}

@@ -10,6 +10,12 @@ import {
     firstAgentDriver,
     type FirstAgentPreset,
 } from '../../lib/workspace-onboarding';
+import {
+    canStartFirstAgent,
+    workstationReadiness,
+    type ReadinessLine,
+} from '../../lib/workstation-readiness';
+import { useGitHubAccount } from '../GitHubConnect';
 
 /**
  * FIRST RUN, IN TWO STEPS: pick a folder, then meet an agent.
@@ -25,11 +31,19 @@ import {
  *    is installed, falls back to anything that is, and reports NOT READY only when the machine
  *    has nothing — which is the one case that genuinely blocks a first agent, and now surfaces
  *    where it can be acted on instead of as a gate in front of everything.
- *  - **Everything else is deferred to where it already lives.** Each was located in source before
- *    its step was deleted: Tynn is enforced by `master.tsx` refusing to render signed out, GitHub
- *    and the toolchain wizard are in Settings, and the Genie OS backup is `syncGenieOs`, which
- *    Settings already calls. A deferred prompt that does not exist is not deferred, it is
- *    deleted.
+ *  - **Everything else is REPORTED, not asked.** Owner direction: *"on a fresh workstation with no
+ *    workspaces, genie is just making sure the toolchain and environment is ready for
+ *    development."* So step two says what it found — driver, git, Tynn, GitHub — each a line with a
+ *    route to fix it and never a gate. `workstationReadiness` owns that and is tested.
+ *  - **Tynn is OPTIONAL** (owner, explicitly), and the line for it says which services it gates
+ *    rather than reading as a fault. Everything that was a step is reachable where it already
+ *    lives: GitHub and the toolchain wizard in Settings, the Genie OS backup through
+ *    `syncGenieOs`, which Settings already calls. A deferred prompt that does not exist is not
+ *    deferred, it is deleted — so each was located in source first.
+ *
+ * Paperclip's own onboarding, read at the owner's request, is the shape this follows: ONE question,
+ * everything else derived and then said out loud with reasons, nothing gated, and it ends by
+ * offering to start.
  *
  * The three presets come from the plan and each ends by calling `imDone` with a handoff, so the
  * first run teaches the loop the product is built on rather than teaching that Genie is a chat
@@ -47,11 +61,20 @@ export function FirstRunOnboarding({
     onComplete,
     onWorkspaceAdded,
     existingWorkspaceCount,
+    onFix,
 }: {
     open: boolean;
     onComplete: () => void;
     onWorkspaceAdded: (workspace: WorkspaceRow) => void;
     existingWorkspaceCount: number;
+    /**
+     * Take the person to where a reported gap is fixed — a ⌘K feature id, or `tynn-signin`.
+     *
+     * Absent means the routes are not offered, and then the lines are information only. That is a
+     * legitimate shape (a window that cannot act on them should not pretend), and it is why the
+     * button is conditional on the prop rather than on the line.
+     */
+    onFix?: (route: string) => void;
 }) {
     /**
      * A workstation that already has a workspace starts at the agent step.
@@ -63,6 +86,11 @@ export function FirstRunOnboarding({
     const [workspace, setWorkspace] = useState<WorkspaceRow | null>(null);
     const [installed, setInstalled] = useState<readonly string[] | null>(null);
     const [configured, setConfigured] = useState<string | null>(null);
+    /** `git` on PATH. An agent can reason without it and cannot KEEP anything it writes. */
+    const [gitPresent, setGitPresent] = useState(true);
+    /** The Tynn account, or null. OPTIONAL — it gates its own services and nothing else. */
+    const [tynnUser, setTynnUser] = useState<string | null>(null);
+    const github = useGitHubAccount();
     const [preset, setPreset] = useState<FirstAgentPreset>(FIRST_AGENT_PRESETS[0]!);
     const [prompt, setPrompt] = useState(FIRST_AGENT_PRESETS[0]!.prompt);
     const [starting, setStarting] = useState(false);
@@ -90,7 +118,20 @@ export function FirstRunOnboarding({
                 if (live) setConfigured(settings.agent_default ?? null);
             })
             .catch(() => {});
-        const driverTools = Object.values(DRIVER_TOOL).filter(Boolean) as HostToolName[];
+        // `git` is asked for alongside the drivers because the report mentions it, and one probe
+        // beats two.
+        const driverTools = [
+            'git' as HostToolName,
+            ...(Object.values(DRIVER_TOOL).filter(Boolean) as HostToolName[]),
+        ];
+        void api()
+            .auth.whoami('tynn')
+            .then((user) => {
+                if (live) setTynnUser((user as { name?: string } | null)?.name ?? null);
+            })
+            // A failed read means "not connected", which is a legitimate state rather than an
+            // error — Tynn is optional and the line says what it gates.
+            .catch(() => live && setTynnUser(null));
         void api()
             .devServer.toolchainInspect(undefined, driverTools)
             .then((inspection) => {
@@ -101,6 +142,7 @@ export function FirstRunOnboarding({
                         .filter(([, tool]) => tool && present.has(tool))
                         .map(([providerId]) => providerId),
                 );
+                setGitPresent(present.has('git'));
             })
             // A failed probe must not block the step: it reports "cannot tell" and still offers
             // to start, because the start itself will say what went wrong far better than a
@@ -114,6 +156,25 @@ export function FirstRunOnboarding({
     const driver = useMemo(
         () => (installed === null ? null : firstAgentDriver({ configured, installed })),
         [installed, configured],
+    );
+    /**
+     * WHAT I FOUND — four lines, none of them a gate.
+     *
+     * `null` while the probe is in flight, which the step renders as "checking" rather than as
+     * either answer: claiming a clean bill of health before looking is the one thing this report
+     * must not do.
+     */
+    const readiness = useMemo<ReadinessLine[] | null>(
+        () =>
+            installed === null
+                ? null
+                : workstationReadiness({
+                      installedDrivers: installed,
+                      gitPresent,
+                      tynnUser,
+                      githubConnected: github.connected,
+                  }),
+        [installed, gitPresent, tynnUser, github.connected],
     );
 
     if (!open) return null;
@@ -215,29 +276,63 @@ export function FirstRunOnboarding({
                         onChange={(e: { target: { value: string } }) => setPrompt(e.target.value)}
                     />
 
-                    {/* THE DRIVER, reported rather than chosen. Three states and no fourth: not
-                        known yet, ready and named, or genuinely absent — which is the only case
-                        that stops a first agent, and it says what to do about it. */}
-                    {driver === null ? (
-                        <Text size="xs" className="text-zinc-500">Checking which agent CLI is installed…</Text>
-                    ) : driver.ready ? (
-                        <Text size="xs" className="text-zinc-500">
-                            Using <strong>{providerDef(driver.driver as AgentTuiId).label}</strong>, which is
-                            already installed. You can change this in Settings.
-                        </Text>
+                    {/* WHAT I FOUND — four lines, none of them a gate.
+                        Owner: "on a fresh workstation with no workspaces, genie is just making sure
+                        the toolchain and environment is ready for development." So this reports and
+                        offers a route; it never blocks. `null` is "still looking", which is rendered
+                        as itself rather than as either answer — claiming a clean bill of health
+                        before looking is the one thing a report must not do. */}
+                    {readiness === null ? (
+                        <Text size="xs" className="text-zinc-500">Checking this workstation…</Text>
                     ) : (
-                        <Text size="sm" className="text-amber-500">
-                            No agent CLI is installed on this machine yet. Settings → Toolchain will
-                            install one, and then this takes a few seconds.
-                        </Text>
+                        <div className="firstrun-readiness" data-testid="firstrun-readiness">
+                            {readiness.map((line) => (
+                                <div
+                                    key={line.id}
+                                    className="firstrun-readiness-line"
+                                    data-state={line.state}
+                                    data-id={line.id}
+                                >
+                                    <Text size="xs">{line.label}</Text>
+                                    {/* A route, not a second wizard. `off` is not a problem, so its
+                                        route is offered in the same quiet voice as everything else. */}
+                                    {line.fix && onFix ? (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => onFix?.(line.fix!)}
+                                        >
+                                            Set up
+                                        </Button>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
                     )}
+
+                    {driver?.ready ? (
+                        <Text size="xs" className="text-zinc-500">
+                            Your first agent will run on{' '}
+                            <strong>{providerDef(driver.driver as AgentTuiId).label}</strong>. You can
+                            change that in Settings.
+                        </Text>
+                    ) : null}
 
                     {error && <Text size="xs" className="text-rose-500">{error}</Text>}
 
                     <div style={{ display: 'flex', gap: 8 }}>
                         <Button
                             color="blue"
-                            disabled={!driver?.ready || starting || !prompt.trim()}
+                            // `canStartFirstAgent` is the ONE yes-or-no on this screen, and it
+                            // consults the driver and nothing else — a workstation with no Tynn, no
+                            // GitHub and no git can still start an agent and show somebody what this
+                            // product does.
+                            disabled={
+                                !readiness
+                                || !canStartFirstAgent(readiness)
+                                || starting
+                                || !prompt.trim()
+                            }
                             onClick={() => void startFirstAgent()}
                         >
                             {starting ? 'Starting…' : 'Start the agent'}

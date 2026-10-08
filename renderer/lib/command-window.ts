@@ -166,13 +166,42 @@ export function featureCommandItems(features: readonly FeatureSurface[]): Comman
  */
 const LOCAL_ONLY_FEATURES = new Set(['sharing', 'remote-host', 'genie-os']);
 
+/**
+ * Features that need a TYNN ACCOUNT, which is optional.
+ *
+ * Owner decision, asked directly: *"fully local mode — everything local works, Tynn features say
+ * 'sign in to use this'."* Until then Tynn was a hard gate on the whole app — signed out,
+ * `master.tsx` rendered a sign-in prompt instead of Genie, so a workstation with no account could
+ * not open a workspace, run an agent or see the Deck, none of which needs one.
+ *
+ * These rows are KEPT and ANNOTATED rather than dropped, and the distinction from
+ * `LOCAL_ONLY_FEATURES` is the reason: a feature belonging to another machine is nothing a person
+ * can act on from here, while signing in is. A dropped row teaches that the feature does not
+ * exist, which is the one wrong lesson available.
+ */
+const TYNN_BACKED_FEATURES = new Set(['sites', 'remote-host', 'issuewatch', 'sharing']);
+
+/** Appended rather than replacing: a contextual hint is a real route and worth more than this. */
+const NEEDS_ACCOUNT = 'sign in to Tynn to use this';
+
 export function dropUndeliverable(
     items: readonly CommandItem[],
-    ctx: { hasTerminal: boolean; remote?: boolean },
+    ctx: { hasTerminal: boolean; remote?: boolean; tynn?: boolean },
 ): CommandItem[] {
     const kept = ctx.remote
         ? items.filter((i) => !(i.featureId && LOCAL_ONLY_FEATURES.has(i.featureId)))
         : [...items];
-    if (ctx.hasTerminal) return kept;
-    return kept.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
+
+    // `tynn === false` only. Omitted means the caller does not know — a remote window, a test — and
+    // marking a row on a guess would be an accusation about an account nobody checked.
+    const marked = ctx.tynn === false
+        ? kept.map((i) =>
+              i.featureId && TYNN_BACKED_FEATURES.has(i.featureId)
+                  ? { ...i, hint: i.hint ? `${i.hint} · ${NEEDS_ACCOUNT}` : NEEDS_ACCOUNT }
+                  : i,
+          )
+        : kept;
+
+    if (ctx.hasTerminal) return marked;
+    return marked.filter((i) => i.category !== 'prompt' && i.category !== 'terminal');
 }

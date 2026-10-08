@@ -700,11 +700,19 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * where they are measured against the Deck's strip instead of a CSS animation.
  */
 const openPalette = async (): Promise<void> => {
-    // FOCUS FIRST, and this is not ceremony. `resolveShortcut` withholds ⌘K while a TERMINAL owns
-    // the keyboard — *"Ctrl-K is kill-line in any readline prompt"* — and this fixture has a live
-    // seeded terminal, so the chord is deliberately swallowed if xterm has focus. Clicking the
-    // title bar is the neutral place to put focus; it opens nothing of its own.
-    await page.locator('.titlebar').click({ position: { x: 4, y: 4 } });
+    /**
+     * BLUR FIRST, and this is not ceremony.
+     *
+     * `resolveShortcut` withholds ⌘K while a TERMINAL owns the keyboard — *"Ctrl-K is kill-line in
+     * any readline prompt"* — and this fixture has a live seeded terminal, so the chord is
+     * deliberately swallowed whenever xterm has focus.
+     *
+     * Clicking the title bar does NOT fix it, measured: that strip is a window drag region, so the
+     * click moves the window's focus notion not at all and `document.activeElement` stays xterm's
+     * hidden helper textarea. Blurring it explicitly is the only thing that reliably hands the
+     * keyboard back to the surface.
+     */
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('ControlOrMeta+KeyK');
     await expect(page.locator('.genie-cmdk')).toBeVisible();
 };
@@ -1773,4 +1781,51 @@ test('the window itself does not scroll — no document scrollbar (owner report)
     });
     expect(overflow.docScrolls, 'the document must not overflow its viewport').toBe(false);
     expect(overflow.bodyScrolls, 'the body must not overflow its viewport').toBe(false);
+});
+
+/**
+ * THE DECK'S SIGNAL STRIP — the live signals the title-bar icons carried.
+ *
+ * These lived in their own spec file with its own Electron launch, and that launch's `afterAll`
+ * timed out at 60s on every platform, taking the two files that ran after it down with it. A second
+ * master app in one run is not worth an assertion: this file already has a working app, a working
+ * teardown and the flows fixture, so the specs moved here and navigate the same window.
+ *
+ * Owner decision behind the feature: *"move the signals to the Deck, then delete the icons."*
+ * `renderer/lib/station-signals.ts` decides which and in what order, and is unit-tested — what only
+ * a real window can show is that a REAL running Flow makes one appear and stopping it makes it go.
+ *
+ * Last in the file ON PURPOSE: they navigate to the Deck, and every spec above expects the grid.
+ */
+test('the Deck shows a running Flow as a signal, and clears it when the run ends', async () => {
+    await setFlowsRunning([]);
+    // NAVIGATE the way the app itself does. `usePageQuery` listens for `popstate` AND for Genie's
+    // own `genie:pagequery` event, because `history.replaceState` notifies nobody — so a test that
+    // only rewrote the url would change nothing on screen. Dropping `view` entirely is the Deck:
+    // no params and the Deck are the same thing in both directions (`viewRouteQuery`).
+    await page.evaluate(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('view');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+        window.dispatchEvent(new Event('genie:pagequery'));
+    });
+    await expect(page.locator('.deck')).toBeVisible({ timeout: 15_000 });
+
+    const strip = page.getByTestId('deck-signals');
+    const flow = () => strip.getByText('A Flow is running', { exact: false });
+
+    // NOT an assertion that the strip is empty: a fresh profile legitimately shows others (GitHub
+    // is not connected, IssueWatch cannot tell), and asserting a total would be asserting the
+    // fixture's GitHub state by accident.
+    await expect(flow()).toHaveCount(0);
+
+    await setFlowsRunning(['e2e-flow-manual']);
+    await expect(flow()).toBeVisible();
+    // The FEATURE id the signal routes through — the same one the palette dispatches on, so a
+    // signal cannot open something other than what it names.
+    await expect(strip.locator('[data-feature="flows"]')).toHaveAttribute('data-tone', 'busy');
+
+    await setFlowsRunning([]);
+    // A stuck signal is worse than no signal: the same failure as a badge that never clears.
+    await expect(flow()).toHaveCount(0);
 });

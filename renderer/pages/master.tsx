@@ -14,6 +14,7 @@ import ProjectContextMenu from '../components/Master/ProjectContextMenu';
 import ShareWorkspaceModal from '../components/Master/ShareWorkspaceModal';
 import SharingFlyout from '../components/Master/SharingFlyout';
 import NewAgentModal from '../components/Master/NewAgentModal';
+import { FirstRunOnboarding } from '../components/Master/FirstRunOnboarding';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../lib/ams-grid';
 import {
     restartOptionsFor,
@@ -71,7 +72,6 @@ import {
 } from '../lib/hibernated-visibility';
 import { gappLaunchLabel, gappLaunchTargets } from '../lib/gapp-launch';
 import { terminalTypeById, type TerminalTypeId } from '../lib/terminal-types';
-import SignInPrompt from '../components/SignInPrompt';
 import type {
     AgentType,
     BackendUser,
@@ -326,6 +326,8 @@ function specWorkspaceId(s: TerminalSpec): string | null {
 function MasterInner() {
     const [authChecked, setAuthChecked] = useState(false);
     const [signedIn, setSignedIn] = useState(false);
+    /** The account's NAME, for the menu. Null signed out, which is a legitimate state now. */
+    const [tynnAccountName, setTynnAccountName] = useState<string | null>(null);
     const [hosts, setHosts] = useState<{ tynn: string }>({
         tynn: 'https://tynn.ai',
     });
@@ -1493,8 +1495,12 @@ function MasterInner() {
     const refreshAuth = useCallback(async () => {
         const [t, tHost] = await Promise.all([api().auth.whoami('tynn'), api().tynnHost.get()]);
         setHosts({ tynn: tHost });
-        const any = !!(t as BackendUser | null);
+        const user = t as BackendUser | null;
+        const any = !!user;
         setSignedIn(any);
+        // The NAME, for the menu. A workstation can be signed into the wrong account and nothing
+        // else in the window says so.
+        setTynnAccountName(user?.name ?? null);
         return any;
     }, []);
 
@@ -1504,7 +1510,11 @@ function MasterInner() {
             const any = await refreshAuth();
             if (cancelled) return;
             setAuthChecked(true);
-            if (any) await refresh();
+            // REFRESH EITHER WAY. Tynn is optional, so a signed-out workstation has local
+            // workspaces to list and a Deck to fill — gating the read on an account is what made
+            // "fully local mode" impossible, one layer below the sign-in wall itself.
+            void any;
+            await refresh();
         })();
         const off = api().on.authChanged(async () => {
             const any = await refreshAuth();
@@ -2611,6 +2621,18 @@ function MasterInner() {
      * guard also reads — so a feature cannot be contracted there and silently unreachable here.
      */
     const activateFeature = (featureId: string): void => {
+        /**
+         * NO ACCOUNT? Offer the account, not a dead surface.
+         *
+         * Tynn is optional (owner), so these four surfaces exist and cannot work without one.
+         * Opening the Site Manager signed out would show an empty list that looks like "you have no
+         * sites" rather than "Genie cannot see them", which is the confident-zero mistake in a new
+         * costume. The same list is in `lib/command-window.ts`, where it annotates the row.
+         */
+        if (!signedIn && ['sites', 'remote-host', 'issuewatch', 'sharing'].includes(featureId)) {
+            void api().auth.startSignIn('tynn').catch(() => {});
+            return;
+        }
                 // Ids come from FEATURE_SURFACES in lib/feature-reachability, which the
                 // reachability guard also reads -- so a feature cannot be contracted
                 // there and silently unreachable here.
@@ -2803,32 +2825,25 @@ function MasterInner() {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
 
-    if (authChecked && !signedIn) {
-        return (
-            <div className="gwrap" id="app">
-                {/* Signed out: no left column, so the frame stacks
-                    vertically and the title bar spans the full width (it
-                    paints the corner itself — see AppCorner). */}
-                <div className="winframe stacked">
-                    <TitleBar isStage={false} />
-                    <div style={{ flex: 1, minHeight: 0, background: 'var(--bg-0)' }} />
-                </div>
-                <div style={{ position: 'absolute', inset: 40, display: 'grid', placeItems: 'center' }}>
-                        <div style={{ maxWidth: 720, width: '100%' }}>
-                            <SignInPrompt
-                                tynnHost={hosts.tynn}
-                                onSignedIn={async () => {
-                                    await refreshAuth();
-                                    await refresh();
-                                }}
-                            />
-                        </div>
-                    </div>
-                <PromptHost />
-            </div>
-        );
-    }
-
+    /**
+     * NO SIGN-IN GATE. Tynn is OPTIONAL.
+     *
+     * This returned `SignInPrompt` instead of the app whenever `authChecked && !signedIn`, so a
+     * workstation with no Tynn account could not open a workspace, run an agent or see the Deck —
+     * none of which needs one. Owner decision, asked directly, 2026-10-08: *"fully local mode —
+     * everything local works, Tynn features say 'sign in to use this'."*
+     *
+     * What replaces it, rather than nothing:
+     *
+     *  - the four Tynn-backed ⌘K rows say what they need (`TYNN_BACKED_FEATURES` in
+     *    `lib/command-window.ts`), and activating one starts the sign-in instead of opening a
+     *    surface that cannot work;
+     *  - first run reports the account as OFF with a route, never as a fault
+     *    (`workstationReadiness`);
+     *  - `Sign in to Tynn` is in the system menu, which is where an account lives.
+     *
+     * `signedIn` is still read — it is what tells those three what to say.
+     */
     if (!authChecked) {
         return (
             <div
@@ -2987,6 +3002,8 @@ function MasterInner() {
                         onShowAppStore={() => setAppStoreOpen((o) => !o)}
                         onShowGenieOs={() => setGenieOsOpen((open) => !open)}
                         setupIncomplete={onboardingOpen}
+                        tynnAccount={tynnAccountName}
+                        onSignInTynn={() => void api().auth.startSignIn('tynn').catch(() => {})}
                     />
                     <UpgradeModal />
                     {/* THE GRID'S OWN CHROME, with the grid.
@@ -3302,6 +3319,40 @@ function MasterInner() {
                 </div>
             )}
 
+            {/* FIRST RUN — pick a folder, then meet an agent (P7, owner-approved 2026-10-08).
+                MOUNTED, which it was not: P7 described rewriting a seven-gate wizard and that
+                component had no mount site at all, so the "7 gates" were true of a file and not of
+                the product. The owner's call was asked for and given — *"build that — folder, then
+                'what I found' + start an agent"* — after reading how Paperclip onboards.
+
+                Gated on there being NO workspace, which is the one state where the folder question
+                has an answer worth asking for. An existing install never sees it; `canFinishFirstRun`
+                is the same gate the component closes itself with.
+
+                `onFix` routes a reported gap through the SAME `activateFeature` the palette and the
+                Deck's signals use, so there is one answer to "where does this feature live". Tynn is
+                the exception and has no feature id — it is an auth flow, so it is called directly. */}
+            {!isRemoteWindow() && workspaces.length === 0 && (
+                <FirstRunOnboarding
+                    open={!localStorage.getItem('genie-onboarding-complete')}
+                    existingWorkspaceCount={workspaces.length}
+                    // `refresh` is the page's own workspace re-read — the same one every
+                    // other path calls after a workspace changes.
+                    onComplete={() => void refresh()}
+                    onWorkspaceAdded={(ws) => {
+                        void refresh();
+                        setActiveWorkspaceId(ws.id);
+                    }}
+                    onFix={(route) => {
+                        if (route === 'tynn-signin') {
+                            void api().auth.startSignIn('tynn').catch(() => {});
+                            return;
+                        }
+                        activateFeature(route);
+                    }}
+                />
+            )}
+
             <DocsFlyout open={docsOpen} onClose={() => setDocsOpen(false)} />
             <IssueWatchFlyout
                 open={issueWatchOpen}
@@ -3512,6 +3563,9 @@ function MasterInner() {
                 }}
                 terminalId={commandWindowFor}
                 onActivateFeature={activateFeature}
+                // Tynn is OPTIONAL, so the rows that need it say so. `signedIn` rather than a
+                // guess: the palette must not accuse an account it never checked.
+                tynnConnected={signedIn}
                 workspaces={workspaces.map((w) => ({ id: w.id, name: w.project_name }))}
                 terminals={specs.map((sp) => ({
                     id: sp.id,
@@ -4766,6 +4820,8 @@ function TitleBar({
     cornerInRail = false,
     setupIncomplete = false,
     onShowGenieOs,
+    tynnAccount = null,
+    onSignInTynn,
 }: {
     isStage: boolean;
     stageWorkspaceName?: string;
@@ -4790,6 +4846,10 @@ function TitleBar({
     /** Shows "Continue workstation setup" in the menu while first-run is unfinished. */
     setupIncomplete?: boolean;
     onShowGenieOs?: () => void;
+    /** The signed-in Tynn account's name, or null. Named in the menu, because a workstation can be
+     *  signed into the WRONG account and nothing else says so. */
+    tynnAccount?: string | null;
+    onSignInTynn?: () => void;
     /**
      * True in the master layout, where this bar is the RIGHT column's header
      * and the LEFT column already owns the window's top-left corner (traffic
@@ -4907,6 +4967,20 @@ function TitleBar({
                         <button type="button" role="menuitem" onClick={() => void openWhatsNew()}>
                             What&apos;s new
                         </button>
+                        {/* THE ACCOUNT. Tynn is optional (owner, 2026-10-08), so this is the one
+                            place a person goes to connect it rather than a wall in front of the
+                            app. It names the account when there is one, because a workstation can
+                            be signed into the wrong one and that is otherwise invisible. */}
+                        {tynnAccount ? (
+                            <button type="button" role="menuitem" disabled>
+                                Tynn: {tynnAccount}
+                            </button>
+                        ) : (
+                            <button type="button" role="menuitem" onClick={() => {
+                                setSystemMenuOpen(false);
+                                onSignInTynn?.();
+                            }}>Sign in to Tynn…</button>
+                        )}
                         {/* Workstation setup lives in the MENU, not as a chip
                             floating over the header. It only appears while setup
                             is unfinished, so it disappears once it is done

@@ -51,7 +51,12 @@ describe('every stylesheet parses', () => {
         const css = fs.readFileSync(path.join(STYLES, 'master.css'), 'utf8');
         const root = postcss.parse(css, { from: 'master.css' });
         const selectors = new Set<string>();
-        root.walkRules((rule) => selectors.add(rule.selector));
+        root.walkRules((rule) => {
+            // A BLOCK body, not an expression: `walkRules`'s callback may return `false` to stop
+            // walking, and `Set.add` returns the Set — so the arrow form ended the walk on the
+            // first rule and this check passed against one selector.
+            selectors.add(rule.selector);
+        });
         for (const needed of ['.gwrap', '.deck', '.agent-view']) {
             expect([...selectors].some((s) => s.includes(needed)), `${needed} has no rule`).toBe(true);
         }

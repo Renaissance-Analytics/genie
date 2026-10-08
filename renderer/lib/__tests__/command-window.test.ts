@@ -223,3 +223,75 @@ describe('a REMOTE window is offered only what belongs to the machine it is driv
         expect(dropUndeliverable([workspace], remote)).toEqual([workspace]);
     });
 });
+
+describe('TYNN IS OPTIONAL — its features say so rather than disappearing', () => {
+    /**
+     * Owner decision, asked directly, 2026-10-08: *"fully local mode — everything local works, Tynn
+     * features say 'sign in to use this'."*
+     *
+     * Until now Tynn was a hard gate on the whole app: `master.tsx` returned a sign-in prompt
+     * instead of rendering, so a workstation with no account could not open a workspace, run an
+     * agent or see the Deck — none of which needs one.
+     *
+     * ## Why these rows are KEPT rather than dropped
+     *
+     * `LOCAL_ONLY_FEATURES` drops Sharing, Hosts and Genie OS in a REMOTE window, because there the
+     * feature belongs to a different machine and there is nothing a person can do about it from
+     * here. Signing in IS something a person can do — so a Tynn-backed row stays, says what it
+     * needs, and activating it starts the sign-in rather than opening a surface that cannot work.
+     *
+     * A dropped row teaches that the feature does not exist. That is the one wrong lesson here.
+     */
+    const feature = (id: string): CommandItem => ({
+        id: `feature:${id}`,
+        category: 'panel',
+        label: id,
+        featureId: id,
+    });
+
+    const signedOut = { hasTerminal: true, tynn: false };
+    const signedIn = { hasTerminal: true, tynn: true };
+
+    it('keeps every Tynn-backed row when signed out', () => {
+        const ids = ['sites', 'remote-host', 'issuewatch', 'sharing'];
+        expect(dropUndeliverable(ids.map(feature), signedOut).map((i) => i.featureId)).toEqual(ids);
+    });
+
+    it('says SIGN IN on each of them, so the row explains itself', () => {
+        for (const id of ['sites', 'remote-host', 'issuewatch', 'sharing']) {
+            const [row] = dropUndeliverable([feature(id)], signedOut);
+            expect(row!.hint, `${id} should say it needs an account`).toMatch(/sign in/i);
+        }
+    });
+
+    it('leaves purely LOCAL features alone', () => {
+        // The whole point of fully-local mode: these work with no account and must not be marked.
+        for (const id of ['lists', 'questions', 'flows', 'docs', 'tasks', 'grid', 'genie-os']) {
+            const [row] = dropUndeliverable([feature(id)], signedOut);
+            expect(row!.hint ?? '').not.toMatch(/sign in/i);
+        }
+    });
+
+    it('says nothing about sign-in once there IS an account', () => {
+        for (const id of ['sites', 'remote-host', 'issuewatch', 'sharing']) {
+            const [row] = dropUndeliverable([feature(id)], signedIn);
+            expect(row!.hint ?? '').not.toMatch(/sign in/i);
+        }
+    });
+
+    it('does not overwrite a hint the feature already had', () => {
+        // `FEATURE_SURFACES` gives some rows a contextual hint. Replacing it would lose a real
+        // route in order to say something the state already shows.
+        const withHint: CommandItem = { ...feature('sharing'), hint: 'Settings → hosts' };
+        const [row] = dropUndeliverable([withHint], signedOut);
+        expect(row!.hint).toContain('Settings → hosts');
+        expect(row!.hint).toMatch(/sign in/i);
+    });
+
+    it('treats an UNKNOWN tynn state as signed in, so nothing is marked on a guess', () => {
+        // `tynn` is omitted by callers that do not know — a remote window, a test. Marking a row
+        // "sign in" when we cannot tell would be an accusation about an account we never checked.
+        const [row] = dropUndeliverable([feature('sharing')], { hasTerminal: true });
+        expect(row!.hint ?? '').not.toMatch(/sign in/i);
+    });
+});

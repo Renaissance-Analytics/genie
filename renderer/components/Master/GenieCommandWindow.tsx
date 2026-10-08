@@ -66,6 +66,13 @@ export interface GenieCommandWindowProps {
     /** Open one of Genie's features. The palette is where they live once the
      *  title bar stops carrying an icon for each. */
     onActivateFeature: (featureId: string) => void;
+    /**
+     * Is there a Tynn account? Tynn is OPTIONAL, and the four rows that need one say so.
+     *
+     * Omitted means "not known" and nothing is marked — a window that never checked must not
+     * accuse the account of being absent.
+     */
+    tynnConnected?: boolean;
 }
 
 export default function GenieCommandWindow({
@@ -80,6 +87,7 @@ export default function GenieCommandWindow({
     onFocusTerminal,
     onSendPrompt,
     onActivateFeature,
+    tynnConnected,
 }: GenieCommandWindowProps) {
     const items = useMemo<CommandItem[]>(
         () =>
@@ -115,9 +123,10 @@ export default function GenieCommandWindow({
                     // `LOCAL_ONLY_FEATURES`. The title-bar icons enforced this by being withheld;
                     // the palette has to enforce it now that it is the way in.
                     remote: isRemoteWindow(),
+                    ...(tynnConnected === undefined ? {} : { tynn: tynnConnected }),
                 },
             ),
-        [prompts, actions, workspaces, terminals, terminalId],
+        [prompts, actions, workspaces, terminals, terminalId, tynnConnected],
     );
 
     if (!open) return null;
