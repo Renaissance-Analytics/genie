@@ -251,7 +251,24 @@ export async function warmElectronRuntime(
     let app: Awaited<ReturnType<WarmupEffects['launch']>> | undefined;
     try {
         app = await effects.launch({
-            args: [MAIN_ENTRY, `--user-data-dir=${userData}`],
+            /**
+             * `--enable-logging=stderr` — WITHOUT IT THERE IS NOTHING TO CAPTURE (genie#667).
+             *
+             * Measured: occurrence 8 crashed the renderer with the stderr capture confirmed
+             * `attached`, and produced ZERO lines. The capture was correct; Chromium simply had not
+             * written anything. Chromium's own logging — which is where `[FATAL:file.cc(123)] Check
+             * failed: <expr>` goes — is OFF unless logging is explicitly enabled, so the one line
+             * that names the crash was never emitted on any of the eight occurrences.
+             *
+             * The minidump says this is a deliberate trap (`SIGTRAP` + `SI_KERNEL`, fault address 0),
+             * i.e. `IMMEDIATE_CRASH()` from a failed CHECK — and a CHECK always prints its reason
+             * first. Enabling the sink is the difference between having that sentence and not.
+             *
+             * E2E ONLY, and it changes no behaviour under test: it routes messages that already
+             * exist to a stream instead of discarding them. The chatter it adds is dropped by
+             * `isFatalElectronLine`, which is why that filter was built first.
+             */
+            args: [MAIN_ENTRY, `--user-data-dir=${userData}`, '--enable-logging=stderr'],
             env: {
                 ...process.env,
                 NODE_ENV: 'production',
@@ -282,6 +299,46 @@ export async function warmElectronRuntime(
             /* a leftover temp profile is untidy, not broken */
         }
     }
+}
+
+/**
+ * IS THIS THE LINE THAT SAYS WHY THE RENDERER DIED? — genie#667.
+ *
+ * The minidump's exception stream settles the KIND of crash without needing symbols:
+ * `exception_code: 5` (SIGTRAP), `exception_flags: 128` (SI_KERNEL), fault address `0x0`. That
+ * combination is a **deliberate trap** — Chromium's `IMMEDIATE_CRASH()`, which a failed `CHECK()` or
+ * an explicit `FATAL` emits. Not a memory error, and not a glibc abort: `__libc_fatal` raises
+ * `SIGABRT` (6), and this is 5.
+ *
+ * And a Chromium CHECK **prints its reason before dying** — `[FATAL:file.cc(123)] Check failed:
+ * <expr>` — naming the exact check, file and line. Seven occurrences have produced no cause because
+ * the rig never captured the renderer's stderr: the one line that identifies it is written and
+ * discarded every time.
+ *
+ * A FILTER rather than piping everything, because Electron is chatty (Fontconfig, libva, GPU, dbus,
+ * ALSA) and thirty spec files of that is a log nobody reads — the same failure the release-notes
+ * limit exists to prevent. Which makes the predicate the part worth testing: **a filter that drops
+ * the one line that matters is worse than no filter**, because it looks like the capture works.
+ *
+ * `WARNING` is excluded deliberately: those are frequent, sometimes contain the word "failed", and
+ * would bury the FATAL. And the match is ANCHORED on Chromium's bracketed severity rather than a
+ * bare /fatal/i, because this repo's own CI log contains the line
+ * "# NON-FATAL. azure.archive.ubuntu.com has now been unreachable twice".
+ */
+export function isFatalElectronLine(line: string): boolean {
+    const t = typeof line === 'string' ? line.trim() : '';
+    if (t === '') return false;
+    // Chromium's severity marker, inside the bracketed log prefix: `…:FATAL:file.cc(123)]`.
+    if (/:(FATAL|DCHECK)\b/.test(t)) return true;
+    // `[FATAL:…` with no leading pid/timestamp.
+    if (/^\[(FATAL|DCHECK)\b/.test(t)) return true;
+    // The signal report Chromium writes as it traps.
+    if (/^Received signal\b/.test(t)) return true;
+    // A child exiting unexpectedly is the other way this surfaces. Both prefix forms, which the
+    // first version got wrong: `:ERROR:` alone misses the bare `[ERROR:…` with no pid/timestamp,
+    // exactly the case already handled above for FATAL and forgotten here.
+    if (/(^\[|:)ERROR:.*exited unexpectedly/.test(t)) return true;
+    return false;
 }
 
 /**
@@ -470,7 +527,9 @@ export async function launchGenieE2E(
     page: Page;
 }> {
     const app = await launchElectron(harness, {
-        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`],
+        // See the note on the other launch site: without this, a CHECK failure writes its reason
+        // nowhere and the stderr capture has nothing to find (genie#667).
+        args: [MAIN_ENTRY, `--user-data-dir=${E2E_USERDATA}`, '--enable-logging=stderr'],
         env: {
             ...process.env,
             NODE_ENV: 'production',
@@ -503,6 +562,37 @@ export async function launchGenieE2E(
          * is whatever the first launch saw, kept in module scope so every spec file in a worker
          * compares against the same number.
          */
+        /**
+         * THE RENDERER'S OWN WORDS — genie#667. A `CHECK` failure prints its file, line and
+         * expression before trapping, and the rig has been discarding that on seven occurrences.
+         * Filtered through `isFatalElectronLine` so Electron's ordinary chatter does not flood the
+         * log; see that function for why `WARNING` is excluded and why the match is anchored.
+         */
+        const stderr = app.process().stderr;
+        /**
+         * SAY WHICH IT IS. Without this line, "no FATAL lines in the log" is ambiguous between
+         * *nothing fatal happened* and *the capture was inert because `stderr` was null* — and
+         * `if (stderr)` skips silently. That is exactly the distinction this codebase insists on
+         * everywhere else (`null` is "cannot see", `[]` is "none"), broken here in a diagnostic
+         * whose whole purpose is to make an absence meaningful. Measured: the first run reported
+         * zero captured lines on all three platforms and could not tell me which had happened.
+         */
+        // eslint-disable-next-line no-console
+        console.log(`[e2e] electron stderr: ${stderr ? 'attached' : 'NOT AVAILABLE — a FATAL line cannot be captured, see genie#667'} (${harness})`);
+        if (stderr) {
+            let pending = '';
+            stderr.on('data', (chunk: Buffer | string) => {
+                pending += String(chunk);
+                const lines = pending.split(/\r?\n/);
+                pending = lines.pop() ?? '';
+                for (const line of lines) {
+                    if (!isFatalElectronLine(line)) continue;
+                    // eslint-disable-next-line no-console
+                    console.error(`[e2e] electron stderr (${harness}): ${line.trim()}`);
+                }
+            });
+        }
+
         // The ELECTRON main process, by pid — not `/proc/self`, which is this test runner.
         const threads = readThreadCount(app.process().pid);
         if (firstThreadCount === null) firstThreadCount = threads;
