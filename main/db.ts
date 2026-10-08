@@ -3078,6 +3078,26 @@ export function runMigrations(
                 }
             },
         },
+        {
+            /**
+             * v80 — DROP the `acp_engine` setting. Owner's choice, asked directly: *"Delete the dead
+             * column entirely."*
+             *
+             * It never gated anything once ACP became non-optional — `engineFor` routes on capability
+             * alone and nothing read this key — but a stale comment ON it claimed otherwise and cost a
+             * day: a Settings switch was built and merged for a setting nothing consults, and two
+             * false claims shipped in the release notes.
+             *
+             * The ROW goes as well as the type, following v25's precedent for retired toggles: *"so
+             * remote settings payloads and future diagnostics cannot resurrect stale product state
+             * from pre-removal builds."* A key-value row outliving its reader is precisely what made
+             * that comment believable.
+             */
+            version: 80,
+            runner: (db) => {
+                db.prepare(`DELETE FROM settings WHERE key = 'acp_engine'`).run();
+            },
+        },
     ];
 
     const apply = d.transaction(
@@ -3421,26 +3441,6 @@ export function setAgentAvatar(
 // Settings helpers ------------------------------------------------------
 
 export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
-    /**
-     * VESTIGIAL — nothing reads this. Kept only so an existing row does not fail to parse.
-     *
-     * It used to gate the ACP engine, and this comment used to say *"`engineFor` reads this,
-     * and a provider with no ACP mode stays on the pty regardless, so turning it on is
-     * permission rather than a promise."* **That is no longer true and the comment outlived the
-     * behaviour**, which is a worse failure than the behaviour changing: `agents/engine.ts`
-     * removed the flag on a direct owner directive — *"acp is the core of our agent
-     * communications, this is not optional"* — so a provider that can speak ACP speaks it, and
-     * `engineFor` contains no reference to this key at all.
-     *
-     * The stale comment cost real work: it was read as authoritative, a Settings switch was
-     * built for a setting nothing consults, and the release was reported as blocked on a
-     * decision the owner had already made in the opposite direction. **A comment asserting that
-     * something reads a value is a claim about code, and nothing checks it.**
-     *
-     * Holding ONE agent on the pty is still supported and is a per-agent fact, not a global
-     * one: `EngineInput.agentOverride`.
-     */
-    acp_engine?: 'on' | 'off';
     primary_workspace?: string;
     /** Last-activated workspace id in the master view; seeds the active workspace on launch. */
     active_workspace?: string;
