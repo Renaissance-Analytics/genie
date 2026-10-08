@@ -14,8 +14,8 @@ import type { AgentSession, ToolCall } from '../../main/agentsession/model';
  *
  * The board also shows `+42 −8` per file, a per-line presence (*"atlas is writing lines
  * 23–26"*), and an `on disk · not attributed` row for a write no agent claimed. None of those
- * are derivable today — a tool call reports no line counts and no line ranges, and the file
- * watcher that would see an unclaimed write does not exist.
+ * are derivable from tool calls — they report no line counts or line ranges. Unclaimed disk
+ * changes come separately from the existing file watcher when the panel composes its view.
  *
  * They are left out rather than estimated. A `+42` guessed from nothing is worse than no
  * number at all, because a number on screen reads as measured — and this surface's whole value

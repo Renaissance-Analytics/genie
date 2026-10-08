@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePageQuery } from '../lib/page-query';
 import Terminal from '../components/Terminal/Terminal';
+import WorkspaceFilesWindow from '../components/Code/WorkspaceFilesWindow';
 import { hasGenieBridge } from '../lib/genie';
 import { parseTerminalWindowRoute } from '../lib/terminal-window-route';
 
@@ -52,6 +53,8 @@ export default function TerminalPage() {
     // would briefly decide "scratch" and spawn a pty the window never wanted.
     const pageQuery = usePageQuery();
     const view = useMemo(() => parseTerminalWindowRoute(pageQuery), [pageQuery]);
+    const fileSpecId = typeof pageQuery.files === 'string' ? pageQuery.files : null;
+    if (ready && fileSpecId) return <WorkspaceFilesWindow specId={fileSpecId} />;
 
     if (!ready || !view) {
         return (

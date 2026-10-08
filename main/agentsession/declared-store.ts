@@ -36,6 +36,7 @@ import type { AgentUsageEvent } from '../agents/usage-rollup';
  */
 
 export interface DeclaredStorePorts {
+    changed?: () => void;
     /** Append one telemetry row. Injected: the store must not know about sqlite. */
     record: (e: Omit<AgentUsageEvent, 'day'> & { workspaceId: string | null }) => void;
     now: () => number;
@@ -335,6 +336,7 @@ export class DeclaredSessionStore {
         const now = this.ports.now();
         const next = applySessionUpdate(current, update, now);
         this.sessions.set(agentId, next);
+        this.ports.changed?.();
 
         // The id the mapper just extracted, reported once. See `onSessionIdCaptured`.
         if (!current.session.sessionId && next.session.sessionId) {

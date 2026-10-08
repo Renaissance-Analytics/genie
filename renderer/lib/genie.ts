@@ -4383,6 +4383,13 @@ export interface GenieApi {
         ) => Promise<{ ok: boolean; error?: string }>;
     };
     files: {
+        readyPanel: (specId: string) => Promise<void>;
+        claimPanel: (specId: string) => Promise<boolean>;
+        releasePanel: (workspaceId: string) => Promise<void>;
+        popPanel: (specId: string) => Promise<{ ok: boolean; error?: string }>;
+        poppedPanels: () => Promise<Array<{ workspaceId: string; specId: string }>>;
+        focusPanel: (workspaceId: string) => Promise<void>;
+        bringBackPanel: (workspaceId: string) => Promise<void>;
         listTree: (
             workspacePath: string,
             opts?: { maxDepth?: number; maxEntries?: number; root?: string; system?: boolean },
@@ -4938,6 +4945,7 @@ export interface GenieApi {
         /** The set of terminal specs changed outside the renderer's own edits
          *  (e.g. an MCP-created process) — re-fetch the spec list to stay live. */
         terminalSpecsChanged: (cb: () => void) => () => void;
+        filePanelWindowsChanged: (cb: () => void) => () => void;
         /** The set of workspaces changed outside the renderer's own edits (e.g.
          *  MCP-provisioned child workspaces) — re-fetch the workspace list. */
         workspacesChanged: (cb: () => void) => () => void;

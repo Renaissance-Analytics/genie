@@ -305,7 +305,7 @@ export async function openFileInEditor(
 // `openFileInEditor` emits to the chosen panel after arbitration. A HIDDEN panel
 // has no subscriber — it is reopened through its meta seed instead.
 
-type OpenInPanelListener = (relPath: string, line?: number) => void;
+type OpenInPanelListener = (relPath: string, line?: number) => void | Promise<boolean>;
 const panelListeners = new Map<string, Set<OpenInPanelListener>>();
 
 /** Subscribe a mounted CodePanel (by spec id) to open-file requests. Returns an
@@ -330,6 +330,12 @@ export function emitOpenInPanel(specId: string, relPath: string, line?: number):
     const set = panelListeners.get(specId);
     if (!set) return;
     for (const cb of set) cb(relPath, line);
+}
+
+export async function emitOpenInPanelAndWait(specId: string, relPath: string, line?: number): Promise<boolean> {
+    const listener = panelListeners.get(specId)?.values().next().value;
+    if (!listener) return false;
+    return (await listener(relPath, line)) === true;
 }
 
 /** A pending line-reveal scoped to the file it targets. */

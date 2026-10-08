@@ -6,6 +6,29 @@ leaving Genie. It's a file tree plus a syntax-highlighted editor.
 Open one from the toolbar's **Add Files** (chevron menu), an empty-grid **Add
 Files** tile, or **Add Files…** in the chooser.
 
+Each workspace has one Files panel. Opening Files again reuses it, including
+its tabs and settings. **Open in new window** moves the same panel out of the
+grid; the grid then offers **Focus window** and **Bring back**. Save unsaved
+tabs before popping out. Closing a popped window with unsaved edits asks
+before discarding them.
+
+Pop-out and cross-window ownership are local-desktop controls. A remote-host
+window keeps its existing in-place editor and does not offer the local pop-out
+control.
+
+## Workspace changes
+
+**All** shows the full tree. **Changed (N)** keeps changed files and their
+parent folders, including Git changes not reported by an agent. Agent-reported
+writes name the reporting agent. A disk change with no attributable report
+shows a neutral **?**; Genie does not guess its author.
+
+**Changes this session** lists reported writes and named filesystem events,
+newest first, one entry per file. Reads and failed writes do not count as agent
+edits. Times appear only when reported or observed; line counts and per-line
+agent presence are not estimated. A newer unattributed disk event takes
+precedence over an older report about the same file.
+
 ## Opening, editing, saving
 
 - **Open a file:** click it in the file tree. The tree auto-hides once a file is

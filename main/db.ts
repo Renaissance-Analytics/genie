@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'node:crypto';
 import { SYSTEM_WORKSPACE_ROW_ID } from './workspace/system-workspace-id';
+import { workspaceIdOfSpec } from './terminal/spec-workspace';
 import { WORKSPACE_TODO_CAPS } from './lists/types';
 // Pure (no store, no electron): the v68 audit has to resolve links both the old
 // way and the new way, and importing the STORE here would be a cycle.
@@ -6552,6 +6553,11 @@ export function createTerminalSpec(input: {
     type?: TerminalSpecType;
     meta?: TerminalSpecMeta;
 }): TerminalSpecRow {
+    const workspaceId = workspaceIdOfSpec(input);
+    if (input.type === 'code' && workspaceId) {
+        const existing = listTerminalSpecs().find((spec) => spec.type === 'code' && workspaceIdOfSpec(spec) === workspaceId);
+        if (existing) return existing;
+    }
     const now = new Date().toISOString();
     const nextOrder = (getDb()
         .prepare<[string | null], { mx: number | null }>(

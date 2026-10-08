@@ -3757,6 +3757,8 @@ body.gutter-dragging .grid-gutter {
     overflow: hidden;
 }
 .code-host .code-tree {
+    display: flex;
+    flex-direction: column;
     flex: 0 0 230px;
     width: 230px;
     min-width: 0;
@@ -3766,6 +3768,42 @@ body.gutter-dragging .grid-gutter {
     background: var(--bg-1);
     color: var(--fg-1);
     font-size: 12.5px;
+}
+.code-tree .filetree-root {
+    min-height: 0;
+    flex: 1;
+}
+.code-session-changes {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border-1);
+    padding-top: 8px;
+    max-height: 40%;
+    overflow: auto;
+}
+.code-session-change {
+    font-size: 11px;
+    color: var(--fg-3);
+}
+.code-session-change td {
+    padding: 2px 4px;
+}
+.code-session-change button {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 110px;
+}
+.tree-agent {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+.code-popped {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    flex-wrap: wrap;
 }
 .code-host .code-editor-col {
     flex: 1;

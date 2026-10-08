@@ -13,10 +13,9 @@ import { workspaceChanges } from '../workspace-changes';
  *
  * The board also shows `+42 −8` per file, a per-line "atlas is writing lines 23–26" presence,
  * and an `on disk · not attributed` row for a write no agent claimed. None of those are
- * derivable today: a tool call reports no line counts, no line ranges, and a file watcher that
- * would see an unattributed write does not exist. They are named in the design notes rather
- * than estimated — a `+42` guessed from nothing is worse than no number, because a number on
- * screen reads as measured.
+ * derivable from tool calls: they report no line counts or line ranges. The panel composes
+ * unattributed writes separately from the existing file watcher. A `+42` guessed from nothing
+ * is worse than no number, because a number on screen reads as measured.
  */
 
 const NOW = 1_000_000;
