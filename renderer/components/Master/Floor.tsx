@@ -2,6 +2,7 @@ import { IconBox, IconLayoutGrid } from './icons';
 import TerminalGrid from './TerminalGrid';
 import { HibernatedFloor } from './Hibernation';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
+import type { AgentSession } from '../../../main/agentsession/model';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import type { LayoutMode } from './TerminalGrid';
 import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../../lib/genie';
@@ -25,6 +26,7 @@ import type { AgentInboxIncomingNotice, TerminalSpec, WorkspaceRow } from '../..
  * change when the floor changes.
  */
 export interface FloorState {
+    sessions?: AgentSession[];
     /** Active-workspace specs — these lay out the visible grid. */
     specs: TerminalSpec[];
     /** Every known spec, including a disabled `<name>-slave` screen that is not

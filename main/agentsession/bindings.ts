@@ -102,6 +102,7 @@ export function productionPorts(): SessionPorts {
  * without pulling in Electron.
  */
 export const declaredSessions = new DeclaredSessionStore({
+    changed: () => { void import('../ipc').then((module) => module.broadcastAgentsChanged()); },
     record: (e) => {
         try {
             recordAgentUsage(getDb(), { ...e, costUsd: e.costUsd ?? null });

@@ -1484,6 +1484,13 @@ const api = {
     },
 
     files: {
+        readyPanel: (specId: string) => ipcRenderer.invoke('files:panel-ready', specId),
+        claimPanel: (specId: string) => ipcRenderer.invoke('files:claim-panel', specId),
+        releasePanel: (workspaceId: string) => ipcRenderer.invoke('files:release-panel', workspaceId),
+        popPanel: (specId: string) => ipcRenderer.invoke('files:pop-panel', specId),
+        poppedPanels: () => ipcRenderer.invoke('files:popped-panels'),
+        focusPanel: (workspaceId: string) => ipcRenderer.invoke('files:focus-panel', workspaceId),
+        bringBackPanel: (workspaceId: string) => ipcRenderer.invoke('files:bring-back-panel', workspaceId),
         listTree: (
             workspacePath: string,
             opts?: { maxDepth?: number; maxEntries?: number; root?: string; system?: boolean },
@@ -2121,6 +2128,11 @@ const api = {
             const handler = () => cb();
             ipcRenderer.on('terminal-spec:changed', handler);
             return () => ipcRenderer.off('terminal-spec:changed', handler);
+        },
+        filePanelWindowsChanged: (cb: () => void) => {
+            const handler = () => cb();
+            ipcRenderer.on('files:panel-windows-changed', handler);
+            return () => ipcRenderer.off('files:panel-windows-changed', handler);
         },
         /** AgentInbox presence — an agent joined/changed (full info), or LEFT
          *  (`{ agentId, status:'offline', left:true }`). The panel updates its

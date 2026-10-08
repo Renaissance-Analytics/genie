@@ -16,12 +16,15 @@ import EmptyWorkspace from './EmptyWorkspace';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import CodePanel from '../Code/CodePanel';
+import { Button } from '@particle-academy/react-fancy';
+import type { AgentSession } from '../../../main/agentsession/model';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
 import PluginPanelHost from '../Plugins/PluginPanelHost';
 import ErrorBoundary from '../ErrorBoundary';
 import { IconCode, IconPlus } from './icons';
 import {
     api,
+    SYSTEM_WORKSPACE_ID,
     currentConnKey,
     type TerminalSpec,
     type WorkspaceRow,
@@ -48,6 +51,7 @@ import { panelResetKeys } from '../../lib/panel-reset-keys';
 export type { LayoutMode } from '../../lib/terminal-grid-layout';
 
 interface Props {
+    sessions?: AgentSession[];
     /** Active-workspace specs only — these lay out the visible grid. */
     specs: TerminalSpec[];
     /** Includes disabled specs that own a paired sidecar agent's screen. */
@@ -141,6 +145,7 @@ interface FrTracks {
  * the gutters and gives the maximised panel the full area.
  */
 export default function TerminalGrid({
+    sessions,
     agentRecord,
     onRuntimesChanged,
     specs,
@@ -171,6 +176,17 @@ export default function TerminalGrid({
     addDisabledReason,
     onReorder,
 }: Props) {
+    const [poppedPanels, setPoppedPanels] = useState<Array<{ workspaceId: string; specId: string }>>([]);
+    useEffect(() => {
+        if (currentConnKey() !== 'local') return;
+        let alive = true;
+        const load = () => void api().files.poppedPanels().then((panels) => {
+            if (alive) setPoppedPanels(panels);
+        }).catch(() => {});
+        const off = api().on.filePanelWindowsChanged(load);
+        load();
+        return () => { alive = false; off(); };
+    }, []);
     // --- Panel drag-reorder ------------------------------------------------
     // Live preview while dragging (the tiles move under the cursor), committed
     // to `onReorder` on dragend — the same preview-then-commit shape the
@@ -242,6 +258,8 @@ export default function TerminalGrid({
 
     return (
         <ResizableGrid
+            sessions={sessions}
+            poppedPanels={poppedPanels}
             agentRecord={agentRecord}
             onRuntimesChanged={onRuntimesChanged}
             mode={mode}
@@ -278,6 +296,8 @@ export default function TerminalGrid({
 }
 
 interface ResizableGridProps {
+    sessions?: AgentSession[];
+    poppedPanels: Array<{ workspaceId: string; specId: string }>;
     /** The active workspace's agents + TUIs, forwarded to each agent panel
      *  so its driver control can tell WHICH agent it is showing. */
     agentRecord?: { agents: AgentRecordSpec[]; runtimes: AgentRuntimeSpec[] };
@@ -327,6 +347,8 @@ function evenTracks(n: number): number[] {
 }
 
 const ResizableGrid = ({
+    sessions,
+    poppedPanels,
     agentRecord,
     onRuntimesChanged,
     mode,
@@ -560,6 +582,8 @@ const ResizableGrid = ({
                         resetKeys={panelResetKeys(p.spec, activeWorkspaceId)}
                     >
                         <PanelFor
+                            sessions={sessions}
+                            popped={poppedPanels.some((panel) => panel.workspaceId === (p.spec.workspace_id ?? (p.spec.meta?.system ? SYSTEM_WORKSPACE_ID : null)))}
                             spec={p.spec}
                             allSpecs={allSpecs}
                             workspacesById={workspacesById}
@@ -741,6 +765,8 @@ function Gutters({
 }
 
 interface PanelForProps {
+    sessions?: AgentSession[];
+    popped?: boolean;
     spec: TerminalSpec;
     allSpecs: TerminalSpec[];
     workspacesById: Map<string, WorkspaceRow>;
@@ -786,6 +812,8 @@ interface PanelForProps {
  * Fancy editor via PluginEditorHost (§6.1); everything else is a terminal.
  */
 function PanelFor({
+    sessions,
+    popped,
     spec,
     allSpecs,
     workspacesById,
@@ -822,9 +850,41 @@ function PanelFor({
         ? workspacesById.get(shownSpec.workspace_id)
         : undefined;
 
+    const codeWorkspaceId = spec.workspace_id ?? (spec.meta?.system ? SYSTEM_WORKSPACE_ID : null);
+    const [codeOwned, setCodeOwned] = useState<boolean | null>(null);
+    useEffect(() => {
+        if (spec.type !== 'code' || !codeWorkspaceId || currentConnKey() !== 'local') return;
+        if (popped) { setCodeOwned(false); return; }
+        let alive = true;
+        const claim = () => void api().files.claimPanel(spec.id).then((owned) => {
+            if (alive) setCodeOwned(owned);
+        }).catch(() => { if (alive) setCodeOwned(false); });
+        const off = api().on.filePanelWindowsChanged(claim);
+        claim();
+        return () => {
+            alive = false;
+            off();
+            void api().files.releasePanel(codeWorkspaceId);
+        };
+    }, [spec.id, spec.type, codeWorkspaceId, popped]);
+
     if (spec.type === 'code') {
+        const workspaceId = codeWorkspaceId;
+        if (typeof window !== 'undefined' && workspaceId && currentConnKey() === 'local' && (popped || codeOwned !== true)) return (
+            <section className="tpanel code-panel code-popped" style={style}>
+                <span>{codeOwned === null && !popped ? 'Opening workspace files…' : 'Workspace files · open in another window'}</span>
+                {codeOwned !== null && <Button size="sm" variant="ghost" onClick={() => void api().files.focusPanel(workspaceId)}>Focus window</Button>}
+                {popped && <Button size="sm" variant="ghost" onClick={() => void api().files.bringBackPanel(workspaceId)}>Bring back</Button>}
+                <Button size="sm" variant="ghost" onClick={onClose}>Close panel</Button>
+            </section>
+        );
         return (
             <CodePanel
+                sessions={sessions}
+                onPopOut={workspaceId && currentConnKey() === 'local' ? async () => {
+                    const result = await api().files.popPanel(spec.id);
+                    if (!result.ok) throw new Error(result.error ?? 'Could not open the file panel window.');
+                } : undefined}
                 spec={spec}
                 workspace={workspace}
                 focused={focused}

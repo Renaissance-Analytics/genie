@@ -180,6 +180,7 @@ import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
 import { replacePageQuery, usePageQuery } from '../lib/page-query';
+import { filePanelForWorkspace, uniqueWorkspaceFilePanels } from '../lib/workspace-file-panel';
 import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
 import { AgentView } from '../components/Master/AgentView';
 import { parkedApproval } from '../lib/agent-view';
@@ -406,7 +407,6 @@ function MasterInner() {
     }, [workspaces]);
 
     useEffect(() => {
-        if (!surface.showDeck && !surface.showAgent) return;
         loadSessions();
         loadAttention();
         const offQ = api().on.questionsChanged?.(() => {
@@ -414,10 +414,16 @@ function MasterInner() {
             loadAttention();
         });
         const offA = api().on.agentsChanged?.(loadSessions);
+        const offP = api().on.agentPulse?.(loadSessions);
+        const offT = api().on.terminalAttention?.(loadSessions);
+        const offF = api().on.treeChanged?.(loadSessions);
         const offL = api().on.listsChanged?.(() => loadAttention());
         return () => {
             offQ?.();
             offA?.();
+            offP?.();
+            offT?.();
+            offF?.();
             offL?.();
         };
     }, [surface.showDeck, surface.showAgent, loadSessions, loadAttention]);
@@ -1679,12 +1685,12 @@ function MasterInner() {
             // the pty, so a mounted panel would be an error card where the floor
             // should say the workspace is asleep.
             awakeSpecs(
-                workspaceSurfaceSpecs(specs).filter(
+                uniqueWorkspaceFilePanels(workspaceSurfaceSpecs(specs).filter(
                     (s) =>
                         s.type !== 'process' &&
                         specWorkspaceId(s) === activeWorkspaceId &&
                         selected.has(s.id),
-                ),
+                )),
                 workspacesById,
             ),
         [specs, selected, activeWorkspaceId, workspacesById],
@@ -1695,12 +1701,12 @@ function MasterInner() {
     const backgroundSpecs = useMemo(
         () =>
             awakeSpecs(
-                workspaceSurfaceSpecs(specs).filter(
+                uniqueWorkspaceFilePanels(workspaceSurfaceSpecs(specs).filter(
                     (s) =>
                         s.type !== 'process' &&
                         specWorkspaceId(s) !== activeWorkspaceId &&
                         selected.has(s.id),
-                ),
+                )),
                 workspacesById,
             ),
         [specs, selected, activeWorkspaceId, workspacesById],
@@ -1779,6 +1785,12 @@ function MasterInner() {
             // tree alongside terminals.
             const root = type === 'code' ? `${baseLabel}-files` : baseLabel;
             const sameType = existing.filter((s) => s.type === type);
+            const filePanel = type === 'code' ? filePanelForWorkspace(specs, workspaceId) : null;
+            if (filePanel) {
+                setSelected((previous) => new Set(previous).add(filePanel.id));
+                setFocusId(filePanel.id);
+                return;
+            }
             const label = sameType.length === 0 ? root : `${root}-${sameType.length + 1}`;
             const created = await api().terminalSpec.create({
                 id: ulid(),
@@ -1793,7 +1805,7 @@ function MasterInner() {
             // the panels' parent re-render. Existing TerminalPanels stay keyed
             // by their spec id so they don't unmount, but minimising churn
             // here keeps the new-panel-while-others-running path smooth.
-            setSpecs((prev) => [...prev, created]);
+            setSpecs((prev) => prev.some((spec) => spec.id === created.id) ? prev : [...prev, created]);
             setSelected((prev) => new Set(prev).add(created.id));
         },
         [specs, workspacesById],
@@ -3151,6 +3163,7 @@ function MasterInner() {
                         window is a single workspace and derives the same shape
                         from far less. */}
                     <Floor
+                        sessions={sessions}
                         deck={
                             surface.showAgent ? (
                                 (() => {

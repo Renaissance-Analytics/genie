@@ -368,6 +368,7 @@ import {
 } from './updater/reopen-after-update';
 import { markDesktopRuntime, isHeadless } from './runtime-mode';
 import { registerFilesIpc } from './files/ipc';
+import { FilePanelWindows } from './files/panel-windows';
 import { startFlows } from './flows';
 import { registerGithubIpc } from './github/ipc';
 import { registerPluginsIpc } from './plugins/ipc';
@@ -856,7 +857,7 @@ export function showTerminalWindow(req?: TerminalWindowRequest): { ok: boolean; 
 }
 
 /** The Electron half: a window on the `/terminal` route. No decisions here. */
-function openTerminalBrowserWindow(route: string, title: string): void {
+function openTerminalBrowserWindow(route: string, title: string): BrowserWindow {
     const win = new BrowserWindow({
         width: 880,
         height: 560,
@@ -881,7 +882,26 @@ function openTerminalBrowserWindow(route: string, title: string): void {
     win.once('ready-to-show', () => win.show());
     terminalWindows.add(win);
     win.on('closed', () => terminalWindows.delete(win));
+    return win;
 }
+
+export const filePanelWindows = new FilePanelWindows({
+    open: (specId) => {
+        const win = openTerminalBrowserWindow(`?files=${encodeURIComponent(specId)}`, 'Genie · Workspace Files');
+        return {
+            id: win.id,
+            sendOpenFile: (request) => win.webContents.send('editor:open-file', request),
+            focus: () => { if (win.isMinimized()) win.restore(); win.show(); win.focus(); },
+            close: () => win.close(),
+            onClosed: (listener) => { win.on('closed', listener); },
+        };
+    },
+    changed: () => {
+        for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) win.webContents.send('files:panel-windows-changed');
+        }
+    },
+});
 
 export function getSettingsWindow(): BrowserWindow | null {
     return settingsWindow;
@@ -2571,6 +2591,7 @@ app.whenReady().then(async () => {
         listWorkspaces: () => listWorkspaces().map((w) => ({ id: w.id, path: w.path })),
         homeDir: () => os.homedir(),
         sendOpenFile: (payload) => {
+            if (filePanelWindows.routeOpenFile(payload)) return true;
             // Surface the master window so the file is actually visible, then push
             // the request (after its content has loaded, on a cold open).
             showMasterWindow();

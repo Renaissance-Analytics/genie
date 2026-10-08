@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { CodeEditor } from '@particle-academy/fancy-code';
+import { Button, Table, Tabs } from '@particle-academy/react-fancy';
+import type { AgentSession } from '../../../main/agentsession/model';
+import { workspaceChanges } from '../../lib/workspace-changes';
+import { changedFilePaths, popFilePanel, sessionFileChanges } from '../../lib/workspace-file-panel';
 import { useResolvedTheme } from '../../lib/theme-boot';
 import FileTree from './FileTree';
 import EditorWand from './EditorWand';
@@ -23,6 +27,7 @@ import {
     api,
     isSystemWorkspace,
     type TerminalSpec,
+    type GitStatusMap,
     type TreeNodeData,
     type ViewMeta,
     type WorkspaceRow,
@@ -32,6 +37,9 @@ import type { PanelDragHandlers } from '../../lib/panel-reorder';
 interface Props {
     spec: TerminalSpec;
     workspace?: WorkspaceRow;
+    sessions?: AgentSession[];
+    onPopOut?: () => Promise<void>;
+    onDirtyChange?: (dirty: boolean) => void;
     onClose: () => void;
     onMaximize?: () => void;
     onMinimize?: () => void;
@@ -134,6 +142,9 @@ function normaliseRoot(input: string): string {
 export default function CodePanel({
     spec,
     workspace,
+    sessions = [],
+    onPopOut,
+    onDirtyChange,
     onClose,
     onMaximize,
     onMinimize,
@@ -157,6 +168,13 @@ export default function CodePanel({
     const editorTheme = useResolvedTheme();
     const [nodes, setNodes] = useState<TreeNodeData[]>([]);
     const [treeVisible, setTreeVisible] = useState(true);
+    const [fileFilter, setFileFilter] = useState('all');
+    const [diskChanges, setDiskChanges] = useState<Record<string, number>>({});
+    const [gitStatus, setGitStatus] = useState<GitStatusMap>({});
+    const reportedChanges = useMemo(() => workspaceChanges(sessions, {
+        workspaceId: workspace?.id ?? spec.workspace_id ?? '',
+    }), [sessions, workspace?.id, spec.workspace_id]);
+    const changes = useMemo(() => sessionFileChanges(reportedChanges, diskChanges), [reportedChanges, diskChanges]);
 
     // Multi-file tab model: the open tabs (in order), the active one, and a
     // per-file state map. Seeded from persisted meta on mount.
@@ -185,6 +203,13 @@ export default function CodePanel({
 
     // Bumped after a save so the FileTree refetches git status.
     const [gitRefreshKey, setGitRefreshKey] = useState(0);
+    useEffect(() => {
+        let alive = true;
+        void api().files.gitStatus(workspacePath).then((status) => {
+            if (alive) setGitStatus(status);
+        }).catch(() => {});
+        return () => { alive = false; };
+    }, [workspacePath, nodes, gitRefreshKey]);
 
     // Live refs for the keydown handler + async ops without re-binding.
     const activeFileRef = useRef(activeFile);
@@ -197,6 +222,8 @@ export default function CodePanel({
     treePinnedRef.current = treePinned;
 
     const active = activeFile ? files[activeFile] : undefined;
+    const anyDirty = Object.values(files).some((file) => file.dirty);
+    useEffect(() => onDirtyChange?.(anyDirty), [anyDirty, onDirtyChange]);
 
     /** Paths of open tabs with unsaved edits — the tree marks these with `*`. */
     const dirtyPaths = useMemo(() => {
@@ -352,6 +379,11 @@ export default function CodePanel({
         let t: ReturnType<typeof setTimeout> | null = null;
         const off = api().on.treeChanged(({ workspacePath: changedWs, changed }) => {
             if (changedWs !== workspacePath) return;
+            if (changed) {
+                const at = Date.now();
+                setDiskChanges((previous) => ({ ...previous, ...Object.fromEntries(changed.map((path) => [path, at])) }));
+            }
+            setGitRefreshKey((previous) => previous + 1);
             void reconcileRef.current(changed);
             if (t) clearTimeout(t);
             t = setTimeout(() => void reloadTreeRef.current(), 120);
@@ -435,11 +467,11 @@ export default function CodePanel({
     // a tab + focus it. The mount-seed below only runs once, so a live panel
     // needs this side channel.
     useEffect(() => {
-        return onOpenInPanel(spec.id, (relPath, line) => {
-            void openTab(relPath).then((opened) => {
-                if (opened && !treePinnedRef.current) setTreeVisible(false);
-            });
+        return onOpenInPanel(spec.id, async (relPath, line) => {
+            const opened = await openTab(relPath);
+            if (opened && !treePinnedRef.current) setTreeVisible(false);
             if (typeof line === 'number') setReveal({ file: relPath, line });
+            return opened;
         });
     }, [spec.id, openTab]);
 
@@ -680,6 +712,31 @@ export default function CodePanel({
         persistMeta({ locked: true, root: '' });
     }, [locked, unlock, persistMeta]);
 
+    const handlePopOut = async () => {
+        if (!onPopOut || Object.values(filesRef.current).some((file) => file.dirty)) return;
+        try {
+            await popFilePanel({
+                persist: async () => {
+                    const updated = await api().terminalSpec.update(spec.id, { meta: {
+                        ...spec.meta,
+                        open_files: openFilesRef.current,
+                        active_file: activeFileRef.current ?? undefined,
+                        file_path: activeFileRef.current ?? undefined,
+                        tree_pinned: treePinned,
+                        expanded_tree_ids: expandedIds,
+                        word_wrap: wordWrap,
+                        locked,
+                        root: lockedRoot,
+                    } });
+                    if (!updated) throw new Error('File panel no longer exists.');
+                },
+                pop: onPopOut,
+            });
+        } catch (error) {
+            setLoadError(error instanceof Error ? error.message : String(error));
+        }
+    };
+
     return (
         <section
             /* `code-panel` themes the tile CHROME. `.tpanel` and `.tpanel-head`
@@ -749,6 +806,9 @@ export default function CodePanel({
                 ) : null}
                 <span className="grow" />
                 <span className="pa">
+                    {onPopOut && !anyDirty && (
+                        <Button size="sm" variant="ghost" onClick={() => void handlePopOut()}>Open in new window</Button>
+                    )}
                     <button
                         type="button"
                         className="pctl save-btn"
@@ -848,6 +908,12 @@ export default function CodePanel({
             <div className={`code-host${treeVisible ? '' : ' tree-hidden'}`}>
                 {treeVisible && (
                     <div className="code-tree">
+                        <Tabs activeTab={fileFilter} onTabChange={setFileFilter}>
+                            <Tabs.List>
+                                <Tabs.Tab value="all">All</Tabs.Tab>
+                                <Tabs.Tab value="changed">{`Changed (${changedFilePaths(changes, gitStatus).size})`}</Tabs.Tab>
+                            </Tabs.List>
+                        </Tabs>
                         <FileTree
                             nodes={nodes}
                             selectedId={activeFile ?? undefined}
@@ -864,7 +930,25 @@ export default function CodePanel({
                             lockedRoot={lockedRoot}
                             dirtyPaths={dirtyPaths}
                             gitRefreshKey={gitRefreshKey}
+                            gitStatus={gitStatus}
+                            changes={changes}
+                            changedOnly={fileFilter === 'changed'}
                         />
+                        <div className="code-session-changes">
+                            <h3>Changes this session</h3>
+                            {changes.length === 0 && <p>No changes reported this session.</p>}
+                            <Table aria-label="Changes this session">
+                                <Table.Body>
+                                    {changes.map((change) => (
+                                        <Table.Row key={change.path} className="code-session-change">
+                                            <Table.Cell>{change.at > 0 && <time dateTime={new Date(change.at).toISOString()}>{new Date(change.at).toLocaleTimeString()}</time>}</Table.Cell>
+                                            <Table.Cell><Button size="sm" variant="ghost" onClick={() => void selectFile(change.path)}>{change.path}</Button></Table.Cell>
+                                            <Table.Cell><span title={change.who ?? 'On disk · not attributed'}>{change.who ?? '?'}</span></Table.Cell>
+                                        </Table.Row>
+                                    ))}
+                                </Table.Body>
+                            </Table>
+                        </div>
                     </div>
                 )}
                 <div className="code-editor-col">

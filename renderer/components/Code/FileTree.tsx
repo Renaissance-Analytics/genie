@@ -3,9 +3,13 @@ import { TreeNav } from '@particle-academy/react-fancy';
 import FileTreeContextMenu from './FileTreeContextMenu';
 import { showPrompt } from '../Master/Prompt';
 import { api, type GitStatusMap, type TreeNodeData } from '../../lib/genie';
+import { changedFilePaths, filterChangedTree, type SessionFileChange } from '../../lib/workspace-file-panel';
 
 interface Props {
     nodes: TreeNodeData[];
+    changes?: SessionFileChange[];
+    changedOnly?: boolean;
+    gitStatus?: GitStatusMap;
     /** Workspace-relative path of the open file (the TreeNav selectedId). */
     selectedId?: string;
     /** Workspace root — every file op is path-guarded to it in main. */
@@ -91,6 +95,9 @@ function joinRel(folder: string, leaf: string): string {
  */
 export default function FileTree({
     nodes,
+    changes = [],
+    changedOnly = false,
+    gitStatus,
     selectedId,
     workspacePath,
     system,
@@ -159,12 +166,13 @@ export default function FileTree({
     }, [workspacePath]);
 
     useEffect(() => {
+        if (gitStatus) return;
         const cancel = refreshGit();
         return cancel;
         // nodes in deps: refetch after any tree mutation reshapes it.
         // gitRefreshKey in deps: refetch after a save.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [refreshGit, nodes, gitRefreshKey]);
+    }, [refreshGit, nodes, gitRefreshKey, gitStatus]);
 
     /**
      * Decorate the raw tree with git-status colour + a dirty `*` marker.
@@ -180,6 +188,8 @@ export default function FileTree({
      * `TreeNodeData` contract while passing a node that React renders.
      */
     const decorated = useMemo(() => {
+        const statuses = gitStatus ?? gitMap;
+        const attribution = new Map(changes.map((change) => [change.path, change]));
         const decorate = (ns: TreeNodeData[]): TreeNodeData[] =>
             ns.map((n) => {
                 if (n.type === 'folder') {
@@ -187,9 +197,10 @@ export default function FileTree({
                         ? { ...n, children: decorate(n.children) }
                         : n;
                 }
-                const status = gitMap[n.id];
+                const status = statuses[n.id];
                 const isDirty = !!dirtyPaths && dirtyPaths.has(n.id);
-                if (!status && !isDirty) return n;
+                const change = attribution.get(n.id);
+                if (!status && !isDirty && !change) return n;
                 const color = status ? STATUS_COLOR[status] : undefined;
                 const strike = status === 'deleted';
                 const labelNode = (
@@ -201,6 +212,11 @@ export default function FileTree({
                         title={status ?? undefined}
                     >
                         {n.label}
+                        {(change || (status && status !== 'ignored')) && (
+                            <span className="tree-agent" title={change?.who ?? 'On disk · not attributed'}>
+                                {' · '}{change?.who ?? '?'}
+                            </span>
+                        )}
                         {isDirty && (
                             <span className="tree-dirty-mark" aria-hidden>
                                 {' '}
@@ -222,8 +238,8 @@ export default function FileTree({
                         : undefined);
                 return { ...n, ext, label: labelNode as unknown as string };
             });
-        return decorate(nodes);
-    }, [nodes, gitMap, dirtyPaths]);
+        return decorate(changedOnly ? filterChangedTree(nodes, changedFilePaths(changes, statuses)) : nodes);
+    }, [nodes, gitMap, gitStatus, dirtyPaths, changes, changedOnly]);
 
     /**
      * Resolve the folder a "create" op should target:

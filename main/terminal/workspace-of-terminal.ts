@@ -1,5 +1,6 @@
-import { getTerminalSpec, type TerminalSpecRow } from '../db';
+import { getTerminalSpec } from '../db';
 import { SYSTEM_WORKSPACE_ROW_ID } from '../workspace/system-workspace-id';
+import { workspaceIdOfSpec } from './spec-workspace';
 
 /**
  * The System Workspace's id (mirrors the renderer's `SYSTEM_WORKSPACE_ID` in
@@ -30,11 +31,7 @@ export const SYSTEM_WORKSPACE_ID = SYSTEM_WORKSPACE_ROW_ID;
  *
  * Pure (takes the spec) so it's unit-testable without electron/db.
  */
-export function workspaceIdOfSpec(spec: TerminalSpecRow): string | null {
-    if (spec.workspace_id) return spec.workspace_id;
-    if (spec.meta?.system === true) return SYSTEM_WORKSPACE_ID;
-    return null;
-}
+export { workspaceIdOfSpec } from './spec-workspace';
 
 /** Look a terminal id up in the spec store and resolve its workspace id. */
 export function workspaceIdOfTerminal(terminalId: string): string | null {

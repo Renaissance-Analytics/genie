@@ -101,6 +101,7 @@ import { requestWorkstationReset } from './workstation/reset';
 import { osAgentBootMode, readWorkstationEvidence } from './agents/os-lifecycle';
 import { armSchedule, forgetSchedule } from './terminal/process-scheduler';
 import { broadcastTerminalSpecsChanged, liveTerminalCount } from './terminal/ipc';
+import { workspaceIdOfSpec } from './terminal/spec-workspace';
 import { applyWindowTheme } from './window-theme';
 import { agentPulse } from './terminal/agent-pulse';
 import {
@@ -380,6 +381,7 @@ import {
     showStageWindow,
     showHostWindow,
     showTerminalWindow,
+    filePanelWindows,
 } from './background';
 import {
     allConfiguredBackends,
@@ -2473,6 +2475,38 @@ export function registerIpcHandlers(): void {
      * placed here is logic nobody checks.
      */
     ipcMain.handle('terminal:open-window', (_event, req: TerminalWindowRequest) => showTerminalWindow(req));
+    ipcMain.handle('files:popped-panels', () => filePanelWindows.list());
+    ipcMain.handle('files:claim-panel', (event, specId: string) => {
+        const spec = getTerminalSpec(specId);
+        const owner = BrowserWindow.fromWebContents(event.sender);
+        const workspaceId = spec ? workspaceIdOfSpec(spec) : null;
+        if (!spec || spec.type !== 'code' || !workspaceId || !owner) return false;
+        return filePanelWindows.claim(workspaceId, specId, owner.id, {
+            id: owner.id,
+            sendOpenFile: (request) => owner.webContents.send('editor:open-file', request),
+            focus: () => { if (owner.isMinimized()) owner.restore(); owner.show(); owner.focus(); },
+            close: () => owner.close(),
+            onClosed: (listener) => { owner.once('closed', listener); },
+        });
+    });
+    ipcMain.handle('files:release-panel', (event, workspaceId: string) => {
+        const owner = BrowserWindow.fromWebContents(event.sender);
+        if (owner) filePanelWindows.release(workspaceId, owner.id);
+    });
+    ipcMain.handle('files:panel-ready', (event, specId: string) => {
+        const owner = BrowserWindow.fromWebContents(event.sender);
+        if (owner) filePanelWindows.ready(specId, owner.id);
+    });
+    ipcMain.handle('files:pop-panel', (event, specId: string) => {
+        const spec = getTerminalSpec(specId);
+        if (!spec || spec.type !== 'code') return { ok: false, error: 'File panel not found.' };
+        const workspaceId = workspaceIdOfSpec(spec);
+        if (!workspaceId) return { ok: false, error: 'File panel has no workspace.' };
+        filePanelWindows.pop(workspaceId, spec.id, BrowserWindow.fromWebContents(event.sender)?.id);
+        return { ok: true };
+    });
+    ipcMain.handle('files:focus-panel', (_event, workspaceId: string) => filePanelWindows.focus(workspaceId));
+    ipcMain.handle('files:bring-back-panel', (_event, workspaceId: string) => filePanelWindows.bringBack(workspaceId));
 
     // --- Flows ------------------------------------------------------------
     // Registered in `flows/ipc.ts`, not here. There is ONE flow system now, so
