@@ -9043,3 +9043,125 @@ body.gutter-dragging .grid-gutter {
     font-family: var(--font-mono);
     color: var(--fg-4);
 }
+
+/* ===== The Stream — §5.2's body ========================================
+   One ordered list of two row shapes. An EVENT row is one line; a SPEECH
+   row wraps. The one-line guarantee is NOT made here — `lib/agent-stream.ts`
+   flattens the text, so a careless override of `nowrap` cannot silently
+   restore the content-jumping this design exists to remove. The ellipsis
+   below is for WIDTH only. */
+.agent-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* ── the one-line event row ─────────────────────────────────────────────
+   A fixed row height is the structural half of the rule: whatever arrives,
+   the rows above it do not move. */
+.stream-event {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 22px;
+    flex: none;
+    padding: 0 8px;
+    border-radius: 4px;
+    color: var(--fg-2);
+}
+.stream-main {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.stream-meta {
+    font-family: var(--font-mono);
+    color: var(--fg-4);
+    white-space: nowrap;
+}
+
+/* A THOUGHT is italic and quieter than the work — it is the agent's private
+   reasoning, legible but never competing with what it actually did. */
+.stream-event[data-kind='think'] {
+    font-style: italic;
+    color: var(--fg-3);
+}
+/* An EDIT is the one row kind that is TINTED, because "what changed" is the
+   question this surface is most often opened to answer. */
+.stream-event[data-kind='edit'] {
+    background: var(--bg-1);
+    color: var(--fg-1);
+}
+.stream-event[data-kind='edit'] .stream-main {
+    font-family: var(--font-mono);
+}
+.stream-event[data-kind='tool'] .stream-main {
+    font-family: var(--font-mono);
+}
+
+.stream-event[data-level='bad'] .stream-meta {
+    color: var(--red-500);
+}
+.stream-event[data-level='pending'] .stream-meta {
+    color: var(--amber-400);
+}
+/* The live thought pulses its ICON, not its text — there is no text to
+   pulse, and animating the row would move the thing it sits under. */
+.stream-event[data-live] {
+    color: var(--fg-2);
+    font-style: normal;
+}
+
+/* ── speech: the one place text may wrap ────────────────────────────────── */
+.stream-speech {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+}
+.stream-who {
+    font-family: var(--font-mono);
+    color: var(--violet-400);
+}
+.stream-speech-text {
+    color: var(--fg-1);
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+/* ── dividers: a turn boundary, a compaction, a parked turn ─────────────── */
+.stream-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    font-family: var(--font-mono);
+    color: var(--fg-4);
+}
+.stream-divider::before,
+.stream-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-1);
+}
+.stream-divider[data-level='attention'] {
+    color: var(--amber-400);
+}
+.stream-divider[data-level='attention']::before,
+.stream-divider[data-level='attention']::after {
+    background: var(--amber-500);
+    opacity: 0.5;
+}
+.stream-divider[data-level='bad'] {
+    color: var(--red-500);
+}
+.stream-divider[data-level='bad']::before,
+.stream-divider[data-level='bad']::after {
+    background: var(--red-500);
+    opacity: 0.5;
+}

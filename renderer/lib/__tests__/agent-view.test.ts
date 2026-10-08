@@ -24,6 +24,8 @@ const session = (over: Partial<AgentSession> = {}): AgentSession => ({
     specId: 's1',
     session: { provider: 'claude', name: 'kai', cwd: '/w', workspaceId: 'w1', sessionId: 'sess' },
     turn: { state: 'idle', since: 0 },
+    thoughts: [],
+    liveThought: null,
     rateLimit: null,
     rateLimitUnavailable: null,
     composer: null,

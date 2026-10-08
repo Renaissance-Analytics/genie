@@ -87,6 +87,35 @@ export interface Message {
     at?: number | null;
 }
 
+/**
+ * ONE PIECE OF THE AGENT'S REASONING.
+ *
+ * Kept separate from `transcript` deliberately, and that separation is the whole design: the
+ * mapper used to DISCARD thought chunks, with a correct reason — *"appending it to `live`
+ * would splice the agent's private thinking into what it actually said."* The remedy was
+ * wrong, not the reasoning. Reasoning is a different kind of thing from speech, so it gets a
+ * different field rather than being folded into one or thrown away.
+ *
+ * ## No token count, on purpose
+ *
+ * The spec board draws a thought as one line with its cost (`842 tok`). **That number is not
+ * on the wire** — nothing in `agent_thought_chunk` carries it — so the only way to produce one
+ * here would be to estimate it from the text, which is an estimate dressed as a measurement.
+ * The honest version is a `Δctx` delta between two real `usage_update`s, which belongs to the
+ * stream projection where both samples are in hand. A closed key-set assertion in
+ * `update-to-session.test.ts` is what stops a `tokens` field appearing by guesswork.
+ */
+export interface Thought {
+    id: string;
+    /** The reasoning itself. Shown as ONE LINE and never auto-expanded — content jumping as
+     *  reasoning streams is the worst reading experience in agent UIs, and the board fixes it
+     *  structurally by making the row unable to grow. */
+    text: string;
+    /** When the thought STARTED, carried through every chunk — the same rule as
+     *  {@link Message.at}, so the stream orders by when the agent began thinking. */
+    at: number;
+}
+
 export interface ToolCall {
     id: string;
     name: string;
@@ -229,6 +258,17 @@ export interface AgentSession {
     transcript: Message[];
     /** The in-flight message, if any. */
     live: Message | null;
+    /**
+     * The agent's REASONING, settled. `[]` is a fact — the agent has thought nothing yet —
+     * not an absence, which is why this is never null. Same distinction as `approvals`.
+     *
+     * A thought settles when the agent does something else: there is no "thought finished"
+     * update, so the boundary is the next event, which is also how the board draws it.
+     */
+    thoughts: Thought[];
+    /** The thought in flight. Rendered as "Thinking…" with its count ticking and the TEXT
+     *  NEVER APPEARING, per the board — the text is only legible once it has settled. */
+    liveThought: Thought | null;
     tools: ToolCall[];
     /** Genie owns its approval queue, so `[]` here is a fact for any provider. */
     approvals: PendingApproval[];
@@ -278,6 +318,8 @@ export function emptyAgentSession(identity: AgentSessionIdentity, now = Date.now
         composer: null,
         transcript: [],
         live: null,
+        thoughts: [],
+        liveThought: null,
         tools: [],
         approvals: [],
         rateLimit: null,
