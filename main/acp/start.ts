@@ -148,6 +148,11 @@ export function startAcpForSpec(input: {
         get closed() {
             return started.client.closed;
         },
+        // Read through to the driver on every call rather than captured here. This
+        // registration happens BEFORE the handshake (see the note above), so a value read
+        // now would be `null` for the life of the session — the entry would have recorded
+        // "not declared" about an agent that declares perfectly well.
+        capabilities: () => driver.capabilities,
         prompt: async (text) => {
             const outcome = await driver.prompt(text);
             // The turn is over when `session/prompt` RESOLVES — ACP has no "turn over"

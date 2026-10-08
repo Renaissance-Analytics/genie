@@ -20,6 +20,8 @@
  */
 
 import {
+    CLAUDE_DRIVER_CAPABILITIES,
+    CODEX_DRIVER_CAPABILITIES,
     ClaudeDriver,
     CodexDriver,
     probeSessionStore,
@@ -87,9 +89,27 @@ const permissionMode = (process.env.GENIE_ACP_PERMISSION_MODE ?? '').trim() || u
  */
 const probeSession = provider === 'claude' ? (id) => probeSessionStore(id) : undefined;
 
+/**
+ * WHAT THIS DRIVER CAN DO, declared to the client on the `initialize` result.
+ *
+ * prism-acp 0.6.0 carries it in `_meta` under `particle.academy/driver_capabilities`, and
+ * the embedder has to supply it — the agent cannot know which driver its factory is about
+ * to build. Omitting it is not a neutral default: the key is then ABSENT, which prism
+ * defines as "not declared" and the client reads as "I don't know", so every consumer
+ * falls back to guessing from the provider name. Which is the thing the declaration exists
+ * to stop.
+ *
+ * Taken from the package's own constants rather than written out here. `permissionRequests`
+ * is `false` for claude TODAY and flips when its permission bridge lands in 0.7.0; a pair
+ * of literals copied into this file would keep saying `false` through that upgrade, and
+ * nothing would fail.
+ */
+const driverCapabilities = provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : CLAUDE_DRIVER_CAPABILITIES;
+
 const served = serve({
     input: process.stdin,
     output: process.stdout,
+    driverCapabilities,
     driverFactory: (opts, events) =>
         provider === 'codex'
             ? // NOT given a permissionMode. `CodexDriverOptions` has no such field, and codex

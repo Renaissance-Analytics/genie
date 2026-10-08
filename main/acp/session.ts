@@ -59,8 +59,50 @@ interface HeldApproval {
     settle: (response: PermissionResponse) => void;
 }
 
+/**
+ * What the driver on the other end declared it can do — prism's
+ * `particle.academy/driver_capabilities`, read off the `initialize` result.
+ *
+ * Exactly these two fields, because that is exactly what prism declares. Mirrored here
+ * rather than imported so `main` keeps compiling if the package is absent; the SHAPE is
+ * pinned by `driver-capabilities.test.ts`, which refuses a partial or mistyped object.
+ */
+export interface DriverCapabilities {
+    readonly permissionRequests: boolean;
+    readonly transcriptReplay: boolean;
+}
+
+/** prism's `_meta` key for the declaration. */
+const META_DRIVER_CAPABILITIES = 'particle.academy/driver_capabilities';
+
+/**
+ * Read the declaration, or report that there ISN'T ONE.
+ *
+ * Returns `null` for absent AND for malformed, and the two are the same answer on purpose:
+ * prism says *"absence does not mean `false`"*, and a half-read object is worse than
+ * absence because it puts `undefined` in a boolean field, where every `!cap.x` downstream
+ * reads it as a confident "cannot".
+ */
+function capabilitiesFrom(result: unknown): DriverCapabilities | null {
+    if (typeof result !== 'object' || result === null) return null;
+    const meta = (result as { _meta?: unknown })._meta;
+    if (typeof meta !== 'object' || meta === null) return null;
+    const declared = (meta as Record<string, unknown>)[META_DRIVER_CAPABILITIES];
+    if (typeof declared !== 'object' || declared === null) return null;
+    const { permissionRequests, transcriptReplay } = declared as Record<string, unknown>;
+    if (typeof permissionRequests !== 'boolean' || typeof transcriptReplay !== 'boolean') return null;
+    return { permissionRequests, transcriptReplay };
+}
+
 export class AcpSessionDriver {
     private sessionIdValue: string | null = null;
+    /**
+     * `null` until a handshake has answered, and `null` again if it answered without a
+     * declaration. NEVER inferred from the provider name: prism states that claude's
+     * `permissionRequests` is `false` today and flips when its permission bridge lands, so
+     * a name-keyed guess is an answer with an expiry date set by a package we do not own.
+     */
+    private capabilitiesValue: DriverCapabilities | null = null;
     /**
      * Keyed by a UNIQUE internal handle, not by the approval id.
      *
@@ -91,6 +133,17 @@ export class AcpSessionDriver {
         deps.onRequest('session/request_permission', (params) => this.holdPermission(params as RequestPermissionParams));
     }
 
+    /**
+     * What this session's agent declared it can do, or `null` for "not declared".
+     *
+     * Read per session rather than cached against a provider, which is prism's own
+     * instruction and the reason the declaration shipped a release ahead of the bridge
+     * it describes.
+     */
+    get capabilities(): DriverCapabilities | null {
+        return this.capabilitiesValue;
+    }
+
     get sessionId(): string | null {
         return this.sessionIdValue;
     }
@@ -104,11 +157,15 @@ export class AcpSessionDriver {
 
     async start(opts: { cwd: string; instructions?: string }): Promise<void> {
         // Order matters and is not ours to choose: initialize, then session/new.
-        await this.deps.request('initialize', {
-            protocolVersion: 1,
-            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-            clientInfo: { name: 'genie', version: '2' },
-        });
+        // The RESULT is read, not discarded — it is the only place the driver's declared
+        // capabilities appear.
+        this.capabilitiesValue = capabilitiesFrom(
+            await this.deps.request('initialize', {
+                protocolVersion: 1,
+                clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+                clientInfo: { name: 'genie', version: '2' },
+            }),
+        );
         const session = (await this.deps.request('session/new', { cwd: opts.cwd, mcpServers: [] })) as {
             sessionId?: string;
         };
@@ -185,11 +242,16 @@ export class AcpSessionDriver {
                     'nothing to continue. Start it fresh instead.',
             );
         }
-        await this.deps.request('initialize', {
-            protocolVersion: 1,
-            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-            clientInfo: { name: 'genie', version: '2' },
-        });
+        // Read here too, and this is the case the declaration matters most for: a resumed
+        // session is one where Genie has restarted with no memory, and the agent on the
+        // other end may be a different build of prism than the one that opened it.
+        this.capabilitiesValue = capabilitiesFrom(
+            await this.deps.request('initialize', {
+                protocolVersion: 1,
+                clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+                clientInfo: { name: 'genie', version: '2' },
+            }),
+        );
         // Throws on refusal, deliberately unhandled: prism-acp refuses an ACP id and refuses
         // a load for an agent still running, and a swallowed refusal leaves the caller
         // believing a conversation was continued when it was not.
