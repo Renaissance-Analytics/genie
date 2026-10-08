@@ -16,8 +16,8 @@ export function stripCssComments(css: string): string {
 /**
  * The declarations inside the first block whose selector list is exactly
  * `selector`, or null when no such rule exists. Exact match on the trimmed
- * prelude, so `.gwrap.lists-docked` does not accidentally answer for
- * `.gwrap.lists-docked .gright`.
+ * prelude, so `.gwrap.docked` does not accidentally answer for
+ * `.gwrap.docked .gright`.
  */
 export function declarationsFor(css: string, selector: string): string | null {
     const body = stripCssComments(css);

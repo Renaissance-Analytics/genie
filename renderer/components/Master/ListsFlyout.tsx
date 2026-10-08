@@ -12,7 +12,7 @@ import {
 /**
  * The AgentList + UserList panel (genie#556). Right-side slide-in reusing the
  * Docs flyout chrome, with a PIN that docks it to the right edge — pinned, the
- * app shell reserves the width on each content row (`.gwrap.lists-docked .gbody, .deck,
+ * app shell reserves the width on each content row (`.gwrap.docked .gbody, .deck,
  * .agent-view, .agent-view-missing`) so the panel sits beside
  * the Floor rather than over it.
  *

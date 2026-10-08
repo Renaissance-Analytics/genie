@@ -177,6 +177,10 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
      * LOST but a feature never found. So it gets a palette row like everything else.
      */
     { id: 'dashboard', label: 'Workflow Dashboard', entry: { paletteId: 'dashboard' } },
+
+    /** Chat (§5.4). Registered for the same reason as the Dashboard: ⌘J is a shortcut, and a
+     *  shortcut is not an entry point a person DISCOVERS. */
+    { id: 'chat', label: 'Chat', entry: { paletteId: 'chat', contextual: 'Agent view → ⌘J' } },
 ];
 
 export interface FoundEntryPoints {

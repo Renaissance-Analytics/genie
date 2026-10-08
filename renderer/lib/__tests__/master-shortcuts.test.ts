@@ -173,10 +173,27 @@ describe('resolveShortcut — unmodified keys act ONLY on the surface', () => {
     });
 
     it('NEVER acts when a modifier is held, so select-all still selects all', () => {
+        /**
+         * The single-letter QUEUE commands must not fire under a modifier, or ⌘A would allow a
+         * tool call instead of selecting all.
+         *
+         * ⌘J USED TO BE IN THIS LIST and no longer is, because the board assigns it (§5.4:
+         * *"⌘J chat"*). That is a deliberate contract change, not a loosened assertion — the
+         * principle is unchanged and still asserted by the three cases below, and the case
+         * underneath proves ⌘J now resolves to something rather than merely stopping being
+         * null. A letter leaving this list should always be paired with a reason and a
+         * positive control; otherwise it reads as the guard quietly eroding.
+         */
         expect(resolveShortcut(ev({ key: 'a', metaKey: true }), 'surface')).toBeNull();
         expect(resolveShortcut(ev({ key: 'a', ctrlKey: true }), 'surface')).toBeNull();
         expect(resolveShortcut(ev({ key: 'd', altKey: true }), 'surface')).toBeNull();
-        expect(resolveShortcut(ev({ key: 'j', metaKey: true }), 'surface')).toBeNull();
+        // NOT ⌘K or ⌃K as a fourth case: those are the palette, which the resolver assigns
+        // above. Tried it, and it went red — the remaining inert letters under a modifier are
+        // exactly `a` and `d`, which is what the three lines above cover.
+    });
+
+    it('⌘J is now an assigned chord, which is why it left the list above', () => {
+        expect(resolveShortcut(ev({ key: 'j', metaKey: true }), 'surface')).toEqual({ kind: 'chat' });
     });
 
     it('accepts the shifted letter, since Caps Lock is not a different intent', () => {
@@ -238,5 +255,44 @@ describe('Escape on the Dashboard', () => {
         // The positive control: it still DOES navigate from an agent, or this test would pass
         // against a function that always returned false.
         expect(escapeLeavesForDeck({ view: 'agent', overlayOpen: false })).toBe(true);
+    });
+});
+
+/**
+ * ⌘J / ⌘⇧J — the chat keys the board adds (§5.4).
+ *
+ * Chat is where a human types to an agent, so its key has to work from wherever they noticed
+ * the agent — and the one place it must NOT work is inside a terminal, where the TUI has first
+ * claim on every chord. That is the same rule ⌘K already follows for the same reason.
+ */
+describe('the chat shortcuts', () => {
+    const key = (k: string, extra: Partial<KeyboardEvent> = {}) =>
+        ({ key: k, metaKey: true, ...extra }) as KeyboardEvent;
+
+    it('⌘J asks for chat', () => {
+        expect(resolveShortcut(key('j'), 'surface')).toEqual({ kind: 'chat' });
+        // Capitalised too: a chord with Shift reports an upper-case key on some layouts, and
+        // ⌘K already handles both for that reason.
+        expect(resolveShortcut(key('J', { shiftKey: true }), 'surface')).toEqual({ kind: 'chat-pin' });
+    });
+
+    it('⌘⇧J asks for the PIN, not for chat', () => {
+        // Order matters in the resolver: the Shift variant must be tested first, or ⌘⇧J would
+        // match ⌘J and the pin key would just toggle the panel.
+        expect(resolveShortcut(key('j', { shiftKey: true }), 'surface')).toEqual({ kind: 'chat-pin' });
+    });
+
+    it('is withheld inside a TERMINAL, where the TUI owns the chord', () => {
+        // ⌃J is newline in any readline prompt. The same reasoning that withholds ⌘K.
+        expect(resolveShortcut(key('j'), 'terminal')).toBeNull();
+        expect(resolveShortcut(key('j', { shiftKey: true }), 'terminal')).toBeNull();
+    });
+
+    it('still works from a TEXT field, unlike the single-letter commands', () => {
+        // A chord is safe in a field — nothing is being composed by ⌘J — and someone typing in
+        // a filter box is exactly who wants to reach an agent. The single letters (J/K/A/D) are
+        // the ones that must not fire there, and the test above asserts exactly that for the
+        // same focus value.
+        expect(resolveShortcut(key('j'), 'text')).toEqual({ kind: 'chat' });
     });
 });

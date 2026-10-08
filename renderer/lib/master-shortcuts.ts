@@ -67,6 +67,10 @@ export type ShortcutIntent =
     | { kind: 'deck' }
     /** Open the command palette. */
     | { kind: 'palette' }
+    /** Open (or close) chat — §5.4's flyout, and the only place a human types to an agent. */
+    | { kind: 'chat' }
+    /** Pin or unpin chat at the right edge. One dock slot, so pinning it undocks whatever was. */
+    | { kind: 'chat-pin' }
     /** Jump to the nth agent (1-based; there is no slot 0). */
     | { kind: 'agent-slot'; slot: number }
     /** Take over an agent's terminal, or hand it back — one toggle, both ways. */
@@ -108,6 +112,18 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
         if (focus === 'terminal') return null;
 
         if (e.key === 'k' || e.key === 'K') return { kind: 'palette' };
+
+        /**
+         * CHAT. The SHIFT variant is tested first, or ⌘⇧J would match ⌘J and the pin key would
+         * merely toggle the panel — the kind of ordering bug that only shows up as "the pin
+         * does nothing".
+         *
+         * Both cases of the letter, because a chord with Shift reports an upper-case key on
+         * some layouts; ⌘K above already handles both for that reason.
+         */
+        if (e.key === 'j' || e.key === 'J') {
+            return e.shiftKey || e.key === 'J' ? { kind: 'chat-pin' } : { kind: 'chat' };
+        }
 
         // 1–9 only. There is no slot 0, so ⌘0 stays free for zoom-reset.
         if (e.key >= '1' && e.key <= '9') return { kind: 'agent-slot', slot: Number(e.key) };
