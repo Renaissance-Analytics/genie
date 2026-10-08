@@ -287,6 +287,14 @@ export interface KnownFacts {
     usage: boolean;
     commands: boolean;
     transcript: boolean;
+    /**
+     * Subscription headroom — a reading, or the explanation for its absence.
+     *
+     * Separate from `usage` because they answer different questions from different frames:
+     * `usage` is this session's tokens and cost, a rate limit is the ACCOUNT's remaining
+     * capacity. An agent can have either without the other.
+     */
+    rateLimit: boolean;
 }
 
 /**
@@ -306,5 +314,8 @@ export function knownFacts(s: AgentSession): KnownFacts {
             (s.usage.contextUsed !== null || s.usage.contextMax !== null || s.usage.costUsd !== null),
         commands: s.commands !== null,
         transcript: s.transcript.length > 0,
+        // The explanation counts as a fact: "no reading, and here is why" is worth a line, and
+        // it is the case prism explicitly warned would otherwise leave no gauge AND no reason.
+        rateLimit: s.rateLimit !== null || s.rateLimitUnavailable !== null,
     };
 }

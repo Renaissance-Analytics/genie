@@ -174,3 +174,32 @@ export function attentionItems(src: AttentionSources, opts: AttentionOptions = {
         return a.createdAt - b.createdAt;
     });
 }
+
+/**
+ * Where J and K land — the queue's keyboard focus.
+ *
+ * `resolveShortcut` has resolved `queue-move` since the keyboard model was restored, and
+ * nothing acted on it, because there was no focus to move: the band rendered ranked rows and
+ * never said which one you were on.
+ *
+ * Two decisions worth stating, both about not resolving the wrong thing:
+ *
+ *  - **No wrapping.** Press J once more than the list is long and a wrapping cursor jumps
+ *    silently back to the top, which looks exactly like not having moved — and the next
+ *    keystroke approves whatever is there.
+ *  - **A vanished row re-enters from the end you came from.** Rows disappear as agents answer
+ *    and items resolve; keeping the INDEX would put the cursor on whatever item took that slot,
+ *    which is a different thing under the same highlight.
+ */
+export function moveQueueFocus(
+    items: readonly { key: string }[],
+    currentKey: string | null,
+    delta: 1 | -1,
+): string | null {
+    if (items.length === 0) return null;
+    const at = currentKey === null ? -1 : items.findIndex((i) => i.key === currentKey);
+    // Nothing focused, or focused on a row that is gone: enter from the end the key implies.
+    if (at < 0) return (delta === 1 ? items[0] : items[items.length - 1])!.key;
+    const next = Math.min(items.length - 1, Math.max(0, at + delta));
+    return items[next]!.key;
+}

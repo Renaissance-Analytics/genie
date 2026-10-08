@@ -180,12 +180,14 @@ import { nudgeGappDevSync, nudgeGappDevSyncOnFocus } from '../lib/gapp-dev';
 import { playChime } from '../lib/alert-chime';
 import { motifForPayload } from '../../main/notify-sound-kinds';
 import { replacePageQuery, usePageQuery } from '../lib/page-query';
-import { mergeViewRoute, parseViewRoute, type GenieView } from '../lib/view-route';
+import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
 import { AgentView } from '../components/Master/AgentView';
+import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
+import { attentionItems, moveQueueFocus } from '../lib/attention-queue';
 import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
-import { focusOwnerOf } from '../lib/master-shortcuts';
+import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
 import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
 
 /**
@@ -732,6 +734,16 @@ function MasterInner() {
     // The panel owns the grouped list; the master just tracks the badge total and
     // refreshes it on `questions:changed` (event-driven, no polling).
     const [questionsOpen, setQuestionsOpen] = useState(false);
+    /**
+     * Which Needs-you row has its answer form open.
+     *
+     * Here rather than inside `NeedsYou` so the expanded shape is assertable — the renderer's
+     * test environment has no DOM and cannot click — and so answering survives the band
+     * re-rendering as questions arrive.
+     */
+    const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
+    /** The Needs-you row the keyboard is on — `J`/`K` move it (`moveQueueFocus`). */
+    const [focusedQueueKey, setFocusedQueueKey] = useState<string | null>(null);
     // The workspace lists (genie#556): a header icon, and a PIN that docks the
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
@@ -2489,6 +2501,67 @@ function MasterInner() {
     // (⌘1–9 / ⌘\ / ⌘W) were removed: a focused terminal swallowed them, so they
     // were unreliable and their status-bar hint misled.
     //
+    /**
+     * EVERYTHING THE KEYBOARD LISTENER NEEDS, in a ref refreshed every render.
+     *
+     * The listener below is mounted ONCE (`[]` deps) and that is deliberate — re-subscribing a
+     * window keydown handler on every state change is how a chord gets delivered twice. The cost
+     * is that it closes over the first render's state, so anything it reads has to come through
+     * here. Reading `view` or `sessions` directly would act on what was true when the window
+     * opened, which in a long-lived window is any amount of wrong.
+     *
+     * `overlayOpen` is the OR of every flyout's own flag. It reads as a list because that is
+     * genuinely the state today; P7's single `openDrawer` is what turns it into one comparison,
+     * and until then an incomplete OR is the honest risk — a missing flag means Escape navigates
+     * out from under an open panel.
+     */
+    const keys = useRef({
+        view: 'deck' as 'deck' | 'grid' | 'workbench' | 'agent',
+        overlayOpen: false,
+        query: {} as RouteQuery,
+        sessions: [] as AgentSessionSpec[],
+        queue: [] as Array<{ key: string }>,
+        agentId: null as string | null,
+        agentSpecId: null as string | null,
+        parkedApprovalId: null as string | null,
+    });
+    keys.current = {
+        view: view.kind,
+        overlayOpen:
+            sharingOpen
+            || paletteOpen
+            || recipeLauncherOpen
+            || onboardingOpen
+            || genieOsOpen
+            || docsOpen
+            || issueWatchOpen
+            || taskManagerOpen
+            || agentInboxOpen
+            || flowsOpen
+            || questionsOpen
+            || listsOpen
+            || appStoreOpen
+            || githubCapsOpen,
+        query: pageQuery,
+        sessions,
+        // The SAME ranking the band renders, from the same function — a second ordering here
+        // would mean `J` moved to a row that was not the next one on screen.
+        queue: attentionItems({ questions: deckQuestions, listItems: deckListItems }),
+        agentId: view.kind === 'agent' ? view.agentId : null,
+        agentSpecId:
+            view.kind === 'agent'
+                ? (sessions.find((x) => x.agentId === view.agentId)?.specId ?? null)
+                : null,
+        parkedApprovalId: (() => {
+            if (view.kind !== 'agent') return null;
+            const s = sessions.find((x) => x.agentId === view.agentId);
+            // `parkedApproval` takes a session, not a maybe-session: a route can name an agent
+            // that has gone, and inventing an empty session to ask about would answer a question
+            // about nothing.
+            return s ? (parkedApproval(s)?.id ?? null) : null;
+        })(),
+    };
+
     // Guard against stealing the keystroke while the user is typing in a real text
     // input — the in-app prompt modal, the editor's fields, any <input>/<textarea>/
     // contenteditable. The xterm surface uses a hidden `.xterm-helper-textarea`;
@@ -2515,6 +2588,9 @@ function MasterInner() {
         const onKeyDown = (e: KeyboardEvent) => {
             const intent = resolveShortcut(e, ownerOf(document.activeElement));
             if (!intent) return;
+            // Read through the ref: this listener is mounted ONCE, so closing over state
+            // directly would act on whatever was true when the window opened.
+            const now = keys.current;
             if (intent.kind === 'settings') {
                 e.preventDefault();
                 api().app.showSettings(isRemoteWindow()).catch(() => {});
@@ -2528,24 +2604,85 @@ function MasterInner() {
                 setPaletteOpen(true);
                 return;
             }
-            // ESCAPE IS DELIBERATELY NOT WIRED TO THE DECK YET, and E2E is why.
-            //
-            // Wiring it navigated away from the grid on every Escape — and Escape already
-            // means something here: it closes a flyout, dismisses a panel, leaves a docked
-            // layout. preventDefault on top of that stole it from the app's own handling.
-            // Four specs failed IDENTICALLY on all three platforms (a dismissed panel that
-            // stayed, an "empty floor" holding one, a hibernated floor, a docked lists
-            // header) because the grid was hidden underneath them.
-            //
-            // Escape goes UP a level once the Deck IS the default surface — then there is a
-            // level to go up to. Until then the Deck is reached explicitly with
-            // `?view=deck`, which is what "parallel surface" means.
-            //
-            // The remaining intents — agent slots, take-over, queue movement, approvals —
-            // are resolved and likewise not acted on. They need surfaces that do not exist
-            // yet, and acting now would be a silent no-op, which this repo treats as a bug.
-            // `palette` is no longer in that list: its surface DOES exist, and is wired
-            // above.
+            /**
+             * ESCAPE GOES UP A LEVEL — now that there is a level to go up to.
+             *
+             * This was deliberately unwired, and the reason is worth keeping: the naive version
+             * navigated on EVERY Escape, and Escape already means something here — it closes a
+             * flyout, dismisses a panel, leaves a docked layout. `preventDefault` on top of that
+             * stole the key from the app's own handling and four E2E specs failed identically on
+             * all three platforms.
+             *
+             * `escapeLeavesForDeck` is that lesson as a rule: an open overlay owns Escape, the
+             * grid and the Workbench own it (that is where panels live, and all four failures
+             * were panels), and the Deck has no level above it. What is left is an agent view,
+             * which is exactly where "up" means something.
+             */
+            if (intent.kind === 'deck') {
+                if (!escapeLeavesForDeck({ view: now.view, overlayOpen: now.overlayOpen })) return;
+                e.preventDefault();
+                replacePageQuery(mergeViewRoute(now.query, { kind: 'deck' }));
+                return;
+            }
+
+            /**
+             * ⌘1..9 — jump to the nth agent, in the order the Deck lists them.
+             *
+             * The ROSTER's order, not a saved slot map: the number means "the nth agent I can
+             * see", so the key and the screen cannot disagree. Out of range is a no-op rather
+             * than a clamp — ⌘7 with four agents means nothing, and jumping to the fourth would
+             * be a guess at what was meant.
+             */
+            if (intent.kind === 'agent-slot') {
+                const target = now.sessions[intent.slot - 1];
+                if (!target) return;
+                e.preventDefault();
+                replacePageQuery(
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null }),
+                );
+                return;
+            }
+
+            // J / K through the Needs-you queue. `moveQueueFocus` owns the wrapping rule (it does
+            // not wrap) and the vanished-row rule, both tested.
+            if (intent.kind === 'queue-move') {
+                e.preventDefault();
+                setFocusedQueueKey((current) => moveQueueFocus(now.queue, current, intent.delta));
+                return;
+            }
+
+            /**
+             * A / D — allow or deny the approval the TURN IS PARKED ON.
+             *
+             * Only in an agent view, and only when that agent actually has one. A letter that
+             * resolves a permission has to be unambiguous about which: on the Deck there is no
+             * single agent in view, and acting on "the first parked one anywhere" is how the
+             * wrong tool call gets approved.
+             */
+            if (intent.kind === 'approval') {
+                if (now.view !== 'agent' || !now.agentSpecId || !now.parkedApprovalId) return;
+                e.preventDefault();
+                void api()
+                    .agentSession.decide(
+                        now.agentSpecId,
+                        now.parkedApprovalId,
+                        intent.decision === 'allow' ? 'allow-once' : 'deny-once',
+                    )
+                    .then(() => loadSessions())
+                    .catch(() => {});
+                return;
+            }
+
+            // ⌘⇧T — take over. A PLACE, not a mode: the agent's own pty, with the url recording
+            // it so refresh and back land in the same place.
+            if (intent.kind === 'take-over') {
+                if (now.view !== 'agent' || !now.agentId) return;
+                e.preventDefault();
+                replacePageQuery(
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: now.agentId, tab: 'terminal' }),
+                );
+                return;
+            }
         };
 
         window.addEventListener('keydown', onKeyDown);
@@ -2811,10 +2948,90 @@ function MasterInner() {
                                     // A route naming an agent that no longer exists resolves
                                     // to a SENTENCE, not a blank surface: an empty view would
                                     // read as Genie breaking rather than as a stale link.
+                                    /**
+                                     * A DORMANT agent has no terminal spec, and there is nothing
+                                     * to write to. The write handlers are withheld rather than
+                                     * guarded inside, which also means no composer is rendered —
+                                     * a box that cannot send is worse than no box, because it
+                                     * invites typing and swallows it.
+                                     */
+                                    const writable = found?.specId ?? null;
                                     return found ? (
                                         <AgentView
                                             session={found}
                                             {...(view.kind === 'agent' && view.tab ? { tab: view.tab } : {})}
+                                            /**
+                                             * THE WRITE PATH, finally connected.
+                                             *
+                                             * `AgentView` has taken `onApprove` and `onTakeOver`
+                                             * since it was written and master passed NEITHER, and
+                                             * there was no composer at all — so the default
+                                             * surface could show an agent and not speak to it.
+                                             * `terminal:write` does not help: it reaches a pty,
+                                             * and an ACP agent's pty is an empty shell.
+                                             *
+                                             * Each handler re-reads the sessions afterwards rather
+                                             * than mutating local state: the host is the record,
+                                             * and a hopeful local edit would show a prompt as sent
+                                             * when the channel had gone.
+                                             */
+                                            {...(writable ? { onSend: (text: string) => {
+                                                void api()
+                                                    .agentSession.prompt(writable, text)
+                                                    .then((r) => {
+                                                        // A named refusal is worth saying out
+                                                        // loud: `parked` means the agent is over
+                                                        // its own daily cap and the gate has
+                                                        // already asked the owner, so silence here
+                                                        // would look like Genie dropping the
+                                                        // message.
+                                                        if (!r.ok) {
+                                                            console.warn(
+                                                                `[agent] prompt not sent (${r.reason})`,
+                                                            );
+                                                        }
+                                                        loadSessions();
+                                                    })
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            {...(writable ? { onCancel: () => {
+                                                void api()
+                                                    .agentSession.cancel(writable)
+                                                    .then((r) => {
+                                                        // `session/cancel` only ASKS. An agent that
+                                                        // keeps going is a fact to report, not a
+                                                        // failure to retry.
+                                                        if (r.ok && !r.honoured) {
+                                                            console.warn(
+                                                                '[agent] the agent did not stop when asked',
+                                                            );
+                                                        }
+                                                        loadSessions();
+                                                    })
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            {...(writable ? { onApprove: (
+                                                approvalId: string,
+                                                decision: 'allow-once' | 'allow-always' | 'deny-once',
+                                            ) => {
+                                                void api()
+                                                    .agentSession.decide(writable, approvalId, decision)
+                                                    .then(() => loadSessions())
+                                                    .catch(() => {});
+                                            } } : {})}
+                                            onTakeOver={() => {
+                                                // The pty is one click away and it is the SAME
+                                                // terminal the agent's session belongs to — "take
+                                                // over" is a place to go, not a mode to enter, so
+                                                // it is the Terminal tab and the url records it.
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId: surface.showAgent!,
+                                                        tab: 'terminal',
+                                                    }),
+                                                );
+                                            }}
                                             onTab={(t) => {
                                                 // The tab lives in the URL, so refresh, back and a
                                                 // shared link all land in the same place.
@@ -2855,7 +3072,25 @@ function MasterInner() {
                                             .then(() => loadAttention())
                                             .catch(() => {});
                                     }}
+                                    /**
+                                     * A FORWARDED question only. Everything else is answered on
+                                     * the row itself now — `NeedsYou` grew the form — so the
+                                     * flyout is no longer the way to answer a multi-part,
+                                     * multi-select or free-text question.
+                                     */
                                     onOpenQuestion={() => setQuestionsOpen(true)}
+                                    focusedKey={focusedQueueKey}
+                                    expandedQuestionId={expandedQuestionId}
+                                    onExpandQuestion={setExpandedQuestionId}
+                                    onSubmitAnswer={(questionId, answers) => {
+                                        // Already COMPLETE — `buildAnswer` refuses to produce a
+                                        // partial — so this is the same call the one-click path
+                                        // makes, with every part filled in.
+                                        void api()
+                                            .questions.answer(questionId, answers)
+                                            .then(() => loadAttention())
+                                            .catch(() => {});
+                                    }}
                                     onResolveListItem={(todoId, action) => {
                                         void api()
                                             .lists.resolveUser(todoId, action, '')

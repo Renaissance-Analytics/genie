@@ -1,5 +1,10 @@
 import { Badge, Card, Heading, Progress, Text } from '@particle-academy/react-fancy';
-import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../../lib/genie';
+import type {
+    AgentSessionSpec,
+    ForceAnswerSpec,
+    ListItemSpec,
+    PendingQuestionSpec,
+} from '../../lib/genie';
 import { deckView, type RosterRow, type RosterState } from '../../lib/deck-view';
 import { attentionItems } from '../../lib/attention-queue';
 import { NeedsYou } from './NeedsYou';
@@ -106,12 +111,22 @@ export interface DeckProps {
     now?: number;
     onAnswerOption?: (questionId: string, label: string) => void;
     onOpenQuestion?: (questionId: string) => void;
+    /** The row the keyboard is on — `J`/`K` move it. */
+    focusedKey?: string | null;
+    /** Which question's full-answer form is open — see `NeedsYou`. */
+    expandedQuestionId?: string | null;
+    onExpandQuestion?: (questionId: string | null) => void;
+    onSubmitAnswer?: (questionId: string, answers: ForceAnswerSpec[]) => void;
     onResolveListItem?: (todoId: string, action: 'done' | 'thrown_back' | 'refused') => void;
 }
 
 export function Deck({
     sessions,
     questions = [],
+    focusedKey = null,
+    expandedQuestionId = null,
+    onExpandQuestion,
+    onSubmitAnswer,
     listItems = [],
     now = Date.now(),
     onAnswerOption,
@@ -138,6 +153,10 @@ export function Deck({
                 now={now}
                 onAnswerOption={onAnswerOption ?? (() => {})}
                 onOpenQuestion={onOpenQuestion ?? (() => {})}
+                focusedKey={focusedKey}
+                expandedQuestionId={expandedQuestionId}
+                {...(onExpandQuestion ? { onExpandQuestion } : {})}
+                {...(onSubmitAnswer ? { onSubmitAnswer } : {})}
                 onResolveListItem={onResolveListItem ?? (() => {})}
             />
             <Card className="deck-band">

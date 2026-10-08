@@ -360,3 +360,113 @@ describe('resume', () => {
         ).rejects.toThrow(/already open/i);
     });
 });
+
+/**
+ * THE AGENT'S PERSONA AND OPENING INSTRUCTIONS.
+ *
+ * The pty path delivers these by TYPING them: `renderAgentLaunch` folds them into the launch
+ * line as a positional prompt. An ACP session has no launch line, and before this `main/acp/`
+ * contained no reference to instructions at all — so with ACP as the default, every agent
+ * started with no persona. A GApp "Strategist" would have been a generic claude with no idea
+ * it was a strategist.
+ *
+ * `main/terminal/ipc.ts` records that this exact bug already happened once on the pty side:
+ * *"a project agent that was revived or restarted came back with no persona and no workspace
+ * framing, silently."* Shipping ACP-mandatory without this would have reintroduced it for
+ * every agent at once.
+ *
+ * ## Sent on a fresh start, NEVER on a resume
+ *
+ * A resumed conversation already contains them. Re-sending would open the continued
+ * conversation by telling the agent who it is a second time — which reads as the agent having
+ * forgotten, and spends a turn saying nothing new.
+ */
+describe('opening instructions', () => {
+    const PERSONA = 'You are the Strategist. Read .agents/strategist.md.';
+
+    it('are sent as the first prompt of a FRESH session', async () => {
+        const { deps: d, calls } = deps();
+        const driver = new AcpSessionDriver(d);
+        await driver.start({ cwd: '/repo', instructions: PERSONA });
+
+        expect(calls.map((c) => c.method)).toEqual(['initialize', 'session/new', 'session/prompt']);
+        expect(calls[2]!.params).toMatchObject({
+            prompt: [{ type: 'text', text: PERSONA }],
+        });
+    });
+
+    it('are NOT sent when there are none', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).start({ cwd: '/repo' });
+        expect(calls.some((c) => c.method === 'session/prompt')).toBe(false);
+    });
+
+    it('are NOT sent on a RESUME, because the conversation already has them', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).resume({
+            cwd: '/repo',
+            sessionId: '9f1c2f84-0000-4000-8000-5a6b7c8d9e01',
+            instructions: PERSONA,
+        });
+        expect(calls.map((c) => c.method)).toEqual(['initialize', 'session/load']);
+    });
+
+    it('ignores whitespace-only instructions rather than opening with a blank turn', async () => {
+        const { deps: d, calls } = deps();
+        await new AcpSessionDriver(d).start({ cwd: '/repo', instructions: '   ' });
+        expect(calls.some((c) => c.method === 'session/prompt')).toBe(false);
+    });
+});
+
+describe('heldApprovalIds — what a CANCEL is about to settle', () => {
+    /**
+     * A cancel answers every held permission with `cancelled` — the protocol's MUST, which this
+     * driver already honours. The SURFACE has to find out: the session model holds those
+     * approvals and nothing told it they were gone, so the Agent view would keep offering
+     * Allow/Deny for decisions the agent had stopped waiting for. Pressing one does nothing,
+     * which reads as Genie being broken rather than as a turn that has ended.
+     *
+     * Exposed as ids rather than as another callback because the caller already has the port it
+     * needs (`onApprovalSettled` in `start.ts`), and because a list can be asserted.
+     */
+    const asking = (count = 1) =>
+        deps({
+            onRequest: (method, handler) => {
+                if (method !== 'session/request_permission') return;
+                for (let n = 0; n < count; n++) {
+                    void handler({
+                        sessionId: 'sess-1',
+                        toolCall: { toolCallId: `tc${n}`, title: `Edit ${n}.ts` },
+                        options: [{ optionId: 'o1', name: 'Allow', kind: 'allow_once' }],
+                    });
+                }
+            },
+        });
+
+    it('is empty with nothing held', () => {
+        expect(new AcpSessionDriver(deps().deps).heldApprovalIds()).toEqual([]);
+    });
+
+    it('names each held request by the id the HUMAN was shown', async () => {
+        // The exposed id, not the internal handle: that is what the surface rendered and what
+        // comes back from a click.
+        const seen: string[] = [];
+        const driver = new AcpSessionDriver(asking(2).deps);
+        driver.onApproval((a) => seen.push(a.id));
+        await driver.start({ cwd: '/repo' });
+
+        await vi.waitFor(() => expect(seen).toHaveLength(2));
+        expect(driver.heldApprovalIds()).toEqual(seen);
+    });
+
+    it('forgets one that has been decided', async () => {
+        const seen: string[] = [];
+        const driver = new AcpSessionDriver(asking(1).deps);
+        driver.onApproval((a) => seen.push(a.id));
+        await driver.start({ cwd: '/repo' });
+        await vi.waitFor(() => expect(seen).toHaveLength(1));
+
+        driver.decide(seen[0]!, 'allow-once');
+        expect(driver.heldApprovalIds()).toEqual([]);
+    });
+});

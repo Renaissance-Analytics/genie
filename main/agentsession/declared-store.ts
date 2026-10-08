@@ -1,5 +1,10 @@
 import { applySessionUpdate, type AcpSessionUpdate } from '../acp/update-to-session';
-import { emptyAgentSession, type AgentSession, type AgentSessionIdentity } from './model';
+import {
+    emptyAgentSession,
+    type AgentSession,
+    type AgentSessionIdentity,
+    type PendingApproval,
+} from './model';
 import type { AgentEngine } from '../agents/budget';
 import type { AgentUsageEvent } from '../agents/usage-rollup';
 
@@ -149,6 +154,81 @@ export class DeclaredSessionStore {
         if (!identity) return; // Not an agent we can key yet: the row is not fronted.
         if (!this.sessions.has(identity.agentId)) this.open(identity);
         this.apply(identity.agentId, update);
+    }
+
+    /**
+     * A permission request the agent is PARKED on, addressed by spec.
+     *
+     * Not an update, so it cannot go through `apply`: `session/request_permission` is a request
+     * the agent makes of US, held open by `AcpSessionDriver` until a human decides. The driver
+     * announces it through `onApproval` — which production code called from nowhere, so an ACP
+     * agent that asked permission parked forever and no surface said why. The agent stays alive,
+     * the turn never ends, and the only symptom is an agent that went quiet.
+     *
+     * Opens the session if the permission is the first thing this agent does — a first turn
+     * whose first act is an edit. Dropping it for want of a session would be the same silence.
+     */
+    addApprovalForSpec(specId: string, approval: PendingApproval): void {
+        const identity = this.ports.identityForSpec?.(specId) ?? null;
+        if (!identity) return;
+        if (!this.sessions.has(identity.agentId)) this.open(identity);
+        const current = this.sessions.get(identity.agentId);
+        if (!current) return;
+        // Already held: the driver disambiguates colliding ids, so one id twice can only be a
+        // re-announcement — most plausibly a listener attached twice — and counting it would
+        // report one block as two.
+        if (current.approvals.some((a) => a.id === approval.id)) return;
+
+        const now = this.ports.now();
+        this.sessions.set(identity.agentId, {
+            ...current,
+            approvals: [...current.approvals, approval],
+        });
+        // A human being blocked is the measure that compares honestly across engines: not how
+        // fast an agent is, but how often it stops and waits for a person.
+        this.ports.record({
+            agentId: identity.agentId,
+            workspaceId: current.session.workspaceId,
+            engine: 'acp',
+            at: now,
+            kind: 'approval-asked',
+            durationMs: null,
+            costUsd: null,
+            tokensIn: null,
+            tokensOut: null,
+        });
+    }
+
+    /**
+     * A decision landed, or the turn was cancelled — the agent is no longer waiting on this one.
+     *
+     * A no-op for an id it does not hold rather than a throw: this is reached straight from an
+     * IPC handler after a human clicked, and a cancel settles every held request, so a second
+     * click on a row that is already gone is ordinary.
+     */
+    clearApprovalForSpec(specId: string, approvalId: string): void {
+        const identity = this.ports.identityForSpec?.(specId) ?? null;
+        if (!identity) return;
+        const current = this.sessions.get(identity.agentId);
+        if (!current) return;
+        if (!current.approvals.some((a) => a.id === approvalId)) return;
+
+        const now = this.ports.now();
+        this.sessions.set(identity.agentId, {
+            ...current,
+            approvals: current.approvals.filter((a) => a.id !== approvalId),
+        });
+        this.ports.record({
+            agentId: identity.agentId,
+            workspaceId: current.session.workspaceId,
+            engine: 'acp',
+            at: now,
+            kind: 'approval-decided',
+            durationMs: null,
+            costUsd: null,
+            tokensIn: null,
+            tokensOut: null,
+        });
     }
 
     /** The turn finished, addressed by spec. */

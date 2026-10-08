@@ -37,9 +37,44 @@
    with the agent-settings modal and would drag all of Genie's chrome back over
    Fancy dialogs, undoing #66). It stays below toasts for the same reason the
    Fancy layer does: a notification must survive over a dialog. */
+/* --- THE LADDER, in one place (genie 2 / P7) ---------------------------------
+   Every global layer in Genie, named, in order. It was a COMMENT and two tokens: the prose
+   above listed eight rungs and the sheet carried raw numbers for six of them, which is how
+   `.system-menu` at 1200 ended up ABOVE the toast rung the comment says must stay on top.
+   Naming them does not change any of it — each token below holds the value that selector
+   already had, so this commit is behaviour-identical by construction — but it makes the order
+   READABLE, and `renderer/styles/__tests__/z-ladder.test.ts` asserts it rather than trusting
+   the comment.
+
+   Values below 60 are deliberately NOT here: those are intra-component stacking (a sparkline
+   behind a button face, a sticky header over its own rows) and they answer to their own
+   stacking context, not to this ladder. The test's boundary is the same 60. */
 :root {
+    /* Genie's own chrome. */
+    --z-chrome-flyout: 60;
+    --z-ctx-scrim: 80;
+    --z-prompt-scrim: 100;
+    --z-proc-menu: 120;
+    /* The Genie OS layer sits UNDER the Fancy rung on purpose: a dialog opened from inside it
+       portals to the body at 900 and must paint over it. */
+    --z-genie-os: 850;
+    /* Every Fancy portal surface, lifted once — see genie#66 above. */
     --z-fancy-overlay: 900;
+    /* The file picker: a LEAF dialog, opened FROM Fancy modals — genie#86. */
     --z-picker: 950;
+    /* A notification must survive over a dialog. */
+    --z-toast: 1000;
+    /* Shares the toast rung. A tie, recorded rather than silently invented: these three cannot
+       be ordered against each other today, and pretending otherwise with a made-up number
+       would be a change nobody asked for. */
+    --z-chrome-pop: 1000;
+    /* ABOVE the toast rung, which contradicts the rule stated above. Left at its value and
+       named so the contradiction is visible instead of buried in a selector. */
+    --z-chrome-menu: 1200;
+    /* App-lifecycle surfaces: these interrupt everything, by design. */
+    --z-whats-new: 5000;
+    --z-upgrade: 5100;
+    --z-boot: 9999;
 }
 [data-react-fancy-portal] > div:has([data-react-fancy-modal]),
 [data-react-fancy-portal] > [data-react-fancy-popover] {
@@ -485,7 +520,7 @@
        because it is the only one asking a question the user cannot postpone by
        clicking elsewhere. The number alone is not enough -- see the portal in
        UpgradeModal, and genie#114 for why. */
-    z-index: 5100;
+    z-index: var(--z-upgrade);
     background: color-mix(in srgb, var(--shell) 62%, transparent);
     /* The blur is the point of the backdrop, not decoration: it says the rest
        of the app is not what you are looking at right now. Paired with a solid
@@ -943,7 +978,7 @@
 
 .system-menu {
     position: absolute;
-    z-index: 1200;
+    z-index: var(--z-chrome-menu);
     top: calc(100% + 7px);
     right: 0;
     width: 190px;
@@ -976,7 +1011,7 @@
 
 .whats-new-backdrop {
     position: fixed;
-    z-index: 5000;
+    z-index: var(--z-whats-new);
     inset: 0;
     display: grid;
     place-items: center;
@@ -1982,7 +2017,7 @@ button.iw-feedback-note.as-link:hover {
 .prompt-scrim {
     position: fixed;
     inset: var(--titlebar-h) 0 0 0;
-    z-index: 100;
+    z-index: var(--z-prompt-scrim);
     background: rgba(0, 0, 0, 0.55);
     display: grid;
     place-items: center;
@@ -2768,7 +2803,7 @@ button.iw-feedback-note.as-link:hover {
     /* Portaled to <body> + fixed so the narrow scrollable sidebar can't
        clip it (top/left set inline from the anchor's rect). */
     position: fixed;
-    z-index: 1000;
+    z-index: var(--z-chrome-pop);
     width: 268px;
     /* Positioning cannot save content taller than the window: with a long
        missing-docs list and both sections showing, this popover can exceed a
@@ -3010,7 +3045,7 @@ button.iw-feedback-note.as-link:hover {
     left: 50%;
     bottom: 54px;
     transform: translateX(-50%);
-    z-index: 1000;
+    z-index: var(--z-chrome-pop);
     max-width: 460px;
     padding: 10px 16px;
     border-radius: var(--radius-md);
@@ -4077,7 +4112,7 @@ body.gutter-dragging .grid-gutter {
        OUTSIDE of, so this uses the globally-scoped `--card` + a literal
        shadow instead (matching .agi-health-pop below). */
     position: fixed;
-    z-index: 1000;
+    z-index: var(--z-chrome-pop);
     min-width: 168px;
     background: var(--card);
     border: 1px solid var(--border-1);
@@ -4554,7 +4589,7 @@ body.gutter-dragging .grid-gutter {
 .docs-flyout-root {
     position: fixed;
     inset: var(--titlebar-h) 0 0 0;
-    z-index: 60;
+    z-index: var(--z-chrome-flyout);
     pointer-events: none;
 }
 .docs-flyout-root.open {
@@ -4668,7 +4703,7 @@ body.gutter-dragging .grid-gutter {
 .boot-screen {
     position: fixed;
     inset: 0;
-    z-index: 9999;
+    z-index: var(--z-boot);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -5037,7 +5072,7 @@ body.gutter-dragging .grid-gutter {
 .ctx-scrim {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: var(--z-ctx-scrim);
     background: rgba(0, 0, 0, 0.42);
     display: grid;
     place-items: center;
@@ -6662,7 +6697,7 @@ body.gutter-dragging .grid-gutter {
     object-fit: contain;
 }
 /* Genie OS is a workstation surface, never a workspace-sidebar row. */
-.genie-os-layer { position: fixed; inset: 40px 0 0; z-index: 850; pointer-events: none; }
+.genie-os-layer { position: fixed; inset: 40px 0 0; z-index: var(--z-genie-os); pointer-events: none; }
 .genie-os-layer.is-open { pointer-events: auto; }
 .genie-os-backdrop { position: absolute; inset: 0; z-index: 0; border: 0; background: rgba(0,0,0,.38); opacity: 0; transition: opacity 240ms ease; }
 .genie-os-layer.is-open .genie-os-backdrop { opacity: 1; }
@@ -6679,7 +6714,7 @@ body.gutter-dragging .grid-gutter {
 @keyframes genie-os-pulse { 50% { color: #35f2a3; filter: drop-shadow(0 0 5px #35f2a3); } }
 @media (prefers-reduced-motion: reduce) { .genie-os-flyout, .genie-os-backdrop { transition-duration: 1ms; } .genie-os-flyout, .genie-os-button { animation: none !important; } }
 .agent-panel-shell { position: relative; }
-.agent-panel-menu { min-width: 180px; padding: 6px; z-index: 1200; background: var(--bg-0); border: 1px solid var(--border-1); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
+.agent-panel-menu { min-width: 180px; padding: 6px; z-index: var(--z-chrome-menu); background: var(--bg-0); border: 1px solid var(--border-1); box-shadow: 0 16px 38px rgba(0, 0, 0, .38); }
 .agent-panel-menu button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 8px 9px; background: transparent; color: var(--fg-1); text-align: left; cursor: pointer; }
 .agent-panel-menu button:hover { background: var(--bg-2); }
 
@@ -8075,6 +8110,14 @@ body.gutter-dragging .grid-gutter {
     height: 100%;
 }
 
+/* ONE BAND of the Deck — "Needs you", "Agents", "What changed". The surface itself is a Fancy
+   Card, so this is spacing only; without a rule of its own the bands sat flush against each
+   other and the Card's own padding did all the work, which is why the heading and the first row
+   read as one block. */
+.deck-band {
+    padding: 10px 12px;
+}
+
 .deck-band-head {
     display: flex;
     align-items: baseline;
@@ -8187,8 +8230,309 @@ body.gutter-dragging .grid-gutter {
     flex-wrap: wrap;
 }
 
+/* THE FULL ANSWER FORM, inline on the row — the surface that made `QuestionInboxFlyout`
+   redundant rather than merely duplicated. Indented under the row it belongs to, because a
+   form floating level with the next question reads as applying to that one. */
+.needs-answer-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 4px 0 6px 10px;
+    padding: 10px;
+    border-left: 2px solid var(--agent, #7c9cff);
+    /* `--bg-1`, not an invented `--surface-2`: the token guard reads every `var()` in this
+       sheet and refuses one nothing defines, because a fallback makes a missing token look
+       deliberate in light mode and wrong in dark. */
+    background: var(--bg-1);
+    border-radius: 6px;
+}
+
+.needs-answer-part {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.needs-answer-options {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.needs-answer-note {
+    width: 100%;
+}
+
+.needs-answer-actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* THE KEYBOARD CURSOR. `J`/`K` move it, and `A`/`D` act on what it is pointing at — so it has
+   to be visible at a glance rather than a subtle tint: an invisible cursor on a queue you are
+   resolving is how the wrong thing gets approved. An inset border rather than an outline, so the
+   row does not shift by a pixel when focus lands on it. */
+.needs-row[data-focused='true'] {
+    box-shadow: inset 2px 0 0 0 var(--agent, #7c9cff);
+    background: rgba(124, 156, 255, 0.07);
+}
+
 /* A blocking row is tinted the same amber the roster uses for "awaiting you", so the two
    surfaces agree about what the colour means. */
 .needs-row[data-kind='question'] {
     background: rgba(251, 191, 36, 0.06);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────────
+   THE AGENT VIEW — Genie 2's most important screen, which had NO CSS AT ALL.
+
+   Measured, not assumed: before this block, `.agent-view`, `.agent-view-head`,
+   `.agent-view-tabs`, `.agent-view-body`, `.agent-view-rail`, `.agent-conversation`,
+   `.agent-msg`, `.agent-tool`, `.agent-approval` and `.agent-composer` appeared in exactly
+   one place each — the component — and in no stylesheet. The Deck was styled; the screen
+   the Deck navigates TO rendered as an unstyled stack of divs. A typecheck cannot see that
+   and neither can a render test asserting markup, which is why it survived this long.
+
+   Layout only, following the rest of the Deck's convention: the surfaces are Fancy
+   components, so nothing here paints a card background and nothing enters the z-index
+   ladder.
+   ─────────────────────────────────────────────────────────────────────────────── */
+
+.agent-view {
+    display: grid;
+    /* BODY then RAIL. The rail is fixed because its job is to hold its place: context, cost
+       and headroom are frequently absent on purpose (`knownFacts` hides what the session
+       cannot see), and a rail that collapsed when a number went missing would move the
+       conversation sideways mid-turn. */
+    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 0 12px;
+    height: 100%;
+    padding: 12px;
+    overflow: hidden;
+}
+
+.agent-view-head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+}
+
+/* The name takes the slack so the controls stay to the right rather than drifting with the
+   length of a cwd. */
+.agent-view-head > :first-child {
+    margin-right: auto;
+}
+
+.agent-view-tabs {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border-1, #26262e);
+}
+
+.agent-tab {
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--fg-3);
+    padding: 6px 10px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.agent-tab:hover {
+    color: var(--fg-1, #e6e6ea);
+}
+
+/* The SELECTED tab, marked by the same accent the keyboard cursor uses. Which tabs exist at
+   all is the fidelity decision (`agentViewTabs`) — absence of a tab, never a disabled one —
+   so there is deliberately no `:disabled` style here to reach for. */
+.agent-tab.on {
+    color: var(--fg-1, #e6e6ea);
+    border-bottom-color: var(--agent, #7c9cff);
+}
+
+.agent-view-body {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 0;
+}
+
+.agent-view-rail {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 0 10px 12px;
+    border-left: 1px solid var(--border-1, #26262e);
+}
+
+.rail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* The headroom gauge's TONE. Colour is the whole point: this is the number the owner judges
+   the migration by, and "87% left" and "rate limited" must not read the same at a glance.
+   `empty` and `over` are different states because the provider models overage — one of them
+   is costing money. */
+.rail-section[data-tone='warn'] {
+    color: var(--amber-400, #fbbf24);
+}
+
+.rail-section[data-tone='empty'],
+.rail-section[data-tone='blocked'] {
+    color: var(--rose-400, #fb7185);
+}
+
+.rail-section[data-tone='over'] {
+    color: var(--rose-400, #fb7185);
+    font-weight: 600;
+}
+
+/* `unknown` is NOT an error. It means the agent reports no limit — every pty agent, forever —
+   so it reads as quiet information rather than as something wrong. */
+.rail-section[data-tone='unknown'] {
+    color: var(--fg-3);
+}
+
+.plan-done {
+    color: var(--fg-3);
+    text-decoration: line-through;
+}
+
+.plan-in_progress {
+    color: var(--agent, #7c9cff);
+}
+
+.agent-conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.agent-msg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 72ch;
+}
+
+.agent-msg-who {
+    color: var(--fg-3);
+    text-transform: lowercase;
+}
+
+/* The agent's own words sit left; a person's are tinted and indented, so a long transcript
+   can be skimmed for "what did I ask". */
+.agent-msg[data-role='user'] {
+    align-self: flex-end;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(124, 156, 255, 0.10);
+}
+
+.agent-msg[data-role='error'] {
+    color: var(--rose-400, #fb7185);
+}
+
+.agent-msg[data-role='tool'],
+.agent-msg[data-role='system'] {
+    color: var(--fg-3);
+}
+
+/* STREAMING. A pulse rather than a spinner: the content is already moving, and a second
+   moving thing beside it is noise. */
+.agent-msg.live {
+    opacity: 0.85;
+}
+
+.agent-tool {
+    font-variant-numeric: tabular-nums;
+}
+
+/* THE PARKED APPROVAL. Inline and unmissable — the decision the plan made is that an `Edit`
+   approval fires many times per turn, so a modal per approval makes the modal the new TUI.
+   Tinted the same amber as a blocking Deck row, because it is the same fact: an agent has
+   stopped and is waiting for a person. */
+.agent-approval {
+    border-left: 3px solid var(--amber-400, #fbbf24);
+    background: rgba(251, 191, 36, 0.07);
+}
+
+.agent-approval-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 6px 0 4px;
+}
+
+/* THE COMPOSER. Sticks to the bottom of the scrolling conversation so it is reachable
+   without scrolling to find it — a send box you have to hunt for is the reason people take
+   over the terminal instead. */
+.agent-composer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-1, #26262e);
+    background: var(--shell, #16161c);
+}
+
+.agent-composer-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+/* STOP sits beside Send and must not read as the primary action — it only appears while a turn
+   is running, and `session/cancel` only ASKS. Tinted rather than loud: this is a request to the
+   agent, not a kill. */
+.agent-stop {
+    color: var(--amber-400, #fbbf24);
+}
+
+/* A tab with nothing behind it yet says WHICH tab, so an empty Files view is legible as
+   "nothing here" rather than as a broken screen. */
+.agent-view-placeholder {
+    padding: 24px 4px;
+    color: var(--fg-3);
+}
+
+/* A route naming an agent that has gone resolves to a SENTENCE. An empty surface would read
+   as Genie breaking rather than as a stale link. */
+.agent-view-missing {
+    padding: 24px;
+    color: var(--fg-3);
+}
+
+/* NARROW: the rail goes under the body rather than squeezing the conversation to a column of
+   two words. Same breakpoint discipline as the rest of this file — the rail's content is
+   secondary everywhere, so it is the thing that moves. */
+@media (max-width: 900px) {
+    .agent-view {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    .agent-view-rail {
+        border-left: none;
+        border-top: 1px solid var(--border-1, #26262e);
+        padding: 10px 0 0;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
 }

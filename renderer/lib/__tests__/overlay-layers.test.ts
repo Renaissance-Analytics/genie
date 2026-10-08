@@ -28,16 +28,30 @@ const GLOBALS = fs.readFileSync(
     'utf8',
 );
 
-/** The `z-index` declared in the first rule block for `selector`. */
+/**
+ * The `z-index` declared in the first rule block for `selector`, FOLLOWING one level of
+ * indirection.
+ *
+ * Every global rung is a token now (`z-index: var(--z-ctx-scrim)`), where it used to be a raw
+ * number — so a reader that only accepted digits answered `null` for five of these selectors and
+ * took this whole file red. The assertions below were right and are untouched; it is the reading
+ * that had to learn what the sheet does.
+ *
+ * One level only, deliberately. A token defined in terms of another token is not something this
+ * ladder does, and a recursive resolver would quietly accept a tangle nobody could read.
+ */
 function zIndexOf(css: string, selector: string): number | null {
     const at = css.indexOf(`${selector} {`);
     if (at < 0) return null;
     const block = css.slice(at, css.indexOf('}', at));
-    const m = /z-index:\s*([0-9]+)\s*;/.exec(block);
-    return m ? Number(m[1]) : null;
+    const direct = /z-index:\s*([0-9]+)\s*;/.exec(block);
+    if (direct) return Number(direct[1]);
+    const token = /z-index:\s*var\(\s*(--[a-z0-9-]+)\s*\)/i.exec(block);
+    return token ? tokenValue(css, token[1]) : null;
 }
 
-/** The value of a `--custom-property: N;` declaration anywhere in the sheet. */
+/** The value of a `--custom-property: N;` declaration anywhere in the sheet. Used by
+ *  {@link zIndexOf} above — a function declaration, so the order here is presentation only. */
 function tokenValue(css: string, name: string): number | null {
     const m = new RegExp(`${name}:\\s*([0-9]+)\\s*;`).exec(css);
     return m ? Number(m[1]) : null;

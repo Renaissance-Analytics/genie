@@ -133,3 +133,112 @@ describe('rails render only KNOWN facts', () => {
         expect(render(declared({ error: 'the plan tool was not recognised' }))).toContain('rail-error');
     });
 });
+
+describe('subscription headroom is ON SCREEN', () => {
+    /**
+     * The owner's own measure of this migration: *"I do need to see what is remaining on rate
+     * limits at least."*
+     *
+     * `rate-limit.ts` computed it and `rate-limit-view.ts` shapes it, both tested — and for a
+     * while nothing RENDERED either, which is the gap a green suite reports as finished. These
+     * cases assert the markup, because that is the part the owner can actually read.
+     */
+    const limited = (over: Record<string, unknown> = {}) =>
+        declared({
+            rateLimit: {
+                status: 'allowed',
+                rateLimitType: 'five_hour',
+                windows: { five_hour: { utilization: 0.13, resetsAtMs: NOW + 3_600_000 } },
+                notice: null,
+                ...over,
+            } as never,
+        });
+
+    it('shows what is LEFT and when it resets', () => {
+        const html = render(limited());
+        expect(html).toContain('87% left');
+        expect(html).toContain('resets in 1h');
+        expect(html).toContain('5h');
+    });
+
+    it('shows NOTHING for an agent that reports no limit', () => {
+        // Every pty agent. A gauge at 100% for an agent nobody is metering is the single most
+        // expensive thing this could get wrong — it is the number a day of work gets planned
+        // around.
+        const html = render(declared());
+        expect(html).not.toContain('left');
+        expect(html).not.toContain('rail-ratelimit');
+    });
+
+    it('marks the TONE so a thin window is visibly different from a full one', () => {
+        expect(render(limited())).toContain('data-tone="ok"');
+        expect(
+            render(
+                limited({ windows: { five_hour: { utilization: 0.93, resetsAtMs: NOW + 600_000 } } }),
+            ),
+        ).toContain('data-tone="warn"');
+    });
+
+    it('says rate LIMITED rather than a cheerful percentage', () => {
+        const html = render(limited({ status: 'rate_limited' }));
+        expect(html).toContain('rate limited');
+        expect(html).not.toContain('87% left');
+    });
+
+    it('renders WHY there is no reading, when that is all there is', () => {
+        const html = render(declared({ rateLimitUnavailable: 'unmapped frame: rate_limit_event' }));
+        expect(html).toContain('no reading');
+        expect(html).toContain('unmapped frame: rate_limit_event');
+    });
+});
+
+describe('the Conversation can be TALKED TO', () => {
+    /**
+     * The gap this closes, measured rather than assumed: `agentSession` over IPC was `list()`,
+     * `master.tsx` passed neither `onApprove` nor `onTakeOver`, and the Conversation tab had no
+     * input at all. `terminal:write` reaches a pty — and an ACP agent's pty is an empty shell.
+     *
+     * So the default surface of Genie 2 could display an agent and not speak to it. Everything
+     * type-checked and the suite was green, because nothing asserted that a human could act.
+     */
+    it('offers a composer on the Conversation tab', () => {
+        expect(render(declared(), { onSend: () => {} })).toContain('agent-composer');
+    });
+
+    it('does NOT offer one without a send handler', () => {
+        // A box that cannot send is worse than no box: it invites typing and swallows it.
+        expect(render(declared())).not.toContain('agent-composer');
+    });
+
+    it('offers no composer for an OBSERVED agent, which has a Terminal tab instead', () => {
+        // A pty agent is driven by typing into its TUI. A second input that cannot reach it
+        // would be two ways to do one thing, one of which silently fails.
+        const html = render(session(), { onSend: () => {} });
+        expect(html).not.toContain('agent-composer');
+    });
+
+    it('offers STOP while a turn is running, and not while it is idle', () => {
+        // `session/cancel` only ASKS, so the control is honest about what it does — but it has
+        // to exist: a turn you cannot stop is the thing people take over the terminal for.
+        const working = declared({ turn: { state: 'thinking', since: NOW - 5_000 } });
+        expect(render(working, { onSend: () => {}, onCancel: () => {} })).toContain('agent-stop');
+        expect(render(declared(), { onSend: () => {}, onCancel: () => {} })).not.toContain('agent-stop');
+    });
+
+    it('keeps the approval card to THREE decisions, with a handler behind them', () => {
+        // The shape is pinned elsewhere in this file ("is INLINE with all three decisions, not a
+        // modal") and that decision stands. An earlier version of this case hid the buttons when
+        // no handler was passed, which contradicted it and encoded a rule nobody asked for — the
+        // real requirement is that the handler EXISTS in the product, which is the
+        // `master.tsx` wiring (`agentSession.decide`), not a prop check.
+        const parked = declared({
+            approvals: [{ id: 'p1', name: 'Edit ipc.ts', args: {} }],
+            turn: { state: 'awaiting-approval', since: NOW - 1_000 },
+        });
+        const html = render(parked, { onApprove: () => {} });
+        expect(html).toContain('Edit ipc.ts');
+        expect(html).toContain('Allow');
+        expect(html).toContain('Allow for session');
+        expect(html).toContain('Deny');
+    });
+});

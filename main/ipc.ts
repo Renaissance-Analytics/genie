@@ -60,6 +60,7 @@ import {
     reorderTerminalSpecs,
     updateTerminalSpec,
     TerminalSpecRow,
+    workspaceAgentBySpecId,
 } from './db';
 import { rebuildMenu } from './tray';
 import { broadcastIssueWatchUpdate } from './issue-watch';
@@ -133,7 +134,16 @@ import { broadcastListsChanged } from './lists/announce';
 import { onListsChanged } from './lists/changed';
 import { type UserListAction } from './lists/service';
 import { readWorkspaceLists, resolveUserListItemOnHost } from './lists/wiring';
-import { agentSessions } from './agentsession/bindings';
+import { agentSessions, budgetGatePorts } from './agentsession/bindings';
+import {
+    cancelSession,
+    decideApproval,
+    promptSession,
+    type SessionWritePorts,
+} from './agentsession/writes';
+import { acpRegistry } from './acp/registry';
+import { checkBudgetBeforeTurn } from './agents/budget-gate';
+import type { PermissionDecision } from './acp/permission';
 import { type AgentInboxScope } from './agentinbox/types';
 import { appendLaunchFlags } from './agentinbox/session-capture';
 import {
@@ -2299,6 +2309,49 @@ export function registerIpcHandlers(): void {
     // which is push-driven without a sixth emitter to keep in step with the other
     // five.
     ipcMain.handle('agentsession:list', () => agentSessions());
+
+    /**
+     * THE WRITE PATH FROM THE UI.
+     *
+     * Three handlers, all thin: the decisions are in `agentsession/writes.ts` because this file
+     * has no test of its own. Before these existed, `agentSession` was `list()` and nothing
+     * else — so with ACP as the mechanism and Conversation as the default surface, a human
+     * could not prompt an agent, stop a turn, or answer a permission request from Genie's own
+     * UI. Only the MCP tools could, because `deliverTerminalInput` was taught about ACP and the
+     * renderer never was.
+     *
+     * The budget gate is read through the same ports the MCP path uses, so a cap behaves the
+     * same whoever starts the turn.
+     */
+    const sessionWritePorts = (): SessionWritePorts => ({
+        promptFor: (specId) => acpRegistry.promptFor(specId),
+        cancelFor: (specId) => acpRegistry.cancelFor(specId),
+        decideFor: (specId) => acpRegistry.decideFor(specId),
+        allowTurn: (specId) => {
+            // FAILS OPEN, deliberately and in two places: an unknown agent row and an
+            // unreadable database both mean "no cap we can enforce", and a cap that cannot be
+            // read must never become "Genie has stopped running agents".
+            try {
+                const agent = workspaceAgentBySpecId(getDb(), specId);
+                if (!agent) return true;
+                return checkBudgetBeforeTurn(agent.id, budgetGatePorts()).allow;
+            } catch {
+                return true;
+            }
+        },
+    });
+
+    ipcMain.handle('agentsession:prompt', (_e, specId: string, text: string) =>
+        promptSession(sessionWritePorts(), { specId, text }),
+    );
+    ipcMain.handle('agentsession:cancel', (_e, specId: string) =>
+        cancelSession(sessionWritePorts(), { specId }),
+    );
+    ipcMain.handle(
+        'agentsession:decide',
+        (_e, specId: string, approvalId: string, decision: PermissionDecision) =>
+            decideApproval(sessionWritePorts(), { specId, approvalId, decision }),
+    );
     // Every writer announces through the same emitter — an agent's MCP call, a
     // local resolve, and a remote one over the bridge — so an open panel
     // re-reads without polling any of them.

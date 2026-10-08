@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    escapeLeavesForDeck,
     focusOwnerOf,
     resolveShortcut,
     type FocusEl,
@@ -183,5 +184,45 @@ describe('resolveShortcut — unmodified keys act ONLY on the surface', () => {
             kind: 'approval',
             decision: 'allow',
         });
+    });
+});
+
+describe('escapeLeavesForDeck — when Escape may actually navigate', () => {
+    /**
+     * Escape RESOLVES to the Deck and for a long time did nothing, and the reason is written
+     * into `master.tsx`: wiring it navigated away on every Escape, and Escape already means
+     * something here — it closes a flyout, dismisses a panel, leaves a docked layout.
+     * `preventDefault` on top of that stole the key from the app's own handling, and **four
+     * E2E specs failed identically on all three platforms**: a dismissed panel that stayed, an
+     * "empty floor" holding one, a hibernated floor, a docked lists header.
+     *
+     * So the fix is not "never wire it". It is that going up a level is the LAST claim on
+     * Escape, not the first. Two conditions, both learned from those failures:
+     *
+     *  - **Nothing is open.** An overlay owns Escape while it is up; closing it IS the up-a-level
+     *    action, and there is no second level to climb in the same keystroke.
+     *  - **The view has somewhere to go up TO.** From an agent, that is the Deck. The grid and
+     *    the Workbench are where panels live, and every one of those four failures was a panel
+     *    losing its Escape — so there the key is left entirely alone.
+     */
+    it('leaves an agent view for the Deck', () => {
+        expect(escapeLeavesForDeck({ view: 'agent', overlayOpen: false })).toBe(true);
+    });
+
+    it('does NOT act while an overlay is open — closing it is the up-a-level action', () => {
+        expect(escapeLeavesForDeck({ view: 'agent', overlayOpen: true })).toBe(false);
+    });
+
+    it('leaves the GRID alone, where four E2E specs were lost to exactly this', () => {
+        // Panels own Escape: dismiss, un-hibernate, leave a docked header. Taking it to
+        // navigate hid the grid underneath every one of them.
+        expect(escapeLeavesForDeck({ view: 'grid', overlayOpen: false })).toBe(false);
+        expect(escapeLeavesForDeck({ view: 'workbench', overlayOpen: false })).toBe(false);
+    });
+
+    it('does nothing on the Deck itself, because there is no level above it', () => {
+        // A key that silently does nothing is better than one that re-navigates the view you
+        // are already on and scrolls it back to the top.
+        expect(escapeLeavesForDeck({ view: 'deck', overlayOpen: false })).toBe(false);
     });
 });

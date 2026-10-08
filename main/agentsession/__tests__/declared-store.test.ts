@@ -276,3 +276,108 @@ describe('capturing the CLI session id', () => {
         expect(captured).toEqual([]);
     });
 });
+
+describe('APPROVALS reach the session — the half that was never wired', () => {
+    /**
+     * `session/request_permission` is not a `session/update`: it is a REQUEST the agent makes of
+     * us, held open by `AcpSessionDriver.holdPermission` until a human decides. The driver has
+     * `onApproval` to announce it and `decide` to answer it, both tested — and in production
+     * `onApproval` was called by NOTHING.
+     *
+     * So an ACP agent that asked permission parked forever and no surface said why: the agent is
+     * alive, the turn never ends, and the only symptom is an agent that went quiet. Same defect
+     * shape as the mapper having no caller — built, tested, not wired.
+     *
+     * An approval therefore enters the session HERE rather than through `apply`, because there
+     * is no update to fold.
+     */
+    const approval = (id: string) =>
+        ({ id, name: 'Edit src/index.ts', detail: null, options: [] }) as never;
+
+    /** A store that can resolve a SPEC to this identity, as `bindings.ts` does in production. */
+    function specStore() {
+        const rows: Array<{ kind: string }> = [];
+        const s = new DeclaredSessionStore({
+            record: (e) => rows.push(e),
+            now: () => NOW,
+            identityForSpec: (specId) => (specId === 'spec-1' ? identity : null),
+        });
+        return { s, rows };
+    }
+
+    it('adds an approval to the session, addressed by SPEC', () => {
+        const { s } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals.map((a) => a.id)).toEqual(['p1']);
+    });
+
+    it('OPENS the session when the permission arrives first', () => {
+        // The agent can ask before it has said anything else — a first turn whose first act is
+        // an edit. Dropping it because no session was open yet would park the agent silently,
+        // which is the exact failure this closes.
+        const { s } = specStore();
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(1);
+    });
+
+    it('records approval-asked, so a blocked human is COUNTABLE', () => {
+        // The measure that compares honestly across engines: not how fast an agent is, but how
+        // often it stops and waits for a person.
+        const { s, rows } = specStore();
+        s.open(identity);
+        rows.length = 0;
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(rows.map((r) => r.kind)).toEqual(['approval-asked']);
+    });
+
+    it('holds SEVERAL at once, because one turn can ask more than once', () => {
+        const { s } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        s.addApprovalForSpec('spec-1', approval('p2'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(2);
+    });
+
+    it('does not DOUBLE one it already holds', () => {
+        // The driver disambiguates colliding ids, so two rows under one id can only be a
+        // re-announcement — of which the obvious cause is a listener attached twice.
+        const { s, rows } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        rows.length = 0;
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        expect(s.get('ag-1')?.approvals).toHaveLength(1);
+        // And nothing is recorded, or one decision would be counted as two blocks.
+        expect(rows).toEqual([]);
+    });
+
+    it('clears one once it is decided, and records that too', () => {
+        const { s, rows } = specStore();
+        s.open(identity);
+        s.addApprovalForSpec('spec-1', approval('p1'));
+        s.addApprovalForSpec('spec-1', approval('p2'));
+        rows.length = 0;
+        s.clearApprovalForSpec('spec-1', 'p1');
+        expect(s.get('ag-1')?.approvals.map((a) => a.id)).toEqual(['p2']);
+        expect(rows.map((r) => r.kind)).toEqual(['approval-decided']);
+    });
+
+    it('is a no-op for an id it does not hold, rather than throwing', () => {
+        // Called straight from an IPC handler after a human clicked. A stale click — the agent
+        // cancelled the turn, which settles every held request — must not take the handler down.
+        const { s, rows } = specStore();
+        s.open(identity);
+        rows.length = 0;
+        expect(() => s.clearApprovalForSpec('spec-1', 'nope')).not.toThrow();
+        expect(rows).toEqual([]);
+    });
+
+    it('ignores a spec it cannot resolve to an agent', () => {
+        // Opening a session from an unresolvable spec would invent an agent out of a permission
+        // request nobody is tracking.
+        const { s } = specStore();
+        expect(() => s.addApprovalForSpec('spec-unknown', approval('p1'))).not.toThrow();
+        expect(s.get('ag-1')).toBeNull();
+    });
+});

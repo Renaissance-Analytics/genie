@@ -25,6 +25,17 @@
  * `overageStatus`), so a window consumed past its allowance is a real state and
  * `1 - utilization` goes negative. Clamping is for the BAR, never for the number.
  *
+ * ## Where the arithmetic lives
+ *
+ * In `./rate-limit-headroom.ts`, over a structural parameter, because the renderer imports it
+ * and `renderer/lib/__tests__/renderer-main-boundary.test.ts` refuses a `main/` module that
+ * reaches a bare package specifier — this file imports prism's types, and prism is ESM-only.
+ * That guard is not a style rule: an ESM-only package required from the CJS main bundle killed
+ * the main process at boot once already.
+ *
+ * This file is still where the prism types enter, and the re-exports below keep every host
+ * caller's import unchanged.
+ *
  * ## Shapes, not a parse
  *
  * The narrowing parse is `readRateLimit` in `prism-acp` — ours, at the boundary, where an
@@ -45,109 +56,18 @@ import type { ClaudeRateLimit, ClaudeRateLimitWindow } from '@particle-academy/p
  */
 export type SessionRateLimit = ClaudeRateLimit & { notice: string | null };
 
-export interface WindowHeadroom {
-    name: string;
-    /** Fraction left, CLAMPED to 0 for display. Never negative. */
-    remaining: number;
-    /** The real figure, unclamped, so "full" and "exceeded" stay distinguishable. */
-    utilization: number;
-    /** True when the window is consumed PAST its allowance, not merely full. */
-    overspent: boolean;
-    resetsAtMs: number;
-}
-
-export interface RateLimitSummary {
-    /** False for any status that is not exactly `allowed`. */
-    allowed: boolean;
-    /** The window that will stop you first, or null when none were reported. */
-    binding: WindowHeadroom | null;
-    /** Every window — they disagree, and both matter. */
-    windows: WindowHeadroom[];
-    usingOverage: boolean;
-    overageStatus: string | null;
-    notice: string | null;
-    /**
-     * Why there is no reading, when there is none.
-     *
-     * Prism refuses the whole payload if a field is unrecognised and routes the frame to
-     * `particle.academy/unmapped_frame`. Their warning, which this exists to answer: reading
-     * only `rate_limit` leaves "no gauge and no explanation". This carries the explanation.
-     */
-    unavailable: string | null;
-}
-
-/** Headroom for one window: clamped for the bar, honest in the number. */
-export function windowHeadroom(w: ClaudeRateLimitWindow, name = ''): WindowHeadroom {
-    return {
-        name,
-        // Clamp for DISPLAY. A bar cannot render -0.4, and rounding silently would lose the
-        // fact that the window is exceeded rather than merely empty.
-        remaining: Math.max(0, 1 - w.utilization),
-        utilization: w.utilization,
-        overspent: w.utilization > 1,
-        resetsAtMs: w.resetsAtMs,
-    };
-}
-
 /**
- * The window that stops you first.
+ * The arithmetic, re-exported so host callers import it from the module that owns the SHAPE.
  *
- * `rateLimitType` is the provider's own answer, so it wins: choosing the lowest-headroom
- * window ourselves would be a guess that can disagree with the thing actually enforcing the
- * limit. When it names a window we were not sent, the TIGHTEST window is the fallback —
- * reporting nothing would hide a real limit and taking the first key would be arbitrary.
+ * `SessionRateLimit` and `ClaudeRateLimitWindow` are assignable to `HeadroomInput` and
+ * `HeadroomWindowInput`, and that assignment is checked wherever a caller passes one in — which
+ * is the drift guard. A field prism renames stops a build instead of quietly reading
+ * `undefined`.
  */
-export function bindingWindow(limit: SessionRateLimit): WindowHeadroom | null {
-    const entries = Object.entries(limit.windows);
-    if (entries.length === 0) return null;
-
-    const named = limit.windows[limit.rateLimitType];
-    if (named) return windowHeadroom(named, limit.rateLimitType);
-
-    let worst: WindowHeadroom | null = null;
-    for (const [name, w] of entries) {
-        const h = windowHeadroom(w, name);
-        if (!worst || h.utilization > worst.utilization) worst = h;
-    }
-    return worst;
-}
-
-/**
- * What a surface renders.
- *
- * Returns null only when there is genuinely nothing to say — no reading and no explanation,
- * which is the normal state of a pty agent that will never report one. A surface must then
- * render NOTHING rather than full headroom.
- */
-export function rateLimitSummary(
-    limit: SessionRateLimit | null | undefined,
-    fallback?: { unrecognised?: string | null },
-): RateLimitSummary | null {
-    if (!limit) {
-        const why = fallback?.unrecognised ?? null;
-        if (!why) return null;
-        // No reading, but we know why — which is strictly better than an empty space.
-        return {
-            allowed: true,
-            binding: null,
-            windows: [],
-            usingOverage: false,
-            overageStatus: null,
-            notice: null,
-            unavailable: why,
-        };
-    }
-
-    return {
-        // Never a match on a breach spelling — see the note on `status`.
-        allowed: limit.status === 'allowed',
-        binding: bindingWindow(limit),
-        windows: Object.entries(limit.windows).map(([name, w]) => windowHeadroom(w, name)),
-        usingOverage: limit.isUsingOverage === true,
-        overageStatus: limit.overageStatus ?? null,
-        notice: limit.notice,
-        // A real reading beats a stale explanation: the explanation is only useful while
-        // there is nothing to show.
-        unavailable: null,
-    };
-}
+export {
+    bindingWindow,
+    rateLimitSummary,
+    windowHeadroom,
+    type RateLimitSummary,
+    type WindowHeadroom,
+} from './rate-limit-headroom';

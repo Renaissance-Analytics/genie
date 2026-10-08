@@ -102,7 +102,7 @@ export class AcpSessionDriver {
         while (this.unseen.length > 0) cb(this.unseen.shift()!);
     }
 
-    async start(opts: { cwd: string }): Promise<void> {
+    async start(opts: { cwd: string; instructions?: string }): Promise<void> {
         // Order matters and is not ours to choose: initialize, then session/new.
         await this.deps.request('initialize', {
             protocolVersion: 1,
@@ -113,6 +113,24 @@ export class AcpSessionDriver {
             sessionId?: string;
         };
         this.sessionIdValue = session?.sessionId ?? null;
+
+        /**
+         * THE AGENT'S PERSONA, as the first prompt.
+         *
+         * The pty path delivers this by TYPING it — `renderAgentLaunch` folds it into the
+         * launch line as a positional prompt. An ACP session has no launch line, so without
+         * this an agent starts with no persona and no workspace framing: a GApp "Strategist"
+         * would be a generic claude with no idea it is a strategist.
+         *
+         * `main/terminal/ipc.ts` records that this bug already happened once on the pty
+         * side — *"a project agent that was revived or restarted came back with no persona
+         * and no workspace framing, silently"* — and ACP as the default would have
+         * reintroduced it for every agent at once.
+         *
+         * Only on a FRESH session. See `resume`, which deliberately does not.
+         */
+        const opening = opts.instructions?.trim();
+        if (opening) await this.prompt(opening);
     }
 
     /**
@@ -145,7 +163,21 @@ export class AcpSessionDriver {
      * UI. That is the honest shape rather than an omission — the alternative is re-prompting
      * the agent with a transcript it never had, which looks resumed and is not.
      */
-    async resume(opts: { cwd: string; sessionId: string }): Promise<void> {
+    async resume(opts: {
+        cwd: string;
+        sessionId: string;
+        /**
+         * Accepted and DELIBERATELY IGNORED.
+         *
+         * A resumed conversation already contains the agent's persona. Re-sending it would
+         * open the continued conversation by telling the agent who it is a second time —
+         * which reads as the agent having forgotten, and spends a turn saying nothing new.
+         *
+         * Taken as a parameter rather than omitted so the caller can pass the same options
+         * to either path without having to know which one it is choosing.
+         */
+        instructions?: string;
+    }): Promise<void> {
         const id = opts.sessionId?.trim();
         if (!id) {
             throw new Error(
@@ -215,6 +247,18 @@ export class AcpSessionDriver {
                 resolve({ honoured: true });
             };
         });
+    }
+
+    /**
+     * Every permission currently held, by the id the HUMAN was shown.
+     *
+     * For the caller that has to tell a SURFACE what a cancel just settled: `cancel()` answers
+     * all of them with `cancelled`, and without this the session model would keep rendering
+     * Allow/Deny for decisions the agent has stopped waiting for — buttons that do nothing,
+     * which reads as Genie being broken rather than as a turn that ended.
+     */
+    heldApprovalIds(): string[] {
+        return [...this.held.values()].map((a) => a.exposedId);
     }
 
     /** A human decided. Resolves the agent's waiting request. */

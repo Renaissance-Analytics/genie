@@ -1,4 +1,5 @@
 import type { AgentEngine } from '../agents/engine';
+import type { PermissionDecision } from './permission';
 
 /**
  * The seam that makes an ACP session a first-class Genie agent.
@@ -31,6 +32,22 @@ export interface AcpSessionEntry {
      * Claude agent takes this path.
      */
     prompt: (text: string) => Promise<{ delivered: boolean; submitted: boolean }>;
+    /**
+     * Ask the agent to stop the turn.
+     *
+     * `session/cancel` only ASKS — the protocol's own schema says so — and the outcome reports
+     * whether it was honoured. Held here for the same reason as `prompt`: this registry is the
+     * one thing that knows an agent is an ACP session, and `AcpSessionDriver.cancel()` had no
+     * production caller, so a turn could be started and never stopped from any surface.
+     */
+    cancel: () => Promise<{ honoured: boolean }>;
+    /**
+     * A human decided on a held permission.
+     *
+     * Resolves the request the agent is parked on. Without a caller, an ACP agent that asked
+     * permission waited forever: alive, mid-turn, and silent about why.
+     */
+    decide: (approvalId: string, decision: PermissionDecision) => void;
 }
 
 export class AcpRegistry {
@@ -78,6 +95,26 @@ export class AcpRegistry {
         const entry = this.sessions.get(specId);
         if (!entry || entry.closed) return null;
         return entry.prompt;
+    }
+
+    /**
+     * This session's cancel, or null when there is no live session.
+     *
+     * Same discriminator as `promptFor`: null for every pty agent, so their path is untouched,
+     * and null for a CLOSED entry, because cancelling a dead channel would hang or throw inside
+     * an IPC handler.
+     */
+    cancelFor(specId: string): AcpSessionEntry['cancel'] | null {
+        const entry = this.sessions.get(specId);
+        if (!entry || entry.closed) return null;
+        return entry.cancel;
+    }
+
+    /** This session's permission decider, or null when there is no live session. */
+    decideFor(specId: string): AcpSessionEntry['decide'] | null {
+        const entry = this.sessions.get(specId);
+        if (!entry || entry.closed) return null;
+        return entry.decide;
     }
 
     liveSpecIds(): string[] {
