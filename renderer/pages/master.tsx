@@ -189,6 +189,7 @@ import { floorSurface } from '../lib/floor-surface';
 import { Deck } from '../components/Master/Deck';
 import { escapeLeavesForDeck, focusOwnerOf } from '../lib/master-shortcuts';
 import type { AgentSessionSpec, ListItemSpec, PendingQuestionSpec } from '../lib/genie';
+import { probeTynnAuth } from '../lib/auth-probe';
 
 /**
  * Master workspace — cross-project terminal organiser. Hosts the
@@ -1492,16 +1493,26 @@ function MasterInner() {
         void api().terminalSpec.reorder(orderedIds).catch(() => {});
     }, []);
 
+    /**
+     * CANNOT FAIL, and that is the whole point — see `probeTynnAuth`.
+     *
+     * This was `await Promise.all([whoami, tynnHost.get()])` with no catch, and the effect below
+     * sets `authChecked` AFTER it. The window renders "Checking sign-in…" until that flag flips, so
+     * a rejected probe left Genie on that screen permanently: offline, a bad `tynnHost`, Tynn down.
+     * The sign-in wall the owner asked to be removed, reached by failure instead of by being signed
+     * out — which is worse, because being signed out at least looked deliberate.
+     */
     const refreshAuth = useCallback(async () => {
-        const [t, tHost] = await Promise.all([api().auth.whoami('tynn'), api().tynnHost.get()]);
-        setHosts({ tynn: tHost });
-        const user = t as BackendUser | null;
-        const any = !!user;
-        setSignedIn(any);
+        const probe = await probeTynnAuth({
+            whoami: () => api().auth.whoami('tynn') as Promise<BackendUser | null>,
+            host: () => api().tynnHost.get(),
+        });
+        setHosts({ tynn: probe.host });
+        setSignedIn(probe.signedIn);
         // The NAME, for the menu. A workstation can be signed into the wrong account and nothing
         // else in the window says so.
-        setTynnAccountName(user?.name ?? null);
-        return any;
+        setTynnAccountName(probe.name);
+        return probe.signedIn;
     }, []);
 
     useEffect(() => {
@@ -1509,12 +1520,14 @@ function MasterInner() {
         (async () => {
             const any = await refreshAuth();
             if (cancelled) return;
+            // BEFORE anything that can throw. This flag is what dismisses "Checking sign-in…", so
+            // every failure after it is a failure in a window the owner can see and use.
             setAuthChecked(true);
             // REFRESH EITHER WAY. Tynn is optional, so a signed-out workstation has local
             // workspaces to list and a Deck to fill — gating the read on an account is what made
             // "fully local mode" impossible, one layer below the sign-in wall itself.
             void any;
-            await refresh();
+            await refresh().catch(() => {});
         })();
         const off = api().on.authChanged(async () => {
             const any = await refreshAuth();
