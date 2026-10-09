@@ -4,6 +4,7 @@ import { api, makeSystemWorkspace, SYSTEM_WORKSPACE_ID, type TerminalSpec, type 
 import CodePanel from './CodePanel';
 import { PromptHost, showPrompt } from '../Master/Prompt';
 import { emitOpenInPanelAndWait } from '../../lib/editor-open';
+import { poppedWindowIntent } from '../../lib/file-panel-states';
 
 export default function WorkspaceFilesWindow({ specId }: { specId: string }) {
     const [spec, setSpec] = useState<TerminalSpec | null>(null);
@@ -61,6 +62,24 @@ export default function WorkspaceFilesWindow({ specId }: { specId: string }) {
         };
         window.addEventListener('beforeunload', beforeUnload);
         return () => window.removeEventListener('beforeunload', beforeUnload);
+    }, []);
+
+    /**
+     * ⌘B closes this window — §5.3's *"Closing it (⌘B) looks the same, without the bar"*.
+     *
+     * The same chord opens the panel in the workspace, and `poppedWindowIntent` maps that one
+     * existing intent rather than matching the key again here. `window.close()` goes through
+     * the beforeunload guard above, so an unsaved edit still gets its prompt instead of being
+     * discarded by a keystroke.
+     */
+    useEffect(() => {
+        const onKey = (event: KeyboardEvent) => {
+            if (poppedWindowIntent(event) !== 'close-window') return;
+            event.preventDefault();
+            window.close();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
     }, []);
 
     if (error) return <div className="code-empty">{error}</div>;
