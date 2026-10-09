@@ -923,8 +923,13 @@ export function openPtyhostLogStdio(
  * Combined with the user-data runtime (materializeRuntimeToUserData) the
  * detached host then has FULL service semantics on locked-down Windows:
  *   - survives auto-updates  (its node.exe lives outside the install dir)
- *   - survives reboots       (the Run key relaunches it at logon)
  *   - survives app restarts  (detached — it never dies with Genie)
+ * It does NOT survive a reboot, and nothing pretends otherwise any more. This line used to
+ * claim "survives reboots (the Run key relaunches it at logon)", which was false where it
+ * mattered: a host relaunched at logon holds ZERO terminals, because `pty-host.js` spawns
+ * only on a pipe request and restores nothing. A reboot ends every pty either way; what the
+ * Run key actually produced was a second idle host racing `Genie.exe --autostart` for the
+ * pipe. Genie starts the host on demand now.
  * Double-launch is safe: the pty-host is single-instance on its socket (a
  * second instance sees EADDRINUSE against a live incumbent and exits).
  */
@@ -958,83 +963,22 @@ function markServiceBlocked(userDataDir: string, reason: string): void {
     }
 }
 
-/** The windowless launcher: a Run-key entry that points straight at a `.cmd`
- *  flashes a console at logon; `wscript` runs it hidden (second arg 0). VBS
- *  escapes an embedded quote by doubling it. Pure → unit-testable. */
-export function runKeyVbsContents(unitPath: string): string {
-    return `CreateObject("WScript.Shell").Run """${unitPath}""", 0, False\r\n`;
-}
-
-/** The `reg add` argv registering the autostart. Pure → unit-testable. */
-export function runKeyRegAddArgv(vbsPath: string): string[] {
-    return [
-        'reg',
-        'add',
-        RUN_KEY,
-        '/v',
-        HOST_SERVICE_LABEL,
-        '/t',
-        'REG_SZ',
-        '/d',
-        `wscript.exe "${vbsPath}"`,
-        '/f',
-    ];
-}
-
 /**
- * Ensure the HKCU Run-key autostart is registered and its unit script current.
- * Rewritten every boot (cheap + idempotent) so a new runtime key or app path is
- * picked up. Returns ok:false with a reason on any failure — the caller falls
- * back to the plain detached host either way.
+ * Remove the logon autostart, and CLEAN UP after the versions that registered one.
+ *
+ * Genie no longer registers it at all (owner's ruling, 2026-10-09). It only ever existed to
+ * relaunch the host at logon on machines where the scheduled-task service is policy-blocked
+ * — and a host started at logon holds ZERO terminals: `pty-host.js` spawns only on a pipe
+ * request and restores nothing. Meanwhile `Genie.exe --autostart` sits in the same Run key,
+ * so two hosts raced for one pipe. Measured on the owner's machine: two EADDRINUSE lines,
+ * the loser left resident doing nothing until reboot.
+ *
+ * Now called on the policy-blocked paths that used to REGISTER it, so an existing install
+ * loses the stale key the next time Genie boots rather than carrying it forever.
+ *
+ * No-op when nothing was registered (the vbs wrapper is the cheap witness), so users who
+ * never had one don't get a failed `reg delete` in the log every boot.
  */
-export async function ensureRunKeyAutostart(deps: {
-    userDataDir: string;
-    runtime: ServiceRuntime;
-}): Promise<{ ok: boolean; reason?: string }> {
-    if (process.platform !== 'win32') return { ok: false, reason: 'win32 only' };
-    try {
-        // Prefer the user-data materialized host script so the persisted Run-key
-        // `.cmd` launches the copy whose node-pty resolves to user-data (survives
-        // the auto-update). Falls back to the in-place script when unavailable.
-        let hostScript: string | undefined;
-        try {
-            hostScript = resolveMaterializedHostScript() ?? ptyHostScriptPath() ?? undefined;
-        } catch {
-            hostScript = undefined;
-        }
-        const desc = buildServiceDescriptor(
-            resolveServiceConfig({
-                label: HOST_SERVICE_LABEL,
-                userDataDir: deps.userDataDir,
-                runtime: deps.runtime,
-                ...(hostScript ? { hostScript } : {}),
-            }),
-        );
-        const io = genieServiceIo();
-        await io.writeFile(desc.unitPath, desc.unitContents, { mode: 0o700 });
-
-        const vbsPath = path.join(deps.userDataDir, `${HOST_SERVICE_LABEL}.vbs`);
-        await io.writeFile(vbsPath, runKeyVbsContents(desc.unitPath), { mode: 0o700 });
-
-        const res = await io.run(runKeyRegAddArgv(vbsPath));
-        if (res.code !== 0) {
-            return {
-                ok: false,
-                reason: `reg add failed (${res.code}): ${res.stderr.trim() || res.stdout.trim()}`,
-            };
-        }
-        logHostService(
-            `Run-key autostart ensured → ${RUN_KEY}\\${HOST_SERVICE_LABEL} → ${vbsPath}`,
-        );
-        return { ok: true };
-    } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-    }
-}
-
-/** Best-effort removal, for when detached terminals are turned OFF. No-op when
- *  the autostart was never registered (the vbs wrapper is the cheap witness),
- *  so in-process users don't get a failed `reg delete` in the log every boot. */
 export async function removeRunKeyAutostart(userDataDir: string): Promise<void> {
     if (process.platform !== 'win32') return;
     try {
@@ -1152,19 +1096,24 @@ export async function activateHostService(
     }
 
     // A machine with a CONFIRMED schtasks policy denial can never install the
-    // task-based service — skip the doomed (and slow) attempt entirely and keep
-    // the Run-key autostart current instead. The detached host that the caller
-    // falls back to carries full service semantics here: it runs the user-data
-    // runtime (survives updates) and the Run key relaunches it at logon
-    // (survives reboots). Delete <userData>/ptyhost-service-blocked to retry
-    // schtasks after a policy change.
+    // task-based service — skip the doomed (and slow) attempt entirely. The detached host
+    // the caller falls back to still runs the user-data runtime, so it survives updates and
+    // outlives a quit; it is simply started ON DEMAND rather than at logon. Delete
+    // <userData>/ptyhost-service-blocked to retry schtasks after a policy change.
     if (process.platform === 'win32' && isServiceBlocked(deps.userDataDir)) {
-        const rk = await ensureRunKeyAutostart({ userDataDir: deps.userDataDir, runtime });
+        // NO Run-key autostart any more. A host started at LOGON holds zero terminals —
+        // `pty-host.js` spawns only on a pipe request and restores nothing — so relaunching
+        // it before Genie asks achieves nothing. And `Genie.exe --autostart` sits in the same
+        // Run key, so two hosts raced for one pipe: measured on the owner's machine as two
+        // EADDRINUSE lines with the loser left resident, doing nothing, until reboot.
+        //
+        // The detached host still carries service semantics — it runs the user-data runtime
+        // and outlives a quit. It is simply started ON DEMAND, by the Genie that needs it.
+        // Any key a previous version left behind is cleaned up here.
+        void removeRunKeyAutostart(deps.userDataDir);
         return {
             ok: false,
-            reason: rk.ok
-                ? 'scheduled-task service policy-blocked — Run-key autostart active; detached host carries service semantics'
-                : `scheduled-task service policy-blocked and Run-key registration failed (${rk.reason}) — using the plain detached host`,
+            reason: 'scheduled-task service policy-blocked — using the plain detached host, started on demand',
         };
     }
 
@@ -1235,12 +1184,12 @@ export async function activateHostService(
         // the doomed schtasks dance.
         if (process.platform === 'win32' && /access is denied/i.test(reason)) {
             markServiceBlocked(deps.userDataDir, reason);
-            const rk = await ensureRunKeyAutostart({ userDataDir: deps.userDataDir, runtime });
-            logHostService(
-                rk.ok
-                    ? 'schtasks policy-blocked → HKCU Run-key autostart registered; detached host carries service semantics'
-                    : `schtasks policy-blocked and Run-key registration failed: ${rk.reason}`,
-            );
+            // See the sibling branch above: a logon-started host holds no terminals, so the
+            // Run key bought nothing and raced `Genie.exe --autostart` for the pipe. The
+            // marker is still persisted, so the doomed schtasks dance is still skipped on
+            // every subsequent boot — that part was always the useful half.
+            void removeRunKeyAutostart(deps.userDataDir);
+            logHostService('schtasks policy-blocked → detached host, started on demand');
         }
         logHostService(`service NOT ready → falling back to detached: ${reason}`);
         return { ok: false, reason, result };
