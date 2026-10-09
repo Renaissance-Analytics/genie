@@ -9204,6 +9204,239 @@ button.dash-row:focus-visible {
     height: 100%;
 }
 
+/* ===== Workspace file panel · §5.3's error / blind / popped states ======= */
+
+/* The conflict notice — one per colliding file, above the code. RED, matching the artboard:
+   the collision itself is the alarming fact. That nothing is lost is said in WORDS, in the
+   body, where it can be stated precisely, rather than implied by a colour. (This comment
+   previously argued for amber on the opposite reasoning; the artboard settles it.) */
+.code-conflict {
+    flex: none;
+    margin: 8px 10px 0;
+}
+
+.code-conflict-title {
+    font-weight: 600;
+}
+
+.code-conflict-body {
+    color: var(--fg-2);
+    line-height: 1.5;
+}
+
+.code-conflict-path {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+
+.code-conflict-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.code-conflict-action {
+    flex: none;
+}
+
+/* The repo chip. `held` is deliberately NOT red: a real `git status` holds index.lock for
+   milliseconds, so reddening for held would strobe the chip on every refresh. Only a lock
+   still there on a later look — `stale` — earns the alarm. */
+.code-repo-chip {
+    flex: none;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.code-repo-chip.is-locked {
+    border-color: rgba(220, 38, 38, 0.55);
+    color: rgba(220, 38, 38, 0.95);
+}
+
+.code-remove-lock {
+    flex: none;
+}
+
+/* A scan that could not read everything says SO, with a count. Silence here would be a
+   claim that nothing collides, which is the one thing a partial scan cannot know. */
+.code-unchecked {
+    flex: none;
+    margin: 6px 10px 0;
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
+/* The unattributed write. NEUTRAL, never red — an unexplained write is something Genie
+   cannot see, not something that went wrong. */
+.code-unattributed {
+    flex: none;
+    margin: 8px 10px 0;
+}
+
+.code-unattributed-title {
+    font-weight: 600;
+}
+
+.code-unattributed-body {
+    color: var(--fg-2);
+    line-height: 1.5;
+}
+
+.code-unattributed-action {
+    color: var(--fg-3);
+}
+
+/* Who last wrote a file, in the tree. Violet names an agent; grey is the board's `?` —
+   "Genie does not guess the author". */
+.code-who {
+    flex: none;
+    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.code-who.is-unattributed {
+    color: var(--fg-4);
+}
+
+/* The pulse rides Badge's OWN dot — its first child span — because the dot is Fancy's and
+   re-creating one beside it would drift from Badge the next time Badge changes. */
+@keyframes code-who-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.3;
+    }
+}
+
+.code-who.is-live > span:first-child {
+    animation: code-who-pulse 1.4s ease-in-out infinite;
+}
+
+.code-change-marker {
+    flex: none;
+    width: 12px;
+    text-align: center;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* 24px rows and a mono filename, per the artboard's tree. Targeted at Fancy's own node
+   button so the hit area keeps its semantics. */
+.code-tree [data-react-fancy-tree-node] button {
+    height: 24px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+}
+
+/* The panel header — 38px, per the artboard. */
+.code-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--border-1);
+    background: var(--bg-1);
+}
+
+.code-head-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.code-head-filter {
+    flex: none;
+}
+
+.code-head-hint {
+    margin-left: auto;
+    color: var(--fg-4);
+    font-size: 11px;
+}
+
+.code-head-popout,
+.code-head-close {
+    flex: none;
+}
+
+.code-popped-says {
+    color: var(--fg-2);
+}
+
+/* The route is a `<code>`, not a link: nothing resolves `genie://` today, and an anchor
+   would promise navigation that does not exist. */
+.code-popped-route {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--fg-4);
+}
+
+/* Compare — a real diff from fancy-git-ui, taking the whole panel body while it is open. */
+.code-compare {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.code-compare-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.code-status-conflict {
+    color: rgba(220, 38, 38, 0.95);
+}
+
+/* The conflicted tab. An inset marker, never an outline: an outline changes the tab's box
+   and shifts its neighbours, which is the one thing a tab strip must not do mid-edit. */
+.code-tabs .code-tab.is-conflict {
+    box-shadow: inset 0 -2px 0 rgba(220, 38, 38, 0.9);
+}
+
+/* NEUTRAL GREY for a write nobody claimed — the board's own word, and the whole point:
+   "Genie does not guess the author." An attributed row keeps git's colour. */
+.code-session-change.is-unattributed .code-change-who {
+    color: var(--fg-4);
+}
+
+.code-session-change.is-attributed .code-change-who {
+    color: var(--violet-400);
+}
+
+.code-session-change.is-conflict {
+    background: rgba(251, 191, 36, 0.1);
+}
+
+.code-change-who {
+    font-size: 11px;
+}
+
+/* The bring-back bar on a popped panel. A modifier on `.code-popped`, which already lays the
+   stand-in out — this only adds what the bar needs. */
+.code-popped-bar {
+    gap: 10px;
+    justify-content: flex-start;
+}
+
+/* A SECOND popped window for one workspace. Counted and said rather than silently taking the
+   first, because "there is still only one" is the board's rule and this is it being broken. */
+.code-popped-duplicate {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
 /* ===== Agent · Activity tab (the OBSERVED agent's honest account) ======== */
 
 .agent-activity {

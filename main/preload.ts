@@ -1489,6 +1489,14 @@ const api = {
         releasePanel: (workspaceId: string) => ipcRenderer.invoke('files:release-panel', workspaceId),
         popPanel: (specId: string) => ipcRenderer.invoke('files:pop-panel', specId),
         poppedPanels: () => ipcRenderer.invoke('files:popped-panels'),
+        /** Open a file in the window that owns this workspace's panel (popped out, or another
+         *  master). `false` ⇒ no window owns one — a real answer, not a failure. */
+        openInPanelWindow: (req: {
+            workspaceId: string;
+            root: string;
+            relPath: string;
+            line?: number;
+        }) => ipcRenderer.invoke('files:open-in-panel-window', req) as Promise<boolean>,
         focusPanel: (workspaceId: string) => ipcRenderer.invoke('files:focus-panel', workspaceId),
         bringBackPanel: (workspaceId: string) => ipcRenderer.invoke('files:bring-back-panel', workspaceId),
         listTree: (

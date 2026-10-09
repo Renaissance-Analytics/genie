@@ -92,6 +92,17 @@ export interface FileConflict {
      * range (`start === end`) is an insertion seam, which is a position rather than a span.
      */
     lines: LineRange[];
+    /**
+     * Where the WRITER's colliding hunks are, in the same baseline coordinates.
+     *
+     * A different measurement from {@link lines} and the notice needs both — *"atlas changed
+     * lines 13–16 while you had unsaved edits to line 13"*. Printing one range for both would
+     * tell the user the agent touched exactly the lines they did.
+     *
+     * FILTERED to the hunks that actually collide. A hunk of theirs at the other end of the
+     * file is not part of this collision, and naming it would widen the claim.
+     */
+    theirLines: LineRange[];
     /** The agent that wrote the file, by name. `null` ⇒ nobody claimed the write, and Genie
      *  does not guess — the collision is still real. */
     who: string | null;
@@ -203,6 +214,9 @@ export function scanConflicts(input: { tabs: OpenTab[]; changes: SessionFileChan
         conflicts.push({
             path: tab.path,
             lines,
+            // Symmetric to `lines` and through the same `touches` rule, so the two halves of
+            // the notice cannot disagree about what collided.
+            theirLines: theirs.filter((their) => lines.some((mine) => touches(mine, their))),
             who: change?.who ?? null,
             agentId: change?.agentId ?? null,
         });

@@ -185,6 +185,7 @@ import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from 
 import { laneRangeQuery, parseLaneRange } from '../lib/agent-lanes';
 import type { GitStatusMap } from '../lib/genie';
 import { agentFilesView } from '../lib/agent-files-view';
+import { openFileInPanel } from '../lib/file-panel-open';
 import { AgentView } from '../components/Master/AgentView';
 import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
@@ -3493,29 +3494,41 @@ function MasterInner() {
                                                     : null
                                             }
                                             /**
-                                             * Opens the workspace's FILE PANEL, not the file.
+                                             * Opens the FILE, not merely the panel.
                                              *
-                                             * Stated plainly because it is a real gap: there is
-                                             * no renderer-callable "open this path" — `selectFile`
-                                             * is private to `CodePanel` and `on.editorOpenFile` is
-                                             * inbound from the MCP tool, so a cross-component
-                                             * channel would have to be built. Taking you to the
-                                             * panel is a true step toward the file; claiming to
-                                             * open it would not be.
+                                             * It used to do the latter and say so, because no
+                                             * renderer-callable "open this path" existed —
+                                             * `selectFile` is private to `CodePanel` and
+                                             * `on.editorOpenFile` is inbound from the MCP tool.
+                                             * `openFileInPanel` is that channel now.
+                                             *
+                                             * `root` is not optional in spirit: main hands the
+                                             * payload to whichever window owns the panel, and a
+                                             * master window resolves the tab against `root` — an
+                                             * empty one re-opens the file as a System panel
+                                             * somewhere else entirely.
                                              */
-                                            onOpenFile={() => {
-                                                // Workbench first: the panel lives there, and
-                                                // opening it under a surface that conceals the
-                                                // grid is a change you cannot see.
+                                            onOpenFile={(relPath) => {
                                                 const ws = found.session.workspaceId;
                                                 if (!ws) return;
-                                                replacePageQuery(
-                                                    mergeViewRoute(pageQuery, {
-                                                        kind: 'workbench',
-                                                        workspaceId: ws,
-                                                    }),
+                                                const root = workspacesById.get(ws)?.path ?? '';
+                                                void openFileInPanel({ workspaceId: ws, root, relPath }).then(
+                                                    (landing) => {
+                                                        // Already on screen: navigating would move
+                                                        // you away from the file you just opened.
+                                                        if (landing.kind === 'live') return;
+                                                        // Otherwise go where the panel lives and
+                                                        // mount one — mounting is what DRAINS the
+                                                        // queued request, so the file follows.
+                                                        replacePageQuery(
+                                                            mergeViewRoute(pageQuery, {
+                                                                kind: 'workbench',
+                                                                workspaceId: ws,
+                                                            }),
+                                                        );
+                                                        void addSpecRef.current(ws, 'code');
+                                                    },
                                                 );
-                                                void addSpecRef.current(ws, 'code');
                                             }}
                                             onOpenAgent={(agentId) =>
                                                 replacePageQuery(

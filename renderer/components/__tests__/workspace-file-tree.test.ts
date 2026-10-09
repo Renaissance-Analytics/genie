@@ -18,8 +18,26 @@ describe('existing Fancy file tree attribution', () => {
     it('names a reported writer and leaves a git-only author neutral', () => {
         const html = render();
         expect(html).toContain('atlas');
-        expect(html).toContain('On disk · not attributed');
-        expect(html).toContain(' · ?');
+        // The chip is now `WhoChip` (a Fancy Badge) rather than a ` · who` text run, per the
+        // owner's mockup: the `?` is a chip of its own in NEUTRAL GREY, and the colour is what
+        // carries "Genie does not guess the author". So the assertions move from the old text
+        // separator to the two things the mockup actually specifies.
+        expect(html).toContain('on disk · not attributed');
+        expect(html).toContain('>?<');
+        // Violet for a named agent, zinc for the unclaimed write — the distinction the old
+        // single-colour `.tree-agent` span could not draw.
+        expect(html).toContain('bg-violet-100');
+        expect(html).toContain('code-who is-unattributed');
+    });
+
+    it('marks the git state with git’s own letter', () => {
+        // `b.ts` is modified and unclaimed: an `M` in amber beside the `?`.
+        const html = render();
+        expect(html).toContain('>M<');
+        expect(html).toContain('code-change-marker');
+        // And the file nobody reported a status for carries no marker — a marker is a state
+        // claim, and git made none about `a.ts`.
+        expect(html.split('code-change-marker').length - 1).toBe(1);
     });
 
     it('keeps git-only changes in Changed, not just agent-reported changes', () => {

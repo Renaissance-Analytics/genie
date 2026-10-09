@@ -10,7 +10,13 @@ describe('workspace files use the existing panel and push sources', () => {
         expect(source('components/Master/Floor.tsx')).toMatch(/sessions\?: AgentSession\[\]/);
         const grid = source('components/Master/TerminalGrid.tsx');
         expect(grid).toMatch(/<PanelFor\s+sessions=\{sessions\}/);
-        expect(grid).toMatch(/<CodePanel\s+sessions=\{sessions\}/);
+        // RETARGETED: the grid's `code` slot now mounts `WorkspaceFilePanel`, which decides
+        // between the panel and a stand-in (popped / not claimed / duplicate window) before
+        // rendering `CodePanel`. The invariant is unchanged and is the point of this guard —
+        // the session snapshot must reach the panel through every layer, or the Changes list
+        // silently shows nothing and looks like an agent that edited nothing.
+        expect(grid).toMatch(/<WorkspaceFilePanel\s+sessions=\{sessions\}/);
+        expect(source('components/Code/WorkspaceFilePanel.tsx')).toMatch(/sessions=\{sessions\}/);
     });
 
     it('reuses a workspace panel instead of creating another, including closed panels', () => {

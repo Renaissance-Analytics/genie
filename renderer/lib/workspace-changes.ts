@@ -90,3 +90,42 @@ export function workspaceChanges(
     // Newest first: the panel answers "what just changed", and the answer belongs at the top.
     return [...latest.values()].sort((a, b) => b.at - a.at);
 }
+
+/**
+ * THE FILES BEING WRITTEN RIGHT NOW.
+ *
+ * {@link workspaceChanges} reports `status === 'success'` calls, which is every write that has
+ * already LANDED. This is the other half: a PENDING call, of a kind the agent classified as
+ * changing, whose `rawInput` names a file. `ToolCall.rawInput`'s own doc points here —
+ * *"This is where 'it is editing `ipc.ts` right now' comes from"*.
+ *
+ * Same rules, same helpers, deliberately: the kinds that change a file, the keys a path can
+ * arrive under, and the workspace-relative form all come from the code above rather than a
+ * second opinion about the same payloads.
+ *
+ * One entry per FILE — the Map is keyed by path, so two pending calls on one file is one file
+ * being written. (An explicit `if (live.has(path)) continue` guard was here and a break probe
+ * proved it redundant: the keyed Map already does it. Removed rather than kept as a second
+ * opinion about the same thing.)
+ */
+export function liveWrites(
+    sessions: AgentSession[],
+    input: { workspaceId: string },
+): Array<{ path: string; who: string; agentId: string }> {
+    const live = new Map<string, { path: string; who: string; agentId: string }>();
+    for (const session of sessions) {
+        if (session.session.workspaceId !== input.workspaceId) continue;
+        for (const call of session.tools) {
+            if (call.status !== 'pending') continue;
+            // `kind === null` is a classification Genie was NOT given. A pulse says "this is
+            // being edited"; saying it on the strength of a missing field is the claim the
+            // null-is-not-zero rule exists to refuse.
+            if (call.kind === null || !CHANGING_KINDS.has(call.kind)) continue;
+            const absolute = pathOf(call);
+            if (!absolute) continue;
+            const path = relativeTo(session.session.cwd, absolute);
+            live.set(path, { path, who: session.session.name, agentId: session.agentId });
+        }
+    }
+    return [...live.values()];
+}

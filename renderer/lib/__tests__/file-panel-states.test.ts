@@ -156,7 +156,36 @@ describe('error · the human and an agent on the same lines', () => {
         const scan = scanConflicts({ tabs, changes: [] });
         expect(JSON.stringify(tabs)).toBe(before);
         // And the result carries no text at all, so no consumer can mistake it for a resolution.
-        expect(Object.keys(scan.conflicts[0]!).sort()).toEqual(['agentId', 'lines', 'path', 'who']);
+        expect(Object.keys(scan.conflicts[0]!).sort())
+            .toEqual(['agentId', 'lines', 'path', 'theirLines', 'who']);
+    });
+
+    it('reports the WRITER’s colliding lines too, and only the colliding ones', () => {
+        // The notice says "atlas changed lines 3–5 while you had unsaved edits to line 4".
+        // Both halves are measurements and they are DIFFERENT ranges: `lines` is the human's,
+        // in their coordinates, and a surface that printed it for both would tell the user the
+        // agent touched exactly the line they did.
+        const scan = scanConflicts({
+            tabs: [tab({ path: 'a.ts', buffer: rewrite(3, 'MINE'), disk: rewriteBlock(2, 5) })],
+            changes: [change('a.ts', 'atlas')],
+        });
+        expect(scan.conflicts[0]!.lines).toEqual([{ start: 3, end: 4 }]);
+        expect(scan.conflicts[0]!.theirLines).toEqual([{ start: 2, end: 5 }]);
+
+        // A hunk of THEIRS that collides with nothing is left out: the sentence names the
+        // collision, not everything the agent did to the file. POSITIVE CONTROL for the filter
+        // — the colliding hunk survives it in the same scan.
+        const theirsFarToo = BASE.split('\n')
+            .map((line, index) => {
+                if (index >= 2 && index < 5) return `BLK${index}`;
+                return index === 8 ? 'THEIRS8' : line;
+            })
+            .join('\n');
+        const wide = scanConflicts({
+            tabs: [tab({ path: 'a.ts', buffer: rewrite(3, 'MINE'), disk: theirsFarToo })],
+            changes: [],
+        });
+        expect(wide.conflicts[0]!.theirLines).toEqual([{ start: 2, end: 5 }]);
     });
 
     it('treats an insertion by its SEAM: the same seam collides, a block edge does not', () => {

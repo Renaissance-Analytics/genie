@@ -4,12 +4,17 @@ import FileTreeContextMenu from './FileTreeContextMenu';
 import { showPrompt } from '../Master/Prompt';
 import { api, type GitStatusMap, type TreeNodeData } from '../../lib/genie';
 import { changedFilePaths, filterChangedTree, type SessionFileChange } from '../../lib/workspace-file-panel';
+import { diskWriteMarks } from '../../lib/file-panel-states';
+import { ChangeMarker, WhoChip } from './FilePanelStates';
 
 interface Props {
     nodes: TreeNodeData[];
     changes?: SessionFileChange[];
     changedOnly?: boolean;
     gitStatus?: GitStatusMap;
+    /** Paths with a write IN FLIGHT (`liveWrites`) — their chip pulses. A write
+     *  that has landed is not live, so this empties itself. */
+    live?: ReadonlySet<string>;
     /** Workspace-relative path of the open file (the TreeNav selectedId). */
     selectedId?: string;
     /** Workspace root — every file op is path-guarded to it in main. */
@@ -98,6 +103,7 @@ export default function FileTree({
     changes = [],
     changedOnly = false,
     gitStatus,
+    live,
     selectedId,
     workspacePath,
     system,
@@ -189,7 +195,15 @@ export default function FileTree({
      */
     const decorated = useMemo(() => {
         const statuses = gitStatus ?? gitMap;
-        const attribution = new Map(changes.map((change) => [change.path, change]));
+        /**
+         * ATTRIBUTION BY THE RULE, not by a lookup at the point of render.
+         *
+         * This used to be `changes` in a Map and `change?.who ?? '?'` in the JSX — the same
+         * answer as `diskWriteMarks` by luck rather than by the rule, and the `?` arrived with
+         * no way to tell it apart from a named agent on screen. The chip's COLOUR is the
+         * board's "Genie does not guess the author", so the tone has to come from the rule.
+         */
+        const marks = new Map(diskWriteMarks(changes, statuses).map((mark) => [mark.path, mark]));
         const decorate = (ns: TreeNodeData[]): TreeNodeData[] =>
             ns.map((n) => {
                 if (n.type === 'folder') {
@@ -199,8 +213,8 @@ export default function FileTree({
                 }
                 const status = statuses[n.id];
                 const isDirty = !!dirtyPaths && dirtyPaths.has(n.id);
-                const change = attribution.get(n.id);
-                if (!status && !isDirty && !change) return n;
+                const mark = marks.get(n.id);
+                if (!status && !isDirty && !mark) return n;
                 const color = status ? STATUS_COLOR[status] : undefined;
                 const strike = status === 'deleted';
                 const labelNode = (
@@ -212,11 +226,8 @@ export default function FileTree({
                         title={status ?? undefined}
                     >
                         {n.label}
-                        {(change || (status && status !== 'ignored')) && (
-                            <span className="tree-agent" title={change?.who ?? 'On disk · not attributed'}>
-                                {' · '}{change?.who ?? '?'}
-                            </span>
-                        )}
+                        <ChangeMarker status={status ?? null} />
+                        {mark && <WhoChip mark={mark} live={!!live?.has(n.id)} />}
                         {isDirty && (
                             <span className="tree-dirty-mark" aria-hidden>
                                 {' '}
@@ -239,7 +250,7 @@ export default function FileTree({
                 return { ...n, ext, label: labelNode as unknown as string };
             });
         return decorate(changedOnly ? filterChangedTree(nodes, changedFilePaths(changes, statuses)) : nodes);
-    }, [nodes, gitMap, gitStatus, dirtyPaths, changes, changedOnly]);
+    }, [nodes, gitMap, gitStatus, dirtyPaths, changes, changedOnly, live]);
 
     /**
      * Resolve the folder a "create" op should target:

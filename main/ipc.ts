@@ -2476,6 +2476,28 @@ export function registerIpcHandlers(): void {
      */
     ipcMain.handle('terminal:open-window', (_event, req: TerminalWindowRequest) => showTerminalWindow(req));
     ipcMain.handle('files:popped-panels', () => filePanelWindows.list());
+    /**
+     * Open a file in whichever WINDOW owns a workspace's file panel — the renderer half of
+     * `openFileInPanel` for a panel that is popped out or sitting in another master window.
+     *
+     * The router, the focus and the until-ready queue are `FilePanelWindows.routeOpenFile`'s,
+     * which the `openFileForUser` MCP tool already drives and which has its own tests. The
+     * request id is minted here because the renderer must not name ids main tracks; nothing
+     * awaits a reply for a renderer-originated request, and `editor:open-file-result` already
+     * ignores an id it is not holding. `false` ⇒ no window owns one, which is the answer the
+     * caller needs to try the next route. A full queue answers `false` for the same reason:
+     * the file was not opened.
+     */
+    ipcMain.handle(
+        'files:open-in-panel-window',
+        (_event, req: { workspaceId: string; root: string; relPath: string; line?: number }) => {
+            try {
+                return filePanelWindows.routeOpenFile({ requestId: randomUUID(), ...req });
+            } catch {
+                return false;
+            }
+        },
+    );
     ipcMain.handle('files:claim-panel', (event, specId: string) => {
         const spec = getTerminalSpec(specId);
         const owner = BrowserWindow.fromWebContents(event.sender);
