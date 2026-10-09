@@ -211,7 +211,7 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
 
 /** What the window is showing, for {@link escapeLeavesForDeck}. */
 export interface EscapeContext {
-    view: 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent';
+    view: 'deck' | 'dashboard' | 'workbench' | 'agent';
     /** Is any overlay up — a flyout, the palette, a modal, a drawer? */
     overlayOpen: boolean;
 }

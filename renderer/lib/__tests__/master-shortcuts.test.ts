@@ -230,11 +230,12 @@ describe('escapeLeavesForDeck — when Escape may actually navigate', () => {
         expect(escapeLeavesForDeck({ view: 'agent', overlayOpen: true })).toBe(false);
     });
 
-    it('leaves the GRID alone, where four E2E specs were lost to exactly this', () => {
+    it('leaves PANELS alone, where four E2E specs were lost to exactly this', () => {
         // Panels own Escape: dismiss, un-hibernate, leave a docked header. Taking it to
-        // navigate hid the grid underneath every one of them.
-        expect(escapeLeavesForDeck({ view: 'grid', overlayOpen: false })).toBe(false);
+        // navigate hid the surface underneath every one of them. The grid is gone now, but
+        // the Workbench still mounts panels, so the rule it taught still binds.
         expect(escapeLeavesForDeck({ view: 'workbench', overlayOpen: false })).toBe(false);
+        expect(escapeLeavesForDeck({ view: 'dashboard', overlayOpen: false })).toBe(false);
     });
 
     it('does nothing on the Deck itself, because there is no level above it', () => {

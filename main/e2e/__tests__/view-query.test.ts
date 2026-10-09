@@ -31,8 +31,13 @@ describe('no override', () => {
 });
 
 describe('named views', () => {
-    it('asks for the grid by name', () => {
-        expect(routeOf(e2eViewQuery('grid'))).toEqual({ kind: 'grid' });
+    it('no longer resolves the GRID, which has been removed', () => {
+        // `?view=grid` still forms — the builder does not know which views exist — but the
+        // route cannot satisfy it and degrades. Asserted rather than deleted, because a spec
+        // that still passes `GENIE_E2E_VIEW=grid` would silently run against the DEFAULT
+        // surface, and "element not found" reads as a broken panel rather than a stale env.
+        expect(e2eViewQuery('grid')).toBe('?view=grid');
+        expect(routeOf(e2eViewQuery('grid'))).toEqual({ kind: 'dashboard' });
     });
 
     it('asks for the deck by name', () => {

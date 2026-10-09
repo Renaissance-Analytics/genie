@@ -148,26 +148,6 @@ export const FEATURE_SURFACES: readonly FeatureSurface[] = [
     },
 
     /**
-     * THE GRID ITSELF — the surface this whole contract was protecting other things from
-     * losing, and the one it did not cover.
-     *
-     * Genie 2 made the Deck the default (`parseViewRoute({})` → `{kind:'deck'}`). The plan
-     * justified that with *"the grid is one query away and loses nothing"*, and measured on
-     * 2026-10-06 it was EXACTLY one query away and nothing else: no title-bar control, no
-     * keyboard shortcut, no palette row, no link on the Deck. `?view=grid` in a desktop app
-     * with no address bar is not a route a person has.
-     *
-     * So the 2×2 Floor that every existing user opens Genie to see became unreachable the
-     * moment the default flipped — a feature lost by the very change this module was added
-     * to make safe. It was missed because the contract was written for the eight title-bar
-     * ICONS of P7, and a SURFACE becoming unreachable is not an icon being deleted.
-     *
-     * Registered here so it is covered by the same guard as everything else, and so the
-     * palette carries it like any other feature.
-     */
-    { id: 'grid', label: 'The grid (all workspaces)', entry: { paletteId: 'grid' } },
-
-    /**
      * THE WORKFLOW DASHBOARD — and it is registered here for the reason the comment above
      * records rather than as a formality.
      *

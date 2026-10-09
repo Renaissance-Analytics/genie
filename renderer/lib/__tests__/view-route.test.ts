@@ -20,8 +20,28 @@ describe('parseViewRoute', () => {
         expect(parseViewRoute({})).toEqual({ kind: 'dashboard' });
     });
 
-    it('still reaches the grid, by name', () => {
-        expect(parseViewRoute({ view: 'grid' })).toEqual({ kind: 'grid' });
+    /**
+     * THE GRID IS GONE. Owner's ruling, 2026-10-08:
+     *
+     *   "why do we even still support the old terminal grid? I told you to drop that… the
+     *    only terminal like ux in the floor is when watching an agents workstream (firehose
+     *    layout) which isn't a real terminal."
+     *
+     * `?view=grid` used to be the 2x2 cross-workspace Floor. A stale link or a bookmark must
+     * not land on a blank screen, so it degrades to the default like any other view the route
+     * cannot satisfy — the same rule `?view=workbench` and `?view=nonsense` already follow.
+     */
+    it('no longer reaches the grid, and degrades rather than blanking', () => {
+        expect(parseViewRoute({ view: 'grid' })).toEqual({ kind: 'dashboard' });
+    });
+
+    it('a stale grid link that also names a workspace opens that WORKBENCH', () => {
+        // The better landing for an old link: it still carries where you were. `ws` is only
+        // beaten by an explicit named view, and `grid` is no longer one.
+        expect(parseViewRoute({ view: 'grid', ws: 'w1' })).toEqual({
+            kind: 'workbench',
+            workspaceId: 'w1',
+        });
     });
 
     it('reaches the Deck explicitly', () => {
@@ -112,7 +132,7 @@ describe('viewRouteQuery', () => {
     });
 
     const cases: GenieView[] = [
-        { kind: 'grid' },
+
         { kind: 'deck' },
         { kind: 'workbench', workspaceId: 'w1' },
         { kind: 'agent', agentId: 'a1', tab: null, lanes: null },
