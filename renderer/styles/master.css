@@ -8172,65 +8172,6 @@ body.gutter-dragging .grid-gutter {
     margin-bottom: 8px;
 }
 
-/* One row per agent. A FIXED grid rather than flex: every column means the same
-   thing on every row, which is the only way a dense display stays readable — and
-   the cost and context columns are frequently EMPTY on purpose (the session
-   cannot see them), so they must still hold their place instead of letting the
-   row reflow and move the name under somebody's cursor. */
-.deck-row {
-    display: grid;
-    grid-template-columns: 7.5rem minmax(6rem, 1fr) minmax(8rem, 1.5fr) 3.5rem 9rem 4.5rem auto;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 4px;
-    border-bottom: 1px solid var(--border-1, #26262e);
-}
-
-.deck-row:last-child {
-    border-bottom: none;
-}
-
-.deck-row-name {
-    font-weight: 600;
-}
-
-.deck-row-provider,
-.deck-row-since,
-.deck-row-cost {
-    color: var(--fg-3);
-}
-
-.deck-row-since,
-.deck-row-cost {
-    text-align: right;
-    /* Tabular figures so a column of durations and prices lines up rather than
-       jittering as digit widths change. */
-    font-variant-numeric: tabular-nums;
-}
-
-.deck-row-ctx {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-variant-numeric: tabular-nums;
-}
-
-/* A stalled agent is the one state the product could not see before, so the row
-   carries it rather than relying on the badge alone being noticed. */
-.deck-row[data-state='stalled'] {
-    /* Literal rgba, matching this file's existing convention for a state tint
-       (see the amber attention rules around line 1360) rather than inventing
-       palette tokens. The palette lives in globals.css with light AND dark
-       variants, so a new colour token there is a change to the shared theme — too
-       much blast radius for two row tints, and `theme-tokens.test.ts` rightly
-       fails a `var(--x)` nothing defines. */
-    background: rgba(220, 38, 38, 0.09);
-}
-
-.deck-row[data-state='awaiting-you'] {
-    background: rgba(251, 191, 36, 0.08);
-}
-
 .deck-empty {
     display: flex;
     flex-direction: column;
