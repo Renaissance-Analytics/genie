@@ -100,10 +100,19 @@ describe('the activity list', () => {
         expect(html).toContain('data-kind="wrote"');
     });
 
-    it('renders no button at all when nothing can act on the rows', () => {
-        // POSITIVE CONTROL is the test above: the same session WITH a handler has one.
+    it('makes a control of the INSPECTABLE row and only that one, handler or not', () => {
+        /**
+         * RETARGETED. This asserted "no handler ⇒ no buttons", which was right while nothing
+         * could inspect a call from this surface. Activity has its own inspector now, so a
+         * row with `inspect` is always a control and the caller's handler merely overrides
+         * where it goes.
+         *
+         * The constraint underneath is unchanged and is what this still pins: a row with
+         * NOTHING behind it never becomes a button. `inspect: null`, not the handler's
+         * presence, is what decides — which is the rule `agent-activity.ts` states.
+         */
         const s = session({ transcript: [msg({ id: 'm1' })], tools: [tool({ id: 't1' })] });
-        expect(count(render(s), '<button')).toBe(0);
+        expect(count(render(s), '<button')).toBe(1);
         expect(rows(render(s))).toBe(2);
     });
 
@@ -165,5 +174,31 @@ describe('the sources panel', () => {
         );
         // mail, files and tools are all measurable once a tool call has arrived.
         expect(count(html, 'activity-source-count')).toBe(3);
+    });
+});
+
+/**
+ * THE TOOL ROWS WERE CONTROLS THAT DID NOTHING.
+ *
+ * `agentActivity` marks a tool row with `inspect: c.id` — "this row has something behind
+ * it" — and `Row` turns that into a `<button>` only when it is given a handler. Nothing
+ * passed one, so every inspectable row rendered as an inert `<div>`: the idiom was right
+ * and the wiring was absent, which is the same defect as `ChatFlyout`'s unpassed `onSend`.
+ *
+ * Activity now inspects in place, so a row with `inspect` is always a control.
+ */
+describe('a tool row can actually be opened', () => {
+    it('renders an inspectable row as a BUTTON', () => {
+        const html = render(session({ tools: [tool({ id: 't1' })] }));
+        expect(html).toContain('<button');
+    });
+
+    it('POSITIVE CONTROL: a row with nothing behind it stays inert', () => {
+        // Without this, "contains a button" would pass against a component that made EVERY
+        // row a control — which is the opposite failure and a worse one, because a button
+        // that opens nothing invites a press and swallows it.
+        const html = render(session({ transcript: [msg({ id: 'm1' })] }));
+        expect(html).toContain('activity-row');
+        expect(html).not.toContain('<button');
     });
 });
