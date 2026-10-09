@@ -95,7 +95,7 @@ describe('ciQueuedVerdict', () => {
             waitedMs: 10_000,
         });
         expect(v.state).toBe('waiting');
-        expect(v.missing).toEqual(['E2E (macos-latest)', 'E2E (windows-latest)']);
+        expect(v.missing).toEqual(['E2E (windows-latest)']);
     });
 
     it('blocks when the budget runs out with checks still missing, and names them', () => {
@@ -107,12 +107,8 @@ describe('ciQueuedVerdict', () => {
         });
         expect(v.state).toBe('blocked');
         expect(v.reason).toBe('checks-never-queued');
-        expect(v.missing).toEqual([
-            'E2E (macos-latest)',
-            'E2E (ubuntu-latest)',
-            'E2E (windows-latest)',
-        ]);
-        expect(v.detail).toContain('E2E (macos-latest)');
+        expect(v.missing).toEqual(['E2E (ubuntu-latest)', 'E2E (windows-latest)']);
+        expect(v.detail).toContain('E2E (ubuntu-latest)');
     });
 
     it('skips fork PRs, where "no CI yet" is a maintainer approval away', () => {
@@ -137,18 +133,21 @@ describe('ciQueuedVerdict', () => {
         expect(v.state).toBe('skipped');
     });
 
-    it('requires exactly the five checks a pushed SHA carries — no more, no fewer', () => {
-        // The complete set on a pushed SHA is EIGHT: these five, plus CodeQL and
-        // its two Analyze jobs, which come from GitHub's default setup and run
-        // on the head regardless of mergeability. Only the five that come from
-        // `pull_request` workflows are evidence that CI ran on this code.
-        expect(REQUIRED_CHECKS).toEqual([
-            'E2E (macos-latest)',
-            'E2E (ubuntu-latest)',
-            'E2E (windows-latest)',
-            'hosting',
-            'test',
-        ]);
+    it('carries no check that comes from a trigger other than pull_request', () => {
+        // Only checks from `pull_request` workflows are evidence that CI ran on THIS code.
+        // CodeQL and its two Analyze jobs come from GitHub's default code-scanning setup and
+        // run against the head regardless of mergeability; `flag` is `pull_request_target`
+        // with no `synchronize`. All four were green on #574 while nothing had been tested,
+        // so admitting any of them here would re-open the exact hole this guard closes.
+        //
+        // WHAT THE LIST **IS** is asserted in `required-checks-match-workflows.test.ts`, by
+        // deriving the names from `ci.yml` and `e2e.yml`. This test used to make that claim
+        // against a hardcoded copy of the list in this same file, which meant it only ever
+        // noticed someone editing the list — a matrix change desynced it silently and went
+        // red in CI instead of here.
+        for (const name of ['CodeQL', 'Analyze (actions)', 'Analyze (javascript-typescript)', 'flag', 'ci-queued']) {
+            expect(REQUIRED_CHECKS).not.toContain(name);
+        }
     });
 
     it('ignores unrelated checks entirely — flag and CodeQL prove nothing about CI', () => {

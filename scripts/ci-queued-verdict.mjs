@@ -42,7 +42,6 @@
  * Sorted, so a missing-check list reads the same way every time.
  */
 export const REQUIRED_CHECKS = [
-    'E2E (macos-latest)',
     'E2E (ubuntu-latest)',
     'E2E (windows-latest)',
     'hosting',
