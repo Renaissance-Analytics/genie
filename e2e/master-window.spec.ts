@@ -45,7 +45,7 @@ let page: Page;
 let seed: MasterSeed;
 
 test.beforeAll(async () => {
-    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' }));
+    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'workbench' }));
 
     // Two first-run overlays used to be dismissed here, each behind a 20s
     // `waitFor(...).catch(() => {})`. Neither can render on this route any more,
@@ -658,7 +658,7 @@ test('a blocked nudge stays on its terminal and replaces that workspace AgentPul
  * ## Why these tests are HERE rather than in their own spec
  *
  * They started in `e2e/flow-manager.spec.ts`, which called
- * `launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' })` a second time. Every spec shares one
+ * `launchGenieE2E('master', { GENIE_E2E_VIEW: 'workbench' })` a second time. Every spec shares one
  * `--user-data-dir`, and a dozen of them launch and close apps against it
  * happily — but `master` is the heavy one, the real product window with ptys and
  * a terminal host behind it, and a SECOND master app in the same run left this
@@ -1626,10 +1626,12 @@ test('docking the lists panel reserves the gutter on the DECK, not just the Floo
     await expect(listsRoot()).not.toHaveClass(/\bopen\b/);
     await page.evaluate(() => {
         const url = new URL(window.location.href);
-        // `grid`, not `floor` — `viewRouteQuery` NAMES the grid and leaves the Deck
-        // paramless, so restoring with any other value lands back on the Deck and every
-        // test after this one runs on the wrong surface.
-        url.searchParams.set('view', 'grid');
+        // Back to the WORKBENCH, which is addressed by `ws` and has no `view` name — the
+        // route accepts only `deck|grid|dashboard` for `view`, so `?view=workbench` would
+        // degrade to the default and every test after this one would run on the wrong
+        // surface. `view` is deleted too, or a leftover one would win over `ws`.
+        url.searchParams.delete('view');
+        url.searchParams.set('ws', 'e2e-master-window');
         window.history.replaceState(null, '', `${url.pathname}${url.search}`);
         window.dispatchEvent(new Event('genie:pagequery'));
     });

@@ -34,7 +34,7 @@ let app: ElectronApplication;
 let page: Page;
 
 test.beforeAll(async () => {
-    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' }));
+    ({ app, page } = await launchGenieE2E('master'));
     const whatsNew = page.locator('.whats-new-backdrop');
     await whatsNew.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
     if (await whatsNew.count()) {

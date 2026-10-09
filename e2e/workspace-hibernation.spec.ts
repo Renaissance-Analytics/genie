@@ -34,7 +34,7 @@ let page: Page;
 let seed: MasterSeed;
 
 test.beforeAll(async () => {
-    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'grid' }));
+    ({ app, page } = await launchGenieE2E('master', { GENIE_E2E_VIEW: 'workbench' }));
 
     const whatsNew = page.locator('.whats-new-backdrop');
     await whatsNew.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
