@@ -3488,6 +3488,17 @@ export interface Settings extends ProviderSettingKeys, SoundSettingKeys {
      *  everywhere; an explicit 'off' opts back into the in-process T1/T2 backend
      *  (which restores panels from a snapshot but cold-spawns a fresh shell). */
     detached_terminals?: 'on' | 'off';
+    /**
+     * Bring agents that were running back when Genie LAUNCHES. Default 'off'.
+     *
+     * Off by default because the alternative is what the owner hit: a reboot brought every
+     * agent back working, with no window open to reach or stop them. An agent that starts
+     * itself while nobody is looking is a decision Genie should not make unasked.
+     *
+     * Does NOT gate host recovery — a pty host that dies mid-session is a fault being
+     * repaired, not a choice.
+     */
+    restore_agents_on_launch?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray instead of opening its
      *  window. Defaults 'off' — Genie starts OPEN. 'on' starts in the tray only
      *  (the window opens on the first tray click / global hotkey). */
@@ -3706,6 +3717,7 @@ export function getAllSettings(): Settings {
         view_state_json: out['view_state_json'] ?? '{}',
         track_cwd: (out['track_cwd'] as 'on' | 'off') ?? 'on',
         detached_terminals: (out['detached_terminals'] as 'on' | 'off') ?? 'on',
+        restore_agents_on_launch: (out['restore_agents_on_launch'] as 'on' | 'off') ?? 'off',
         start_minimized: (out['start_minimized'] as 'on' | 'off') ?? 'off',
         notify_sound: (out['notify_sound'] as 'on' | 'off') ?? 'off',
         notify_toast: (out['notify_toast'] as 'on' | 'off') ?? 'off',

@@ -357,6 +357,21 @@ export default function SettingsPage() {
                         }
                     />
                 </SettingRow>
+
+                <SettingRow
+                    label="Start agents again when Genie launches"
+                    desc={s.restore_agents_on_launch === 'on'
+                        ? 'On — agents that were running when Genie last closed start again at launch, and begin working straight away.'
+                        : 'Off by default. Agents that were running when Genie last closed stay stopped until you start them. They are still listed, with what they were doing. This does not affect recovery: if the terminal host crashes while you are working, Genie puts those agents back either way.'}
+                    keywords="restore agents launch boot startup revive reboot start again"
+                >
+                    <Switch
+                        checked={s.restore_agents_on_launch === 'on'}
+                        onCheckedChange={(on: boolean) =>
+                            patch({ restore_agents_on_launch: on ? 'on' : 'off' })
+                        }
+                    />
+                </SettingRow>
             </SetSection>
 
                             </SearchGroup>

@@ -1434,6 +1434,7 @@ export interface Settings extends ProviderLaunchSettings, SoundSettingKeys {
     /** Tier 3: keep terminals running in a detached host so they survive a full
      *  quit. Defaults 'off' (in-process). 'on' opts in. */
     detached_terminals?: 'on' | 'off';
+    restore_agents_on_launch?: 'on' | 'off';
     /** Whether Genie launches minimized to the tray (default 'off' = start open). */
     start_minimized?: 'on' | 'off';
     /** Last Genie version whose What’s New modal was shown to the user. */
