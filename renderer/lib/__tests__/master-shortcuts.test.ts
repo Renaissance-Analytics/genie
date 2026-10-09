@@ -323,3 +323,113 @@ describe('L opens the lanes', () => {
         expect(resolveShortcut(ev({ key: 'l', altKey: true }), 'surface')).toBeNull();
     });
 });
+
+/**
+ * ⌘B — the workspace file panel ("New keys: ... ⌘B files").
+ *
+ * A CHORD, so it is not bound by the safety rule that governs single letters — but it IS
+ * withheld from a terminal, for a sharper reason than most: `Ctrl-B` is tmux's default prefix
+ * key and `backward-char` in every readline prompt. Taking it would break the chord people
+ * press before every tmux command, and the break would look like tmux itself was broken.
+ */
+describe('⌘B opens the files panel', () => {
+    it('resolves on Genie’s own surface, with either modifier', () => {
+        expect(resolveShortcut(ev({ key: 'b', metaKey: true }), 'surface')).toEqual({ kind: 'files' });
+        expect(resolveShortcut(ev({ key: 'b', ctrlKey: true }), 'surface')).toEqual({ kind: 'files' });
+    });
+
+    it('accepts the upper-case letter, since Caps Lock is not a different intent', () => {
+        // No Shift variant is assigned to B, so BOTH cases mean the same thing — unlike ⌘J,
+        // where `J` is the pin and the ordering has to separate them.
+        expect(resolveShortcut(ev({ key: 'B', metaKey: true, shiftKey: true }), 'surface')).toEqual({
+            kind: 'files',
+        });
+    });
+
+    it('is withheld inside a TERMINAL, where Ctrl-B is tmux’s prefix', () => {
+        expect(resolveShortcut(ev({ key: 'b', ctrlKey: true }), 'terminal')).toBeNull();
+        // The positive control: the same chord DOES resolve on the surface, so this pair proves
+        // the focus check and not a resolver that returns null for B everywhere.
+        expect(resolveShortcut(ev({ key: 'b', ctrlKey: true }), 'surface')).toEqual({ kind: 'files' });
+    });
+
+    it('still works from a TEXT field, like ⌘J and ⌘K', () => {
+        // Nothing is composed by ⌘B in a plain field — there is no rich-text surface in this app
+        // for it to mean "bold" — and someone in a filter box is exactly who wants the files.
+        expect(resolveShortcut(ev({ key: 'b', metaKey: true }), 'text')).toEqual({ kind: 'files' });
+    });
+
+    it('needs the modifier, and never fires with Alt held', () => {
+        expect(resolveShortcut(ev({ key: 'b' }), 'surface')).toBeNull();
+        expect(resolveShortcut(ev({ key: 'b', metaKey: true, altKey: true }), 'surface')).toBeNull();
+        // Positive control for both negatives above.
+        expect(resolveShortcut(ev({ key: 'b', metaKey: true }), 'surface')).toEqual({ kind: 'files' });
+    });
+});
+
+/**
+ * `E` — jump to the next edit in the stream ("New keys: ... E next edit").
+ *
+ * An unmodified letter, so THE SAFETY RULE governs it: a command only on Genie's own surface.
+ * In a field or a TUI it is the letter `e`, which is in roughly every English word a person
+ * might type.
+ */
+describe('E jumps to the next edit', () => {
+    it('is a command on Genie’s own surface, in either case', () => {
+        expect(resolveShortcut(ev({ key: 'e' }), 'surface')).toEqual({ kind: 'next-edit' });
+        expect(resolveShortcut(ev({ key: 'E' }), 'surface')).toEqual({ kind: 'next-edit' });
+    });
+
+    it('is just a letter in a terminal or a field', () => {
+        expect(resolveShortcut(ev({ key: 'e' }), 'terminal')).toBeNull();
+        expect(resolveShortcut(ev({ key: 'e' }), 'text')).toBeNull();
+        // The positive control: `e` DOES resolve on the surface. Without this line the two
+        // assertions above would pass against a resolver that ignored `e` entirely.
+        expect(resolveShortcut(ev({ key: 'e' }), 'surface')).toEqual({ kind: 'next-edit' });
+    });
+
+    it('is NOT claimed under a modifier, so ⌘E stays free', () => {
+        expect(resolveShortcut(ev({ key: 'e', metaKey: true }), 'surface')).toBeNull();
+        expect(resolveShortcut(ev({ key: 'e', ctrlKey: true }), 'surface')).toBeNull();
+        // Positive control again: the bare letter is the binding, the chord is not.
+        expect(resolveShortcut(ev({ key: 'e' }), 'surface')).toEqual({ kind: 'next-edit' });
+    });
+});
+
+/**
+ * `/` — find in the stream ("New keys: ... / find in stream").
+ *
+ * The most dangerous key on the board, and the one the safety rule was written for. `/` starts
+ * a path and it starts a slash-command, so a human types it constantly INTO things. It may act
+ * only on Genie's own surface; anywhere a character is being composed it must reach the field.
+ */
+describe('/ finds in the stream', () => {
+    it('is a command on Genie’s own surface', () => {
+        expect(resolveShortcut(ev({ key: '/' }), 'surface')).toEqual({ kind: 'find-in-stream' });
+    });
+
+    it('reaches the FIELD and the TUI untouched, because people type it there', () => {
+        // `/src/main` in a filter box, `/model` in a TUI. Stealing this keystroke would be the
+        // most-noticed bug on the board.
+        expect(resolveShortcut(ev({ key: '/' }), 'text')).toBeNull();
+        expect(resolveShortcut(ev({ key: '/' }), 'terminal')).toBeNull();
+        // The positive control: it still resolves on the surface.
+        expect(resolveShortcut(ev({ key: '/' }), 'surface')).toEqual({ kind: 'find-in-stream' });
+    });
+
+    it('resolves with Shift held, because on many layouts / IS a shifted key', () => {
+        // Shift+7 on a German layout, Shift+: on a Japanese one — the browser still reports
+        // `/`. Requiring Shift to be absent would make find unreachable outside US layouts,
+        // and the shifted letters (A/D) are already accepted for the same reason.
+        expect(resolveShortcut(ev({ key: '/', shiftKey: true }), 'surface')).toEqual({
+            kind: 'find-in-stream',
+        });
+    });
+
+    it('is NOT claimed under ⌘ or Alt', () => {
+        expect(resolveShortcut(ev({ key: '/', metaKey: true }), 'surface')).toBeNull();
+        expect(resolveShortcut(ev({ key: '/', altKey: true }), 'surface')).toBeNull();
+        // Positive control for the two negatives above.
+        expect(resolveShortcut(ev({ key: '/' }), 'surface')).toEqual({ kind: 'find-in-stream' });
+    });
+});

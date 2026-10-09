@@ -94,6 +94,11 @@ export interface AgentViewProps {
     /** The dragged window, parsed from the url so a refresh and a shared link agree. */
     lanesRange?: LaneSpan | null;
     onLanesRange?: (range: LaneSpan | null) => void;
+    /** `/` — the stream's find box is open. */
+    findOpen?: boolean;
+    onFindClose?: () => void;
+    /** `E` — a nonce; bumping it jumps the stream's selection to the next edit. */
+    jumpToNextEdit?: number;
     now?: number;
 }
 
@@ -134,6 +139,9 @@ export function AgentView({
     lanesOpen = false,
     lanesRange = null,
     onLanesRange,
+    findOpen = false,
+    onFindClose,
+    jumpToNextEdit,
     now = Date.now(),
 }: AgentViewProps): React.JSX.Element {
     const tabs = agentViewTabs(session);
@@ -260,6 +268,9 @@ export function AgentView({
                             lanesOpen={lanesOpen}
                             range={lanesRange}
                             {...(onLanesRange ? { onRange: onLanesRange } : {})}
+                            findOpen={findOpen}
+                            {...(onFindClose ? { onFindClose } : {})}
+                            {...(jumpToNextEdit !== undefined ? { jumpToNextEdit } : {})}
                         />
 
                         {parked ? (

@@ -9316,6 +9316,34 @@ button.dash-row:focus-visible {
     color: var(--fg-3);
 }
 
+/* `/` — find in stream. FLEX NONE for the same reason as the lanes: it must not take height
+   from the transcript it is searching. */
+.stream-find {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.stream-find-input {
+    flex: 1;
+    min-width: 0;
+    appearance: none;
+    background: var(--bg-1);
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 8px;
+}
+.stream-find-input:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -1px;
+}
+
 /* An empty RANGE is not an empty agent, and it carries its own way out. */
 .stream-empty-range {
     display: flex;

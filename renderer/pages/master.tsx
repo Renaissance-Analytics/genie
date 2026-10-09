@@ -814,6 +814,15 @@ function MasterInner() {
      * history entry.
      */
     const [lanesOpen, setLanesOpen] = useState(false);
+    /** `/` — the stream's find box. Local for the same reason as `lanesOpen`. */
+    const [streamFindOpen, setStreamFindOpen] = useState(false);
+    /**
+     * `E` — a counter, not a flag.
+     *
+     * Pressing the key twice must move twice, and a boolean cannot say "again". The stream
+     * ignores the first value it sees, so mounting an agent view never jumps on its own.
+     */
+    const [nextEditNonce, setNextEditNonce] = useState(0);
     // The workspace lists (genie#556): a header icon, and a PIN that docks the
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
@@ -2261,6 +2270,10 @@ function MasterInner() {
     workspacesByIdRef.current = workspacesById;
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
+    // Same reason as the line above: the keydown effect is mounted once with `[]` deps, so it
+    // would otherwise close over the FIRST `addSpec` forever and act on a stale workspace list.
+    const addSpecRef = useRef(addSpec);
+    addSpecRef.current = addSpec;
     useEffect(() => {
         return api().on.pluginPanelOpen?.((request) => {
             void (async () => {
@@ -2649,7 +2662,9 @@ function MasterInner() {
      * out from under an open panel.
      */
     const keys = useRef({
-        view: 'deck' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
+        // `dashboard` first: it is the default surface, so it is what this ref holds for the
+        // one render before `keys.current` is assigned below.
+        view: 'dashboard' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
         overlayOpen: false,
         query: {} as RouteQuery,
         sessions: [] as AgentSessionSpec[],
@@ -2657,6 +2672,7 @@ function MasterInner() {
         agentId: null as string | null,
         agentSpecId: null as string | null,
         parkedApprovalId: null as string | null,
+        activeWorkspaceId: null as string | null,
     });
     keys.current = {
         view: view.kind,
@@ -2689,6 +2705,9 @@ function MasterInner() {
             // about nothing.
             return s ? (parkedApproval(s)?.id ?? null) : null;
         })(),
+        // For ⌘B. The file panel belongs to a WORKSPACE, so with none active there is nothing
+        // to open one against and the key no-ops rather than guessing at a workspace.
+        activeWorkspaceId,
     };
 
     /**
@@ -2890,6 +2909,43 @@ function MasterInner() {
                 replacePageQuery(
                     mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null, lanes: null }),
                 );
+                return;
+            }
+
+            /**
+             * ⌘B — the WORKSPACE FILE PANEL (spec board's "New keys": `⌘B` files).
+             *
+             * It routes to the Workbench first and then opens the panel, in that order and
+             * deliberately: `addSpec` selects an existing file panel rather than creating a
+             * second one, but a selected panel on a surface that conceals the grid is a
+             * change you cannot see — which is the exact failure this release has spent its
+             * time removing.
+             */
+            if (intent.kind === 'files') {
+                const ws = now.activeWorkspaceId;
+                if (!ws) return;
+                e.preventDefault();
+                replacePageQuery(mergeViewRoute(now.query, { kind: 'workbench', workspaceId: ws }));
+                void addSpecRef.current(ws, 'code');
+                return;
+            }
+
+            /**
+             * E and / — both act on ONE agent's stream, so both are confined to an agent
+             * view. Firing them from the Dashboard would change hidden state on a surface
+             * that cannot show it, which is how a shortcut earns a reputation for doing
+             * nothing.
+             */
+            if (intent.kind === 'next-edit') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setNextEditNonce((n) => n + 1);
+                return;
+            }
+            if (intent.kind === 'find-in-stream') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setStreamFindOpen(true);
                 return;
             }
 
@@ -3332,6 +3388,9 @@ function MasterInner() {
                                                   }
                                                 : {})}
                                             lanesOpen={lanesOpen}
+                                            findOpen={streamFindOpen}
+                                            onFindClose={() => setStreamFindOpen(false)}
+                                            jumpToNextEdit={nextEditNonce}
                                             lanesRange={parseLaneRange(
                                                 view.kind === 'agent' ? view.lanes : null,
                                             )}

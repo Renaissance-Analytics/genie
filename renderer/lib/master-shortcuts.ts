@@ -73,6 +73,12 @@ export type ShortcutIntent =
     | { kind: 'chat-pin' }
     /** Open or close §5.2's Lanes pulldown over the agent's stream. */
     | { kind: 'lanes' }
+    /** Open (or close) the workspace file panel. */
+    | { kind: 'files' }
+    /** Jump to the next edit in the agent's stream. */
+    | { kind: 'next-edit' }
+    /** Open find-in-stream over the agent's output. */
+    | { kind: 'find-in-stream' }
     /** Jump to the nth agent (1-based; there is no slot 0). */
     | { kind: 'agent-slot'; slot: number }
     /** Take over an agent's terminal, or hand it back — one toggle, both ways. */
@@ -127,6 +133,19 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
             return e.shiftKey || e.key === 'J' ? { kind: 'chat-pin' } : { kind: 'chat' };
         }
 
+        /**
+         * ⌘B → the workspace file panel. Withheld from a terminal with the rest, and this one
+         * has the sharpest reason of any of them: `Ctrl-B` is tmux's DEFAULT PREFIX key, and
+         * `backward-char` in every readline prompt. Claiming it would eat the keystroke people
+         * press before every tmux command, and the damage would read as tmux being broken
+         * rather than as Genie having taken the chord.
+         *
+         * Both cases of the letter, and no Shift variant: unlike ⌘J — where `J` is the pin and
+         * the ordering has to separate them — nothing else is assigned to B, so ⌘⇧B is simply
+         * the same request with a finger on Shift.
+         */
+        if (e.key === 'b' || e.key === 'B') return { kind: 'files' };
+
         // 1–9 only. There is no slot 0, so ⌘0 stays free for zoom-reset.
         if (e.key >= '1' && e.key <= '9') return { kind: 'agent-slot', slot: Number(e.key) };
 
@@ -166,6 +185,25 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
         case 'l':
         case 'L':
             return { kind: 'lanes' };
+        // Next edit in the stream. A bare letter, so it reaches here only on the surface —
+        // `e` is in nearly every word anyone types, and jumping the stream mid-sentence
+        // would be the least explicable thing this resolver could do.
+        case 'e':
+        case 'E':
+            return { kind: 'next-edit' };
+        /**
+         * Find in stream. THE SAFETY RULE matters most here of anything on the board: `/`
+         * begins a path and begins a slash-command, so it is a character humans type INTO
+         * things constantly. It is reachable only because the guard above has already handed
+         * every field and every TUI their own `/` back.
+         *
+         * Shift is deliberately NOT required to be absent: on a German layout `/` is Shift+7,
+         * on a Japanese one Shift+:, and the browser reports `/` either way. Rejecting a held
+         * Shift would make find unreachable outside a US layout — the same reason the shifted
+         * letters above are accepted rather than treated as a different intent.
+         */
+        case '/':
+            return { kind: 'find-in-stream' };
         default:
             return null;
     }
