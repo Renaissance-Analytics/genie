@@ -112,37 +112,45 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     if (workspaceId) return { kind: 'workbench', workspaceId };
 
     /**
-     * No params: THE DECK.
+     * No params: THE GRID — REVERTED from the Deck in 2.0.0-beta.2.
      *
-     * This is the Genie 2 flip. The grid was the default while the Deck was a parallel
-     * surface; now the Deck is what opens and the grid is reached with `?view=grid`, which
-     * is also what `floorSurface` conceals rather than unmounts -- every terminal panel owns
-     * a live xterm bound to a pty, so the grid must never be destroyed to show something
-     * else.
+     * beta.1 made the Deck the default. It stranded the owner on first launch, and the
+     * reason is worth keeping, because the reasoning that produced it was not obviously
+     * wrong: a 2x2 of transcripts really is maximum pixels and near-zero information, and
+     * the Deck really does answer "what needs me" better.
      *
-     * A 2x2 of transcripts is maximum pixels and near-zero information; the Deck answers
-     * "what needs me" instead. The grid is one query away and loses nothing.
+     * What was missed is that the Deck had NO WAY OUT BY MOUSE. Its roster rows carried no
+     * handler, the workspace rail changed `activeWorkspaceId` without touching the route so
+     * clicking a workspace altered nothing visible, and the only door to the grid was a ⌘K
+     * palette row — which `feature-reachability` judged sufficient because it checks that a
+     * feature HAS an entry, not that a human can find one. A palette row is not an
+     * affordance.
+     *
+     * So the default goes back to the surface that has always been navigable, and it moves
+     * again only when `surface-exits.test.ts` can prove the destination is escapable with a
+     * mouse. The Deck is `?view=grid`'s mirror now: reached by name, and reachable.
      */
-    return { kind: 'deck' };
+    return { kind: 'grid' };
 }
 
 /**
  * The query params for a view — the inverse of {@link parseViewRoute}.
  *
- * The Deck encodes to `{}`, deliberately: it is the landing view and the place
- * you sit most, so its url stays clean instead of carrying `?view=deck`. That
- * also means "no params" and "the Deck" are the same thing in both directions,
- * which is what keeps the round trip honest.
+ * The GRID encodes to `{}`, deliberately: it is the landing view, so its url stays
+ * clean instead of carrying `?view=grid`. That also means "no params" and "the grid"
+ * are the same thing in both directions, which is what keeps the round trip honest —
+ * and it must move together with `parseViewRoute`'s default or the two halves of this
+ * module disagree about what an empty url means.
  */
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
         case 'grid':
-            // The grid is now the one you ask for. It must be NAMED, or parsing its own url
-            // would hand back the Deck and the two halves would disagree.
-            return { view: 'grid' };
-        case 'deck':
-            // The DEFAULT carries no params, so the url you sit on most stays clean.
+            // The DEFAULT carries no params, so the url you land on stays clean.
             return {};
+        case 'deck':
+            // The Deck is now the one you ask for. It must be NAMED, or parsing its own url
+            // would hand back the grid and the two halves would disagree.
+            return { view: 'deck' };
         case 'dashboard':
             return { view: 'dashboard' };
         case 'workbench':

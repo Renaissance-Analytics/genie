@@ -17,7 +17,7 @@ describe('parseViewRoute', () => {
         // survivable now for one reason: `floorSurface` CONCEALS the grid rather than
         // unmounting it, so no live xterm is destroyed, and the E2E specs that need the grid
         // now ask for it by name.
-        expect(parseViewRoute({})).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({})).toEqual({ kind: 'grid' });
     });
 
     it('still reaches the grid, by name', () => {
@@ -79,29 +79,29 @@ describe('parseViewRoute', () => {
 
     it('falls back to the default for a blank id', () => {
         // `?ws=` must not open a Workbench for the workspace named "".
-        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'grid' });
     });
 
     it('falls back to the default for a view it cannot satisfy', () => {
         // A Workbench with no workspace is not a thing. Never a blank screen.
-        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'grid' });
     });
 });
 
 describe('viewRouteQuery', () => {
-    it('gives the DEFAULT a clean url — and that is now the Deck', () => {
+    it('gives the DEFAULT a clean url — and that is now the grid', () => {
         // The view you sit on most carries no params. This moved with the default, exactly
         // as the previous version of this test said it would.
-        expect(viewRouteQuery({ kind: 'deck' })).toEqual({});
+        expect(viewRouteQuery({ kind: 'grid' })).toEqual({});
     });
 
-    it('names the GRID explicitly, because it is no longer the default', () => {
-        // It must be named, or parsing its own url would hand back the Deck and the two
+    it('names the DECK explicitly, because it is no longer the default', () => {
+        // It must be named, or parsing its own url would hand back the grid and the two
         // halves of this module would disagree.
-        expect(viewRouteQuery({ kind: 'grid' })).toEqual({ view: 'grid' });
+        expect(viewRouteQuery({ kind: 'deck' })).toEqual({ view: 'deck' });
     });
 
     it('omits a tab that has not been chosen', () => {
@@ -135,11 +135,11 @@ describe('viewRouteQuery', () => {
  */
 describe('mergeViewRoute', () => {
     it('keeps a remote window remote', () => {
-        // The DEFAULT (now the Deck) adds nothing; the grid names itself. Either way `host`
+        // The DEFAULT (now the grid) adds nothing; the Deck names itself. Either way `host`
         // survives, which is the point — it is bound before load and decides whether the
         // renderer talks to a remote machine.
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1' });
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1', view: 'grid' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1', view: 'deck' });
     });
 
     it('keeps a stage window staged', () => {
@@ -162,18 +162,18 @@ describe('mergeViewRoute', () => {
         expect(mergeViewRoute({ agent: 'a1', tab: 'terminal' }, { kind: 'workbench', workspaceId: 'w1' })).toEqual(
             { ws: 'w1' },
         );
-        // And a stale `view=deck` is dropped when navigating away from it.
-        expect(mergeViewRoute({ view: 'deck' }, { kind: 'deck' })).toEqual({});
+        // And a stale `view=grid` is dropped when navigating away from it.
+        expect(mergeViewRoute({ view: 'grid' }, { kind: 'grid' })).toEqual({});
     });
 
     it('preserves a param it has never heard of', () => {
         // Route ownership is a CLOSED list; everything else belongs to whoever put
         // it there, including params added after this module was written.
-        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'deck' })).toEqual({ somethingNew: 'x' });
+        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'grid' })).toEqual({ somethingNew: 'x' });
     });
 
     it('preserves a repeated non-route param verbatim', () => {
-        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'deck' })).toEqual({ tags: ['a', 'b'] });
+        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'grid' })).toEqual({ tags: ['a', 'b'] });
     });
 });
 
