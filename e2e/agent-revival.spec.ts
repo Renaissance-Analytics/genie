@@ -48,11 +48,16 @@ test('a running agent returns after Genie restarts without opening its workspace
  * It deliberately does NOT call `optIn()`. Its positive control is the spec above: the same
  * fixture, the same restart, opted in, comes back live.
  */
-test('an agent does NOT come back on its own after a restart', async ({}, testInfo) => {
+test('an agent does NOT come back on its own when revival is off', async ({}, testInfo) => {
     let app: ElectronApplication | undefined;
     const state = () => app!.evaluate(() => (globalThis as any).__GENIE_E2E_AGENT_REVIVAL__.state());
     try {
         ({ app } = await launchGenieE2E('issuewatch'));
+        // EXPLICIT, not assumed. Specs share ONE E2E profile, so the opt-in in the spec
+        // above persists past it — measured, by this spec first passing for the wrong
+        // reason. That the DEFAULT is off is asserted in db.ts's own tests, where defaults
+        // belong; what this spec owns is "off ⇒ the agent stays stopped".
+        await app.evaluate(() => (globalThis as any).__GENIE_E2E_AGENT_REVIVAL__.optOut());
         await app.evaluate(() => (globalThis as any).__GENIE_E2E_AGENT_REVIVAL__.start());
         await expect.poll(async () => (await state()).beat?.pid).toBeTruthy();
         const before = await state();

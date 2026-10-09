@@ -50,6 +50,15 @@ beat(); setInterval(beat, 100);
          * this, which is what keeps the two claims from collapsing into one.
          */
         optIn: () => deferEvaluation(() => setSettings({ restore_agents_on_launch: 'on' })),
+        /**
+         * Put it back.
+         *
+         * Specs share ONE E2E profile, so `optIn` persists past the spec that called it —
+         * measured, by the spec below going green for the wrong reason. Setting it
+         * explicitly is what makes each spec independent of what ran before it; the DEFAULT
+         * value is asserted where defaults live, in `db.ts`'s own tests.
+         */
+        optOut: () => deferEvaluation(() => setSettings({ restore_agents_on_launch: 'off' })),
         start: () => deferEvaluation(() => fixture.start()),
         state: () => deferEvaluation(() => fixture.state()),
         cleanup: () => deferEvaluation(() => fixture.cleanup()),
