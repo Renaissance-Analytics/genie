@@ -9236,6 +9236,38 @@ button.dash-row:focus-visible {
     white-space: nowrap;
 }
 
+/* A row with a tool call behind it is a BUTTON, so it resets the browser's chrome — the
+   same treatment `button.stream-event` and `button.dash-row` get, and necessary for the
+   same reason: background, border, font and centred text would all break the grid. */
+button.activity-row {
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+button.activity-row:hover {
+    background: var(--bg-1);
+}
+button.activity-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* Loudness, from the row's own level. Red is for a row that FAILED; pending is in flight. */
+.activity-row[data-level='bad'] .activity-main {
+    color: rgba(220, 38, 38, 0.95);
+}
+.activity-row[data-level='pending'] .activity-main {
+    color: var(--fg-3);
+}
+.activity-row[data-live] .activity-main {
+    color: var(--violet-400);
+}
+
 .activity-time {
     color: var(--fg-3);
     font-size: 11px;
@@ -9278,6 +9310,13 @@ button.dash-row:focus-visible {
 .activity-source-count {
     color: var(--fg-3);
     font-variant-numeric: tabular-nums;
+}
+
+/* A source Genie CANNOT measure for this agent. Dimmed and italicised rather than hidden:
+   an omitted source is indistinguishable from a source with nothing in it, and the whole
+   point of this panel is that the difference is visible. */
+.activity-source[data-blind] .activity-source-label {
+    color: var(--fg-3);
 }
 
 .activity-blind {
@@ -9345,6 +9384,17 @@ button.dash-row:focus-visible {
 
 .changes-who {
     font-weight: 600;
+}
+
+/* The open agent's own group leads, and is marked so it reads as "yours" among siblings. */
+.changes-group[data-self] .changes-who {
+    color: var(--violet-400);
+}
+
+/* Known-true collision only. The attribute is ABSENT when Genie was never told, so an
+   unknown never gets painted as a clean file — or as a conflicted one. */
+.changes-row[data-conflicted] {
+    background: rgba(251, 191, 36, 0.1);
 }
 
 .changes-group-count {
