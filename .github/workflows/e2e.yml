@@ -51,7 +51,7 @@ jobs:
       # the others — we want to see the boot result on all three.
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 

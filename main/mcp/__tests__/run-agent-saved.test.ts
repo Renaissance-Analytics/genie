@@ -226,6 +226,11 @@ beforeEach(() => {
     spawnedPtys.length = 0;
     modalsRaised.length = 0;
     setSettings({ max_agent_terminals: '' });
+    // Revival on LAUNCH is opt-in and defaults to OFF (the owner's reboot ruling). These
+    // tests are about the MECHANICS of revival, so they turn it on explicitly rather than
+    // relying on a default that deliberately restores nothing. The default itself is pinned
+    // by its own test below, and in main/agents/__tests__/revival.test.ts.
+    setSettings({ restore_agents_on_launch: 'on' });
     setWorkspaceAgentCap(WS_ID, 'unlimited');
 
     createTerminalSpec({
@@ -292,6 +297,31 @@ describe('host-side saved-agent revival', () => {
     }
     const revive = (schedule: (run: () => void, delay: number) => void = run => run()) =>
         terminalIpc.reviveRunningAgents(schedule);
+
+    /**
+     * THE REBOOT RULING, at the level where it actually bit.
+     *
+     * `agentsToRevive` is unit-tested, but what hurt the owner was the whole path: boot ran
+     * revival, revival spawned ptys, and with no window open nobody could stop what started.
+     * This asserts the PATH, not the predicate.
+     *
+     * The surrounding `beforeEach` turns the preference on for every other test here, so this
+     * one turns it back off — and the positive control uses the same spec and the same
+     * settings through the RECOVERY path, or "nothing spawned" would pass for the wrong
+     * reason entirely.
+     */
+    it('a LAUNCH revives nothing by default, while host recovery still repairs', async () => {
+        setSettings({ restore_agents_on_launch: 'off' });
+        const a = saved('cold-boot-agent');
+        revive();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(spawnedPtys).toHaveLength(0);
+
+        // A fault being repaired mid-session, not a decision made on anyone's behalf.
+        await terminalIpc.reviveRunningAgents(run => run(), [a!.id]);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(spawnedPtys.length).toBeGreaterThan(0);
+    });
 
     /**
      * EVERY REVIVAL SETTLES ITS RESERVATION — or `terminal:create` hangs forever.

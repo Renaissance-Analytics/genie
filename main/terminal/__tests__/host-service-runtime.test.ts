@@ -45,8 +45,6 @@ import {
     resolveShippedCaddyBin,
     hostKeyFor,
     materializeHostToUserData,
-    runKeyVbsContents,
-    runKeyRegAddArgv,
     isServiceBlocked,
     detachedModePinsInstallTree,
     HOST_SERVICE_LABEL,
@@ -651,25 +649,37 @@ describe('detachedModePinsInstallTree — active-host identity, not a stale laun
 });
 
 describe('Run-key autostart helpers (policy-blocked schtasks fallback)', () => {
-    it('builds a windowless wscript launcher with VBS-doubled quotes', () => {
-        expect(runKeyVbsContents('C:\\Users\\g\\unit.cmd')).toBe(
-            'CreateObject("WScript.Shell").Run """C:\\Users\\g\\unit.cmd""", 0, False\r\n',
-        );
+    /**
+     * GENIE NO LONGER REGISTERS A LOGON AUTOSTART.
+     *
+     * These used to assert the vbs launcher and the `reg add` argv. Both builders are gone
+     * with the function that called them, so the tests go with them rather than being kept
+     * green against code nothing reaches.
+     *
+     * What replaces them is the assertion that matters now: no registration path survives.
+     * A logon-started host holds zero terminals — `pty-host.js` spawns only on a pipe request
+     * and restores nothing — and `Genie.exe --autostart` is in the same Run key, so two hosts
+     * raced for one pipe. Measured on the owner's machine as two EADDRINUSE lines with the
+     * loser left resident.
+     *
+     * Asserted against the SOURCE because the registration was an Electron/`reg`-shaped side
+     * effect with no seam. Weaker than a behavioural test, stronger than the nothing that was
+     * watching it before.
+     */
+    it('registers NO Run-key autostart anywhere', () => {
+        const src = fs.readFileSync(path.join(__dirname, '..', 'host-service.ts'), 'utf8');
+        const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        expect(code).not.toMatch(/reg['"]?\s*,\s*['"]add['"]/);
+        expect(code).not.toContain('ensureRunKeyAutostart');
     });
 
-    it('builds the reg add argv for the per-user Run key', () => {
-        expect(runKeyRegAddArgv('C:\\ud\\launcher.vbs')).toEqual([
-            'reg',
-            'add',
-            'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
-            '/v',
-            HOST_SERVICE_LABEL,
-            '/t',
-            'REG_SZ',
-            '/d',
-            'wscript.exe "C:\\ud\\launcher.vbs"',
-            '/f',
-        ]);
+    it('POSITIVE CONTROL: it still REMOVES a stale one', () => {
+        // Without this, "no registration" would also pass against a file that had lost the
+        // whole Run-key story — including the cleanup that existing installs depend on to
+        // lose the key a previous version left behind.
+        const src = fs.readFileSync(path.join(__dirname, '..', 'host-service.ts'), 'utf8');
+        expect(src).toContain('removeRunKeyAutostart');
+        expect(src).toMatch(/['"]reg['"],\s*['"]delete['"]/);
     });
 
     it('isServiceBlocked reflects the persisted denial marker', () => {

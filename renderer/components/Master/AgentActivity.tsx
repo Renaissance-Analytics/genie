@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Icon, Text } from '@particle-academy/react-fancy';
-import type { AgentSession } from '../../../main/agentsession/model';
+import type { AgentSession, ToolCall } from '../../../main/agentsession/model';
+import { ToolInspector } from './ToolInspector';
 import {
     agentActivity,
     ACTIVITY_KIND_ICON,
@@ -117,6 +119,23 @@ export function AgentActivity({
     onInspect?: (toolCallId: string) => void;
 }): React.JSX.Element {
     const view = agentActivity(session);
+    /**
+     * Activity's OWN inspector.
+     *
+     * `agentActivity` marks a tool row with `inspect: c.id`, and nothing was passing
+     * `onInspect` — so every one of those rows rendered as an inert `<div>`. The idiom was
+     * right and the wiring was missing, which is the exact defect this release spent its day
+     * removing; I built the guard that catches it and then left this one.
+     *
+     * Resolved FRESH each render rather than stored, for the reason the Stream records: a
+     * selected call is frequently the one still running, and a stored copy would show
+     * "running" forever after it finished.
+     */
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const selected: ToolCall | null = (selectedId && session.tools.find((c) => c.id === selectedId)) || null;
+    // The caller's handler wins when there is one; otherwise Activity inspects in place. A
+    // row is still inert when NEITHER exists, so `inspect: null` rows never become controls.
+    const inspectRow = onInspect ?? ((id: string) => setSelectedId((cur) => (cur === id ? null : id)));
 
     return (
         <div className="agent-activity" data-testid="agent-activity">
@@ -132,13 +151,15 @@ export function AgentActivity({
             ) : (
                 <div className="activity-rows">
                     {view.rows.map((row) => (
-                        <Row key={row.id} row={row} {...(onInspect ? { onInspect } : {})} />
+                        <Row key={row.id} row={row} onInspect={inspectRow} />
                     ))}
                 </div>
             )}
 
             {/* WHAT THIS SURFACE CAN AND CANNOT SEE, always rendered — including on a busy
                 agent, where it is the only thing that stops the list reading as complete. */}
+            <ToolInspector call={selected} onClose={() => setSelectedId(null)} />
+
             <div className="activity-sources">
                 {view.sources.map((source) => (
                     <Source key={source.id} source={source} />

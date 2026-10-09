@@ -160,6 +160,7 @@ export const SETTING_TIERS: Record<keyof Settings, SettingTier> = {
     terminal_shell: 'workstation',
     terminal_custom_cmd: 'workstation',
     detached_terminals: 'workstation',
+    restore_agents_on_launch: 'workstation',
     max_agent_terminals: 'workstation',
     mcp_port: 'workstation',
     mcp_sync_claude: 'workstation',

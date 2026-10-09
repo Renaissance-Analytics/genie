@@ -1371,7 +1371,24 @@ export function reviveRunningAgents(
         }
         return spec;
     });
-    const candidates = agentsToRevive(specs);
+    // LAUNCH vs RECOVERY: `liveOnLostHost` is supplied only by host recovery, so its
+    // ABSENCE is a cold boot or an upgrade. Nobody asked for anything then, and the default
+    // is to restore nothing — the rule and its reasoning live in `agentsToRevive`.
+    const occasion = {
+        onLaunch: !liveOnLostHost,
+        // Read defensively: this runs during boot, and a settings read that throws here
+        // would take down revival for the host-recovery path too — turning a preference
+        // into an outage. An unreadable setting means "not opted in", which is the safe
+        // answer in the same direction as the default.
+        optedIn: (() => {
+            try {
+                return getAllSettings().restore_agents_on_launch === 'on';
+            } catch {
+                return false;
+            }
+        })(),
+    };
+    const candidates = agentsToRevive(specs, occasion);
     // Each reservation's `ready` resolves with whether that agent actually held.
     // Collected so the CALLER can be told — host recovery decides "recovered" vs
     // "degraded" on this, and used to decide it on whether a host process
@@ -1403,7 +1420,7 @@ export function reviveRunningAgents(
                 if (spec && lost?.has(spec.id) && !spec.meta?.user_stopped) {
                     spec = { ...spec, meta: { ...spec.meta, was_running: true } };
                 }
-                if (!spec || agentsToRevive([spec]).length === 0) return;
+                if (!spec || agentsToRevive([spec], occasion).length === 0) return;
                 if (!spec.workspace_id || !isTuiId(spec.meta?.agent)) return;
                 // A surviving detached-host pty spends no new slot and needs no launch.
                 live = terminalManager().isLive(spec.id);
