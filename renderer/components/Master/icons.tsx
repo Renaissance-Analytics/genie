@@ -239,6 +239,49 @@ export const IconEyeOff = ({ size = 13, ...p }: Props) =>
         p.className,
         p.style,
     );
+/**
+ * The three the §5.3 artboard asks for and this set did not have.
+ *
+ * Added HERE rather than reaching for Fancy's `<Icon name="git-merge" />`, which renders an
+ * empty span in this app: nothing calls `registerIcons` and `lucide-react` is not a
+ * dependency, so every Fancy icon slug misses its registry and draws nothing (genie#861).
+ * A second icon set under `Code/` would have been the other way to get these, and two sets
+ * is how a product ends up with two visual languages.
+ */
+export const IconGitBranch = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <line x1="6" y1="3" x2="6" y2="15" />
+            <circle cx="18" cy="6" r="3" />
+            <circle cx="6" cy="18" r="3" />
+            <path d="M18 9a9 9 0 0 1-9 9" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconGitMerge = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <circle cx="18" cy="18" r="3" />
+            <circle cx="6" cy="6" r="3" />
+            <path d="M6 21V9a9 9 0 0 0 9 9" />
+        </>,
+        p.className,
+        p.style,
+    );
+export const IconExternalLink = ({ size = 13, ...p }: Props) =>
+    wrap(
+        size,
+        <>
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+        </>,
+        p.className,
+        p.style,
+    );
 export const IconLayoutGrid = ({ size = 15, ...p }: Props) =>
     wrap(
         size,

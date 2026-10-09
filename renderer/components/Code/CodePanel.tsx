@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { CodeEditor } from '@particle-academy/fancy-code';
-import { Button, Table, Tabs } from '@particle-academy/react-fancy';
+import { Button } from '@particle-academy/react-fancy';
 import type { AgentSession } from '../../../main/agentsession/model';
-import { workspaceChanges } from '../../lib/workspace-changes';
+import { liveWrites, workspaceChanges } from '../../lib/workspace-changes';
 import { changedFilePaths, popFilePanel, sessionFileChanges } from '../../lib/workspace-file-panel';
 import { useResolvedTheme } from '../../lib/theme-boot';
 import FileTree from './FileTree';
@@ -23,9 +23,39 @@ import { showPrompt } from '../Master/Prompt';
 import { closeTab as closeTabState, openTab as openTabState, reconcileTabs } from '../../lib/editor-tabs';
 import { onOpenInPanel, resolveCursorLine, type RevealTarget } from '../../lib/editor-open';
 import PluginEditorBody from '../Plugins/PluginEditorBody';
+import { computeDiff } from '@particle-academy/fancy-file-commons';
+import { DiffViewer } from '@particle-academy/fancy-git-ui';
+import {
+    conflictPaths,
+    conflictPauses,
+    diskWriteMarks,
+    repoLockState,
+    scanConflicts,
+    type LockProbe,
+} from '../../lib/file-panel-states';
+import {
+    changeRows,
+    lockProbe,
+    LOCK_PROBE_MS,
+    LOCK_PROBE_PATHS,
+    openTabsForScan,
+    recordProbe,
+    type PanelTab,
+} from '../../lib/file-panel-signals';
+import { registerFilePanel } from '../../lib/file-panel-open';
+import {
+    ConflictBanner,
+    FilesHeader,
+    PanelChangesList,
+    RepoChip,
+    UnattributedBanner,
+    UncheckedNotice,
+} from './FilePanelStates';
 import {
     api,
+    currentConnKey,
     isSystemWorkspace,
+    SYSTEM_WORKSPACE_ID,
     type TerminalSpec,
     type GitStatusMap,
     type TreeNodeData,
@@ -175,6 +205,16 @@ export default function CodePanel({
         workspaceId: workspace?.id ?? spec.workspace_id ?? '',
     }), [sessions, workspace?.id, spec.workspace_id]);
     const changes = useMemo(() => sessionFileChanges(reportedChanges, diskChanges), [reportedChanges, diskChanges]);
+    /** Files with a write IN FLIGHT — a PENDING tool call, which is the only
+     *  thing that can honestly say "being written right now". It ends when the
+     *  call settles, so a pulse cannot outlive its write. */
+    const live = useMemo(
+        () => new Set(
+            liveWrites(sessions, { workspaceId: workspace?.id ?? spec.workspace_id ?? '' })
+                .map((write) => write.path),
+        ),
+        [sessions, workspace?.id, spec.workspace_id],
+    );
 
     // Multi-file tab model: the open tabs (in order), the active one, and a
     // per-file state map. Seeded from persisted meta on mount.
@@ -231,6 +271,255 @@ export default function CodePanel({
         for (const [p, st] of Object.entries(files)) if (st.dirty) s.add(p);
         return s;
     }, [files]);
+
+    // ── §5.3 · the collision, the stale lock, the unattributed write ────────
+    // The rules live in `file-panel-states.ts` and the joins in
+    // `file-panel-signals.ts`. What is here is the part only a mounted panel can
+    // do: the IPC, and when to do it.
+
+    /**
+     * The on-disk text of each DIRTY tab, as of the last look. `null` ⇒ nothing
+     * has been read yet, which is NOT an empty map: an empty map is a scan that
+     * found no dirty tab to read, and that is a measurement.
+     */
+    const [diskTexts, setDiskTexts] = useState<ReadonlyMap<string, string | null> | null>(null);
+    /** Which tabs are dirty, as a stable key — so the read below fires when the
+     *  SET changes and not on every keystroke inside one of them. */
+    const dirtyKey = useMemo(() => [...dirtyPaths].sort().join('|'), [dirtyPaths]);
+
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            const read = new Map<string, string | null>();
+            for (const [rel, st] of Object.entries(filesRef.current)) {
+                // Only a DIRTY TEXT tab has anything at risk: a clean tab reloads
+                // (`reconcileOpenTabs`), and a plugin tab's buffer is inside the
+                // plugin, which `openTabsForScan` counts instead of guessing at.
+                if (!st.dirty || st.kind === 'plugin') continue;
+                try {
+                    const { content } = await api().files.read(workspacePath, rel, system);
+                    read.set(rel, content);
+                } catch {
+                    // Could not read it. `null` says so, and `ConflictScan.unreadable`
+                    // counts it — the buffer is NOT reported as uncontested.
+                    read.set(rel, null);
+                }
+            }
+            if (alive) setDiskTexts(read);
+        })();
+        return () => { alive = false; };
+        // `diskChanges` is the file watcher: a write that could collide always
+        // arrives with one. `dirtyKey` catches the other direction — the user
+        // starting to type in a file an agent had already changed.
+    }, [diskChanges, dirtyKey, workspacePath, system]);
+
+    /**
+     * The scan itself, recomputed from the texts rather than re-read.
+     *
+     * A memo and not state: the buffer changes on every keystroke and the scan
+     * has to follow it (a collision appears and disappears as the user types),
+     * but re-reading disk per keystroke would be an IPC call per character.
+     * `scanConflicts` is pure and cheap, so the disk text is the only thing that
+     * needs an effect — and `changes` is a dependency rather than a ref read,
+     * so a write REPORTED after the read still gets its author onto the notice.
+     */
+    const conflicts = useMemo(() => {
+        if (diskTexts === null) return null;
+        const tabs: PanelTab[] = Object.entries(files).map(([path, st]) => ({
+            path,
+            content: st.content,
+            baseline: st.baseline,
+            dirty: st.dirty,
+            kind: st.kind,
+        }));
+        const assembled = openTabsForScan(tabs, diskTexts);
+        return {
+            scan: scanConflicts({ tabs: assembled.tabs, changes }),
+            opaque: assembled.opaque,
+        };
+    }, [diskTexts, files, changes]);
+    /** `null` ⇒ nobody has scanned, and `agentChangesView`'s own contract. Never
+     *  `[]` for an unscanned panel: that tells every row it is in the clear. */
+    const contested = useMemo(() => conflictPaths(conflicts?.scan ?? null), [conflicts]);
+    const pauses = useMemo(
+        () => (conflicts ? conflictPauses(conflicts.scan, sessions) : null),
+        [conflicts, sessions],
+    );
+
+    // A stale git lock. Probed, because nothing in Genie REPORTS one:
+    // `files.gitStatus` catches every failure and returns `{}`, so a locked repo
+    // is indistinguishable from a clean one there.
+    const [lockProbes, setLockProbes] = useState<LockProbe[]>([]);
+    const lock = useMemo(() => repoLockState(lockProbes), [lockProbes]);
+    // A REMOTE window cannot probe: `files.exist` is not bridged, so it would
+    // resolve the host's workspace path against THIS machine's disk — which for
+    // the same project cloned at the same path on both is a measurement of the
+    // wrong repo. The System workspace is not a repo at all.
+    const canProbeLock = !system && currentConnKey() === 'local';
+    const lookForLock = useCallback(async () => {
+        if (!canProbeLock) return;
+        try {
+            const found = await api().files.exist(workspacePath, [...LOCK_PROBE_PATHS]);
+            setLockProbes((probes) => recordProbe(probes, lockProbe(found, Date.now())));
+        } catch {
+            // The call itself failed: silence, which never resets the hold clock.
+            setLockProbes((probes) => recordProbe(probes, { at: Date.now(), present: null }));
+        }
+    }, [workspacePath, canProbeLock]);
+    // A run from another repo says nothing about this one.
+    useEffect(() => { setLockProbes([]); }, [workspacePath]);
+    useEffect(() => { void lookForLock(); }, [lookForLock, gitRefreshKey]);
+    const lockHeld = lock.kind === 'held' || lock.kind === 'stale';
+    useEffect(() => {
+        // Only while a lock is actually there. A stuck lock means git is stuck,
+        // so nothing else happens and no event would ever prompt the second look
+        // that tells a millisecond-long lock from a stuck one.
+        if (!lockHeld) return;
+        const timer = setInterval(() => void lookForLock(), LOCK_PROBE_MS);
+        return () => clearInterval(timer);
+    }, [lockHeld, lookForLock]);
+
+    /** The changes list, with the attribution the rule earned and the contested
+     *  files marked — `null` conflicts stay `null`, so an unscanned panel marks
+     *  nothing rather than showing every file as verified clear. */
+    const changeList = useMemo(
+        () => changeRows(changes, gitStatus, contested),
+        [changes, gitStatus, contested],
+    );
+
+    /** The OPEN file's collision, if the scan found one — what the status bar
+     *  reports. `undefined` covers both "no conflict" and "not scanned"; the
+     *  status bar makes no claim in either case. */
+    const activeConflict = useMemo(
+        () => conflicts?.scan.conflicts.find((conflict) => conflict.path === activeFile),
+        [conflicts, activeFile],
+    );
+
+    /** The OPEN file's attribution, by the same rule the tree and the list use.
+     *  `undefined` ⇒ this file has not changed at all, which is not the same as a
+     *  change nobody claimed — only the latter gets the blind-state banner. */
+    const activeMark = useMemo(
+        () => (activeFile ? diskWriteMarks(changes, gitStatus).find((mark) => mark.path === activeFile) : undefined),
+        [activeFile, changes, gitStatus],
+    );
+
+    /**
+     * TELL THE AGENT — §5.3's *"the agent pauses on the file"*, and the mockup's
+     * *"atlas has been told the file is in conflict and is paused on it."*
+     *
+     * Sent automatically, once per (file, agent), because that sentence is the
+     * board's design rather than a button's side effect. What is NOT automatic is
+     * the CLAIM: `cancel` only ASKS, so the banner reads `asking` until a cancel
+     * comes back honoured, and `unreachable` when there was no terminal to ask
+     * through. An agent still running while the banner says it stopped is the one
+     * failure here that costs somebody their code.
+     *
+     * `honoured` is pruned when a file stops colliding, so a SECOND collision on
+     * the same file cannot inherit the first one's answer.
+     */
+    const askedRef = useRef(new Set<string>());
+    const [honoured, setHonoured] = useState<ReadonlySet<string>>(new Set());
+    useEffect(() => {
+        if (!conflicts || !pauses) return;
+        const contestedNow = new Set(conflicts.scan.conflicts.map((conflict) => conflict.path));
+        for (const key of [...askedRef.current]) {
+            if (!contestedNow.has(key.split('|')[0]!)) askedRef.current.delete(key);
+        }
+        setHonoured((current) => {
+            const kept = [...current].filter((path) => contestedNow.has(path));
+            return kept.length === current.size ? current : new Set(kept);
+        });
+        for (const request of pauses.requests) {
+            const key = `${request.path}|${request.agentId}`;
+            if (askedRef.current.has(key)) continue;
+            askedRef.current.add(key);
+            void api()
+                .agentSession.cancel(request.specId)
+                .then((result) => {
+                    if (result.ok && result.honoured) {
+                        setHonoured((current) => new Set(current).add(request.path));
+                    }
+                })
+                .catch(() => {});
+        }
+    }, [conflicts, pauses]);
+
+    /** Compare: the file whose buffer is being shown against the version on
+     *  disk, through Fancy's `DiffViewer`. `null` ⇒ nobody is comparing. */
+    const [comparing, setComparing] = useState<string | null>(null);
+
+    /**
+     * KEEP MINE — write the buffer over the version on disk.
+     *
+     * Confirmed first, because it is the one action here that discards somebody
+     * else's work: the agent's hunk is on disk and this replaces it.
+     */
+    const keepMine = useCallback(async (rel: string) => {
+        const st = filesRef.current[rel];
+        if (!st) return;
+        const ok = await showPrompt({
+            title: 'Keep your version?',
+            body: `Writing your copy of "${baseName(rel)}" over the version on disk replaces the other write.`,
+            confirmLabel: 'Keep mine',
+            destructive: true,
+        });
+        if (ok === null) return;
+        try {
+            justWrote.current.set(rel, Date.now());
+            await api().files.write(workspacePath, rel, st.content, system);
+            setFiles((m) => (m[rel] ? { ...m, [rel]: { ...m[rel], dirty: false, baseline: st.content } } : m));
+            setGitRefreshKey((k) => k + 1);
+        } catch (e) {
+            setLoadError(e instanceof Error ? e.message : String(e));
+        }
+    }, [workspacePath, system]);
+
+    /** TAKE THEIRS — drop the unsaved edit and load what is on disk. Confirmed,
+     *  because this is the one path in the panel that discards the human's own
+     *  work, and the whole point of the notice above it is that nothing has. */
+    const takeTheirs = useCallback(async (rel: string) => {
+        const ok = await showPrompt({
+            title: 'Take the version on disk?',
+            body: `Your unsaved edits to "${baseName(rel)}" will be discarded.`,
+            confirmLabel: 'Take theirs',
+            destructive: true,
+        });
+        if (ok === null) return;
+        try {
+            const { content: text } = await api().files.read(workspacePath, rel, system);
+            setFiles((m) => (m[rel]
+                ? { ...m, [rel]: { ...m[rel], content: text, baseline: text, dirty: false, rev: (m[rel].rev ?? 0) + 1 } }
+                : m));
+        } catch (e) {
+            setLoadError(e instanceof Error ? e.message : String(e));
+        }
+    }, [workspacePath, system]);
+
+    /**
+     * REMOVE STALE LOCK — delete `.git/index.lock`.
+     *
+     * `repoLockNotice`'s own fix, carried out. Offered only for a lock measured
+     * stale (`RepoChip` enforces that), and confirmed anyway: the measurement is
+     * "still there ten seconds later", which is strong evidence and not proof
+     * that no git command is running.
+     */
+    const removeLock = useCallback(async () => {
+        if (lock.kind !== 'stale') return;
+        const ok = await showPrompt({
+            title: 'Remove the stale git lock?',
+            body: `${lock.fix} Deleting it while git IS running can corrupt the index.`,
+            confirmLabel: 'Remove lock',
+            destructive: true,
+        });
+        if (ok === null) return;
+        try {
+            await api().files.delete(workspacePath, lock.lockPath, system);
+            setLockProbes([]);
+            await lookForLock();
+        } catch (e) {
+            setLoadError(e instanceof Error ? e.message : String(e));
+        }
+    }, [lock, workspacePath, system, lookForLock]);
 
     /** Persist a patch into the spec's meta (merging over current meta). */
     const persistMeta = useCallback(
@@ -474,6 +763,22 @@ export default function CodePanel({
             return opened;
         });
     }, [spec.id, openTab]);
+
+    /**
+     * Announce this panel as the one holding `workspaceId`'s files, so anything
+     * in the renderer can open a file BY PATH in it (`openFileInPanel`).
+     *
+     * Declared AFTER the subscription above on purpose: registering drains a
+     * request queued while no panel was open, and the bus it delivers through is
+     * the one that effect subscribes to. Effects run in order, so a queued file
+     * lands in a listener that already exists.
+     */
+    const panelWorkspaceId =
+        workspace?.id ?? spec.workspace_id ?? (spec.meta?.system ? SYSTEM_WORKSPACE_ID : null);
+    useEffect(() => {
+        if (!panelWorkspaceId) return;
+        return registerFilePanel({ specId: spec.id, workspaceId: panelWorkspaceId });
+    }, [spec.id, panelWorkspaceId]);
 
     // Seed the editor from persisted open tabs once the panel mounts. Falls
     // back to the legacy single `file_path`. Tabs whose file no longer exists
@@ -804,6 +1109,15 @@ export default function CodePanel({
                         {workspace.project_name} · {workspace.backend}
                     </span>
                 ) : null}
+                {/* The repo chip CARRIES the lock — red, named, with the fix beside
+                    it, and only for a lock measured stale. `repoLockNotice` decides
+                    that; a repo Genie could not look at draws neither, rather than
+                    reporting a clean one it never read. */}
+                <RepoChip
+                    name={workspace?.project_name ?? spec.label}
+                    state={lock}
+                    onRemoveLock={() => void removeLock()}
+                />
                 <span className="grow" />
                 <span className="pa">
                     {onPopOut && !anyDirty && (
@@ -881,7 +1195,9 @@ export default function CodePanel({
                             key={p}
                             role="tab"
                             aria-selected={p === activeFile}
-                            className={`code-tab${p === activeFile ? ' active' : ''}`}
+                            className={`code-tab${p === activeFile ? ' active' : ''}${
+                                contested?.includes(p) ? ' is-conflict' : ''
+                            }`}
                             title={p}
                             onMouseDown={() => activateTab(p)}
                         >
@@ -905,15 +1221,17 @@ export default function CodePanel({
                     ))}
                 </div>
             )}
+            {/* The mockup's panel header: the label, the segmented filter with its
+                COUNT, and the one-per-workspace hint. The pop-out and close controls
+                stay in the panel head above rather than being drawn twice. */}
+            <FilesHeader
+                filter={fileFilter}
+                onFilterChange={setFileFilter}
+                changedCount={changedFilePaths(changes, gitStatus).size}
+            />
             <div className={`code-host${treeVisible ? '' : ' tree-hidden'}`}>
                 {treeVisible && (
                     <div className="code-tree">
-                        <Tabs activeTab={fileFilter} onTabChange={setFileFilter}>
-                            <Tabs.List>
-                                <Tabs.Tab value="all">All</Tabs.Tab>
-                                <Tabs.Tab value="changed">{`Changed (${changedFilePaths(changes, gitStatus).size})`}</Tabs.Tab>
-                            </Tabs.List>
-                        </Tabs>
                         <FileTree
                             nodes={nodes}
                             selectedId={activeFile ?? undefined}
@@ -932,26 +1250,47 @@ export default function CodePanel({
                             gitRefreshKey={gitRefreshKey}
                             gitStatus={gitStatus}
                             changes={changes}
+                            live={live}
                             changedOnly={fileFilter === 'changed'}
                         />
                         <div className="code-session-changes">
                             <h3>Changes this session</h3>
-                            {changes.length === 0 && <p>No changes reported this session.</p>}
-                            <Table aria-label="Changes this session">
-                                <Table.Body>
-                                    {changes.map((change) => (
-                                        <Table.Row key={change.path} className="code-session-change">
-                                            <Table.Cell>{change.at > 0 && <time dateTime={new Date(change.at).toISOString()}>{new Date(change.at).toLocaleTimeString()}</time>}</Table.Cell>
-                                            <Table.Cell><Button size="sm" variant="ghost" onClick={() => void selectFile(change.path)}>{change.path}</Button></Table.Cell>
-                                            <Table.Cell><span title={change.who ?? 'On disk · not attributed'}>{change.who ?? '?'}</span></Table.Cell>
-                                        </Table.Row>
-                                    ))}
-                                </Table.Body>
-                            </Table>
+                            {changeList.length === 0 && <p>No changes reported this session.</p>}
+                            {/* Every label and tone comes from `diskWriteMarks` through
+                                `changeRows`. This list used to compute `who ?? '?'` at
+                                the point of render — the same answer by luck rather
+                                than by the rule — and it could not show a file GIT
+                                reported that no agent mentioned, because it iterated
+                                the reported changes only. */}
+                            <PanelChangesList rows={changeList} onOpen={(path) => void selectFile(path)} />
                         </div>
                     </div>
                 )}
                 <div className="code-editor-col">
+                    {/* The collision, above the code it is about — a banner, not a
+                        modal. Nothing here writes: the buffer was already safe (a
+                        dirty tab is never reloaded), and what was missing is anyone
+                        SAYING SO. */}
+                    <ConflictBanner
+                        scan={conflicts?.scan ?? null}
+                        pauses={pauses}
+                        honoured={honoured}
+                        onCompare={(path) => setComparing((current) => (current === path ? null : path))}
+                        onKeepMine={(path) => void keepMine(path)}
+                        onTakeTheirs={(path) => void takeTheirs(path)}
+                    />
+                    {/* And what the scan could NOT look at, which is a different
+                        sentence and the one that would otherwise be silence. */}
+                    {conflicts && <UncheckedNotice scan={conflicts.scan} opaque={conflicts.opaque} />}
+                    {/* A write on the OPEN file that no agent reported. Neutral, not
+                        red: Genie cannot see who wrote it, which is not an error. */}
+                    {activeMark && activeMark.tone === 'neutral' && (
+                        <UnattributedBanner
+                            path={activeMark.path}
+                            at={diskChanges[activeMark.path] ?? 0}
+                            onShowDiff={(path) => setComparing((current) => (current === path ? null : path))}
+                        />
+                    )}
                     {/* Plugin tabs stay MOUNTED while other tabs are active —
                         their editor model (unsaved edits included) lives inside
                         the body, so unmounting on a tab switch would discard it. */}
@@ -981,7 +1320,24 @@ export default function CodePanel({
                                 />
                             </div>
                         ))}
-                    {activeFile && active && active.kind !== 'plugin' ? (
+                    {/* COMPARE — the buffer against the version on disk, through
+                        Fancy's own `DiffViewer` (fancy-git-ui) over `computeDiff`.
+                        A real comparison rather than a recoloured gutter, and the
+                        texts are the two this panel already holds. */}
+                    {activeFile && comparing === activeFile && active && active.kind !== 'plugin' ? (
+                        <div className="code-compare">
+                            <span className="code-compare-head">
+                                {`Your version against the one on disk · ${baseName(activeFile)}`}
+                                <Button size="sm" variant="ghost" onClick={() => setComparing(null)}>
+                                    Back to editing
+                                </Button>
+                            </span>
+                            <DiffViewer
+                                mode="split"
+                                value={[computeDiff(diskTexts?.get(activeFile) ?? active.baseline ?? '', active.content)]}
+                            />
+                        </div>
+                    ) : activeFile && active && active.kind !== 'plugin' ? (
                         <CodeEditor
                             // rev in the key: an external change re-reads the file
                             // and bumps rev, remounting with the fresh disk content.
@@ -1012,7 +1368,19 @@ export default function CodePanel({
                             }}
                         >
                             <CodeEditor.Panel className="cv-panel" />
-                            <CodeEditor.StatusBar />
+                            {/* The mockup's `conflict · 1 hunk`. Only for a file the
+                                scan actually found contested — the default status bar
+                                stands everywhere else, including for a file nobody has
+                                scanned yet. */}
+                            {activeConflict ? (
+                                <CodeEditor.StatusBar className="code-status-conflict">
+                                    {`conflict · ${activeConflict.lines.length} ${
+                                        activeConflict.lines.length === 1 ? 'hunk' : 'hunks'
+                                    }`}
+                                </CodeEditor.StatusBar>
+                            ) : (
+                                <CodeEditor.StatusBar />
+                            )}
                             <EditorWand />
                             <WordWrapSync wrap={wordWrap} />
                         </CodeEditor>

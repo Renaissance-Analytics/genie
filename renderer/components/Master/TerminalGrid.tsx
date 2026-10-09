@@ -16,6 +16,7 @@ import EmptyWorkspace from './EmptyWorkspace';
 import type { AgentRecordSpec, AgentRuntimeSpec } from '../../lib/ams-grid';
 import type { RestartMode } from '../../../main/agents/restart-options';
 import CodePanel from '../Code/CodePanel';
+import WorkspaceFilePanel from '../Code/WorkspaceFilePanel';
 import { Button } from '@particle-academy/react-fancy';
 import type { AgentSession } from '../../../main/agentsession/model';
 import PluginEditorHost from '../Plugins/PluginEditorHost';
@@ -851,40 +852,23 @@ function PanelFor({
         : undefined;
 
     const codeWorkspaceId = spec.workspace_id ?? (spec.meta?.system ? SYSTEM_WORKSPACE_ID : null);
-    const [codeOwned, setCodeOwned] = useState<boolean | null>(null);
-    useEffect(() => {
-        if (spec.type !== 'code' || !codeWorkspaceId || currentConnKey() !== 'local') return;
-        if (popped) { setCodeOwned(false); return; }
-        let alive = true;
-        const claim = () => void api().files.claimPanel(spec.id).then((owned) => {
-            if (alive) setCodeOwned(owned);
-        }).catch(() => { if (alive) setCodeOwned(false); });
-        const off = api().on.filePanelWindowsChanged(claim);
-        claim();
-        return () => {
-            alive = false;
-            off();
-            void api().files.releasePanel(codeWorkspaceId);
-        };
-    }, [spec.id, spec.type, codeWorkspaceId, popped]);
 
     if (spec.type === 'code') {
-        const workspaceId = codeWorkspaceId;
-        if (typeof window !== 'undefined' && workspaceId && currentConnKey() === 'local' && (popped || codeOwned !== true)) return (
-            <section className="tpanel code-panel code-popped" style={style}>
-                <span>{codeOwned === null && !popped ? 'Opening workspace files…' : 'Workspace files · open in another window'}</span>
-                {codeOwned !== null && <Button size="sm" variant="ghost" onClick={() => void api().files.focusPanel(workspaceId)}>Focus window</Button>}
-                {popped && <Button size="sm" variant="ghost" onClick={() => void api().files.bringBackPanel(workspaceId)}>Bring back</Button>}
-                <Button size="sm" variant="ghost" onClick={onClose}>Close panel</Button>
-            </section>
-        );
+        /**
+         * ONE component decides whether this slot shows the panel or a stand-in.
+         *
+         * That choice used to be the inline `popped || codeOwned !== true` in this branch, which
+         * answered two different questions with one boolean — "is it in another window" and
+         * "did we fail to claim it" — and so could not tell "bring it back" from "focus it",
+         * nor notice a SECOND popped window for the same workspace.
+         *
+         * `filePanelSlot` and `singlePoppedPanel` own those rules now and are tested, with
+         * break probes on both: offering Bring back for a window this workspace did not pop,
+         * and silently taking the first of a duplicate pair.
+         */
         return (
-            <CodePanel
+            <WorkspaceFilePanel
                 sessions={sessions}
-                onPopOut={workspaceId && currentConnKey() === 'local' ? async () => {
-                    const result = await api().files.popPanel(spec.id);
-                    if (!result.ok) throw new Error(result.error ?? 'Could not open the file panel window.');
-                } : undefined}
                 spec={spec}
                 workspace={workspace}
                 focused={focused}

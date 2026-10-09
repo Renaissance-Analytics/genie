@@ -4388,6 +4388,15 @@ export interface GenieApi {
         releasePanel: (workspaceId: string) => Promise<void>;
         popPanel: (specId: string) => Promise<{ ok: boolean; error?: string }>;
         poppedPanels: () => Promise<Array<{ workspaceId: string; specId: string }>>;
+        /** Open a file in the window that OWNS this workspace's panel — popped out, or another
+         *  master window. `false` ⇒ no window owns one, which is the answer `openFileInPanel`
+         *  needs to try its next route rather than reporting a file it never opened. */
+        openInPanelWindow: (req: {
+            workspaceId: string;
+            root: string;
+            relPath: string;
+            line?: number;
+        }) => Promise<boolean>;
         focusPanel: (workspaceId: string) => Promise<void>;
         bringBackPanel: (workspaceId: string) => Promise<void>;
         listTree: (
