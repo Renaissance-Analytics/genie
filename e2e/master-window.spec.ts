@@ -1568,13 +1568,14 @@ ${JSON.stringify({ before, after }, null, 2)}`)
  * looked at, which is why it needed a new assertion rather than a better one.
  */
 test('docking the lists panel reserves the gutter on the DECK, not just the Floor', async () => {
-    // The Deck is "no view param" in both directions (`viewRouteQuery`), and `usePageQuery`
+    // The Deck is NAMED now -- the Dashboard took the no-params default, so reaching the
+    // Deck by deleting `view` would land on the wrong surface. `usePageQuery`
     // listens for Genie's own event because `replaceState` notifies nobody — the same
     // navigation the signal-strip test uses.
     const toDeck = async () => {
         await page.evaluate(() => {
             const url = new URL(window.location.href);
-            url.searchParams.delete('view');
+            url.searchParams.set('view', 'deck');
             window.history.replaceState(null, '', `${url.pathname}${url.search}`);
             window.dispatchEvent(new Event('genie:pagequery'));
         });
@@ -2000,11 +2001,11 @@ test('the Deck shows a running Flow as a signal, and clears it when the run ends
     await setFlowsRunning([]);
     // NAVIGATE the way the app itself does. `usePageQuery` listens for `popstate` AND for Genie's
     // own `genie:pagequery` event, because `history.replaceState` notifies nobody — so a test that
-    // only rewrote the url would change nothing on screen. Dropping `view` entirely is the Deck:
-    // no params and the Deck are the same thing in both directions (`viewRouteQuery`).
+    // only rewrote the url would change nothing on screen. The Deck is asked for BY NAME: the
+    // Dashboard took the no-params default, so deleting `view` now lands on the wrong surface.
     await page.evaluate(() => {
         const url = new URL(window.location.href);
-        url.searchParams.delete('view');
+        url.searchParams.set('view', 'deck');
         window.history.replaceState(null, '', `${url.pathname}${url.search}`);
         window.dispatchEvent(new Event('genie:pagequery'));
     });
