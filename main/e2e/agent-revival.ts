@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { deferEvaluation } from './defer-evaluation';
-import { addWorkspace, deleteTerminalSpec, removeWorkspace, getTerminalSpec } from '../db';
+import { addWorkspace, deleteTerminalSpec, removeWorkspace, getTerminalSpec, setSettings } from '../db';
 import { createAgentTerminal, isTerminalLive, killTerminalById, terminalHasWindow } from '../terminal/ipc';
 
 const workspaceId = 'e2e-agent-revival';
@@ -42,6 +42,14 @@ beat(); setInterval(beat, 100);
         },
     };
     (globalThis as Record<string, unknown>).__GENIE_E2E_AGENT_REVIVAL__ = {
+        /**
+         * Turn launch-revival ON for this fixture.
+         *
+         * It defaults to OFF — the owner's reboot ruling — so a spec about whether revival
+         * WORKS has to ask for it. The default itself is asserted by a spec that never calls
+         * this, which is what keeps the two claims from collapsing into one.
+         */
+        optIn: () => deferEvaluation(() => setSettings({ restore_agents_on_launch: 'on' })),
         start: () => deferEvaluation(() => fixture.start()),
         state: () => deferEvaluation(() => fixture.state()),
         cleanup: () => deferEvaluation(() => fixture.cleanup()),
