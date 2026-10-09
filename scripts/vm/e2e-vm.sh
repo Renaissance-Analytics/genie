@@ -17,12 +17,16 @@
 #   e2e/agent-access.spec.ts:77   same shape
 #   e2e/workspace-hibernation.spec.ts:80, :147   15s / 1m timeouts
 #
-# They fail in isolation too, so it is NOT contention from running the full suite. Ten
-# workspaces where the fixture seeds one points at state this VM keeps and a fresh CI runner
-# never has — `seedWorkspace` replaces its OWN id, but specs that CREATE workspaces leave
-# them behind. The `rm -rf` below fixed the same class for `genie-apps`; this one is not yet
-# located, and I would rather say so than let the next person read four red specs as a
-# regression in their branch.
+# They fail in isolation too, so it is NOT contention from running the full suite.
+#
+# My first guess was leftover state, like the `genie-apps` one below. MEASURED AND WRONG:
+# `find / -name genie.db` across the VM returns nothing on its Linux filesystem — only
+# copies under /mnt/c, which is Windows. The E2E profile does not survive a run, so nothing
+# accumulates. The `agent-access` harness seeds 2 workspaces and the spec expects 1 row; it
+# sees 10. That is not a leftover database.
+#
+# So the cause is UNKNOWN. Recording the disproved hypothesis too, because the next person
+# will have the same idea and can skip it.
 #
 # So: a red here is a QUESTION, not a verdict. Check CI before believing it, and check these
 # four first. Everything else in the suite has matched CI.
