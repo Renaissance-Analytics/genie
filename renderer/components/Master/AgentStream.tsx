@@ -1,7 +1,10 @@
 import { Icon, Text } from '@particle-academy/react-fancy';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentSession, ToolCall } from '../../../main/agentsession/model';
 import { agentStream, EVENT_KIND_ICON, type StreamRow } from '../../lib/agent-stream';
+import { agentLanes, rowsInLaneRange, type LaneSpan } from '../../lib/agent-lanes';
+import { nextEditId, rowsMatchingFind } from '../../lib/stream-nav';
+import { AgentLanes } from './AgentLanes';
 import { ToolInspector } from './ToolInspector';
 
 /**
@@ -91,12 +94,60 @@ function Row({
 export function AgentStream({
     session,
     now = Date.now(),
+    lanesOpen = false,
+    range = null,
+    onRange,
+    findOpen = false,
+    onFindClose,
+    jumpToNextEdit,
 }: {
     session: AgentSession;
     now?: number;
+    /** The Lanes pulldown (`L`). Closed by default — it is an instrument, not chrome. */
+    lanesOpen?: boolean;
+    /** The dragged window, kept in the URL so a refresh and a shared link agree. */
+    range?: LaneSpan | null;
+    onRange?: (range: LaneSpan | null) => void;
+    /** `/` — the find box is open. Its TEXT is local; only whether it is open comes from above. */
+    findOpen?: boolean;
+    onFindClose?: () => void;
+    /**
+     * `E` — bumped to jump to the next edit.
+     *
+     * A NONCE rather than a boolean or a callback: the same key pressed twice must move twice,
+     * and a boolean cannot express "again". The first value is ignored, or mounting the view
+     * would jump before anyone pressed anything.
+     */
+    jumpToNextEdit?: number;
 }): React.JSX.Element {
-    const rows = agentStream(session, { now });
+    const allRows = agentStream(session, { now });
+    // Lanes are built from the WHOLE stream, never the filtered one: a strip that redrew
+    // itself from its own selection would shrink to the range on every drag, and the next
+    // drag would be against a different timeline than the one just released.
+    const lanes = agentLanes(allRows);
+    const inRange = rowsInLaneRange(allRows, range);
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [find, setFind] = useState('');
+    // The find text only filters while the box is OPEN. Closing it restores the stream
+    // without discarding what was typed, so reopening resumes rather than starting over.
+    const rows = rowsMatchingFind(inRange, findOpen ? find : '');
+
+    /**
+     * `E` — select the next edit.
+     *
+     * Against `allRows`, not the filtered view: jumping should reach the next edit in the
+     * TURN, and silently refusing to leave the current range or search would make the key
+     * look broken for a reason nothing on screen explains.
+     */
+    const lastJump = useRef<number | undefined>(jumpToNextEdit);
+    useEffect(() => {
+        if (jumpToNextEdit === undefined || jumpToNextEdit === lastJump.current) return;
+        lastJump.current = jumpToNextEdit;
+        setSelectedId((current) => nextEditId(allRows, current) ?? current);
+        // `allRows` is intentionally not a dependency: this fires on the NONCE, and
+        // re-running it as the stream grows would hijack the selection mid-turn.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [jumpToNextEdit]);
 
     /**
      * The selected call, looked up FRESH each render rather than stored.
@@ -108,9 +159,10 @@ export function AgentStream({
     const byRowId = new Map<string, ToolCall>(session.tools.map((c) => [`tool:${c.id}`, c]));
     const selected: ToolCall | null = (selectedId && byRowId.get(selectedId)) || null;
 
-    if (rows.length === 0) {
+    if (allRows.length === 0) {
         // The board's empty state is a SENTENCE, not a blank panel: a new agent has said
-        // nothing, which is a fact rather than a fault.
+        // nothing, which is a fact rather than a fault. Checked against the UNFILTERED rows:
+        // an empty RANGE is a different situation with a different remedy, handled below.
         return (
             <div className="agent-stream">
                 <Text size="sm">Nothing yet. The persona and provider are known before the first turn.</Text>
@@ -120,7 +172,52 @@ export function AgentStream({
 
     return (
         <div className="agent-stream-wrap">
+            {lanesOpen ? (
+                <AgentLanes view={lanes} range={range} onRange={onRange ?? (() => {})} />
+            ) : null}
+            {findOpen ? (
+                <div className="stream-find">
+                    <input
+                        className="stream-find-input"
+                        autoFocus
+                        value={find}
+                        placeholder="Find in stream"
+                        onChange={(e) => setFind(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                            // Escape closes the box rather than clearing it: the text is kept
+                            // so reopening resumes, and a key that destroys what you typed is
+                            // the one people stop trusting.
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                onFindClose?.();
+                            }
+                        }}
+                    />
+                    {/* A COUNT, not a highlight: the stream is one line per row, so saying how
+                        many matched is more useful than tinting text that is already terse. */}
+                    <Text size="xs">
+                        {find.trim() ? `${rows.filter((r) => r.type !== 'divider').length} matching` : ''}
+                    </Text>
+                    <button type="button" className="lanes-clear" onClick={() => onFindClose?.()}>
+                        Close
+                    </button>
+                </div>
+            ) : null}
             <div className="agent-stream">
+                {rows.length === 0 ? (
+                    // A range that admits nothing is not an empty agent, and saying so is the
+                    // difference between "your filter is tight" and "your transcript is gone".
+                    // The way out is offered here rather than only on the strip, because this
+                    // is where someone is looking when it happens.
+                    <div className="stream-empty-range">
+                        <Text size="sm">Nothing in the selected range.</Text>
+                        {onRange ? (
+                            <button type="button" className="lanes-clear" onClick={() => onRange(null)}>
+                                Show the whole turn
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
                 {rows.map((row) => {
                     const call = byRowId.get(row.id);
                     return (

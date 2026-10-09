@@ -1613,11 +1613,13 @@ const api = {
          * replaced with something generic.
          */
         openWindow: (req: {
-            kind: 'terminal' | 'agent';
+            /** `existing` takes over a spec that already runs; it creates nothing. */
+            kind: 'terminal' | 'agent' | 'existing';
             workspaceId: string;
             cwd?: string;
             agent?: string;
             command?: string;
+            specId?: string;
         }) => ipcRenderer.invoke('terminal:open-window', req) as Promise<{ ok: boolean; error?: string }>,
         // Agent-integration MCP: clear a terminal's attention glow (imDone)
         // when the user focuses it. Broadcasts to every window so the rail,

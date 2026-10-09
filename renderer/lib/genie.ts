@@ -4628,11 +4628,19 @@ export interface GenieApi {
          * agent X" is the only thing that tells someone what to fix.
          */
         openWindow: (req: {
-            kind: 'terminal' | 'agent';
+            /**
+             * `existing` is TAKE OVER: a window onto a spec that is already running, which
+             * creates nothing. The other two create. That distinction is the difference
+             * between reaching the agent you meant and starting a second one beside it, so
+             * it is a kind rather than a flag.
+             */
+            kind: 'terminal' | 'agent' | 'existing';
             workspaceId: string;
             cwd?: string;
             agent?: string;
             command?: string;
+            /** Required for `existing`, meaningless otherwise. */
+            specId?: string;
         }) => Promise<{ ok: boolean; error?: string }>;
     };
     /** Agent-integration MCP: the ForceTheQuestion OS-level modal. */

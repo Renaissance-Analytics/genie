@@ -8172,65 +8172,6 @@ body.gutter-dragging .grid-gutter {
     margin-bottom: 8px;
 }
 
-/* One row per agent. A FIXED grid rather than flex: every column means the same
-   thing on every row, which is the only way a dense display stays readable — and
-   the cost and context columns are frequently EMPTY on purpose (the session
-   cannot see them), so they must still hold their place instead of letting the
-   row reflow and move the name under somebody's cursor. */
-.deck-row {
-    display: grid;
-    grid-template-columns: 7.5rem minmax(6rem, 1fr) minmax(8rem, 1.5fr) 3.5rem 9rem 4.5rem auto;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 4px;
-    border-bottom: 1px solid var(--border-1, #26262e);
-}
-
-.deck-row:last-child {
-    border-bottom: none;
-}
-
-.deck-row-name {
-    font-weight: 600;
-}
-
-.deck-row-provider,
-.deck-row-since,
-.deck-row-cost {
-    color: var(--fg-3);
-}
-
-.deck-row-since,
-.deck-row-cost {
-    text-align: right;
-    /* Tabular figures so a column of durations and prices lines up rather than
-       jittering as digit widths change. */
-    font-variant-numeric: tabular-nums;
-}
-
-.deck-row-ctx {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-variant-numeric: tabular-nums;
-}
-
-/* A stalled agent is the one state the product could not see before, so the row
-   carries it rather than relying on the badge alone being noticed. */
-.deck-row[data-state='stalled'] {
-    /* Literal rgba, matching this file's existing convention for a state tint
-       (see the amber attention rules around line 1360) rather than inventing
-       palette tokens. The palette lives in globals.css with light AND dark
-       variants, so a new colour token there is a change to the shared theme — too
-       much blast radius for two row tints, and `theme-tokens.test.ts` rightly
-       fails a `var(--x)` nothing defines. */
-    background: rgba(220, 38, 38, 0.09);
-}
-
-.deck-row[data-state='awaiting-you'] {
-    background: rgba(251, 191, 36, 0.08);
-}
-
 .deck-empty {
     display: flex;
     flex-direction: column;
@@ -8700,6 +8641,53 @@ body.gutter-dragging .grid-gutter {
     align-items: center;
     padding: 0 20px 0 28px;
     border-bottom: 1px solid var(--border-1);
+}
+
+/* A ROW THAT OPENS SOMETHING IS A BUTTON.
+   It carries the same grid as the div form, so the columns cannot drift between a wired and
+   an unwired row, and it resets the chrome a <button> arrives with — background, border,
+   font and centred text would all break the table. Same treatment as `button.stream-event`,
+   which is the established pattern for an activatable row here. */
+button.dash-row {
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-1);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+button.dash-row:hover {
+    background: var(--bg-1);
+}
+button.dash-row:focus-visible {
+    /* Inset, so focusing a row never changes its box and shifts its neighbours. */
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* The way into a workspace with no agents. Quiet by default — the empty row is a statement
+   of fact first and an invitation second. */
+.dash-add-agent {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 10px;
+    margin-left: 12px;
+    cursor: pointer;
+}
+.dash-add-agent:hover {
+    background: var(--bg-1);
+}
+.dash-add-agent:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
 }
 
 .dash-col-head {
@@ -9214,6 +9202,532 @@ body.gutter-dragging .grid-gutter {
     flex-direction: column;
     min-height: 0;
     height: 100%;
+}
+
+/* ===== Agent · Activity tab (the OBSERVED agent's honest account) ======== */
+
+.agent-activity {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.activity-rows {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+.activity-empty {
+    padding: 12px 14px;
+    color: var(--fg-3);
+}
+
+/* One line each, like the stream's events: a surface that exists because Genie can only
+   MEASURE must not pretend to the depth of one that can read. */
+.activity-row {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 4px;
+    white-space: nowrap;
+}
+
+/* A row with a tool call behind it is a BUTTON, so it resets the browser's chrome — the
+   same treatment `button.stream-event` and `button.dash-row` get, and necessary for the
+   same reason: background, border, font and centred text would all break the grid. */
+button.activity-row {
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+button.activity-row:hover {
+    background: var(--bg-1);
+}
+button.activity-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* Loudness, from the row's own level. Red is for a row that FAILED; pending is in flight. */
+.activity-row[data-level='bad'] .activity-main {
+    color: rgba(220, 38, 38, 0.95);
+}
+.activity-row[data-level='pending'] .activity-main {
+    color: var(--fg-3);
+}
+.activity-row[data-live] .activity-main {
+    color: var(--violet-400);
+}
+
+.activity-time {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.activity-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.activity-meta {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
+/* WHAT GENIE CANNOT SEE, named per source. This panel is the point of the tab: an empty
+   list above it is not "the agent did nothing", and this says which channels were dark. */
+.activity-sources {
+    flex: none;
+    border-top: 1px solid var(--border-1);
+    padding: 8px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+}
+
+.activity-source {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.activity-source-label {
+    color: var(--fg-2);
+}
+
+.activity-source-count {
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A source Genie CANNOT measure for this agent. Dimmed and italicised rather than hidden:
+   an omitted source is indistinguishable from a source with nothing in it, and the whole
+   point of this panel is that the difference is visible. */
+.activity-source[data-blind] .activity-source-label {
+    color: var(--fg-3);
+}
+
+.activity-blind {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--fg-3);
+}
+
+.activity-blind-label {
+    color: var(--fg-2);
+}
+
+.activity-blind-reason {
+    font-style: italic;
+}
+
+/* ===== Agent · Changes tab ============================================== */
+
+.agent-changes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+.changes-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.changes-added {
+    color: rgba(16, 185, 129, 0.95);
+}
+
+.changes-removed {
+    color: rgba(220, 38, 38, 0.9);
+}
+
+/* Files whose line counts Genie does not have. Counted and SAID, rather than folded into
+   the totals as zeroes — a zero in a diff column is a claim. */
+.changes-uncounted {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
+.changes-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.changes-group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.changes-who {
+    font-weight: 600;
+}
+
+/* The open agent's own group leads, and is marked so it reads as "yours" among siblings. */
+.changes-group[data-self] .changes-who {
+    color: var(--violet-400);
+}
+
+/* Known-true collision only. The attribute is ABSENT when Genie was never told, so an
+   unknown never gets painted as a clean file — or as a conflicted one. */
+.changes-row[data-conflicted] {
+    background: rgba(251, 191, 36, 0.1);
+}
+
+.changes-group-count {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.changes-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 3px 6px;
+}
+button.changes-row {
+    cursor: pointer;
+}
+button.changes-row:hover {
+    background: var(--bg-1);
+}
+button.changes-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+.changes-file {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.changes-file-dir {
+    color: var(--fg-3);
+}
+
+.changes-file-name {
+    color: inherit;
+}
+
+/* The board: "Your unsaved edit and an agent's hunk hit the same lines. Nothing is
+   discarded and the agent pauses on the file." Amber, not red — nothing is lost. */
+.changes-collisions {
+    border: 1px solid rgba(251, 191, 36, 0.5);
+    background: rgba(251, 191, 36, 0.08);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.changes-conflict {
+    font-size: 11px;
+}
+
+/* ===== Agent · Files tab (§5.3, filtered to one agent) =================== */
+
+.agent-files {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+/* Carries BOTH "cannot see this workspace" and "changed nothing". They are different
+   sentences from `agentFilesView`, and the component picks which — the style is shared
+   because the shape is, not because the statements are. */
+.agent-files-empty {
+    padding: 12px 4px;
+    color: var(--fg-3);
+}
+
+.agent-files-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-files-dir {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A row is a BUTTON when it opens something and an inert div when it does not — the same
+   idiom as the stream and the dashboard, and the whole reason this release exists. */
+.agent-files-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 3px 6px;
+}
+button.agent-files-row {
+    cursor: pointer;
+}
+button.agent-files-row:hover {
+    background: var(--bg-1);
+}
+button.agent-files-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* The newest write on this file was nobody's claim. Greyed WHOLE, so the row reads as
+   unattributed rather than as this agent's with a caveat. */
+.agent-files-row[data-disk] {
+    color: var(--fg-3);
+}
+
+.agent-files-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The board's neutral mark: "Genie does not guess the author." */
+.agent-files-unclaimed {
+    color: var(--fg-3);
+}
+
+.agent-files-since,
+.agent-files-age {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.agent-files-others {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-1);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-files-other {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 8px;
+}
+button.agent-files-other {
+    cursor: pointer;
+}
+button.agent-files-other:hover {
+    background: var(--bg-1);
+}
+button.agent-files-other:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
+}
+
+.agent-files-unattributed {
+    font-size: 11px;
+    color: var(--fg-3);
+}
+
+/* ===== Lanes (§5.2's pulldown) =========================================== */
+
+/* Four tracks over the turn, above the stream. FLEX NONE: the lanes must not take height
+   from the stream as ticks accumulate, or opening them would shrink the transcript you
+   opened them to read. */
+.lanes {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.lanes-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.lanes-unplaceable {
+    color: var(--fg-3);
+}
+
+.lanes-clear {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 8px;
+    cursor: pointer;
+}
+.lanes-clear:hover {
+    background: var(--bg-1);
+}
+.lanes-clear:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
+}
+
+/* The drag surface. `position: relative` anchors both the ticks and the selection band,
+   and `touch-action: none` keeps a pointer drag from being stolen by scroll gestures —
+   without it the selection breaks on a trackpad exactly when it is most useful. */
+.lanes-strip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+}
+
+.lanes-lane {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr;
+    align-items: center;
+    gap: 8px;
+}
+
+.lanes-label {
+    color: var(--fg-3);
+}
+
+.lanes-track {
+    position: relative;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--bg-1);
+}
+
+/* Centred on its time with translateX rather than offset by half its width in JS: the
+   maths stays in `laneOffset`, which is tested, and the pixel correction stays in CSS. */
+.lanes-tick {
+    position: absolute;
+    top: 2px;
+    width: 3px;
+    height: 6px;
+    border-radius: 1px;
+    transform: translateX(-50%);
+    background: var(--fg-3);
+}
+.lanes-tick[data-level='bad'] {
+    background: rgba(220, 38, 38, 0.9);
+}
+.lanes-tick[data-level='attention'] {
+    background: rgba(251, 191, 36, 0.95);
+}
+.lanes-tick[data-live] {
+    background: var(--violet-400);
+}
+
+/* Behind the ticks, never over them: a selection that dimmed what it selected would hide
+   the thing you are aiming at. */
+.lanes-selection {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 0;
+    background: rgba(167, 139, 250, 0.18);
+    border-left: 1px solid var(--violet-400);
+    border-right: 1px solid var(--violet-400);
+    pointer-events: none;
+}
+
+.lanes-empty {
+    color: var(--fg-3);
+}
+
+/* `/` — find in stream. FLEX NONE for the same reason as the lanes: it must not take height
+   from the transcript it is searching. */
+.stream-find {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.stream-find-input {
+    flex: 1;
+    min-width: 0;
+    appearance: none;
+    background: var(--bg-1);
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 8px;
+}
+.stream-find-input:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -1px;
+}
+
+/* An empty RANGE is not an empty agent, and it carries its own way out. */
+.stream-empty-range {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 4px;
+    color: var(--fg-3);
 }
 
 /* A selectable event row is a real button, so it resets the browser's. */

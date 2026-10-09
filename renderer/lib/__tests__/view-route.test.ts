@@ -8,7 +8,7 @@ import { mergeViewRoute, parseViewRoute, viewRouteQuery, type GenieView } from '
  * decisions that make it addressable before any surface is built on it.
  */
 describe('parseViewRoute', () => {
-    it('defaults to THE DECK when nothing is in the url', () => {
+    it('defaults to THE WORKFLOW DASHBOARD when nothing is in the url', () => {
         // THE GENIE 2 FLIP. It defaulted to the grid while the Deck was a parallel surface.
         // The Deck now opens, and the grid is reached with `?view=grid`.
         //
@@ -17,7 +17,7 @@ describe('parseViewRoute', () => {
         // survivable now for one reason: `floorSurface` CONCEALS the grid rather than
         // unmounting it, so no live xterm is destroyed, and the E2E specs that need the grid
         // now ask for it by name.
-        expect(parseViewRoute({})).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({})).toEqual({ kind: 'dashboard' });
     });
 
     it('still reaches the grid, by name', () => {
@@ -41,7 +41,7 @@ describe('parseViewRoute', () => {
         // `tab: null` is NOT 'session'. Which tab an agent opens on depends on its
         // FIDELITY (a Declared agent opens on Conversation, an Observed one on
         // Terminal), and the route must not pre-empt a decision it cannot make.
-        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null });
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null, lanes: null });
     });
 
     it('reads an agent tab', () => {
@@ -49,6 +49,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: 'terminal',
+            lanes: null,
         });
     });
 
@@ -60,6 +61,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: null,
+            lanes: null,
         });
     });
 
@@ -68,6 +70,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: null,
+            lanes: null,
         });
     });
 
@@ -79,45 +82,45 @@ describe('parseViewRoute', () => {
 
     it('falls back to the default for a blank id', () => {
         // `?ws=` must not open a Workbench for the workspace named "".
-        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'dashboard' });
     });
 
     it('falls back to the default for a view it cannot satisfy', () => {
         // A Workbench with no workspace is not a thing. Never a blank screen.
-        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'deck' });
-        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'deck' });
+        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'dashboard' });
     });
 });
 
 describe('viewRouteQuery', () => {
-    it('gives the DEFAULT a clean url — and that is now the Deck', () => {
+    it('gives the DEFAULT a clean url — and that is now the Dashboard', () => {
         // The view you sit on most carries no params. This moved with the default, exactly
         // as the previous version of this test said it would.
-        expect(viewRouteQuery({ kind: 'deck' })).toEqual({});
+        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({});
     });
 
-    it('names the GRID explicitly, because it is no longer the default', () => {
-        // It must be named, or parsing its own url would hand back the Deck and the two
+    it('names the DECK explicitly, because it is no longer the default', () => {
+        // It must be named, or parsing its own url would hand back the grid and the two
         // halves of this module would disagree.
-        expect(viewRouteQuery({ kind: 'grid' })).toEqual({ view: 'grid' });
+        expect(viewRouteQuery({ kind: 'deck' })).toEqual({ view: 'deck' });
     });
 
     it('omits a tab that has not been chosen', () => {
-        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({ agent: 'a1' });
+        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({ agent: 'a1' });
     });
 
     const cases: GenieView[] = [
         { kind: 'grid' },
         { kind: 'deck' },
         { kind: 'workbench', workspaceId: 'w1' },
-        { kind: 'agent', agentId: 'a1', tab: null },
-        { kind: 'agent', agentId: 'a1', tab: 'session' },
-        { kind: 'agent', agentId: 'a1', tab: 'terminal' },
-        { kind: 'agent', agentId: 'a1', tab: 'files' },
-        { kind: 'agent', agentId: 'a1', tab: 'changes' },
-        { kind: 'agent', agentId: 'a1', tab: 'activity' },
+        { kind: 'agent', agentId: 'a1', tab: null, lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'session', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'terminal', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'files', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'changes', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'activity', lanes: null },
     ];
 
     it.each(cases)('round-trips %j', (view) => {
@@ -135,15 +138,15 @@ describe('viewRouteQuery', () => {
  */
 describe('mergeViewRoute', () => {
     it('keeps a remote window remote', () => {
-        // The DEFAULT (now the Deck) adds nothing; the grid names itself. Either way `host`
+        // The DEFAULT (now the grid) adds nothing; the Deck names itself. Either way `host`
         // survives, which is the point — it is bound before load and decides whether the
         // renderer talks to a remote machine.
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1' });
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1', view: 'grid' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'dashboard' })).toEqual({ host: 'h1' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1', view: 'deck' });
     });
 
     it('keeps a stage window staged', () => {
-        expect(mergeViewRoute({ stage: 'w1' }, { kind: 'agent', agentId: 'a1', tab: null })).toEqual({
+        expect(mergeViewRoute({ stage: 'w1' }, { kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
             stage: 'w1',
             agent: 'a1',
         });
@@ -152,7 +155,7 @@ describe('mergeViewRoute', () => {
     it('replaces the previous route instead of accumulating it', () => {
         // Leaving `ws` behind would make the url say two subjects at once, and
         // parseViewRoute's agent-wins rule would hide the contradiction.
-        expect(mergeViewRoute({ ws: 'w1' }, { kind: 'agent', agentId: 'a1', tab: 'session' })).toEqual({
+        expect(mergeViewRoute({ ws: 'w1' }, { kind: 'agent', agentId: 'a1', tab: 'session', lanes: null })).toEqual({
             agent: 'a1',
             tab: 'session',
         });
@@ -162,18 +165,18 @@ describe('mergeViewRoute', () => {
         expect(mergeViewRoute({ agent: 'a1', tab: 'terminal' }, { kind: 'workbench', workspaceId: 'w1' })).toEqual(
             { ws: 'w1' },
         );
-        // And a stale `view=deck` is dropped when navigating away from it.
-        expect(mergeViewRoute({ view: 'deck' }, { kind: 'deck' })).toEqual({});
+        // And a stale `view=dashboard` is dropped when navigating away from it.
+        expect(mergeViewRoute({ view: 'dashboard' }, { kind: 'dashboard' })).toEqual({});
     });
 
     it('preserves a param it has never heard of', () => {
         // Route ownership is a CLOSED list; everything else belongs to whoever put
         // it there, including params added after this module was written.
-        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'deck' })).toEqual({ somethingNew: 'x' });
+        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'dashboard' })).toEqual({ somethingNew: 'x' });
     });
 
     it('preserves a repeated non-route param verbatim', () => {
-        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'deck' })).toEqual({ tags: ['a', 'b'] });
+        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'dashboard' })).toEqual({ tags: ['a', 'b'] });
     });
 });
 
@@ -195,7 +198,7 @@ describe('the Dashboard route', () => {
     it('round-trips through viewRouteQuery', () => {
         // The two halves must agree or a link built by one is misread by the other — the
         // failure mode the `grid` comment in `view-route.ts` warns about by name.
-        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({ view: 'dashboard' });
+        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({});
         expect(parseViewRoute(viewRouteQuery({ kind: 'dashboard' }))).toEqual({ kind: 'dashboard' });
     });
 
@@ -203,6 +206,61 @@ describe('the Dashboard route', () => {
         // A deep link naming an agent is the more specific subject. Asserted so the new branch
         // cannot be inserted ahead of that rule by accident.
         expect(parseViewRoute({ view: 'dashboard', agent: 'a1' })).toEqual({ kind: 'dashboard' });
-        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null });
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null, lanes: null });
+    });
+});
+
+/**
+ * THE LANES RANGE RIDES THE AGENT ROUTE.
+ *
+ * The board: *"Dragging across a range filters the stream below; the range is kept in the
+ * URL."* It belongs to the AGENT route rather than to the url at large, and the reason is
+ * the failure it prevents: a range is a window into one agent's turn, so carrying it to
+ * another agent would silently filter that agent's stream by times from somebody else's
+ * session — and a stream that is mostly hidden for an invisible reason reads as data loss.
+ *
+ * So it is a route key, which means `mergeViewRoute` drops it on the way out, like `tab`.
+ */
+describe('the lanes range', () => {
+    it('parses off the agent route', () => {
+        expect(parseViewRoute({ agent: 'a1', lanes: '100-400' })).toEqual({
+            kind: 'agent',
+            agentId: 'a1',
+            tab: null,
+            lanes: '100-400',
+        });
+    });
+
+    it('is null when absent, which means no filter', () => {
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({
+            kind: 'agent',
+            agentId: 'a1',
+            tab: null,
+            lanes: null,
+        });
+    });
+
+    it('round-trips through viewRouteQuery', () => {
+        expect(
+            viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: 'files', lanes: '100-400' }),
+        ).toEqual({ agent: 'a1', tab: 'files', lanes: '100-400' });
+    });
+
+    it('is omitted from the url when there is no range', () => {
+        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
+            agent: 'a1',
+        });
+    });
+
+    it('is DROPPED when navigating to another agent', () => {
+        // The whole reason it is a route key. Left behind, it would filter the next agent's
+        // stream by a window taken from the previous one.
+        expect(
+            mergeViewRoute({ agent: 'a1', lanes: '100-400' }, { kind: 'agent', agentId: 'a2', tab: null, lanes: null }),
+        ).toEqual({ agent: 'a2' });
+    });
+
+    it('is dropped when leaving the agent entirely', () => {
+        expect(mergeViewRoute({ agent: 'a1', lanes: '100-400' }, { kind: 'dashboard' })).toEqual({});
     });
 });

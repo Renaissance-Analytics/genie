@@ -26,7 +26,15 @@ import type { AgentType } from '../mcp/protocol';
 
 export type TerminalWindowRequest =
     | { kind: 'terminal'; workspaceId: string; cwd?: string }
-    | { kind: 'agent'; workspaceId: string; agent: AgentType; command?: string };
+    | { kind: 'agent'; workspaceId: string; agent: AgentType; command?: string }
+    /**
+     * A window onto a spec that ALREADY EXISTS — taking over a running agent.
+     *
+     * Its own kind rather than a flag on `agent`, because the difference is whether a pty is
+     * created, and that is the difference between reaching the agent you meant and starting a
+     * second one beside it. The two other kinds create; this one never does.
+     */
+    | { kind: 'existing'; workspaceId: string; specId: string; cwd?: string };
 
 /** What the caller must create — mapped 1:1 onto the EXISTING spec builders, so no
  *  parallel implementation of identity exists. */
@@ -37,7 +45,8 @@ export type SpecCreate =
 export type TerminalWindowPlan =
     | {
           ok: true;
-          create: SpecCreate;
+          /** What to create, or `null` when the spec already exists and must not be remade. */
+          create: SpecCreate | null;
           /**
            * The window's query, once the spec exists. Takes the id as an argument because
            * the id does not exist until creation has happened.
@@ -56,15 +65,20 @@ export function planTerminalWindow(req: TerminalWindowRequest): TerminalWindowPl
     // cannot be revived, counted, or addressed by an agent.
     if (!req.workspaceId) return { ok: false, reason: 'no-workspace' };
 
-    const create: SpecCreate =
-        req.kind === 'agent'
-            ? {
-                  kind: 'agent',
-                  workspaceId: req.workspaceId,
-                  agent: req.agent,
-                  command: req.command,
-              }
-            : { kind: 'terminal', workspaceId: req.workspaceId, cwd: req.cwd };
+    const create: SpecCreate | null =
+        req.kind === 'existing'
+            ? // NOTHING is created. The spec is the one already carrying the agent's pty,
+              // its identity and its conversation; making another would start a second
+              // agent beside the one you asked to reach.
+              null
+            : req.kind === 'agent'
+              ? {
+                    kind: 'agent',
+                    workspaceId: req.workspaceId,
+                    agent: req.agent,
+                    command: req.command,
+                }
+              : { kind: 'terminal', workspaceId: req.workspaceId, cwd: req.cwd };
 
     return {
         ok: true,
@@ -93,5 +107,8 @@ export type ClosePolicy = 'detach' | 'kill';
  * 18.4 CPU-hours over nine days when nothing reaped what an agent spawned.
  */
 export function closePolicyFor(kind: TerminalWindowRequest['kind']): ClosePolicy {
-    return kind === 'agent' ? 'detach' : 'kill';
+    // `existing` detaches for the same reason `agent` does, and more strongly: it is by
+    // definition a pty with work already in it, so killing it on close would end the very
+    // session the window was opened to reach.
+    return kind === 'agent' || kind === 'existing' ? 'detach' : 'kill';
 }

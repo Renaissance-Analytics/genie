@@ -78,6 +78,9 @@ test('it is not a GATE — the app is reachable without answering it', async () 
     // usable window rather than a wall, which is also what makes Tynn optional meaningful.
     await page.keyboard.press('Escape');
     await expect(page.locator('.gwrap')).toBeVisible();
-    // And the Deck is behind it, because that is the default surface.
-    await expect(page.locator('.deck')).toBeVisible({ timeout: 10_000 });
+    // And the WORKFLOW DASHBOARD is behind it, because that is the default surface now.
+    // It used to be the Deck. The assertion names the surface rather than just checking the
+    // shell, because "a usable window" is the claim being made and an empty `.gwrap` would
+    // satisfy a weaker one.
+    await expect(page.locator('.dashboard')).toBeVisible({ timeout: 10_000 });
 });

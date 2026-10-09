@@ -182,6 +182,9 @@ import { motifForPayload } from '../../main/notify-sound-kinds';
 import { replacePageQuery, usePageQuery } from '../lib/page-query';
 import { filePanelForWorkspace, uniqueWorkspaceFilePanels } from '../lib/workspace-file-panel';
 import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
+import { laneRangeQuery, parseLaneRange } from '../lib/agent-lanes';
+import type { GitStatusMap } from '../lib/genie';
+import { agentFilesView } from '../lib/agent-files-view';
 import { AgentView } from '../components/Master/AgentView';
 import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
@@ -804,6 +807,41 @@ function MasterInner() {
     const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
     /** The Needs-you row the keyboard is on — `J`/`K` move it (`moveQueueFocus`). */
     const [focusedQueueKey, setFocusedQueueKey] = useState<string | null>(null);
+    /**
+     * Is the Lanes pulldown open (`L`)?
+     *
+     * LOCAL, unlike the range it selects. Whether the instrument is open is a preference
+     * about this window; the RANGE is a claim about what you are looking at, which is why
+     * only the range goes in the url. Putting both there would make opening a panel a
+     * history entry.
+     */
+    const [lanesOpen, setLanesOpen] = useState(false);
+    /** `/` — the stream's find box. Local for the same reason as `lanesOpen`. */
+    const [streamFindOpen, setStreamFindOpen] = useState(false);
+    /**
+     * What the Files tab needs, fetched only while it is open.
+     *
+     * `null` is "not loaded yet", which is why the tab renders nothing rather than an empty
+     * list before the first answer arrives — an empty list is a CLAIM that the agent changed
+     * nothing, and `agentFilesView` distinguishes that (`rows: []`) from "cannot see the
+     * workspace" (`rows: null`). Handing it a premature `{}` would collapse the three states
+     * into one and make the quietest of them the default.
+     */
+    const [filesGitStatus, setFilesGitStatus] = useState<GitStatusMap | null>(null);
+    /**
+     * Workspace-relative path → when the watcher last saw it move.
+     *
+     * This is what lets a file changed on disk that no agent reported render as the board's
+     * neutral `?` instead of being attributed to whoever happens to be in the workspace.
+     */
+    const [observedWrites, setObservedWrites] = useState<Record<string, number>>({});
+    /**
+     * `E` — a counter, not a flag.
+     *
+     * Pressing the key twice must move twice, and a boolean cannot say "again". The stream
+     * ignores the first value it sees, so mounting an agent view never jumps on its own.
+     */
+    const [nextEditNonce, setNextEditNonce] = useState(0);
     // The workspace lists (genie#556): a header icon, and a PIN that docks the
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
@@ -1260,6 +1298,84 @@ function MasterInner() {
         if (systemWorkspace) m.set(systemWorkspace.id, systemWorkspace);
         return m;
     }, [workspaces, systemWorkspace]);
+
+
+    /**
+     * Watch the agent's workspace while its view is open.
+     *
+     * Scoped to the whole AGENT VIEW rather than to the Files tab, deliberately: which tab is
+     * showing is resolved inside `AgentView` from the agent's fidelity, and re-deriving it
+     * here would be a second answer that could disagree with the one on screen. Files and
+     * Changes both want this data anyway, so the broader scope costs one `git status` and a
+     * watcher that is torn down the moment you leave.
+     */
+    useEffect(() => {
+        const agentId = surface.showAgent;
+        if (!agentId) {
+            // Cleared on the way out, so returning to an agent never shows the PREVIOUS
+            // agent's files for the frame before the fetch lands.
+            setFilesGitStatus(null);
+            setObservedWrites({});
+            return;
+        }
+        const session = sessions.find((s) => s.agentId === agentId) ?? null;
+        const wsId = session?.session.workspaceId ?? null;
+        const wsPath = wsId ? (workspacesById.get(wsId)?.path ?? null) : null;
+        if (!wsPath) {
+            // No workspace path means Genie genuinely cannot see this agent's files.
+            // `null` carries that, and the tab says so rather than drawing an empty list.
+            setFilesGitStatus(null);
+            setObservedWrites({});
+            return;
+        }
+
+        let live = true;
+        setObservedWrites({});
+        void api()
+            .files.gitStatus(wsPath)
+            .then((status) => {
+                if (live) setFilesGitStatus(status);
+            })
+            .catch(() => {
+                // A failed status is NOT an empty one. Left null, so the tab keeps saying it
+                // cannot see rather than reporting that nothing has changed.
+                if (live) setFilesGitStatus(null);
+            });
+        void api().files.watch(wsPath).catch(() => {});
+
+        const off = api().on.treeChanged?.(({ workspacePath, changed }) => {
+            if (!live || workspacePath !== wsPath) return;
+            // `changed: null` means the watcher saw too many at once to name them. Re-fetch
+            // the status rather than inventing paths — an unnamed event is not a path.
+            if (changed === null) {
+                void api()
+                    .files.gitStatus(wsPath)
+                    .then((status) => {
+                        if (live) setFilesGitStatus(status);
+                    })
+                    .catch(() => {});
+                return;
+            }
+            const at = Date.now();
+            setObservedWrites((previous) => {
+                const next = { ...previous };
+                for (const path of changed) next[path] = at;
+                return next;
+            });
+            void api()
+                .files.gitStatus(wsPath)
+                .then((status) => {
+                    if (live) setFilesGitStatus(status);
+                })
+                .catch(() => {});
+        });
+
+        return () => {
+            live = false;
+            off?.();
+            void api().files.unwatch(wsPath).catch(() => {});
+        };
+    }, [surface.showAgent, sessions, workspacesById]);
 
     // Resolve a Feedback request against the ACTIVE workspace once it is known.
     useEffect(() => {
@@ -2251,6 +2367,10 @@ function MasterInner() {
     workspacesByIdRef.current = workspacesById;
     const activateWorkspaceRef = useRef(activateWorkspace);
     activateWorkspaceRef.current = activateWorkspace;
+    // Same reason as the line above: the keydown effect is mounted once with `[]` deps, so it
+    // would otherwise close over the FIRST `addSpec` forever and act on a stale workspace list.
+    const addSpecRef = useRef(addSpec);
+    addSpecRef.current = addSpec;
     useEffect(() => {
         return api().on.pluginPanelOpen?.((request) => {
             void (async () => {
@@ -2639,7 +2759,9 @@ function MasterInner() {
      * out from under an open panel.
      */
     const keys = useRef({
-        view: 'deck' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
+        // `dashboard` first: it is the default surface, so it is what this ref holds for the
+        // one render before `keys.current` is assigned below.
+        view: 'dashboard' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
         overlayOpen: false,
         query: {} as RouteQuery,
         sessions: [] as AgentSessionSpec[],
@@ -2647,6 +2769,7 @@ function MasterInner() {
         agentId: null as string | null,
         agentSpecId: null as string | null,
         parkedApprovalId: null as string | null,
+        activeWorkspaceId: null as string | null,
     });
     keys.current = {
         view: view.kind,
@@ -2679,6 +2802,9 @@ function MasterInner() {
             // about nothing.
             return s ? (parkedApproval(s)?.id ?? null) : null;
         })(),
+        // For ⌘B. The file panel belongs to a WORKSPACE, so with none active there is nothing
+        // to open one against and the key no-ops rather than guessing at a workspace.
+        activeWorkspaceId,
     };
 
     /**
@@ -2878,8 +3004,59 @@ function MasterInner() {
                 if (!target) return;
                 e.preventDefault();
                 replacePageQuery(
-                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null }),
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null, lanes: null }),
                 );
+                return;
+            }
+
+            /**
+             * ⌘B — the WORKSPACE FILE PANEL (spec board's "New keys": `⌘B` files).
+             *
+             * It routes to the Workbench first and then opens the panel, in that order and
+             * deliberately: `addSpec` selects an existing file panel rather than creating a
+             * second one, but a selected panel on a surface that conceals the grid is a
+             * change you cannot see — which is the exact failure this release has spent its
+             * time removing.
+             */
+            if (intent.kind === 'files') {
+                const ws = now.activeWorkspaceId;
+                if (!ws) return;
+                e.preventDefault();
+                replacePageQuery(mergeViewRoute(now.query, { kind: 'workbench', workspaceId: ws }));
+                void addSpecRef.current(ws, 'code');
+                return;
+            }
+
+            /**
+             * E and / — both act on ONE agent's stream, so both are confined to an agent
+             * view. Firing them from the Dashboard would change hidden state on a surface
+             * that cannot show it, which is how a shortcut earns a reputation for doing
+             * nothing.
+             */
+            if (intent.kind === 'next-edit') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setNextEditNonce((n) => n + 1);
+                return;
+            }
+            if (intent.kind === 'find-in-stream') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setStreamFindOpen(true);
+                return;
+            }
+
+            /**
+             * L — the Lanes pulldown, and ONLY in an agent view.
+             *
+             * Elsewhere there is no single stream for lanes to be over, and toggling hidden
+             * state from a surface that cannot show it is how a shortcut earns a reputation
+             * for doing nothing.
+             */
+            if (intent.kind === 'lanes') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setLanesOpen((open) => !open);
                 return;
             }
 
@@ -2913,14 +3090,25 @@ function MasterInner() {
                 return;
             }
 
-            // ⌘⇧T — take over. A PLACE, not a mode: the agent's own pty, with the url recording
-            // it so refresh and back land in the same place.
+            // ⌘⇧T — take over. A WINDOW, not a tab: the agent's own pty, opened beside the
+            // Floor rather than inside it. `existing` attaches to the spec that is already
+            // running; the creating kinds would start a second agent next to this one.
             if (intent.kind === 'take-over') {
                 if (now.view !== 'agent' || !now.agentId) return;
+                const target = now.sessions.find((s) => s.agentId === now.agentId);
+                // No workspace or no spec means there is nothing to attach to. The key stays
+                // UNHANDLED rather than swallowed, so the chord falls through to the app
+                // instead of looking like a take-over that silently failed.
+                if (!target?.specId || !target.session.workspaceId) return;
                 e.preventDefault();
-                replacePageQuery(
-                    mergeViewRoute(now.query, { kind: 'agent', agentId: now.agentId, tab: 'terminal' }),
-                );
+                void api()
+                    .terminal.openWindow({
+                        kind: 'existing',
+                        workspaceId: target.session.workspaceId,
+                        specId: target.specId,
+                        ...(target.session.cwd ? { cwd: target.session.cwd } : {}),
+                    })
+                    .catch(() => {});
                 return;
             }
         };
@@ -3168,6 +3356,22 @@ function MasterInner() {
                             surface.showAgent ? (
                                 (() => {
                                     const found = sessions.find((x) => x.agentId === surface.showAgent);
+                                    // Captured so the narrowing survives into the handler's
+                                    // closure — a property read cannot be narrowed across one,
+                                    // and widening the API to accept null would move the
+                                    // problem into main rather than solve it.
+                                    const takeOverSpecId = found?.specId ?? null;
+                                    const takeOverWsId = found?.session.workspaceId ?? null;
+                                    const takeOverCwd = found?.session.cwd ?? null;
+                                    // The agent's own spec, for the header's Restart and
+                                    // Settings actions. Both flows already exist and are used
+                                    // by three other surfaces; the Agent view simply never
+                                    // passed them, so `AgentHeaderActions` gated those items
+                                    // off and they have never appeared on the most important
+                                    // screen in the product.
+                                    const agentSpec = takeOverSpecId
+                                        ? (specs.find((s) => s.id === takeOverSpecId) ?? null)
+                                        : null;
                                     // A route naming an agent that no longer exists resolves
                                     // to a SENTENCE, not a blank surface: an empty view would
                                     // read as Genie breaking rather than as a stale link.
@@ -3242,19 +3446,112 @@ function MasterInner() {
                                                     .then(() => loadSessions())
                                                     .catch(() => {});
                                             } } : {})}
-                                            onTakeOver={() => {
-                                                // The pty is one click away and it is the SAME
-                                                // terminal the agent's session belongs to — "take
-                                                // over" is a place to go, not a mode to enter, so
-                                                // it is the Terminal tab and the url records it.
+                                            /* ABSENT, not dead, when there is nothing to attach
+                                               to: an agent with no spec or no workspace has no
+                                               pty to take over, and a button that silently does
+                                               nothing is the defect this whole release is about. */
+                                            {...(agentSpec
+                                                ? {
+                                                      onAgentSettings: () => setAgentEditSpec(agentSpec),
+                                                      onRestartAgent: (mode: RestartMode) =>
+                                                          void restartAgentSpec(agentSpec, mode),
+                                                  }
+                                                : {})}
+                                            {...(takeOverSpecId && takeOverWsId
+                                                ? {
+                                            onTakeOver: () => {
+                                                /**
+                                                 * TAKE OVER OPENS A WINDOW — owner's ruling,
+                                                 * 2026-10-08: a provider TUI opens in its own
+                                                 * window, never on the Floor. This used to route
+                                                 * to a Terminal TAB, which no longer exists.
+                                                 *
+                                                 * `kind: 'existing'` with the agent's own spec id,
+                                                 * so it ATTACHES to the pty already running. The
+                                                 * creating kinds would have started a second agent
+                                                 * beside the one being taken over — same
+                                                 * workspace, fresh conversation — while the real
+                                                 * one carried on unattended.
+                                                 */
+                                                void api()
+                                                    .terminal.openWindow({
+                                                        kind: 'existing',
+                                                        workspaceId: takeOverWsId,
+                                                        specId: takeOverSpecId,
+                                                        ...(takeOverCwd ? { cwd: takeOverCwd } : {}),
+                                                    })
+                                                    .catch(() => {});
+                                            },
+                                                  }
+                                                : {})}
+                                            /* Null until the workspace has actually been read.
+                                               An empty list would CLAIM the agent changed
+                                               nothing, and that is a different statement from
+                                               "not loaded yet" -- which is the distinction
+                                               `agentFilesView` exists to keep. */
+                                            filesView={
+                                                filesGitStatus
+                                                    ? agentFilesView({
+                                                          session: found,
+                                                          sessions,
+                                                          gitStatus: filesGitStatus,
+                                                          observed: observedWrites,
+                                                      })
+                                                    : null
+                                            }
+                                            /**
+                                             * Opens the workspace's FILE PANEL, not the file.
+                                             *
+                                             * Stated plainly because it is a real gap: there is
+                                             * no renderer-callable "open this path" — `selectFile`
+                                             * is private to `CodePanel` and `on.editorOpenFile` is
+                                             * inbound from the MCP tool, so a cross-component
+                                             * channel would have to be built. Taking you to the
+                                             * panel is a true step toward the file; claiming to
+                                             * open it would not be.
+                                             */
+                                            onOpenFile={() => {
+                                                // Workbench first: the panel lives there, and
+                                                // opening it under a surface that conceals the
+                                                // grid is a change you cannot see.
+                                                const ws = found.session.workspaceId;
+                                                if (!ws) return;
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'workbench',
+                                                        workspaceId: ws,
+                                                    }),
+                                                );
+                                                void addSpecRef.current(ws, 'code');
+                                            }}
+                                            onOpenAgent={(agentId) =>
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId,
+                                                        tab: null,
+                                                        lanes: null,
+                                                    }),
+                                                )
+                                            }
+                                            changesInput={{ sessions, observed: observedWrites }}
+                                            lanesOpen={lanesOpen}
+                                            findOpen={streamFindOpen}
+                                            onFindClose={() => setStreamFindOpen(false)}
+                                            jumpToNextEdit={nextEditNonce}
+                                            lanesRange={parseLaneRange(
+                                                view.kind === 'agent' ? view.lanes : null,
+                                            )}
+                                            onLanesRange={(r) =>
                                                 replacePageQuery(
                                                     mergeViewRoute(pageQuery, {
                                                         kind: 'agent',
                                                         agentId: surface.showAgent!,
-                                                        tab: 'terminal',
+                                                        tab: view.kind === 'agent' ? view.tab : null,
+                                                        lanes: laneRangeQuery(r),
                                                     }),
-                                                );
-                                            }}
+                                                )
+                                            }
                                             onTab={(t) => {
                                                 // The tab lives in the URL, so refresh, back and a
                                                 // shared link all land in the same place.
@@ -3269,6 +3566,12 @@ function MasterInner() {
                                                         kind: 'agent',
                                                         agentId: surface.showAgent!,
                                                         tab: t,
+                                                        // PRESERVED across a tab change: the
+                                                        // range belongs to the agent's turn,
+                                                        // not to the tab you happen to be on,
+                                                        // and silently clearing it would look
+                                                        // like the filter forgot itself.
+                                                        lanes: view.kind === 'agent' ? view.lanes : null,
                                                     }),
                                                 );
                                             }}
@@ -3298,6 +3601,17 @@ function MasterInner() {
                                         name: w.project_name,
                                         path: w.path,
                                     }))}
+                                    /* The door. Without it this board showed every agent and
+                                       opened none of them, which is how beta.1 left the owner
+                                       on a screen with nothing to click. `mergeViewRoute`
+                                       rather than replacing the query, so `host` and `stage`
+                                       survive and a remote window stays remote. */
+                                    onOpenAgent={(agentId) =>
+                                        replacePageQuery(
+                                            mergeViewRoute(pageQuery, { kind: 'agent', agentId, tab: null, lanes: null }),
+                                        )
+                                    }
+                                    onAddAgent={(workspaceId) => setNewAgentWsId(workspaceId)}
                                 />
                             ) : surface.showDeck ? (
                                 <Deck
@@ -3554,6 +3868,43 @@ function MasterInner() {
                     pinned={pinnedDock === 'chat'}
                     onTogglePin={() => togglePin('chat')}
                     onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'chat'))}
+                    /* The three below were DECLARED and never passed, so the composer typed
+                       and sent nothing, Stop did nothing, and an approval could not be
+                       answered. They are optional props, so nothing failed -- not the
+                       compiler, not review, not a screenshot. `surface-handlers-wired`
+                       now fails the build on that shape rather than trusting anyone to
+                       notice it. */
+                    onSend={async (text) => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return false;
+                        const r = await api()
+                            .agentSession.prompt(specId, text)
+                            .catch(() => null);
+                        void loadSessions();
+                        // `delivered` is the honest answer, and it is NOT `ok`: a parked or
+                        // sessionless agent returns a named reason, and the composer must
+                        // keep what you typed rather than eat it.
+                        return r?.ok === true && r.delivered;
+                    }}
+                    onStop={() => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return;
+                        void api()
+                            .agentSession.cancel(specId)
+                            .then(() => loadSessions())
+                            .catch(() => {});
+                    }}
+                    onDecide={(id, decision) => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return;
+                        // ChatFlyout says `deny`; the session API distinguishes once from
+                        // always. Deny maps to ONCE deliberately -- a standing denial is a
+                        // bigger commitment than a button labelled "Deny" promises.
+                        void api()
+                            .agentSession.decide(specId, id, decision === 'deny' ? 'deny-once' : decision)
+                            .then(() => loadSessions())
+                            .catch(() => {});
+                    }}
                 />
             ) : null}
             <GithubCapabilitiesFlyout

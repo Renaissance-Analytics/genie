@@ -62,7 +62,21 @@ export type GenieView =
     | { kind: 'workbench'; workspaceId: string }
     /** One agent. `tab: null` means "not chosen yet"; the surface picks a default
      *  from the agent's fidelity, which the route cannot know. */
-    | { kind: 'agent'; agentId: string; tab: AgentTab | null };
+    | {
+          kind: 'agent';
+          agentId: string;
+          tab: AgentTab | null;
+          /**
+           * The lanes range, raw (`"<from>-<to>"`), or null for no filter.
+           *
+           * Raw rather than parsed so this module stays free of the stream's vocabulary —
+           * `agent-lanes.ts` owns what a range means and refuses a malformed one. It is a
+           * ROUTE key, which is what makes it drop when you navigate to another agent: a
+           * window into one turn would otherwise filter the next agent's stream by times
+           * from somebody else's session.
+           */
+          lanes: string | null;
+      };
 
 /** The shape Next hands back for `router.query`. */
 export type RouteQuery = Record<string, string | string[] | undefined>;
@@ -105,6 +119,10 @@ export function parseViewRoute(query: RouteQuery): GenieView {
             kind: 'agent',
             agentId,
             tab: tab && (AGENT_TABS as readonly string[]).includes(tab) ? (tab as AgentTab) : null,
+            // Carried verbatim; `agent-lanes.parseLaneRange` is the one place that decides
+            // whether it means anything, and answers null for anything malformed rather
+            // than filtering the stream to an accidental window.
+            lanes: one(query.lanes) ?? null,
         };
     }
 
@@ -112,49 +130,73 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     if (workspaceId) return { kind: 'workbench', workspaceId };
 
     /**
-     * No params: THE DECK.
+     * No params: THE WORKFLOW DASHBOARD.
      *
-     * This is the Genie 2 flip. The grid was the default while the Deck was a parallel
-     * surface; now the Deck is what opens and the grid is reached with `?view=grid`, which
-     * is also what `floorSurface` conceals rather than unmounts -- every terminal panel owns
-     * a live xterm bound to a pty, so the grid must never be destroyed to show something
-     * else.
+     * The owner's instruction, and the spec board's own architecture: the Dashboard
+     * "absorbs the Deck's Agents band and the Floor as a cross-workspace glance", and
+     * "the top level shows status and communication; work opens one level down".
      *
-     * A 2x2 of transcripts is maximum pixels and near-zero information; the Deck answers
-     * "what needs me" instead. The grid is one query away and loses nothing.
+     * beta.1 made the DECK the default instead and stranded the owner on first launch. The
+     * reasoning behind that flip was not wrong — a 2x2 of transcripts really is maximum
+     * pixels and near-zero information. What was missed is that the destination had NO WAY
+     * OUT BY MOUSE: roster rows carried no handler, the workspace rail changed
+     * `activeWorkspaceId` without touching the route so clicking a workspace altered
+     * nothing visible, and the only door out was a palette row — which
+     * `feature-reachability` judged sufficient, because it checks that a feature HAS an
+     * entry, not that a human can find one. A palette row is not an affordance.
+     *
+     * So this default is conditional on the destination being escapable, and that is now a
+     * test rather than a promise: `Dashboard` declares `onOpenAgent`, `dashboard-render`
+     * proves a wired row is a real `<button>` carrying its agent id, and
+     * `surface-handlers-wired` fails the build if `master.tsx` ever stops passing it.
      */
-    return { kind: 'deck' };
+    return { kind: 'dashboard' };
 }
 
 /**
  * The query params for a view — the inverse of {@link parseViewRoute}.
  *
- * The Deck encodes to `{}`, deliberately: it is the landing view and the place
- * you sit most, so its url stays clean instead of carrying `?view=deck`. That
- * also means "no params" and "the Deck" are the same thing in both directions,
- * which is what keeps the round trip honest.
+ * The GRID encodes to `{}`, deliberately: it is the landing view, so its url stays
+ * clean instead of carrying `?view=grid`. That also means "no params" and "the grid"
+ * are the same thing in both directions, which is what keeps the round trip honest —
+ * and it must move together with `parseViewRoute`'s default or the two halves of this
+ * module disagree about what an empty url means.
  */
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
         case 'grid':
-            // The grid is now the one you ask for. It must be NAMED, or parsing its own url
-            // would hand back the Deck and the two halves would disagree.
+            // NAMED, and on its way out. The owner's ruling: the terminal grid leaves the
+            // Floor entirely — a provider TUI opens in its OWN WINDOW (`openTerminalWindow`),
+            // and the only terminal-shaped thing left on the Floor is an agent's workstream,
+            // which is a rendered firehose and not a pty. Until that removal lands this stays
+            // reachable by name so nobody is stranded mid-migration.
             return { view: 'grid' };
         case 'deck':
-            // The DEFAULT carries no params, so the url you sit on most stays clean.
-            return {};
+            // Also named. Per the spec board the Deck keeps Needs-you and the signal strip
+            // and gives up its Agents band to the Dashboard.
+            return { view: 'deck' };
         case 'dashboard':
-            return { view: 'dashboard' };
+            // The DEFAULT carries no params, so the url you land on stays clean. It must move
+            // together with `parseViewRoute`'s default or the two halves of this module
+            // disagree about what an empty url means.
+            return {};
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':
-            return view.tab ? { agent: view.agentId, tab: view.tab } : { agent: view.agentId };
+            return {
+                agent: view.agentId,
+                ...(view.tab ? { tab: view.tab } : {}),
+                // Omitted when there is no range, so the url you sit on stays clean and
+                // "no `lanes` param" and "no filter" remain the same thing in both
+                // directions.
+                ...(view.lanes ? { lanes: view.lanes } : {}),
+            };
     }
 }
 
 /** The query keys this module OWNS. A closed list: everything else in the url
  *  belongs to whoever put it there and survives navigation untouched. */
-const ROUTE_KEYS = ['view', 'ws', 'agent', 'tab'] as const;
+const ROUTE_KEYS = ['view', 'ws', 'agent', 'tab', 'lanes'] as const;
 
 /**
  * Rewrite only the ROUTE part of a url, preserving every other param.
