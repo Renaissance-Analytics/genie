@@ -4,10 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { floorSurface } from '../floor-surface';
 
 describe('floorSurface', () => {
-    it('shows the grid for the DEFAULT view', () => {
-        // The default must not hide the grid. An earlier version defaulted the route to
-        // the Deck and every panel test on every platform failed.
-        expect(floorSurface({ kind: 'grid' })).toEqual({
+    it('shows the panels for a WORKBENCH, which is what the grid left behind', () => {
+        // The cross-workspace grid is gone (owner's ruling). A workspace's own panels are
+        // not: this is the surface that still mounts them, and it is what a stale
+        // `?view=grid&ws=…` link now resolves to.
+        expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' })).toEqual({
             showDeck: false,
             showDashboard: false,
             hideGrid: false,
@@ -53,7 +54,6 @@ describe('floorSurface', () => {
         // The flags are separate on purpose, and this pins it: there is no state in
         // which the surface says "the grid should not exist".
         for (const view of [
-            { kind: 'grid' } as const,
             { kind: 'deck' } as const,
             { kind: 'dashboard' } as const,
             { kind: 'workbench', workspaceId: 'w' } as const,
@@ -132,7 +132,7 @@ describe('the agent route now RENDERS the agent view', () => {
     });
 
     it('shows no agent for any other route', () => {
-        expect(floorSurface({ kind: 'grid' }).showAgent).toBeNull();
+        expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showAgent).toBeNull();
         expect(floorSurface({ kind: 'deck' }).showAgent).toBeNull();
         expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showAgent).toBeNull();
     });
@@ -156,7 +156,7 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
      * panel owns a live xterm bound to a pty, and remounting resets the terminal.
      */
     it('offers the toolbar on the grid and the Workbench', () => {
-        expect(floorSurface({ kind: 'grid' }).showGridChrome).toBe(true);
+        expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showGridChrome).toBe(true);
         expect(floorSurface({ kind: 'workbench', workspaceId: 'w1' }).showGridChrome).toBe(true);
     });
 
@@ -174,7 +174,6 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
         // The property, stated once rather than per case: chrome for a surface nobody can see is
         // the defect, whichever route produced it.
         for (const view of [
-            { kind: 'grid' } as const,
             { kind: 'deck' } as const,
             { kind: 'workbench', workspaceId: 'w1' } as const,
             { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
@@ -187,7 +186,6 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
     it('still never unmounts the grid, on any route', () => {
         // The one thing this must not become. `hideGrid` conceals; nothing here destroys.
         for (const view of [
-            { kind: 'grid' } as const,
             { kind: 'deck' } as const,
             { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
         ]) {
@@ -220,7 +218,6 @@ describe('the Workflow Dashboard surface', () => {
         for (const view of [
             { kind: 'deck' } as const,
             { kind: 'dashboard' } as const,
-            { kind: 'grid' } as const,
             { kind: 'workbench', workspaceId: 'w1' } as const,
             { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
         ]) {

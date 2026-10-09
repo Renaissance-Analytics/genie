@@ -28,21 +28,25 @@ const AGENT_TABS: readonly AgentTab[] = ['session', 'terminal', 'files', 'change
 
 /** The subject on screen. */
 export type GenieView =
-    /**
-     * Today's Floor — the panel grid for whatever workspace is active.
+    /*
+     * THE GRID IS GONE — owner's ruling, 2026-10-08:
      *
-     * NOT the default any more: `parseViewRoute` answers the Deck for no params and
-     * `viewRouteQuery` gives the grid `?view=grid`, so the grid is now the one you ask for.
+     *   "why do we even still support the old terminal grid? I told you to drop that… the
+     *    only terminal like ux in the floor is when watching an agents workstream (firehose
+     *    layout) which isn't a real terminal."
      *
-     * This comment used to say the opposite — "THE DEFAULT, and deliberately so for now" —
-     * which was true when it was written and became a lie the moment the default moved. It is
-     * corrected rather than deleted because the warning inside it is still live: an earlier
-     * attempt made the Deck the no-params default BEFORE it was ready, and E2E caught it on
-     * all three platforms with the grid hidden on every window that opened without a query
-     * string. The lesson is that the default is load-bearing in E2E, not that it may never
-     * move.
+     * `?view=grid` was the 2x2 cross-workspace Floor. What replaces it is not one surface but
+     * two, each answering a question the grid answered badly: the Dashboard for "what is every
+     * agent doing", and the Workbench for one workspace's panels.
+     *
+     * The warning that lived on this member is kept, because it is still live: a default that
+     * moves before its destination is ready fails in E2E on all three platforms. That is why
+     * the harness was taken off the grid in a SEPARATE commit before this one.
+     *
+     * Removed as a type member rather than left as an unreachable branch: a `kind` nothing
+     * produces is a case every switch must still handle, and the compiler is what makes that
+     * cost visible.
      */
-    | { kind: 'grid' }
     /** Cross-workspace view: what needs you, every agent, what changed. Reached
      *  EXPLICITLY with `?view=deck` until it becomes the default. */
     | { kind: 'deck' }
@@ -106,7 +110,6 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     // one that must be asked for -- the Deck is the default (Genie 2).
     const named = one(query.view);
     if (named === 'deck') return { kind: 'deck' };
-    if (named === 'grid') return { kind: 'grid' };
     if (named === 'dashboard') return { kind: 'dashboard' };
 
     const agentId = one(query.agent);
@@ -164,13 +167,6 @@ export function parseViewRoute(query: RouteQuery): GenieView {
  */
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
-        case 'grid':
-            // NAMED, and on its way out. The owner's ruling: the terminal grid leaves the
-            // Floor entirely — a provider TUI opens in its OWN WINDOW (`openTerminalWindow`),
-            // and the only terminal-shaped thing left on the Floor is an agent's workstream,
-            // which is a rendered firehose and not a pty. Until that removal lands this stays
-            // reachable by name so nobody is stranded mid-migration.
-            return { view: 'grid' };
         case 'deck':
             // Also named. Per the spec board the Deck keeps Needs-you and the signal strip
             // and gives up its Agents band to the Dashboard.

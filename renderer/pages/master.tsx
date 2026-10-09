@@ -2761,7 +2761,7 @@ function MasterInner() {
     const keys = useRef({
         // `dashboard` first: it is the default surface, so it is what this ref holds for the
         // one render before `keys.current` is assigned below.
-        view: 'dashboard' as 'deck' | 'dashboard' | 'grid' | 'workbench' | 'agent',
+        view: 'dashboard' as 'deck' | 'dashboard' | 'workbench' | 'agent',
         overlayOpen: false,
         query: {} as RouteQuery,
         sessions: [] as AgentSessionSpec[],
@@ -2877,16 +2877,9 @@ function MasterInner() {
                     case 'genie-os':
                         setOpenDrawer('genie-os');
                         break;
-                    // A SURFACE, not a flyout: the only way back to the 2x2 Floor now
-                    // that the Deck is the default. `mergeViewRoute` rather than
-                    // replacing the query, for the same reason as every other
-                    // navigation here -- `host` and `stage` decide whether this window
-                    // points at a remote machine, and dropping them would silently make
-                    // a remote window local.
-                    case 'grid':
-                        replacePageQuery(mergeViewRoute(pageQuery, { kind: 'grid' }));
-                        break;
-                    // Also a SURFACE rather than a flyout, and routed the same way — through
+                    // A SURFACE rather than a flyout, routed through `mergeViewRoute` so that
+                    // `host` and `stage` survive — they decide whether this window points at
+                    // a remote machine, and dropping them would silently make it local.
                     // `mergeViewRoute`, so a remote window stays remote.
                     case 'dashboard':
                         replacePageQuery(mergeViewRoute(pageQuery, { kind: 'dashboard' }));
