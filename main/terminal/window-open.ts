@@ -52,24 +52,37 @@ export function openTerminalWindow(req: TerminalWindowRequest, ports: WindowOpen
     // tested separately; re-deriving it here would be two places to get it wrong.
     if (!plan.ok) return { ok: false, reason: plan.reason };
 
-    const created =
-        plan.create.kind === 'agent'
-            ? ports.createAgent({
-                  workspaceId: plan.create.workspaceId,
-                  agent: plan.create.agent,
-                  ...(plan.create.command ? { command: plan.create.command } : {}),
-              })
-            : ports.createTerminal({
-                  workspaceId: plan.create.workspaceId,
-                  ...(plan.create.cwd ? { cwd: plan.create.cwd } : {}),
-              });
+    const created: SpecResult =
+        plan.create === null
+            ? // TAKING OVER: the spec exists, so nothing is created and the request's own id
+              // is what the window is addressed to. Routing this through the create branch
+              // would have started a second agent beside the one being taken over — see
+              // `window-plan.test.ts`, which states that hazard in full.
+              {
+                  ok: true,
+                  specId: req.kind === 'existing' ? req.specId : '',
+                  ...(req.kind === 'existing' && req.cwd ? { cwd: req.cwd } : {}),
+              }
+            : plan.create.kind === 'agent'
+              ? ports.createAgent({
+                    workspaceId: plan.create.workspaceId,
+                    agent: plan.create.agent,
+                    ...(plan.create.command ? { command: plan.create.command } : {}),
+                })
+              : ports.createTerminal({
+                    workspaceId: plan.create.workspaceId,
+                    ...(plan.create.cwd ? { cwd: plan.create.cwd } : {}),
+                });
 
     // No window on failure, and the error travels unchanged — it is the only thing that
     // explains what went wrong, and paraphrasing it loses the fix.
     if (!created.ok) return { ok: false, reason: 'create-failed', error: created.error };
 
     const ws = ports.workspaceName(req.workspaceId);
-    const subject = req.kind === 'agent' ? req.agent : 'terminal';
+    // `existing` says "agent" rather than naming one: this layer has the spec id, not the
+    // roster, and inventing a name for a title bar is the kind of small guess that later
+    // reads as a fact.
+    const subject = req.kind === 'agent' ? req.agent : req.kind === 'existing' ? 'agent' : 'terminal';
     ports.openWindow(
         plan.routeFor(created.specId, {
             ...(created.cwd ? { cwd: created.cwd } : {}),

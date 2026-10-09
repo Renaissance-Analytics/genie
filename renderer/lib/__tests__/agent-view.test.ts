@@ -46,25 +46,50 @@ const declared = (over: Partial<AgentSession> = {}) =>
 
 describe('tabs follow fidelity', () => {
     it('a DECLARED agent leads with Conversation', () => {
-        expect(agentViewTabs(declared())).toEqual(['session', 'terminal', 'files', 'changes']);
+        expect(agentViewTabs(declared())).toEqual(['session', 'files', 'changes']);
         expect(defaultTabFor(declared())).toBe('session');
     });
 
-    it('an OBSERVED agent has NO Conversation tab at all, and leads with Terminal', () => {
+    it('an OBSERVED agent has NO Conversation tab at all, and leads with Activity', () => {
         // Not disabled — absent. Genie cannot see inside a TUI, so there is no conversation
         // to show, and claiming otherwise with a dead tab would be a lie in UI form.
         const tabs = agentViewTabs(session());
         expect(tabs).not.toContain('session');
-        expect(tabs).toEqual(['terminal', 'activity', 'files', 'changes']);
-        expect(defaultTabFor(session())).toBe('terminal');
+        expect(tabs).toEqual(['activity', 'files', 'changes']);
+        expect(defaultTabFor(session())).toBe('activity');
     });
 
-    it('an UNKNOWN provider still gets a terminal, because that always works', () => {
-        // `provider: null` means Genie could not resolve what this is. The pty is still
-        // real, so the window is still useful; pretending otherwise would strand the user.
+    it('an UNKNOWN provider still gets Activity, because bytes always work', () => {
+        // `provider: null` means Genie could not resolve what this is. It can still MEASURE
+        // the pty's output, so the window stays useful; pretending otherwise would strand
+        // the user. What it must not do is claim a conversation it cannot see.
         const unknown = session({ session: { ...session().session, provider: null } });
-        expect(agentViewTabs(unknown)).toContain('terminal');
-        expect(defaultTabFor(unknown)).toBe('terminal');
+        expect(agentViewTabs(unknown)).toContain('activity');
+        expect(defaultTabFor(unknown)).toBe('activity');
+    });
+
+    /**
+     * THE TERMINAL IS NOT A TAB ANYWHERE — owner's ruling, 2026-10-08:
+     *
+     *   "The new UX needs the ability to open an agent in a provider TUI but that opens in
+     *    a new window, not in theFloor. the only terminal like ux in the floor is when
+     *    watching an agents workstream (firehose layout) which isn't a real terminal."
+     *
+     * So a pty never mounts inside the Floor. `terminals.openWindow({ kind: 'agent' })`
+     * (Tynn #447) is the one way to one, and the Floor's terminal-shaped surface is the
+     * Stream for a Declared agent and Activity for an Observed one — both rendered from
+     * reported facts, neither an xterm.
+     *
+     * Asserted across EVERY shape rather than on one sample: a tab list that quietly keeps
+     * `terminal` for the unknown case is exactly the kind of leftover that survives a
+     * migration, and it would put a live pty back on the Floor.
+     */
+    it('never offers a Terminal tab, in any shape', () => {
+        const unknown = session({ session: { ...session().session, provider: null } });
+        for (const s of [declared(), session(), unknown]) {
+            expect(agentViewTabs(s)).not.toContain('terminal');
+            expect(defaultTabFor(s)).not.toBe('terminal');
+        }
     });
 
     it('never offers Activity to a Declared agent', () => {

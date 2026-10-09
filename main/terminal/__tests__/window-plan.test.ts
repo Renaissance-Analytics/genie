@@ -19,7 +19,10 @@ describe('a plain terminal window', () => {
         const plan = planTerminalWindow({ kind: 'terminal', workspaceId: 'ws1' });
         expect(plan.ok).toBe(true);
         if (!plan.ok) return;
-        // The whole point: it goes through spec creation, not a bare pty.
+        // The whole point: it goes through spec creation, not a bare pty. `create` is
+        // nullable now because a take-over window creates nothing; this kind always does.
+        expect(plan.create).not.toBeNull();
+        if (!plan.create) return;
         expect(plan.create.kind).toBe('terminal');
         expect(plan.create.workspaceId).toBe('ws1');
     });
@@ -42,6 +45,8 @@ describe('an agent in TUI mode', () => {
         const plan = planTerminalWindow({ kind: 'agent', workspaceId: 'ws1', agent: 'claude' });
         expect(plan.ok).toBe(true);
         if (!plan.ok) return;
+        expect(plan.create).not.toBeNull();
+        if (!plan.create) return;
         expect(plan.create.kind).toBe('agent');
         if (plan.create.kind !== 'agent') return;
         expect(plan.create.agent).toBe('claude');
@@ -80,5 +85,51 @@ describe('closing the window', () => {
 
     it('ends a plain shell, which has nothing to outlive its window', () => {
         expect(closePolicyFor('terminal')).toBe('kill');
+    });
+});
+
+/**
+ * TAKING OVER AN AGENT THAT ALREADY EXISTS.
+ *
+ * Owner's ruling, 2026-10-08: a provider TUI opens in its OWN WINDOW, never on the Floor.
+ * For an agent already running, that window must ATTACH to the pty it already has.
+ *
+ * The hazard this guards is specific and expensive: the only window-opening path that
+ * existed created a spec every time, so wiring "Take over" to it would have started a
+ * SECOND agent — same workspace, same provider, a fresh conversation — while the one you
+ * meant to reach kept running unattended. That is strictly worse than the dead button it
+ * would have replaced, because it looks like it worked.
+ */
+describe('a window onto an agent that is ALREADY running', () => {
+    it('creates nothing — the spec is the one that exists', () => {
+        const plan = planTerminalWindow({ kind: 'existing', workspaceId: 'ws1', specId: 's9' });
+        expect(plan.ok).toBe(true);
+        if (!plan.ok) return;
+        expect(plan.create).toBeNull();
+    });
+
+    it('addresses the window at the EXISTING spec, carrying cwd and workspace', () => {
+        const plan = planTerminalWindow({
+            kind: 'existing',
+            workspaceId: 'ws1',
+            specId: 's9',
+            cwd: '/repo',
+        });
+        expect(plan.ok).toBe(true);
+        if (!plan.ok) return;
+        expect(plan.routeFor('s9', { cwd: '/repo', workspaceId: 'ws1' })).toBe(
+            '?spec=s9&cwd=%2Frepo&ws=ws1',
+        );
+    });
+
+    it('still refuses without a workspace, like every other kind', () => {
+        const plan = planTerminalWindow({ kind: 'existing', workspaceId: '', specId: 's9' });
+        expect(plan.ok).toBe(false);
+    });
+
+    it('DETACHES on close — it is a live pty with work in it', () => {
+        // The one policy that must never be `kill` here: closing a window onto a running
+        // agent would end the work, which is the opposite of taking over.
+        expect(closePolicyFor('existing')).toBe('detach');
     });
 });

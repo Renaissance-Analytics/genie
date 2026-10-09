@@ -2913,14 +2913,25 @@ function MasterInner() {
                 return;
             }
 
-            // ⌘⇧T — take over. A PLACE, not a mode: the agent's own pty, with the url recording
-            // it so refresh and back land in the same place.
+            // ⌘⇧T — take over. A WINDOW, not a tab: the agent's own pty, opened beside the
+            // Floor rather than inside it. `existing` attaches to the spec that is already
+            // running; the creating kinds would start a second agent next to this one.
             if (intent.kind === 'take-over') {
                 if (now.view !== 'agent' || !now.agentId) return;
+                const target = now.sessions.find((s) => s.agentId === now.agentId);
+                // No workspace or no spec means there is nothing to attach to. The key stays
+                // UNHANDLED rather than swallowed, so the chord falls through to the app
+                // instead of looking like a take-over that silently failed.
+                if (!target?.specId || !target.session.workspaceId) return;
                 e.preventDefault();
-                replacePageQuery(
-                    mergeViewRoute(now.query, { kind: 'agent', agentId: now.agentId, tab: 'terminal' }),
-                );
+                void api()
+                    .terminal.openWindow({
+                        kind: 'existing',
+                        workspaceId: target.session.workspaceId,
+                        specId: target.specId,
+                        ...(target.session.cwd ? { cwd: target.session.cwd } : {}),
+                    })
+                    .catch(() => {});
                 return;
             }
         };
@@ -3168,6 +3179,22 @@ function MasterInner() {
                             surface.showAgent ? (
                                 (() => {
                                     const found = sessions.find((x) => x.agentId === surface.showAgent);
+                                    // Captured so the narrowing survives into the handler's
+                                    // closure — a property read cannot be narrowed across one,
+                                    // and widening the API to accept null would move the
+                                    // problem into main rather than solve it.
+                                    const takeOverSpecId = found?.specId ?? null;
+                                    const takeOverWsId = found?.session.workspaceId ?? null;
+                                    const takeOverCwd = found?.session.cwd ?? null;
+                                    // The agent's own spec, for the header's Restart and
+                                    // Settings actions. Both flows already exist and are used
+                                    // by three other surfaces; the Agent view simply never
+                                    // passed them, so `AgentHeaderActions` gated those items
+                                    // off and they have never appeared on the most important
+                                    // screen in the product.
+                                    const agentSpec = takeOverSpecId
+                                        ? (specs.find((s) => s.id === takeOverSpecId) ?? null)
+                                        : null;
                                     // A route naming an agent that no longer exists resolves
                                     // to a SENTENCE, not a blank surface: an empty view would
                                     // read as Genie breaking rather than as a stale link.
@@ -3242,19 +3269,44 @@ function MasterInner() {
                                                     .then(() => loadSessions())
                                                     .catch(() => {});
                                             } } : {})}
-                                            onTakeOver={() => {
-                                                // The pty is one click away and it is the SAME
-                                                // terminal the agent's session belongs to — "take
-                                                // over" is a place to go, not a mode to enter, so
-                                                // it is the Terminal tab and the url records it.
-                                                replacePageQuery(
-                                                    mergeViewRoute(pageQuery, {
-                                                        kind: 'agent',
-                                                        agentId: surface.showAgent!,
-                                                        tab: 'terminal',
-                                                    }),
-                                                );
-                                            }}
+                                            /* ABSENT, not dead, when there is nothing to attach
+                                               to: an agent with no spec or no workspace has no
+                                               pty to take over, and a button that silently does
+                                               nothing is the defect this whole release is about. */
+                                            {...(agentSpec
+                                                ? {
+                                                      onAgentSettings: () => setAgentEditSpec(agentSpec),
+                                                      onRestartAgent: (mode: RestartMode) =>
+                                                          void restartAgentSpec(agentSpec, mode),
+                                                  }
+                                                : {})}
+                                            {...(takeOverSpecId && takeOverWsId
+                                                ? {
+                                            onTakeOver: () => {
+                                                /**
+                                                 * TAKE OVER OPENS A WINDOW — owner's ruling,
+                                                 * 2026-10-08: a provider TUI opens in its own
+                                                 * window, never on the Floor. This used to route
+                                                 * to a Terminal TAB, which no longer exists.
+                                                 *
+                                                 * `kind: 'existing'` with the agent's own spec id,
+                                                 * so it ATTACHES to the pty already running. The
+                                                 * creating kinds would have started a second agent
+                                                 * beside the one being taken over — same
+                                                 * workspace, fresh conversation — while the real
+                                                 * one carried on unattended.
+                                                 */
+                                                void api()
+                                                    .terminal.openWindow({
+                                                        kind: 'existing',
+                                                        workspaceId: takeOverWsId,
+                                                        specId: takeOverSpecId,
+                                                        ...(takeOverCwd ? { cwd: takeOverCwd } : {}),
+                                                    })
+                                                    .catch(() => {});
+                                            },
+                                                  }
+                                                : {})}
                                             onTab={(t) => {
                                                 // The tab lives in the URL, so refresh, back and a
                                                 // shared link all land in the same place.

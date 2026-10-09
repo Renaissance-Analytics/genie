@@ -41,7 +41,13 @@ function declaredHandlers(componentFile: string): string[] {
     // only in prose does not count as declared.
     const executable = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     const found = new Set<string>();
-    for (const m of executable.matchAll(/^\s*(on[A-Z][A-Za-z0-9]*)\??\s*:/gm)) found.add(m[1]!);
+    // The type must be a FUNCTION type — `onSend?: (text: string) => void`. Requiring the
+    // `(` is what separates a declared handler from an object-literal field that merely
+    // starts with `on`: `AgentView` builds a chrome input containing
+    // `onRestart: !!onRestartAgent`, and a looser pattern reported those as unwired props.
+    // Two of the first four findings here were that false positive, which is the signal to
+    // suspect the guard rather than the code.
+    for (const m of executable.matchAll(/^\s*(on[A-Z][A-Za-z0-9]*)\??\s*:\s*\(/gm)) found.add(m[1]!);
     return [...found].sort();
 }
 
@@ -66,14 +72,34 @@ function passedProps(hostFile: string, component: string): string[] {
     }
     expect(end, `could not find the end of the <${component}> tag`).toBeGreaterThan(-1);
 
-    const tag = src.slice(open, end);
-    return [...tag.matchAll(/(?:^|\s)([a-zA-Z][A-Za-z0-9]*)=/g)].map((m) => m[1]!);
+    // Comments are stripped before reading props, or a handler NAMED in a comment inside the
+    // tag would count as passed — the guard would then be satisfied by prose about the thing
+    // it is meant to require.
+    const tag = src
+        .slice(open, end)
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+
+    // Two forms, because both are idiomatic here and only counting the first would make the
+    // guard fail on correct code:
+    //   onSend={...}                               a plain prop
+    //   {...(cond ? { onTakeOver: ... } : {})}     CONDITIONALLY passed, which is how this
+    //                                              codebase withholds a control that has
+    //                                              nothing behind it rather than rendering a
+    //                                              dead one.
+    return [
+        ...[...tag.matchAll(/(?:^|\s)([a-zA-Z][A-Za-z0-9]*)=/g)].map((m) => m[1]!),
+        ...[...tag.matchAll(/(?:^|[{,\s])(on[A-Z][A-Za-z0-9]*)\s*:/g)].map((m) => m[1]!),
+    ];
 }
 
 const SURFACES: Array<{ component: string; file: string; host: string }> = [
     { component: 'ChatFlyout', file: 'components/Master/ChatFlyout.tsx', host: 'pages/master.tsx' },
     { component: 'Deck', file: 'components/Master/Deck.tsx', host: 'pages/master.tsx' },
     { component: 'Dashboard', file: 'components/Master/Dashboard.tsx', host: 'pages/master.tsx' },
+    // The most important screen in the product, and the one with the most optional handlers
+    // — approvals, cancel, take-over, restart, settings. Exactly the shape that failed.
+    { component: 'AgentView', file: 'components/Master/AgentView.tsx', host: 'pages/master.tsx' },
 ];
 
 describe('the guard can see what it is guarding', () => {
