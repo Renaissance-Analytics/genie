@@ -8,6 +8,25 @@
 # Electron draws to a virtual display that exists only inside the VM, so nothing ever
 # appears on the Windows desktop — which is the entire point (RULES.md:154).
 #
+# KNOWN DIVERGENCE — four specs fail HERE and pass on CI's ubuntu runner.
+#
+# Measured on `feat/workspace-file-panel-states`, whose CI run is green on all three
+# platforms at the same SHA:
+#
+#   e2e/agent-access.spec.ts:53   expect('.agent-form-ws-row').toHaveCount(1) -> got 10
+#   e2e/agent-access.spec.ts:77   same shape
+#   e2e/workspace-hibernation.spec.ts:80, :147   15s / 1m timeouts
+#
+# They fail in isolation too, so it is NOT contention from running the full suite. Ten
+# workspaces where the fixture seeds one points at state this VM keeps and a fresh CI runner
+# never has — `seedWorkspace` replaces its OWN id, but specs that CREATE workspaces leave
+# them behind. The `rm -rf` below fixed the same class for `genie-apps`; this one is not yet
+# located, and I would rather say so than let the next person read four red specs as a
+# regression in their branch.
+#
+# So: a red here is a QUESTION, not a verdict. Check CI before believing it, and check these
+# four first. Everything else in the suite has matched CI.
+#
 # THIS IS NOT A REPLACEMENT FOR CI.
 #
 # CI runs a three-OS matrix and this is the Linux leg alone. The repo's own history is full
