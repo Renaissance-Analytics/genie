@@ -3298,6 +3298,17 @@ function MasterInner() {
                                         name: w.project_name,
                                         path: w.path,
                                     }))}
+                                    /* The door. Without it this board showed every agent and
+                                       opened none of them, which is how beta.1 left the owner
+                                       on a screen with nothing to click. `mergeViewRoute`
+                                       rather than replacing the query, so `host` and `stage`
+                                       survive and a remote window stays remote. */
+                                    onOpenAgent={(agentId) =>
+                                        replacePageQuery(
+                                            mergeViewRoute(pageQuery, { kind: 'agent', agentId, tab: null }),
+                                        )
+                                    }
+                                    onAddAgent={(workspaceId) => setNewAgentWsId(workspaceId)}
                                 />
                             ) : surface.showDeck ? (
                                 <Deck
@@ -3554,6 +3565,43 @@ function MasterInner() {
                     pinned={pinnedDock === 'chat'}
                     onTogglePin={() => togglePin('chat')}
                     onClose={() => setOpenDrawer((d) => closeDrawerNext(d, 'chat'))}
+                    /* The three below were DECLARED and never passed, so the composer typed
+                       and sent nothing, Stop did nothing, and an approval could not be
+                       answered. They are optional props, so nothing failed -- not the
+                       compiler, not review, not a screenshot. `surface-handlers-wired`
+                       now fails the build on that shape rather than trusting anyone to
+                       notice it. */
+                    onSend={async (text) => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return false;
+                        const r = await api()
+                            .agentSession.prompt(specId, text)
+                            .catch(() => null);
+                        void loadSessions();
+                        // `delivered` is the honest answer, and it is NOT `ok`: a parked or
+                        // sessionless agent returns a named reason, and the composer must
+                        // keep what you typed rather than eat it.
+                        return r?.ok === true && r.delivered;
+                    }}
+                    onStop={() => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return;
+                        void api()
+                            .agentSession.cancel(specId)
+                            .then(() => loadSessions())
+                            .catch(() => {});
+                    }}
+                    onDecide={(id, decision) => {
+                        const specId = chatSession?.specId;
+                        if (!specId) return;
+                        // ChatFlyout says `deny`; the session API distinguishes once from
+                        // always. Deny maps to ONCE deliberately -- a standing denial is a
+                        // bigger commitment than a button labelled "Deny" promises.
+                        void api()
+                            .agentSession.decide(specId, id, decision === 'deny' ? 'deny-once' : decision)
+                            .then(() => loadSessions())
+                            .catch(() => {});
+                    }}
                 />
             ) : null}
             <GithubCapabilitiesFlyout

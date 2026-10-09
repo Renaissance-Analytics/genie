@@ -112,25 +112,27 @@ export function parseViewRoute(query: RouteQuery): GenieView {
     if (workspaceId) return { kind: 'workbench', workspaceId };
 
     /**
-     * No params: THE GRID — REVERTED from the Deck in 2.0.0-beta.2.
+     * No params: THE WORKFLOW DASHBOARD.
      *
-     * beta.1 made the Deck the default. It stranded the owner on first launch, and the
-     * reason is worth keeping, because the reasoning that produced it was not obviously
-     * wrong: a 2x2 of transcripts really is maximum pixels and near-zero information, and
-     * the Deck really does answer "what needs me" better.
+     * The owner's instruction, and the spec board's own architecture: the Dashboard
+     * "absorbs the Deck's Agents band and the Floor as a cross-workspace glance", and
+     * "the top level shows status and communication; work opens one level down".
      *
-     * What was missed is that the Deck had NO WAY OUT BY MOUSE. Its roster rows carried no
-     * handler, the workspace rail changed `activeWorkspaceId` without touching the route so
-     * clicking a workspace altered nothing visible, and the only door to the grid was a ⌘K
-     * palette row — which `feature-reachability` judged sufficient because it checks that a
-     * feature HAS an entry, not that a human can find one. A palette row is not an
-     * affordance.
+     * beta.1 made the DECK the default instead and stranded the owner on first launch. The
+     * reasoning behind that flip was not wrong — a 2x2 of transcripts really is maximum
+     * pixels and near-zero information. What was missed is that the destination had NO WAY
+     * OUT BY MOUSE: roster rows carried no handler, the workspace rail changed
+     * `activeWorkspaceId` without touching the route so clicking a workspace altered
+     * nothing visible, and the only door out was a palette row — which
+     * `feature-reachability` judged sufficient, because it checks that a feature HAS an
+     * entry, not that a human can find one. A palette row is not an affordance.
      *
-     * So the default goes back to the surface that has always been navigable, and it moves
-     * again only when `surface-exits.test.ts` can prove the destination is escapable with a
-     * mouse. The Deck is `?view=grid`'s mirror now: reached by name, and reachable.
+     * So this default is conditional on the destination being escapable, and that is now a
+     * test rather than a promise: `Dashboard` declares `onOpenAgent`, `dashboard-render`
+     * proves a wired row is a real `<button>` carrying its agent id, and
+     * `surface-handlers-wired` fails the build if `master.tsx` ever stops passing it.
      */
-    return { kind: 'grid' };
+    return { kind: 'dashboard' };
 }
 
 /**
@@ -145,14 +147,21 @@ export function parseViewRoute(query: RouteQuery): GenieView {
 export function viewRouteQuery(view: GenieView): Record<string, string> {
     switch (view.kind) {
         case 'grid':
-            // The DEFAULT carries no params, so the url you land on stays clean.
-            return {};
+            // NAMED, and on its way out. The owner's ruling: the terminal grid leaves the
+            // Floor entirely — a provider TUI opens in its OWN WINDOW (`openTerminalWindow`),
+            // and the only terminal-shaped thing left on the Floor is an agent's workstream,
+            // which is a rendered firehose and not a pty. Until that removal lands this stays
+            // reachable by name so nobody is stranded mid-migration.
+            return { view: 'grid' };
         case 'deck':
-            // The Deck is now the one you ask for. It must be NAMED, or parsing its own url
-            // would hand back the grid and the two halves would disagree.
+            // Also named. Per the spec board the Deck keeps Needs-you and the signal strip
+            // and gives up its Agents band to the Dashboard.
             return { view: 'deck' };
         case 'dashboard':
-            return { view: 'dashboard' };
+            // The DEFAULT carries no params, so the url you land on stays clean. It must move
+            // together with `parseViewRoute`'s default or the two halves of this module
+            // disagree about what an empty url means.
+            return {};
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':

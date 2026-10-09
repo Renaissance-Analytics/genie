@@ -63,9 +63,27 @@ function Delivery({ delivery }: { delivery: DashboardDelivery }): React.JSX.Elem
     );
 }
 
-function Row({ row }: { row: DashboardRow }): React.JSX.Element {
+function Row({ row, onOpen }: { row: DashboardRow; onOpen?: () => void }): React.JSX.Element {
+    /**
+     * THE ROW IS THE DOOR.
+     *
+     * Same idiom as the stream's rows, and for the same reason: a `<div>` with an onClick is
+     * unreachable by keyboard and announces nothing, while a row with nothing behind it stays
+     * inert rather than becoming a control that does nothing.
+     *
+     * beta.1 shipped this surface with neither — no handler and no element — so the board the
+     * owner was meant to work from could not be worked from at all. `data-agent` is carried on
+     * the element so a row wired to the wrong agent is a visible defect, not a silent one.
+     */
+    const Tag = onOpen ? 'button' : 'div';
     return (
-        <div className="dash-row" data-state={row.state} data-fidelity={row.fidelity}>
+        <Tag
+            className="dash-row"
+            data-state={row.state}
+            data-fidelity={row.fidelity}
+            data-agent={row.agentId}
+            {...(onOpen ? { type: 'button' as const, onClick: onOpen } : {})}
+        >
             <div className="dash-cell dash-agent">
                 <StateDot row={row} />
                 <Text size="sm" className="dash-name">
@@ -134,11 +152,19 @@ function Row({ row }: { row: DashboardRow }): React.JSX.Element {
                     </>
                 ) : null}
             </div>
-        </div>
+        </Tag>
     );
 }
 
-function Group({ group }: { group: DashboardGroup }): React.JSX.Element {
+function Group({
+    group,
+    onOpenAgent,
+    onAddAgent,
+}: {
+    group: DashboardGroup;
+    onOpenAgent?: (agentId: string) => void;
+    onAddAgent?: (workspaceId: string) => void;
+}): React.JSX.Element {
     return (
         <div className="dash-group">
             <div className="dash-group-head">
@@ -155,12 +181,28 @@ function Group({ group }: { group: DashboardGroup }): React.JSX.Element {
             {group.isEmpty ? (
                 // KEPT, not hidden. A workspace that disappears when its agents stop is a
                 // workspace you cannot start work in — so it offers the way in instead.
+                // "Offers" is the operative word, and it took a button: the row printed
+                // "No agents" and left you with nowhere to go from the empty state.
                 <div className="dash-empty-row">
                     <Text size="sm">No agents</Text>
+                    {onAddAgent ? (
+                        <button
+                            type="button"
+                            className="dash-add-agent"
+                            data-workspace={group.key}
+                            onClick={() => onAddAgent(group.key)}
+                        >
+                            Add agent
+                        </button>
+                    ) : null}
                 </div>
             ) : null}
             {group.rows.map((row) => (
-                <Row key={row.agentId} row={row} />
+                <Row
+                    key={row.agentId}
+                    row={row}
+                    {...(onOpenAgent ? { onOpen: () => onOpenAgent(row.agentId) } : {})}
+                />
             ))}
         </div>
     );
@@ -189,10 +231,20 @@ export function Dashboard({
     // clock. The decay in `statusDetail` is coarse (minutes), so one value per render is right
     // — a per-second tick to animate a duration is heat, not oversight.
     now = Date.now(),
+    onOpenAgent,
+    onAddAgent,
 }: {
     sessions: AgentSession[];
     workspaces: DashboardWorkspace[];
     now?: number;
+    /**
+     * Open an agent. THE reason this surface can hold the default — "the top level shows
+     * status and communication; work opens one level down", and without this there was no
+     * level down to open.
+     */
+    onOpenAgent?: (agentId: string) => void;
+    /** The way into a workspace that has no agents yet. */
+    onAddAgent?: (workspaceId: string) => void;
 }): React.JSX.Element {
     const view = dashboardView(sessions, { now, workspaces });
 
@@ -224,7 +276,12 @@ export function Dashboard({
                     <span>Context</span>
                 </div>
                 {view.groups.map((group) => (
-                    <Group key={group.key} group={group} />
+                    <Group
+                        key={group.key}
+                        group={group}
+                        {...(onOpenAgent ? { onOpenAgent } : {})}
+                        {...(onAddAgent ? { onAddAgent } : {})}
+                    />
                 ))}
             </div>
         </div>

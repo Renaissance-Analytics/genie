@@ -102,7 +102,13 @@ export function ChatFlyout({
     pinned: boolean;
     onTogglePin?: () => void;
     onClose?: () => void;
-    onSend?: (text: string) => void;
+    /**
+     * Deliver the draft. Returning `false` means it did NOT land, and the composer puts the
+     * text back — the session API distinguishes a delivered send from a parked or
+     * sessionless one, and losing what you typed to a silent refusal is the one failure
+     * here you cannot undo.
+     */
+    onSend?: (text: string) => void | boolean | Promise<boolean | void>;
     onStop?: () => void;
     onDecide?: (id: string, decision: 'allow-once' | 'allow-always' | 'deny') => void;
     now?: number;
@@ -110,11 +116,15 @@ export function ChatFlyout({
     const view = chatFlyoutView({ session, now });
     const [draft, setDraft] = useState('');
 
-    const send = () => {
+    const send = async () => {
         const text = draft.trim();
         if (!text || !view.canSend) return;
-        onSend?.(text);
+        // Cleared optimistically so the composer feels immediate, and RESTORED below if the
+        // send did not land. Clearing unconditionally — which this did — silently destroyed
+        // the message whenever the agent was parked or had no session.
         setDraft('');
+        const delivered = await onSend?.(text);
+        if (delivered === false) setDraft(text);
     };
 
     return (

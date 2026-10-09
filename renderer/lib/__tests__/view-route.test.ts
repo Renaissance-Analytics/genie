@@ -8,7 +8,7 @@ import { mergeViewRoute, parseViewRoute, viewRouteQuery, type GenieView } from '
  * decisions that make it addressable before any surface is built on it.
  */
 describe('parseViewRoute', () => {
-    it('defaults to THE DECK when nothing is in the url', () => {
+    it('defaults to THE WORKFLOW DASHBOARD when nothing is in the url', () => {
         // THE GENIE 2 FLIP. It defaulted to the grid while the Deck was a parallel surface.
         // The Deck now opens, and the grid is reached with `?view=grid`.
         //
@@ -17,7 +17,7 @@ describe('parseViewRoute', () => {
         // survivable now for one reason: `floorSurface` CONCEALS the grid rather than
         // unmounting it, so no live xterm is destroyed, and the E2E specs that need the grid
         // now ask for it by name.
-        expect(parseViewRoute({})).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({})).toEqual({ kind: 'dashboard' });
     });
 
     it('still reaches the grid, by name', () => {
@@ -79,23 +79,23 @@ describe('parseViewRoute', () => {
 
     it('falls back to the default for a blank id', () => {
         // `?ws=` must not open a Workbench for the workspace named "".
-        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ ws: '' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ ws: '   ' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ agent: '' })).toEqual({ kind: 'dashboard' });
     });
 
     it('falls back to the default for a view it cannot satisfy', () => {
         // A Workbench with no workspace is not a thing. Never a blank screen.
-        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'grid' });
-        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'grid' });
+        expect(parseViewRoute({ view: 'workbench' })).toEqual({ kind: 'dashboard' });
+        expect(parseViewRoute({ view: 'nonsense' })).toEqual({ kind: 'dashboard' });
     });
 });
 
 describe('viewRouteQuery', () => {
-    it('gives the DEFAULT a clean url — and that is now the grid', () => {
+    it('gives the DEFAULT a clean url — and that is now the Dashboard', () => {
         // The view you sit on most carries no params. This moved with the default, exactly
         // as the previous version of this test said it would.
-        expect(viewRouteQuery({ kind: 'grid' })).toEqual({});
+        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({});
     });
 
     it('names the DECK explicitly, because it is no longer the default', () => {
@@ -138,7 +138,7 @@ describe('mergeViewRoute', () => {
         // The DEFAULT (now the grid) adds nothing; the Deck names itself. Either way `host`
         // survives, which is the point — it is bound before load and decides whether the
         // renderer talks to a remote machine.
-        expect(mergeViewRoute({ host: 'h1' }, { kind: 'grid' })).toEqual({ host: 'h1' });
+        expect(mergeViewRoute({ host: 'h1' }, { kind: 'dashboard' })).toEqual({ host: 'h1' });
         expect(mergeViewRoute({ host: 'h1' }, { kind: 'deck' })).toEqual({ host: 'h1', view: 'deck' });
     });
 
@@ -162,18 +162,18 @@ describe('mergeViewRoute', () => {
         expect(mergeViewRoute({ agent: 'a1', tab: 'terminal' }, { kind: 'workbench', workspaceId: 'w1' })).toEqual(
             { ws: 'w1' },
         );
-        // And a stale `view=grid` is dropped when navigating away from it.
-        expect(mergeViewRoute({ view: 'grid' }, { kind: 'grid' })).toEqual({});
+        // And a stale `view=dashboard` is dropped when navigating away from it.
+        expect(mergeViewRoute({ view: 'dashboard' }, { kind: 'dashboard' })).toEqual({});
     });
 
     it('preserves a param it has never heard of', () => {
         // Route ownership is a CLOSED list; everything else belongs to whoever put
         // it there, including params added after this module was written.
-        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'grid' })).toEqual({ somethingNew: 'x' });
+        expect(mergeViewRoute({ somethingNew: 'x' }, { kind: 'dashboard' })).toEqual({ somethingNew: 'x' });
     });
 
     it('preserves a repeated non-route param verbatim', () => {
-        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'grid' })).toEqual({ tags: ['a', 'b'] });
+        expect(mergeViewRoute({ tags: ['a', 'b'] }, { kind: 'dashboard' })).toEqual({ tags: ['a', 'b'] });
     });
 });
 
@@ -195,7 +195,7 @@ describe('the Dashboard route', () => {
     it('round-trips through viewRouteQuery', () => {
         // The two halves must agree or a link built by one is misread by the other — the
         // failure mode the `grid` comment in `view-route.ts` warns about by name.
-        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({ view: 'dashboard' });
+        expect(viewRouteQuery({ kind: 'dashboard' })).toEqual({});
         expect(parseViewRoute(viewRouteQuery({ kind: 'dashboard' }))).toEqual({ kind: 'dashboard' });
     });
 

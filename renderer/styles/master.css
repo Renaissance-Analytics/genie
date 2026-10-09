@@ -8702,6 +8702,53 @@ body.gutter-dragging .grid-gutter {
     border-bottom: 1px solid var(--border-1);
 }
 
+/* A ROW THAT OPENS SOMETHING IS A BUTTON.
+   It carries the same grid as the div form, so the columns cannot drift between a wired and
+   an unwired row, and it resets the chrome a <button> arrives with — background, border,
+   font and centred text would all break the table. Same treatment as `button.stream-event`,
+   which is the established pattern for an activatable row here. */
+button.dash-row {
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-1);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+button.dash-row:hover {
+    background: var(--bg-1);
+}
+button.dash-row:focus-visible {
+    /* Inset, so focusing a row never changes its box and shifts its neighbours. */
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* The way into a workspace with no agents. Quiet by default — the empty row is a statement
+   of fact first and an invitation second. */
+.dash-add-agent {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 10px;
+    margin-left: 12px;
+    cursor: pointer;
+}
+.dash-add-agent:hover {
+    background: var(--bg-1);
+}
+.dash-add-agent:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
+}
+
 .dash-col-head {
     height: 28px;
     font-size: 11px;
