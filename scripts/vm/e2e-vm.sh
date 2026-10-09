@@ -58,6 +58,18 @@ npx playwright install chromium
 say "native modules"
 npm run pretest:e2e
 
+say "reset per-run state"
+# CI gets a CLEAN MACHINE for every run; this VM does not, and that difference is not
+# cosmetic. `genie-apps.spec.ts` scaffolds into `~/genie-apps/<slug>.gapp` and the product
+# refuses to scaffold into a non-empty folder — correctly — so the second run onward fails
+# four specs with "Target folder … is not empty".
+#
+# Measured, not guessed: that is exactly what happened on the second run here, and it
+# presents as four failures at 5-7ms each. A spec that fails in single-digit milliseconds
+# did not run; it inherited a broken setup. Without this reset the VM would start reporting
+# failures that CI does not have, and a local harness nobody trusts is worse than none.
+rm -rf "$HOME/genie-apps"
+
 say "suite"
 # xvfb-run gives Electron a display inside the VM. `--auto-servernum` so repeat runs do not
 # collide on :99 — without it a second run fails with a server-already-active error that
