@@ -8,6 +8,7 @@ import { isE2E, isE2EMobile, isE2ETunnel } from './flags';
 import { registerE2EMocks, startMobileE2EServer } from './mock';
 import { startTunnelE2EHarness } from './tunnel';
 import { registerAppsE2E } from './apps';
+import { e2eViewQuery } from './view-query';
 import { seedAgentAccessE2E } from './agent-access';
 import { seedAgentManagerE2E } from './agent-manager';
 import { seedAgentPulseE2E } from './agent-pulse';
@@ -275,8 +276,9 @@ function showE2EWindow(host: E2EHost): void {
      * about the PANEL GRID ask for it by name (`view=grid`) rather than relying on it being
      * the default, which it no longer is.
      */
-    const e2eView = process.env.GENIE_E2E_VIEW?.trim();
-    const viewQuery = e2eView ? `?view=${encodeURIComponent(e2eView)}` : '';
+    // `view-query.ts` owns the translation, because the Workbench is addressed by `?ws=` and
+    // has no `view` name — a detail that is invisible when it is wrong and is now tested.
+    const viewQuery = e2eViewQuery(process.env.GENIE_E2E_VIEW);
     if (host.isDev) {
         win.loadURL(`${host.devServerOrigin}/${page}${viewQuery}`);
     } else {
