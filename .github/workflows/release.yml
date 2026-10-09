@@ -1,8 +1,19 @@
 name: Release
 
-# Builds signed installers for Windows, macOS, and Linux on tag push.
+# Builds signed installers for Windows and Linux on tag push.
 # Each platform runs on its native runner so node-pty + better-sqlite3
 # native modules link against the right ABI.
+#
+# macOS is PAUSED, not removed — owner's call, 2026-10-09: "let's drop mac support for
+# now, only ship to windows and linux". It was the only platform failing E2E, and it has
+# never been signable here anyway (the Developer ID secrets are unset, so every build was
+# unsigned and Gatekeeper would refuse it).
+#
+# The macOS build and signing-verification steps below are KEPT and are inert: they are
+# guarded by `runner.os == 'macOS'`, which cannot be true while the matrix has no macOS
+# entry. Re-enabling is one line — put `- os: macos-latest` / `artifact: 'Genie-*.dmg'`
+# back in the matrix — and the same goes for `test-build.yml` and the `e2e.yml` matrix.
+# Deleting the steps would make coming back a rewrite instead.
 #
 # Required secrets (configure under repo Settings → Secrets and variables
 # → Actions). Without them the build still runs but produces unsigned
@@ -108,8 +119,6 @@ jobs:
             # and the portable build (Genie-*.exe without the Setup-
             # prefix) so both get attached to the release.
             artifact: 'Genie*.exe'
-          - os: macos-latest
-            artifact: 'Genie-*.dmg'
           - os: ubuntu-latest
             artifact: 'Genie-*.AppImage'
     runs-on: ${{ matrix.os }}

@@ -29,8 +29,6 @@ jobs:
           # keep the pin identical to the real release path.
           - os: windows-2022
             artifact: 'Genie*.exe'
-          - os: macos-latest
-            artifact: 'Genie-*.dmg'
           - os: ubuntu-latest
             artifact: 'Genie-*.AppImage'
     runs-on: ${{ matrix.os }}
