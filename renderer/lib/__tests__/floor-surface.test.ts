@@ -40,7 +40,7 @@ describe('floorSurface', () => {
     it('resolves an agent route to that AGENT, no longer falling back to the grid', () => {
         // It used to fall back because the Agent view did not exist -- this file said so.
         // It exists now, so the link resolves to what it names.
-        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
             showDeck: false,
             showDashboard: false,
             hideGrid: true,
@@ -57,7 +57,7 @@ describe('floorSurface', () => {
             { kind: 'deck' } as const,
             { kind: 'dashboard' } as const,
             { kind: 'workbench', workspaceId: 'w' } as const,
-            { kind: 'agent', agentId: 'a', tab: null } as const,
+            { kind: 'agent', agentId: 'a', tab: null, lanes: null } as const,
         ]) {
             const s = floorSurface(view);
             // The CLOSED LIST is the assertion: a new flag has to be added here, in a diff a
@@ -116,7 +116,7 @@ describe('the agent route now RENDERS the agent view', () => {
     it('reports the agent to show, and conceals the grid', () => {
         // It used to fall back to the grid because the Agent view did not exist. It does
         // now, so a link to an agent resolves to that agent.
-        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
             showDeck: false,
             showDashboard: false,
             hideGrid: true,
@@ -128,7 +128,7 @@ describe('the agent route now RENDERS the agent view', () => {
     it('CONCEALS the grid rather than unmounting it', () => {
         // Same hazard as the Deck: every terminal panel owns a live xterm bound to a pty,
         // and unmounting the grid would remount them all and reset the terminals.
-        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null }).hideGrid).toBe(true);
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null, lanes: null }).hideGrid).toBe(true);
     });
 
     it('shows no agent for any other route', () => {
@@ -167,7 +167,7 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
     it('does NOT offer it on an Agent view', () => {
         // The Agent view has its own header, with the controls that act on an agent. A layout
         // picker for a grid behind it is chrome for somewhere else.
-        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null }).showGridChrome).toBe(false);
+        expect(floorSurface({ kind: 'agent', agentId: 'a1', tab: null, lanes: null }).showGridChrome).toBe(false);
     });
 
     it('tracks the grid exactly — it is never offered while the grid is concealed', () => {
@@ -177,7 +177,7 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
             { kind: 'grid' } as const,
             { kind: 'deck' } as const,
             { kind: 'workbench', workspaceId: 'w1' } as const,
-            { kind: 'agent', agentId: 'a1', tab: null } as const,
+            { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
         ]) {
             const surface = floorSurface(view);
             expect(surface.showGridChrome).toBe(!surface.hideGrid);
@@ -189,7 +189,7 @@ describe('the GRID TOOLBAR belongs to the grid', () => {
         for (const view of [
             { kind: 'grid' } as const,
             { kind: 'deck' } as const,
-            { kind: 'agent', agentId: 'a1', tab: null } as const,
+            { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
         ]) {
             expect(Object.keys(floorSurface(view))).not.toContain('unmountGrid');
         }
@@ -222,7 +222,7 @@ describe('the Workflow Dashboard surface', () => {
             { kind: 'dashboard' } as const,
             { kind: 'grid' } as const,
             { kind: 'workbench', workspaceId: 'w1' } as const,
-            { kind: 'agent', agentId: 'a1', tab: null } as const,
+            { kind: 'agent', agentId: 'a1', tab: null, lanes: null } as const,
         ]) {
             const surface = floorSurface(view);
             expect(surface.showDeck && surface.showDashboard).toBe(false);

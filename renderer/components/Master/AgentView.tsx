@@ -4,6 +4,7 @@ import type { AgentSession } from '../../../main/agentsession/model';
 import { knownFacts, sessionFidelity } from '../../../main/agentsession/model';
 import { agentViewTabs, defaultTabFor, parkedApproval, type AgentViewTab } from '../../lib/agent-view';
 import { AgentStream } from './AgentStream';
+import type { LaneSpan } from '../../lib/agent-lanes';
 // The LEAF, not `./rate-limit` — that one imports prism's types and the renderer boundary
 // test refuses a `main/` module with a bare package specifier in it.
 import { rateLimitSummary } from '../../../main/agentsession/rate-limit-headroom';
@@ -88,6 +89,11 @@ export interface AgentViewProps {
     spec?: AgentSpecLike | null;
     onRestartAgent?: (mode: RestartMode) => void;
     onAgentSettings?: () => void;
+    /** §5.2's Lanes pulldown (`L`) — closed by default; it is an instrument, not chrome. */
+    lanesOpen?: boolean;
+    /** The dragged window, parsed from the url so a refresh and a shared link agree. */
+    lanesRange?: LaneSpan | null;
+    onLanesRange?: (range: LaneSpan | null) => void;
     now?: number;
 }
 
@@ -125,6 +131,9 @@ export function AgentView({
     spec,
     onRestartAgent,
     onAgentSettings,
+    lanesOpen = false,
+    lanesRange = null,
+    onLanesRange,
     now = Date.now(),
 }: AgentViewProps): React.JSX.Element {
     const tabs = agentViewTabs(session);
@@ -245,7 +254,13 @@ export function AgentView({
                           * is a real change — but doing it here would leave this surface with
                           * no way to type before the flyout is the default way in.
                           */}
-                        <AgentStream session={session} now={now} />
+                        <AgentStream
+                            session={session}
+                            now={now}
+                            lanesOpen={lanesOpen}
+                            range={lanesRange}
+                            {...(onLanesRange ? { onRange: onLanesRange } : {})}
+                        />
 
                         {parked ? (
                             <Card className="agent-approval">

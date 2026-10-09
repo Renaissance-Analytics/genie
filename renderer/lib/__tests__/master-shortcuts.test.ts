@@ -296,3 +296,30 @@ describe('the chat shortcuts', () => {
         expect(resolveShortcut(key('j'), 'text')).toEqual({ kind: 'chat' });
     });
 });
+
+/**
+ * `L` — the Lanes pulldown (§5.2, "New keys: ... L").
+ *
+ * An unmodified letter, so it obeys THE SAFETY RULE: it is a command only on Genie's own
+ * surface. In a field or a TUI it is the letter `l`, because somewhere in this app a person
+ * is always typing prose and a timeline that opens mid-word is worse than no shortcut.
+ */
+describe('L opens the lanes', () => {
+    it('is a command on Genie’s own surface', () => {
+        expect(resolveShortcut(ev({ key: 'l' }), 'surface')).toEqual({ kind: 'lanes' });
+        expect(resolveShortcut(ev({ key: 'L' }), 'surface')).toEqual({ kind: 'lanes' });
+    });
+
+    it('is just a letter in a terminal or a field', () => {
+        expect(resolveShortcut(ev({ key: 'l' }), 'terminal')).toBeNull();
+        expect(resolveShortcut(ev({ key: 'l' }), 'text')).toBeNull();
+    });
+
+    it('is NOT claimed with a modifier, which belongs to the browser and the OS', () => {
+        // Ctrl/Cmd-L is the address bar, and Alt is never part of a Genie chord.
+        expect(resolveShortcut(ev({ key: 'l', ctrlKey: true }), 'surface')).not.toEqual({
+            kind: 'lanes',
+        });
+        expect(resolveShortcut(ev({ key: 'l', altKey: true }), 'surface')).toBeNull();
+    });
+});

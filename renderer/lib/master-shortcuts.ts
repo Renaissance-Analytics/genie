@@ -71,6 +71,8 @@ export type ShortcutIntent =
     | { kind: 'chat' }
     /** Pin or unpin chat at the right edge. One dock slot, so pinning it undocks whatever was. */
     | { kind: 'chat-pin' }
+    /** Open or close §5.2's Lanes pulldown over the agent's stream. */
+    | { kind: 'lanes' }
     /** Jump to the nth agent (1-based; there is no slot 0). */
     | { kind: 'agent-slot'; slot: number }
     /** Take over an agent's terminal, or hand it back — one toggle, both ways. */
@@ -158,6 +160,12 @@ export function resolveShortcut(e: ShortcutKeyEvent, focus: FocusOwner = 'surfac
         case 'd':
         case 'D':
             return { kind: 'approval', decision: 'deny' };
+        // §5.2's Lanes pulldown. Unmodified on purpose: Ctrl/Cmd-L is the address bar
+        // everywhere else, and taking it would be the kind of borrowed chord people only
+        // notice when it stops doing what every other app does.
+        case 'l':
+        case 'L':
+            return { kind: 'lanes' };
         default:
             return null;
     }

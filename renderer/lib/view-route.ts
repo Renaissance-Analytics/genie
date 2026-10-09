@@ -62,7 +62,21 @@ export type GenieView =
     | { kind: 'workbench'; workspaceId: string }
     /** One agent. `tab: null` means "not chosen yet"; the surface picks a default
      *  from the agent's fidelity, which the route cannot know. */
-    | { kind: 'agent'; agentId: string; tab: AgentTab | null };
+    | {
+          kind: 'agent';
+          agentId: string;
+          tab: AgentTab | null;
+          /**
+           * The lanes range, raw (`"<from>-<to>"`), or null for no filter.
+           *
+           * Raw rather than parsed so this module stays free of the stream's vocabulary —
+           * `agent-lanes.ts` owns what a range means and refuses a malformed one. It is a
+           * ROUTE key, which is what makes it drop when you navigate to another agent: a
+           * window into one turn would otherwise filter the next agent's stream by times
+           * from somebody else's session.
+           */
+          lanes: string | null;
+      };
 
 /** The shape Next hands back for `router.query`. */
 export type RouteQuery = Record<string, string | string[] | undefined>;
@@ -105,6 +119,10 @@ export function parseViewRoute(query: RouteQuery): GenieView {
             kind: 'agent',
             agentId,
             tab: tab && (AGENT_TABS as readonly string[]).includes(tab) ? (tab as AgentTab) : null,
+            // Carried verbatim; `agent-lanes.parseLaneRange` is the one place that decides
+            // whether it means anything, and answers null for anything malformed rather
+            // than filtering the stream to an accidental window.
+            lanes: one(query.lanes) ?? null,
         };
     }
 
@@ -165,13 +183,20 @@ export function viewRouteQuery(view: GenieView): Record<string, string> {
         case 'workbench':
             return { ws: view.workspaceId };
         case 'agent':
-            return view.tab ? { agent: view.agentId, tab: view.tab } : { agent: view.agentId };
+            return {
+                agent: view.agentId,
+                ...(view.tab ? { tab: view.tab } : {}),
+                // Omitted when there is no range, so the url you sit on stays clean and
+                // "no `lanes` param" and "no filter" remain the same thing in both
+                // directions.
+                ...(view.lanes ? { lanes: view.lanes } : {}),
+            };
     }
 }
 
 /** The query keys this module OWNS. A closed list: everything else in the url
  *  belongs to whoever put it there and survives navigation untouched. */
-const ROUTE_KEYS = ['view', 'ws', 'agent', 'tab'] as const;
+const ROUTE_KEYS = ['view', 'ws', 'agent', 'tab', 'lanes'] as const;
 
 /**
  * Rewrite only the ROUTE part of a url, preserving every other param.

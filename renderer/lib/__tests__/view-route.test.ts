@@ -41,7 +41,7 @@ describe('parseViewRoute', () => {
         // `tab: null` is NOT 'session'. Which tab an agent opens on depends on its
         // FIDELITY (a Declared agent opens on Conversation, an Observed one on
         // Terminal), and the route must not pre-empt a decision it cannot make.
-        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null });
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null, lanes: null });
     });
 
     it('reads an agent tab', () => {
@@ -49,6 +49,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: 'terminal',
+            lanes: null,
         });
     });
 
@@ -60,6 +61,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: null,
+            lanes: null,
         });
     });
 
@@ -68,6 +70,7 @@ describe('parseViewRoute', () => {
             kind: 'agent',
             agentId: 'a1',
             tab: null,
+            lanes: null,
         });
     });
 
@@ -105,19 +108,19 @@ describe('viewRouteQuery', () => {
     });
 
     it('omits a tab that has not been chosen', () => {
-        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null })).toEqual({ agent: 'a1' });
+        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({ agent: 'a1' });
     });
 
     const cases: GenieView[] = [
         { kind: 'grid' },
         { kind: 'deck' },
         { kind: 'workbench', workspaceId: 'w1' },
-        { kind: 'agent', agentId: 'a1', tab: null },
-        { kind: 'agent', agentId: 'a1', tab: 'session' },
-        { kind: 'agent', agentId: 'a1', tab: 'terminal' },
-        { kind: 'agent', agentId: 'a1', tab: 'files' },
-        { kind: 'agent', agentId: 'a1', tab: 'changes' },
-        { kind: 'agent', agentId: 'a1', tab: 'activity' },
+        { kind: 'agent', agentId: 'a1', tab: null, lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'session', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'terminal', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'files', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'changes', lanes: null },
+        { kind: 'agent', agentId: 'a1', tab: 'activity', lanes: null },
     ];
 
     it.each(cases)('round-trips %j', (view) => {
@@ -143,7 +146,7 @@ describe('mergeViewRoute', () => {
     });
 
     it('keeps a stage window staged', () => {
-        expect(mergeViewRoute({ stage: 'w1' }, { kind: 'agent', agentId: 'a1', tab: null })).toEqual({
+        expect(mergeViewRoute({ stage: 'w1' }, { kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
             stage: 'w1',
             agent: 'a1',
         });
@@ -152,7 +155,7 @@ describe('mergeViewRoute', () => {
     it('replaces the previous route instead of accumulating it', () => {
         // Leaving `ws` behind would make the url say two subjects at once, and
         // parseViewRoute's agent-wins rule would hide the contradiction.
-        expect(mergeViewRoute({ ws: 'w1' }, { kind: 'agent', agentId: 'a1', tab: 'session' })).toEqual({
+        expect(mergeViewRoute({ ws: 'w1' }, { kind: 'agent', agentId: 'a1', tab: 'session', lanes: null })).toEqual({
             agent: 'a1',
             tab: 'session',
         });
@@ -203,6 +206,61 @@ describe('the Dashboard route', () => {
         // A deep link naming an agent is the more specific subject. Asserted so the new branch
         // cannot be inserted ahead of that rule by accident.
         expect(parseViewRoute({ view: 'dashboard', agent: 'a1' })).toEqual({ kind: 'dashboard' });
-        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null });
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({ kind: 'agent', agentId: 'a1', tab: null, lanes: null });
+    });
+});
+
+/**
+ * THE LANES RANGE RIDES THE AGENT ROUTE.
+ *
+ * The board: *"Dragging across a range filters the stream below; the range is kept in the
+ * URL."* It belongs to the AGENT route rather than to the url at large, and the reason is
+ * the failure it prevents: a range is a window into one agent's turn, so carrying it to
+ * another agent would silently filter that agent's stream by times from somebody else's
+ * session — and a stream that is mostly hidden for an invisible reason reads as data loss.
+ *
+ * So it is a route key, which means `mergeViewRoute` drops it on the way out, like `tab`.
+ */
+describe('the lanes range', () => {
+    it('parses off the agent route', () => {
+        expect(parseViewRoute({ agent: 'a1', lanes: '100-400' })).toEqual({
+            kind: 'agent',
+            agentId: 'a1',
+            tab: null,
+            lanes: '100-400',
+        });
+    });
+
+    it('is null when absent, which means no filter', () => {
+        expect(parseViewRoute({ agent: 'a1' })).toEqual({
+            kind: 'agent',
+            agentId: 'a1',
+            tab: null,
+            lanes: null,
+        });
+    });
+
+    it('round-trips through viewRouteQuery', () => {
+        expect(
+            viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: 'files', lanes: '100-400' }),
+        ).toEqual({ agent: 'a1', tab: 'files', lanes: '100-400' });
+    });
+
+    it('is omitted from the url when there is no range', () => {
+        expect(viewRouteQuery({ kind: 'agent', agentId: 'a1', tab: null, lanes: null })).toEqual({
+            agent: 'a1',
+        });
+    });
+
+    it('is DROPPED when navigating to another agent', () => {
+        // The whole reason it is a route key. Left behind, it would filter the next agent's
+        // stream by a window taken from the previous one.
+        expect(
+            mergeViewRoute({ agent: 'a1', lanes: '100-400' }, { kind: 'agent', agentId: 'a2', tab: null, lanes: null }),
+        ).toEqual({ agent: 'a2' });
+    });
+
+    it('is dropped when leaving the agent entirely', () => {
+        expect(mergeViewRoute({ agent: 'a1', lanes: '100-400' }, { kind: 'dashboard' })).toEqual({});
     });
 });

@@ -9204,6 +9204,127 @@ button.dash-row:focus-visible {
     height: 100%;
 }
 
+/* ===== Lanes (§5.2's pulldown) =========================================== */
+
+/* Four tracks over the turn, above the stream. FLEX NONE: the lanes must not take height
+   from the stream as ticks accumulate, or opening them would shrink the transcript you
+   opened them to read. */
+.lanes {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.lanes-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.lanes-unplaceable {
+    color: var(--fg-3);
+}
+
+.lanes-clear {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 8px;
+    cursor: pointer;
+}
+.lanes-clear:hover {
+    background: var(--bg-1);
+}
+.lanes-clear:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
+}
+
+/* The drag surface. `position: relative` anchors both the ticks and the selection band,
+   and `touch-action: none` keeps a pointer drag from being stolen by scroll gestures —
+   without it the selection breaks on a trackpad exactly when it is most useful. */
+.lanes-strip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+}
+
+.lanes-lane {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr;
+    align-items: center;
+    gap: 8px;
+}
+
+.lanes-label {
+    color: var(--fg-3);
+}
+
+.lanes-track {
+    position: relative;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--bg-1);
+}
+
+/* Centred on its time with translateX rather than offset by half its width in JS: the
+   maths stays in `laneOffset`, which is tested, and the pixel correction stays in CSS. */
+.lanes-tick {
+    position: absolute;
+    top: 2px;
+    width: 3px;
+    height: 6px;
+    border-radius: 1px;
+    transform: translateX(-50%);
+    background: var(--fg-3);
+}
+.lanes-tick[data-level='bad'] {
+    background: rgba(220, 38, 38, 0.9);
+}
+.lanes-tick[data-level='attention'] {
+    background: rgba(251, 191, 36, 0.95);
+}
+.lanes-tick[data-live] {
+    background: var(--violet-400);
+}
+
+/* Behind the ticks, never over them: a selection that dimmed what it selected would hide
+   the thing you are aiming at. */
+.lanes-selection {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 0;
+    background: rgba(167, 139, 250, 0.18);
+    border-left: 1px solid var(--violet-400);
+    border-right: 1px solid var(--violet-400);
+    pointer-events: none;
+}
+
+.lanes-empty {
+    color: var(--fg-3);
+}
+
+/* An empty RANGE is not an empty agent, and it carries its own way out. */
+.stream-empty-range {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 4px;
+    color: var(--fg-3);
+}
+
 /* A selectable event row is a real button, so it resets the browser's. */
 .stream-event {
     appearance: none;

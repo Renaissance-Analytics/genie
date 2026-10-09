@@ -182,6 +182,7 @@ import { motifForPayload } from '../../main/notify-sound-kinds';
 import { replacePageQuery, usePageQuery } from '../lib/page-query';
 import { filePanelForWorkspace, uniqueWorkspaceFilePanels } from '../lib/workspace-file-panel';
 import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
+import { laneRangeQuery, parseLaneRange } from '../lib/agent-lanes';
 import { AgentView } from '../components/Master/AgentView';
 import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
@@ -804,6 +805,15 @@ function MasterInner() {
     const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
     /** The Needs-you row the keyboard is on — `J`/`K` move it (`moveQueueFocus`). */
     const [focusedQueueKey, setFocusedQueueKey] = useState<string | null>(null);
+    /**
+     * Is the Lanes pulldown open (`L`)?
+     *
+     * LOCAL, unlike the range it selects. Whether the instrument is open is a preference
+     * about this window; the RANGE is a claim about what you are looking at, which is why
+     * only the range goes in the url. Putting both there would make opening a panel a
+     * history entry.
+     */
+    const [lanesOpen, setLanesOpen] = useState(false);
     // The workspace lists (genie#556): a header icon, and a PIN that docks the
     // panel to the right edge. The pin is a per-window UI preference, so it
     // lives in localStorage — same reasoning as the AgentInbox's seen state, and
@@ -2878,8 +2888,22 @@ function MasterInner() {
                 if (!target) return;
                 e.preventDefault();
                 replacePageQuery(
-                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null }),
+                    mergeViewRoute(now.query, { kind: 'agent', agentId: target.agentId, tab: null, lanes: null }),
                 );
+                return;
+            }
+
+            /**
+             * L — the Lanes pulldown, and ONLY in an agent view.
+             *
+             * Elsewhere there is no single stream for lanes to be over, and toggling hidden
+             * state from a surface that cannot show it is how a shortcut earns a reputation
+             * for doing nothing.
+             */
+            if (intent.kind === 'lanes') {
+                if (now.view !== 'agent') return;
+                e.preventDefault();
+                setLanesOpen((open) => !open);
                 return;
             }
 
@@ -3307,6 +3331,20 @@ function MasterInner() {
                                             },
                                                   }
                                                 : {})}
+                                            lanesOpen={lanesOpen}
+                                            lanesRange={parseLaneRange(
+                                                view.kind === 'agent' ? view.lanes : null,
+                                            )}
+                                            onLanesRange={(r) =>
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId: surface.showAgent!,
+                                                        tab: view.kind === 'agent' ? view.tab : null,
+                                                        lanes: laneRangeQuery(r),
+                                                    }),
+                                                )
+                                            }
                                             onTab={(t) => {
                                                 // The tab lives in the URL, so refresh, back and a
                                                 // shared link all land in the same place.
@@ -3321,6 +3359,12 @@ function MasterInner() {
                                                         kind: 'agent',
                                                         agentId: surface.showAgent!,
                                                         tab: t,
+                                                        // PRESERVED across a tab change: the
+                                                        // range belongs to the agent's turn,
+                                                        // not to the tab you happen to be on,
+                                                        // and silently clearing it would look
+                                                        // like the filter forgot itself.
+                                                        lanes: view.kind === 'agent' ? view.lanes : null,
                                                     }),
                                                 );
                                             }}
@@ -3357,7 +3401,7 @@ function MasterInner() {
                                        survive and a remote window stays remote. */
                                     onOpenAgent={(agentId) =>
                                         replacePageQuery(
-                                            mergeViewRoute(pageQuery, { kind: 'agent', agentId, tab: null }),
+                                            mergeViewRoute(pageQuery, { kind: 'agent', agentId, tab: null, lanes: null }),
                                         )
                                     }
                                     onAddAgent={(workspaceId) => setNewAgentWsId(workspaceId)}
