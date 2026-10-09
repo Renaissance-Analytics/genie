@@ -183,6 +183,8 @@ import { replacePageQuery, usePageQuery } from '../lib/page-query';
 import { filePanelForWorkspace, uniqueWorkspaceFilePanels } from '../lib/workspace-file-panel';
 import { mergeViewRoute, parseViewRoute, type GenieView, type RouteQuery } from '../lib/view-route';
 import { laneRangeQuery, parseLaneRange } from '../lib/agent-lanes';
+import type { GitStatusMap } from '../lib/genie';
+import { agentFilesView } from '../lib/agent-files-view';
 import { AgentView } from '../components/Master/AgentView';
 import { parkedApproval } from '../lib/agent-view';
 import { answerForOption } from '../lib/attention-actions';
@@ -817,6 +819,23 @@ function MasterInner() {
     /** `/` — the stream's find box. Local for the same reason as `lanesOpen`. */
     const [streamFindOpen, setStreamFindOpen] = useState(false);
     /**
+     * What the Files tab needs, fetched only while it is open.
+     *
+     * `null` is "not loaded yet", which is why the tab renders nothing rather than an empty
+     * list before the first answer arrives — an empty list is a CLAIM that the agent changed
+     * nothing, and `agentFilesView` distinguishes that (`rows: []`) from "cannot see the
+     * workspace" (`rows: null`). Handing it a premature `{}` would collapse the three states
+     * into one and make the quietest of them the default.
+     */
+    const [filesGitStatus, setFilesGitStatus] = useState<GitStatusMap | null>(null);
+    /**
+     * Workspace-relative path → when the watcher last saw it move.
+     *
+     * This is what lets a file changed on disk that no agent reported render as the board's
+     * neutral `?` instead of being attributed to whoever happens to be in the workspace.
+     */
+    const [observedWrites, setObservedWrites] = useState<Record<string, number>>({});
+    /**
      * `E` — a counter, not a flag.
      *
      * Pressing the key twice must move twice, and a boolean cannot say "again". The stream
@@ -1279,6 +1298,84 @@ function MasterInner() {
         if (systemWorkspace) m.set(systemWorkspace.id, systemWorkspace);
         return m;
     }, [workspaces, systemWorkspace]);
+
+
+    /**
+     * Watch the agent's workspace while its view is open.
+     *
+     * Scoped to the whole AGENT VIEW rather than to the Files tab, deliberately: which tab is
+     * showing is resolved inside `AgentView` from the agent's fidelity, and re-deriving it
+     * here would be a second answer that could disagree with the one on screen. Files and
+     * Changes both want this data anyway, so the broader scope costs one `git status` and a
+     * watcher that is torn down the moment you leave.
+     */
+    useEffect(() => {
+        const agentId = surface.showAgent;
+        if (!agentId) {
+            // Cleared on the way out, so returning to an agent never shows the PREVIOUS
+            // agent's files for the frame before the fetch lands.
+            setFilesGitStatus(null);
+            setObservedWrites({});
+            return;
+        }
+        const session = sessions.find((s) => s.agentId === agentId) ?? null;
+        const wsId = session?.session.workspaceId ?? null;
+        const wsPath = wsId ? (workspacesById.get(wsId)?.path ?? null) : null;
+        if (!wsPath) {
+            // No workspace path means Genie genuinely cannot see this agent's files.
+            // `null` carries that, and the tab says so rather than drawing an empty list.
+            setFilesGitStatus(null);
+            setObservedWrites({});
+            return;
+        }
+
+        let live = true;
+        setObservedWrites({});
+        void api()
+            .files.gitStatus(wsPath)
+            .then((status) => {
+                if (live) setFilesGitStatus(status);
+            })
+            .catch(() => {
+                // A failed status is NOT an empty one. Left null, so the tab keeps saying it
+                // cannot see rather than reporting that nothing has changed.
+                if (live) setFilesGitStatus(null);
+            });
+        void api().files.watch(wsPath).catch(() => {});
+
+        const off = api().on.treeChanged?.(({ workspacePath, changed }) => {
+            if (!live || workspacePath !== wsPath) return;
+            // `changed: null` means the watcher saw too many at once to name them. Re-fetch
+            // the status rather than inventing paths — an unnamed event is not a path.
+            if (changed === null) {
+                void api()
+                    .files.gitStatus(wsPath)
+                    .then((status) => {
+                        if (live) setFilesGitStatus(status);
+                    })
+                    .catch(() => {});
+                return;
+            }
+            const at = Date.now();
+            setObservedWrites((previous) => {
+                const next = { ...previous };
+                for (const path of changed) next[path] = at;
+                return next;
+            });
+            void api()
+                .files.gitStatus(wsPath)
+                .then((status) => {
+                    if (live) setFilesGitStatus(status);
+                })
+                .catch(() => {});
+        });
+
+        return () => {
+            live = false;
+            off?.();
+            void api().files.unwatch(wsPath).catch(() => {});
+        };
+    }, [surface.showAgent, sessions, workspacesById]);
 
     // Resolve a Feedback request against the ACTIVE workspace once it is known.
     useEffect(() => {
@@ -3387,6 +3484,57 @@ function MasterInner() {
                                             },
                                                   }
                                                 : {})}
+                                            /* Null until the workspace has actually been read.
+                                               An empty list would CLAIM the agent changed
+                                               nothing, and that is a different statement from
+                                               "not loaded yet" -- which is the distinction
+                                               `agentFilesView` exists to keep. */
+                                            filesView={
+                                                filesGitStatus
+                                                    ? agentFilesView({
+                                                          session: found,
+                                                          sessions,
+                                                          gitStatus: filesGitStatus,
+                                                          observed: observedWrites,
+                                                      })
+                                                    : null
+                                            }
+                                            /**
+                                             * Opens the workspace's FILE PANEL, not the file.
+                                             *
+                                             * Stated plainly because it is a real gap: there is
+                                             * no renderer-callable "open this path" — `selectFile`
+                                             * is private to `CodePanel` and `on.editorOpenFile` is
+                                             * inbound from the MCP tool, so a cross-component
+                                             * channel would have to be built. Taking you to the
+                                             * panel is a true step toward the file; claiming to
+                                             * open it would not be.
+                                             */
+                                            onOpenFile={() => {
+                                                // Workbench first: the panel lives there, and
+                                                // opening it under a surface that conceals the
+                                                // grid is a change you cannot see.
+                                                const ws = found.session.workspaceId;
+                                                if (!ws) return;
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'workbench',
+                                                        workspaceId: ws,
+                                                    }),
+                                                );
+                                                void addSpecRef.current(ws, 'code');
+                                            }}
+                                            onOpenAgent={(agentId) =>
+                                                replacePageQuery(
+                                                    mergeViewRoute(pageQuery, {
+                                                        kind: 'agent',
+                                                        agentId,
+                                                        tab: null,
+                                                        lanes: null,
+                                                    }),
+                                                )
+                                            }
+                                            changesInput={{ sessions, observed: observedWrites }}
                                             lanesOpen={lanesOpen}
                                             findOpen={streamFindOpen}
                                             onFindClose={() => setStreamFindOpen(false)}

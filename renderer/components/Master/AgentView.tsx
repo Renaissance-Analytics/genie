@@ -4,6 +4,11 @@ import type { AgentSession } from '../../../main/agentsession/model';
 import { knownFacts, sessionFidelity } from '../../../main/agentsession/model';
 import { agentViewTabs, defaultTabFor, parkedApproval, type AgentViewTab } from '../../lib/agent-view';
 import { AgentStream } from './AgentStream';
+import { AgentFiles } from './AgentFiles';
+import { AgentActivity } from './AgentActivity';
+import { AgentChanges } from './AgentChanges';
+import type { AgentChangesInput } from '../../lib/agent-changes-view';
+import type { AgentFilesView } from '../../lib/agent-files-view';
 import type { LaneSpan } from '../../lib/agent-lanes';
 // The LEAF, not `./rate-limit` — that one imports prism's types and the renderer boundary
 // test refuses a `main/` module with a bare package specifier in it.
@@ -99,6 +104,23 @@ export interface AgentViewProps {
     onFindClose?: () => void;
     /** `E` — a nonce; bumping it jumps the stream's selection to the next edit. */
     jumpToNextEdit?: number;
+    /**
+     * The Files tab's projection, or null while the workspace has not been read yet.
+     *
+     * Null renders the placeholder rather than an empty list: an empty list is a CLAIM that
+     * the agent changed nothing, and `agentFilesView` keeps that (`rows: []`) distinct from
+     * "cannot see the workspace" (`rows: null`). Collapsing the two here would throw away the
+     * distinction the model exists to preserve.
+     */
+    filesView?: AgentFilesView | null;
+    onOpenFile?: (path: string) => void;
+    onOpenAgent?: (agentId: string) => void;
+    /**
+     * What the Changes tab needs beyond this session: the roster it compares against, and
+     * what the watcher saw. `agentId` is NOT taken from here — it comes from the session on
+     * screen, so the tab cannot end up reporting a different agent than its own header.
+     */
+    changesInput?: Omit<AgentChangesInput, 'agentId'>;
     now?: number;
 }
 
@@ -142,6 +164,10 @@ export function AgentView({
     findOpen = false,
     onFindClose,
     jumpToNextEdit,
+    filesView = null,
+    onOpenFile,
+    onOpenAgent,
+    changesInput,
     now = Date.now(),
 }: AgentViewProps): React.JSX.Element {
     const tabs = agentViewTabs(session);
@@ -347,7 +373,27 @@ export function AgentView({
                             </div>
                         ) : null}
                     </div>
+                ) : active === 'activity' ? (
+                    // Built from the session this view already holds — no extra plumbing, and
+                    // no second source that could disagree with the header above it.
+                    <AgentActivity session={session} />
+                ) : active === 'changes' && changesInput ? (
+                    <AgentChanges
+                        {...changesInput}
+                        agentId={session.agentId}
+                        {...(onOpenFile ? { onOpenFile } : {})}
+                    />
+                ) : active === 'files' && filesView ? (
+                    <AgentFiles
+                        view={filesView}
+                        now={now}
+                        {...(onOpenFile ? { onOpenFile } : {})}
+                        {...(onOpenAgent ? { onOpenAgent } : {})}
+                    />
                 ) : (
+                    // The remaining tabs have no body yet. A placeholder that prints the tab's
+                    // own name is not a feature — it is a stub, and it is named as one here so
+                    // nobody mistakes it for a considered empty state.
                     <div className="agent-view-placeholder" data-tab={active}>
                         <Text size="sm">{TAB_LABEL[active]}</Text>
                     </div>

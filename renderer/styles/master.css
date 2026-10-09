@@ -9204,6 +9204,333 @@ button.dash-row:focus-visible {
     height: 100%;
 }
 
+/* ===== Agent · Activity tab (the OBSERVED agent's honest account) ======== */
+
+.agent-activity {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.activity-rows {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+.activity-empty {
+    padding: 12px 14px;
+    color: var(--fg-3);
+}
+
+/* One line each, like the stream's events: a surface that exists because Genie can only
+   MEASURE must not pretend to the depth of one that can read. */
+.activity-row {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr auto;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 4px;
+    white-space: nowrap;
+}
+
+.activity-time {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.activity-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.activity-meta {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
+/* WHAT GENIE CANNOT SEE, named per source. This panel is the point of the tab: an empty
+   list above it is not "the agent did nothing", and this says which channels were dark. */
+.activity-sources {
+    flex: none;
+    border-top: 1px solid var(--border-1);
+    padding: 8px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+}
+
+.activity-source {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.activity-source-label {
+    color: var(--fg-2);
+}
+
+.activity-source-count {
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.activity-blind {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--fg-3);
+}
+
+.activity-blind-label {
+    color: var(--fg-2);
+}
+
+.activity-blind-reason {
+    font-style: italic;
+}
+
+/* ===== Agent · Changes tab ============================================== */
+
+.agent-changes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+.changes-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.changes-added {
+    color: rgba(16, 185, 129, 0.95);
+}
+
+.changes-removed {
+    color: rgba(220, 38, 38, 0.9);
+}
+
+/* Files whose line counts Genie does not have. Counted and SAID, rather than folded into
+   the totals as zeroes — a zero in a diff column is a claim. */
+.changes-uncounted {
+    color: var(--fg-3);
+    font-size: 11px;
+}
+
+.changes-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.changes-group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.changes-who {
+    font-weight: 600;
+}
+
+.changes-group-count {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.changes-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 3px 6px;
+}
+button.changes-row {
+    cursor: pointer;
+}
+button.changes-row:hover {
+    background: var(--bg-1);
+}
+button.changes-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+.changes-file {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.changes-file-dir {
+    color: var(--fg-3);
+}
+
+.changes-file-name {
+    color: inherit;
+}
+
+/* The board: "Your unsaved edit and an agent's hunk hit the same lines. Nothing is
+   discarded and the agent pauses on the file." Amber, not red — nothing is lost. */
+.changes-collisions {
+    border: 1px solid rgba(251, 191, 36, 0.5);
+    background: rgba(251, 191, 36, 0.08);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.changes-conflict {
+    font-size: 11px;
+}
+
+/* ===== Agent · Files tab (§5.3, filtered to one agent) =================== */
+
+.agent-files {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+/* Carries BOTH "cannot see this workspace" and "changed nothing". They are different
+   sentences from `agentFilesView`, and the component picks which — the style is shared
+   because the shape is, not because the statements are. */
+.agent-files-empty {
+    padding: 12px 4px;
+    color: var(--fg-3);
+}
+
+.agent-files-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-files-dir {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+}
+
+/* A row is a BUTTON when it opens something and an inert div when it does not — the same
+   idiom as the stream and the dashboard, and the whole reason this release exists. */
+.agent-files-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    appearance: none;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: 3px 6px;
+}
+button.agent-files-row {
+    cursor: pointer;
+}
+button.agent-files-row:hover {
+    background: var(--bg-1);
+}
+button.agent-files-row:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: -2px;
+}
+
+/* The newest write on this file was nobody's claim. Greyed WHOLE, so the row reads as
+   unattributed rather than as this agent's with a caveat. */
+.agent-files-row[data-disk] {
+    color: var(--fg-3);
+}
+
+.agent-files-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The board's neutral mark: "Genie does not guess the author." */
+.agent-files-unclaimed {
+    color: var(--fg-3);
+}
+
+.agent-files-since,
+.agent-files-age {
+    color: var(--fg-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.agent-files-others {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-1);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-files-other {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border-1);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    padding: 1px 8px;
+}
+button.agent-files-other {
+    cursor: pointer;
+}
+button.agent-files-other:hover {
+    background: var(--bg-1);
+}
+button.agent-files-other:focus-visible {
+    outline: 2px solid var(--violet-400);
+    outline-offset: 1px;
+}
+
+.agent-files-unattributed {
+    font-size: 11px;
+    color: var(--fg-3);
+}
+
 /* ===== Lanes (§5.2's pulldown) =========================================== */
 
 /* Four tracks over the turn, above the stream. FLEX NONE: the lanes must not take height
