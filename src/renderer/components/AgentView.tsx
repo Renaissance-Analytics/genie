@@ -10,7 +10,8 @@ import type { Lane, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
-import { agentViewAction, isTypingTarget } from '../../core/keys.js';
+import { visibleRows } from '../../core/stream-view.js';
+import { agentViewAction, approvalChoice, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 
 /**
@@ -101,6 +102,7 @@ export function AgentView({
      * with it and the Stream keeps a marker. Two live sets of buttons for one decision leaves
      * one of them showing a question that has already been resolved.
      */
+
     const approval = session?.pendingApproval ?? null;
     const placement = approvalPlacement(agent.id, chatSubject ?? null);
 
@@ -112,18 +114,74 @@ export function AgentView({
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const target = e.target instanceof HTMLElement ? e.target : null;
-            const action = agentViewAction({
-                key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, typing: isTypingTarget(target),
-            });
-            if (action !== 'next-edit') return;
-            const next = nextEditAfter(rowsInRange(rows, range), selectedId);
-            if (!next) return;
-            e.preventDefault();
-            onSelect(next);
+            const typing = isTypingTarget(target);
+            const action = agentViewAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, typing });
+            if (action === null) return;
+
+            // The rows a cursor can land on are the ones on screen: inside the range AND the
+            // lane selection. Stepping onto a filtered-out row would select something invisible.
+            const inView = visibleRows(rowsInRange(rows, range), lanes).map((r) => r.id);
+
+            switch (action) {
+                case 'next-edit': {
+                    const next = nextEditAfter(rowsInRange(rows, range), selectedId);
+                    if (!next) return;
+                    e.preventDefault();
+                    onSelect(next);
+                    return;
+                }
+                case 'next-row':
+                case 'prev-row': {
+                    const next = stepRow(inView, selectedId, action === 'next-row' ? 'next' : 'prev');
+                    if (!next) return;
+                    e.preventDefault();
+                    onSelect(next);
+                    return;
+                }
+                case 'toggle-inspector': {
+                    // Selection IS the Inspector in this build: a selected tool row opens it. So
+                    // Enter closes it when something is selected, and does nothing when nothing
+                    // is — there is nothing to open without a cursor on a row.
+                    if (selectedId === null) return;
+                    e.preventDefault();
+                    onSelect(null);
+                    return;
+                }
+                case 'escape': {
+                    // In a field, Esc means "stop typing" and nothing more: blur, and let the
+                    // rest of the map stay out of it.
+                    if (typing) { target?.blur(); return; }
+                    // Otherwise: the Inspector FIRST, and only then the Deck (§4.2). Two
+                    // presses to leave, so one stray Esc never throws the reader off the agent.
+                    e.preventDefault();
+                    if (selectedId !== null) { onSelect(null); return; }
+                    onNavigate('genie://deck');
+                    return;
+                }
+                case 'toggle-thoughts': {
+                    e.preventDefault();
+                    onLanes?.(toggleThoughts(lanes));
+                    return;
+                }
+                case 'allow':
+                case 'deny': {
+                    // Only when the approval is ACTIONABLE here. With the chat pinned to this
+                    // agent the composer owns the decision and the stream shows a marker; a
+                    // letter here would be a second set of buttons for one decision.
+                    if (placement !== 'stream') return;
+                    const optionId = approvalChoice(approval, action);
+                    if (!optionId) return;
+                    e.preventDefault();
+                    onAnswerApproval?.(optionId);
+                    return;
+                }
+                default:
+                    return;
+            }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [rows, range, selectedId, onSelect]);
+    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval]);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
