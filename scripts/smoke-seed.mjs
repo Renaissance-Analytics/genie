@@ -19,8 +19,32 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-// Electron's `userData` on Linux is `~/.config/<package name>`.
-const runtime = join(homedir(), '.config', 'genie2', 'runtime');
+/**
+ * Electron's `userData`, per platform.
+ *
+ * This hardcoded the Linux path, and the Windows smoke found it on its first working run:
+ * fifteen checks passed and the sixteenth said the seeded agent was not on the Dashboard. It
+ * was not — it had been written to `~/.config` on a machine where the app reads `%APPDATA%`.
+ *
+ * Exactly the class of bug that job exists for, and exactly the shape of it: not a crash, not
+ * an error, just a file written somewhere nothing reads. On Linux it would have stayed
+ * invisible forever.
+ *
+ * This mirrors `app.getPath('userData')`. If the two ever diverge the seed misses silently
+ * again — which is why the smoke asserts the agent APPEARS rather than that the file was
+ * written.
+ */
+function userData() {
+    if (process.platform === 'win32') {
+        return join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'genie2');
+    }
+    if (process.platform === 'darwin') {
+        return join(homedir(), 'Library', 'Application Support', 'genie2');
+    }
+    return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'genie2');
+}
+
+const runtime = join(userData(), 'runtime');
 mkdirSync(runtime, { recursive: true });
 
 const now = new Date().toISOString();
