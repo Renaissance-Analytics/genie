@@ -82,3 +82,66 @@ jobs:
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
           grep -q "30px" "$css"
+
+  smoke:
+    name: a real window
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Electron is Chromium and needs its graphics, font and a11y libraries. `xauth` is not
+      # obvious and is not optional: `xvfb-run` shells out to it, and without it the launch
+      # dies with "xauth command not found" — which presents as "the window never appeared",
+      # pointing at the harness rather than at the missing package.
+      - name: install Electron's runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6             libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2             libpangocairo-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3             libxrandr2 fonts-liberation fontconfig
+
+      # Make font resolution representative of a desktop. Measured: without this the runner's
+      # `system-ui` can resolve to a MONOSPACE face, the whole app renders monospaced, and that
+      # is indistinguishable from a real stylesheet bug. A verification environment that cannot
+      # tell the two apart is not a verification environment.
+      - name: make font resolution representative
+        run: |
+          sudo cp scripts/smoke-fonts.conf /etc/fonts/local.conf
+          sudo fc-cache -f
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Seed a workspace and an agent, so the smoke proves a CLICK reaches a surface rather
+      # than only that an empty Dashboard renders. It writes the two JSON files a real machine
+      # would already have — nothing in `src/` knows it exists.
+      - run: node scripts/smoke-seed.mjs
+
+      # THE CHECK THAT WAS MISSING FROM ALL FOUR FAILED BETAS.
+      #
+      # Four releases shipped on green unit suites and every one was broken the moment a human
+      # opened it, because nobody ever opened the built app. This opens it: a real Electron
+      # window on a virtual display, driven over the Chrome DevTools Protocol — no third-party
+      # test framework and no test-only code in the product.
+      - name: open the app and drive it
+        run: |
+          xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
+          node scripts/smoke-cdp.mjs
+
+      - name: electron's own output, on failure
+        if: failure()
+        run: tail -100 electron.log || true
+
+      # The screenshots, for a human to look at. Writing one is not the same as somebody
+      # having seen it, and this step does not pretend otherwise — it just makes looking cheap.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshots
+          path: smoke-*.png
+          if-no-files-found: warn
