@@ -59,6 +59,7 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onNavigate={() => {}}
             onOpenAgent={() => {}}
             onAddAgent={() => {}}
+            onAddWorkspace={() => {}}
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
@@ -147,6 +148,7 @@ describe('first paint, before the bridge has answered', () => {
                 onNavigate={() => {}}
                 onOpenAgent={() => {}}
                 onAddAgent={() => {}}
+                onAddWorkspace={() => {}}
                 onOpenPalette={() => {}}
                 onSelectRow={() => {}}
                 onSend={() => {}}
@@ -160,11 +162,18 @@ describe('first paint, before the bridge has answered', () => {
         expect(html).not.toContain('data-workstation-health');
         expect([...html.matchAll(/>\s*0\s*</g)]).toEqual([]);
 
-        // POSITIVE CONTROL: it is a real window, not a blank one — the chrome and the column
-        // headers are there, so the test is not passing on an empty render.
+        // And it renders a SKELETON, not the first-run invitation. *"First paint is skeletons,
+        // never zeros and never an empty state."* The invitation says "we looked and there is
+        // nothing here", which before the bridge answers is a claim about somebody's machine
+        // that nobody has checked. This assertion caught exactly that regression once already.
+        expect(html).toContain('data-dashboard="loading"');
+        expect(html).not.toContain('data-dashboard="first-run"');
+        expect(html).not.toContain('Nothing is being worked on yet');
+
+        // POSITIVE CONTROL: it is a real window, not a blank one — the chrome is there, so the
+        // test is not passing on an empty render.
         expect(html).toContain('data-route');
         expect(html).toContain('Dashboard');
-        expect(html).toContain('Current target');
 
         // And the SAME component with a real snapshot does show all three, which is what makes
         // the absences above mean something.

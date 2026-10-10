@@ -129,9 +129,10 @@
   --dur-slow:    300ms;   /* drawers, large overlays */
 
   /* ─── Type tokens ────────────────────────────────────────────────────── */
-  --font-sans:   "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono:   "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-  --font-display: "Geist", var(--font-sans);  /* same family, heavier weights */
+  /* The font stacks live in styles.css's `@theme` block, which is their ONE home.
+     They were here too, and because this file is imported AFTER Tailwind expands `@theme`,
+     these declarations won the cascade — so the `@theme` values were emitted, overridden, and
+     silently ignored. Measured: the running app reported this stack, not that one. */
 
   /* Sizes — match react-fancy size scale (xs/sm/md/lg/xl) */
   --text-xs:   0.75rem;   /* 12 */

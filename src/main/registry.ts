@@ -121,7 +121,11 @@ export class Registry {
             // `agentsKnown` is TRUE only once the store has actually been read. Before that the
             // rail must render no counts at all: a `0` on first paint says "this workspace is
             // empty" when the truth is "nobody has looked yet".
-            workspaces: this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: this.#loaded })),
+            // `null` until the store has been read. Not `[]`: "we have not looked" and "there
+            // are none" are different claims, and the Dashboard gives them different surfaces.
+            workspaces: this.#loaded
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true }))
+                : null,
             // `null` until the Deck exists to read it. Not `0` — that would be a badge-sized
             // claim that nothing needs the user, made by a surface that has not been built.
             deckCount: null,

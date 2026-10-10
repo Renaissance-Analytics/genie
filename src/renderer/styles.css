@@ -21,14 +21,41 @@
  * fidelity gap against the board, and it is written here so the next person reads it as a
  * missing asset rather than as a styling bug.
  */
-:root {
-    --font-sans: Geist, ui-sans-serif, system-ui, sans-serif;
-    --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
-}
-
-@theme inline {
-    --font-sans: var(--font-sans);
-    --font-mono: var(--font-mono);
+/*
+ * Declared in `@theme`, with LITERAL stacks, and that is the fix for a real bug.
+ *
+ * This was `@theme inline { --font-sans: var(--font-sans) }` — which is **circular**. A custom
+ * property that references itself is invalid at computed-value time, so `--font-sans` and
+ * `--font-mono` both resolved to nothing, `font-family: var(--font-sans)` fell back to the
+ * browser default, and every `font-mono` utility did too.
+ *
+ * The result: the ENTIRE application rendered in one font. Every unit test passed, the
+ * stylesheet contained both stacks, and the bug was invisible until somebody looked at a
+ * screenshot of the running window — the heading, the body text and the rail were all
+ * monospace, which is what sent me looking.
+ *
+ * `@theme` (not `@theme inline`) emits these into `:root` AND registers them as Tailwind's
+ * font theme, so `font-mono` and `font-sans` resolve from the same place.
+ */
+@theme {
+    /*
+     * Named platform faces BEFORE the generic `system-ui`, which is deliberate and was learned
+     * by measuring.
+     *
+     * `system-ui` is whatever the OS declares, and on a machine whose fontconfig has no alias
+     * for it that is **whatever font happens to be first** — measured in the smoke container:
+     * `system-ui` resolved to Liberation MONO while `sans-serif` resolved proportional. With
+     * `system-ui` early in the stack it wins, and the entire application renders monospaced.
+     *
+     * Putting `"Segoe UI"` and `-apple-system` ahead of it costs nothing on the platforms that
+     * have them — they ARE what `system-ui` would have resolved to — and means a broken alias
+     * can no longer hijack the stack. `sans-serif` is the final backstop because it is the one
+     * generic every engine resolves sensibly.
+     */
+    --font-sans: Geist, "Segoe UI", -apple-system, ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "Geist Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+    /* Same family, heavier weights. tokens.css's heading rules read it. */
+    --font-display: Geist, "Segoe UI", -apple-system, ui-sans-serif, system-ui, sans-serif;
 }
 
 html,

@@ -49,6 +49,8 @@ export interface ShellProps {
     onCloseChat: () => void;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
+    /** The first-run invitation. Without it that button is a control that does nothing. */
+    onAddWorkspace: () => void;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
 }
@@ -65,6 +67,7 @@ export function Shell({
     onNavigate,
     onOpenAgent,
     onAddAgent,
+    onAddWorkspace,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -105,7 +108,7 @@ export function Shell({
                 <Sidebar
                     route={route}
                     deckCount={snapshot.deckCount}
-                    workspaces={railWorkspaces(snapshot.workspaces, snapshot.agents)}
+                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
                 />
@@ -123,6 +126,7 @@ export function Shell({
                             workspaces={snapshot.workspaces}
                             onOpenAgent={onOpenAgent}
                             onAddAgent={onAddAgent}
+                            onAddWorkspace={onAddWorkspace}
                         />
                     ) : null}
 

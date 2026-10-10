@@ -26,7 +26,18 @@ import type { TimedEvent } from '../core/stream-view.js';
  */
 export interface GenieSnapshot {
     agents: readonly AgentRow[];
-    workspaces: readonly RailWorkspace[];
+    /**
+     * `null` until the store has actually been read.
+     *
+     * **Not `[]`.** The two are different claims and they get different surfaces: an empty
+     * array means Genie looked and this machine has no workspaces, which is a first run and
+     * deserves an invitation; `null` means nobody has looked yet, which deserves a skeleton.
+     *
+     * This distinction was missing for exactly one commit, and the Dashboard's brand-new
+     * first-run state rendered "Nothing is being worked on yet" before the bridge had
+     * answered — a confident claim about a machine nobody had asked. An older test caught it.
+     */
+    workspaces: readonly RailWorkspace[] | null;
     /** Things waiting on a human. `null` until the queue has actually been read. */
     deckCount: number | null;
     /** `null` until the workstation has been read — never a default `healthy: false`. */
@@ -69,6 +80,13 @@ export interface GenieBridge {
     stopAgent(agentId: string): void;
     prompt(agentId: string, text: string): void;
     addAgent(workspaceId: string): void;
+    /**
+     * Open the folder picker and register what the user chose.
+     *
+     * The first-run invitation's one action. Genie never guesses a path and never writes into
+     * a folder before showing what it found there.
+     */
+    addWorkspace(): void;
 }
 
 /**
@@ -103,7 +121,7 @@ declare global {
  */
 export const EMPTY_SNAPSHOT: GenieSnapshot = {
     agents: [],
-    workspaces: [],
+    workspaces: null,
     deckCount: null,
     workstation: null,
 };

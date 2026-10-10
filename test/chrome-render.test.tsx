@@ -90,7 +90,9 @@ describe('the title bar', () => {
         const html = bar();
         expect(html).toContain('w-[280px]');
         expect(html).toContain('Search, jump, run');
-        expect(html).toContain('\u2318K');
+        // The hint names a key this reader actually HAS, so it is platform-dependent and
+        // asserted by platform in its own describe below.
+        expect(html).toContain('data-palette-hint');
 
         // The contrast that makes the previous assertion mean something: the bar also carries
         // a labelled route home. A palette-only chrome would pass everything above.
@@ -130,6 +132,22 @@ describe('the title bar', () => {
         expect(bar({ workstation: { name: 'alphar', healthy: false } }))
             .toContain('data-workstation-health="unhealthy"');
     });
+
+describe('the palette hint', () => {
+    it('says Ctrl on Windows and ⌘ on a Mac', () => {
+        /**
+         * Found by looking at a screenshot of the running app, where `⌘` was a tofu box in
+         * a font with no glyph for it. The missing glyph made it visible; the wrongness was
+         * there on every non-Apple platform, where that key does not exist.
+         */
+        expect(bar({ platform: 'Win32' })).toContain('Ctrl K');
+        expect(bar({ platform: 'Win32' })).not.toContain('⌘');
+
+        // POSITIVE CONTROL: the Mac branch still renders the symbol, so the absence above is
+        // a reading rather than a component that simply stopped printing it.
+        expect(bar({ platform: 'MacIntel' })).toContain('⌘K');
+    });
+});
 
 describe('the rail', () => {
     it('is 208px wide and carries Deck, Dashboard and genie as labelled rows', () => {

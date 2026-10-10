@@ -196,6 +196,7 @@ export function App({ bridge }: AppProps) {
                 navigate(`genie://agent/${id}?tab=stream`);
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
+            onAddWorkspace={() => resolvedBridge?.addWorkspace()}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

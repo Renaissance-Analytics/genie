@@ -79,7 +79,7 @@ function createWindow(): BrowserWindow {
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
     if (record.workspaceId === OS_WORKSPACE) return app.getPath('userData');
-    const workspace = registry?.snapshot().workspaces.find((w) => w.id === record.workspaceId);
+    const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId);
     return workspace?.path ?? app.getPath('userData');
 }
 

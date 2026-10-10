@@ -254,3 +254,50 @@ describe('header chips', () => {
         expect(html).not.toContain('data-chip="broken"');
     });
 });
+
+describe('the first run \u2014 found by opening the window, not by a test', () => {
+    /**
+     * The smoke path put a real window on a virtual screen and I looked at the screenshot. The
+     * Dashboard rendered its header and its column headers over **a completely blank body**:
+     * no workspaces, so no groups, so nothing at all.
+     *
+     * Every markup test here passed. They all handed the Dashboard workspaces, because that is
+     * what a test author thinks to write — and the one state every new user sees first is the
+     * one nobody fixtures.
+     *
+     * It fails the owner's acceptance bar outright: *"a person who has never used Genie, given
+     * no instructions, reaches the Dashboard and opens an agent within 30 seconds."* There was
+     * nothing on the screen to click.
+     */
+    it('offers a way IN when there are no workspaces at all', () => {
+        const html = render([], []);
+
+        expect(html).toContain('data-dashboard="first-run"');
+        // It says what is true, and offers the one action that leads anywhere.
+        expect(html).toContain('data-add-workspace');
+
+        // And it does NOT draw a table with nothing in it: column headers over a void read as
+        // a list that failed to load.
+        expect(html).not.toContain('Current target');
+    });
+
+    it('draws the table the moment there IS a workspace, even an empty one', () => {
+        // POSITIVE CONTROL. Without it, "first run shows no table" passes on a build that
+        // never draws a table. An empty workspace is a different state: Genie knows where to
+        // work, and the per-workspace row offers Add agent.
+        const html = render([], [{ id: 'tynn', path: 'C:/_Projects/tynn.ai' }]);
+
+        expect(html).not.toContain('data-dashboard="first-run"');
+        expect(html).toContain('Current target');
+        expect(html).toContain('data-add-agent="tynn"');
+    });
+
+    it('says nothing about agent counts on a first run', () => {
+        // No chips, no zeros, no "0 agents". There is nothing to count yet, and a strip of
+        // zeros is furniture that teaches people to stop reading the strip.
+        const html = render([], []);
+
+        expect(html).not.toContain('data-chip=');
+        expect([...html.matchAll(/>\s*0\s*</g)]).toEqual([]);
+    });
+});

@@ -4,3 +4,7 @@ out/
 *.log
 .DS_Store
 dist/
+
+# The smoke run writes one here for a human to look at. Regenerable, and a PNG in git is a
+# PNG somebody will later diff.
+smoke-dashboard.png

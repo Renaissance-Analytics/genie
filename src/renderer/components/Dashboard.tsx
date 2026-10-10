@@ -298,19 +298,80 @@ const CHIP_DOT: Record<AgentState, string> = {
 
 export interface DashboardProps {
     rows: readonly AgentRow[];
-    /** Every workspace Genie knows, in rail order — including those with no agents. */
-    workspaces: readonly { id: string; path: string }[];
+    /**
+     * Every workspace Genie knows, in rail order — including those with no agents.
+     *
+     * `null` = **not read yet**, which renders a skeleton. `[]` = read, and there are none,
+     * which renders the first-run invitation. Collapsing them puts a confident claim about an
+     * empty machine on screen before anybody has looked.
+     */
+    workspaces: readonly { id: string; path: string }[] | null;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
+    onAddWorkspace?: (() => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
-        workspaces.map((w) => w.id),
+        (workspaces ?? []).map((w) => w.id),
     );
     const chips = summaryChips(rows);
-    const pathOf = (id: string): string => workspaces.find((w) => w.id === id)?.path ?? '';
+    const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
+
+    /**
+     * FIRST PAINT, before the bridge has answered.
+     *
+     * *"First paint is skeletons, never zeros and never an empty state."* A skeleton says "we
+     * are still reading"; the first-run invitation below says "we read, and there is nothing
+     * here". Showing the second while the first is true is a confident claim about somebody's
+     * machine, made before anybody looked at it.
+     */
+    if (workspaces === null) {
+        return (
+            <div data-dashboard="loading" data-surface="dashboard" className="flex h-full flex-col gap-2 p-7">
+                {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-8 w-full animate-pulse rounded-md bg-[var(--bg-2)]" />
+                ))}
+            </div>
+        );
+    }
+
+    /**
+     * THE FIRST RUN — and this was missing until somebody opened the window.
+     *
+     * With no workspaces there are no groups, so the board rendered its header and its column
+     * headers over **a completely blank body**. Every markup test passed, because every test
+     * handed it workspaces — which is what a test author thinks to write, and the one state
+     * every new user sees first is the one nobody fixtures.
+     *
+     * It failed the owner's acceptance bar outright: *"a person who has never used Genie,
+     * given no instructions, reaches the Dashboard and opens an agent within 30 seconds."*
+     * There was nothing on the screen to click.
+     *
+     * So: no table at all, because column headers over a void read as a list that failed to
+     * load. One sentence that is true, and the single action that leads anywhere.
+     */
+    if (workspaces.length === 0) {
+        return (
+            <div data-dashboard="first-run" data-surface="dashboard" className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
+                <h1 className="text-lg font-semibold tracking-tight">Nothing is being worked on yet</h1>
+                <p className="max-w-[46ch] text-[13px] text-[var(--fg-3)]">
+                    A workspace is a folder Genie works in. Add one and its agents appear here, with
+                    what each is doing and what it has produced.
+                </p>
+                <button
+                    type="button"
+                    data-add-workspace
+                    onClick={onAddWorkspace}
+                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border-2)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]"
+                >
+                    <Icon name="plus" size="sm" />
+                    Add a workspace
+                </button>
+            </div>
+        );
+    }
 
     return (
         <div data-surface="dashboard" className="flex min-h-0 flex-col">

@@ -39,7 +39,8 @@ describe('before the store has been read', () => {
         const snapshot = registry.snapshot();
 
         expect(snapshot.agents).toEqual([]);
-        expect(snapshot.workspaces).toEqual([]);
+        // `null`, not `[]` — see the dedicated describe below for why the difference matters.
+        expect(snapshot.workspaces).toBeNull();
         expect(snapshot.deckCount).toBeNull();
         expect(snapshot.workstation).toBeNull();
     });
@@ -54,9 +55,9 @@ describe('before the store has been read', () => {
         // POSITIVE CONTROL: a fresh registry over the SAME store reports it unknown until it
         // loads, so `agentsKnown` is a reading rather than a constant `true`.
         const cold = new Registry(new Store(dir));
-        expect(cold.snapshot().workspaces).toEqual([]);
+        expect(cold.snapshot().workspaces).toBeNull();
         await cold.load(WORKSTATION);
-        expect(cold.snapshot().workspaces[0]?.agentsKnown).toBe(true);
+        expect(cold.snapshot().workspaces?.[0]?.agentsKnown).toBe(true);
     });
 });
 
@@ -220,5 +221,29 @@ describe('the OS agent', () => {
 
         // POSITIVE CONTROL: it exists and is findable; it is the CENSUS it stays out of.
         expect(registry.osAgent()).not.toBeNull();
+    });
+});
+
+describe('workspaces before the store has been read', () => {
+    it('is NULL, not an empty array', () => {
+        /**
+         * The two are different claims and they get different surfaces: `[]` means Genie looked
+         * and this machine has no workspaces — a first run, which deserves an invitation —
+         * while `null` means nobody has looked, which deserves a skeleton.
+         *
+         * The distinction was missing for exactly one commit, and the Dashboard's new first-run
+         * state announced "Nothing is being worked on yet" before the bridge had answered. An
+         * older test caught it, which is the whole argument for keeping the empty-snapshot
+         * assertions around.
+         */
+        const cold = new Registry(new Store(dir));
+        expect(cold.snapshot().workspaces).toBeNull();
+    });
+
+    it('is an ARRAY once loaded, even when there are none', async () => {
+        // POSITIVE CONTROL: `null` is a reading, not a constant.
+        const loaded = new Registry(new Store(dir));
+        await loaded.load(WORKSTATION);
+        expect(loaded.snapshot().workspaces).toEqual([]);
     });
 });

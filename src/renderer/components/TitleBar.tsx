@@ -1,5 +1,5 @@
 import { Icon, Tooltip } from '@particle-academy/react-fancy';
-import { FEATURE_ICONS } from '../../core/rail-view.js';
+import { FEATURE_ICONS, paletteHint } from '../../core/rail-view.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -36,9 +36,19 @@ export interface TitleBarProps {
     workstation: { name: string; healthy: boolean } | null;
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
+    /**
+     * The platform, for the palette's key hint. Injected rather than read from a global so a
+     * test can render both branches on one machine, and defaulted here so every caller does
+     * not have to thread it through.
+     */
+    platform?: string | undefined;
 }
 
-export function TitleBar({ route, workstation, onNavigate, onOpenPalette }: TitleBarProps) {
+export function TitleBar({ route, workstation, onNavigate, onOpenPalette, platform }: TitleBarProps) {
+    const hint = paletteHint(
+        platform ?? (typeof navigator === 'undefined' ? '' : navigator.platform),
+    );
+
     return (
         <div className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5">
             {/* The mark is a button, not an ornament: clicking it lands on the Dashboard. */}
@@ -99,7 +109,12 @@ export function TitleBar({ route, workstation, onNavigate, onOpenPalette }: Titl
             >
                 <Icon name="search" size="xs" />
                 <span className="text-xs">Search, jump, run</span>
-                <span className="ml-auto font-mono text-[11px]">⌘K</span>
+                {/*
+                 * The key this reader actually has. `⌘K` on Windows or Linux tells somebody to
+                 * press a key that is not on their keyboard — and a reader who cannot act on a
+                 * hint learns to ignore hints.
+                 */}
+                <span data-palette-hint className="ml-auto whitespace-nowrap font-mono text-[11px]">{hint}</span>
             </button>
 
             {/*

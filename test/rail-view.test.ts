@@ -3,6 +3,8 @@ import type { AgentRow } from '../src/core/dashboard-view.js';
 import {
     FEATURE_ICONS,
     deckBadge,
+    modifierLabel,
+    paletteHint,
     railSurfacesFor,
     railWorkspaces,
     type RailWorkspace,
@@ -160,5 +162,41 @@ describe('the rail’s rows are DERIVED from what the shell can serve', () => {
         // order would let a refactor reshuffle somebody's navigation.
         expect(railSurfacesFor(['workspace', 'agent', 'dashboard', 'deck']))
             .toEqual(['deck', 'dashboard', 'genie', 'workspace']);
+    });
+});
+
+describe('the palette hint names a key the reader actually has', () => {
+    it('is ⌘ on macOS and Ctrl everywhere else', () => {
+        /**
+         * Found by LOOKING at a screenshot of the running app, where `⌘` rendered as a tofu
+         * box. The missing glyph is what made it visible; the wrongness was there on every
+         * platform — a Windows or Linux user does not have a Command key, so the hint told them
+         * to press something not on their keyboard.
+         *
+         * A reader who cannot act on a hint learns to ignore hints, and the palette is already
+         * the accelerator rather than the main route.
+         */
+        expect(modifierLabel('MacIntel')).toBe('⌘');
+        expect(modifierLabel('darwin')).toBe('⌘');
+        expect(modifierLabel('Win32')).toBe('Ctrl');
+        expect(modifierLabel('Linux x86_64')).toBe('Ctrl');
+    });
+
+    it('spaces the hint so neither form reads badly', () => {
+        expect(paletteHint('Win32')).toBe('Ctrl K');
+        expect(paletteHint('MacIntel')).toBe('⌘K');
+    });
+
+    it('takes the platform rather than reading a global', () => {
+        // Both branches testable on one machine. The same lesson `isInside` taught when a
+        // Windows-only path rule passed here and broke CI's ubuntu runner.
+        expect(modifierLabel.length).toBe(1);
+    });
+
+    it('never emits ⌘ for a non-Apple platform — counted', () => {
+        const others = ['Win32', 'Linux x86_64', 'FreeBSD', 'Android', ''];
+        expect(others.map(modifierLabel).filter((l) => l === '⌘')).toEqual([]);
+        // POSITIVE CONTROL: it CAN emit it, so the empty list above means something.
+        expect(modifierLabel('MacIntel')).toBe('⌘');
     });
 });
