@@ -6,7 +6,8 @@
   "description": "Genie 2 — an agent is a session, never a terminal.",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:live": "tsx test/live/claude-session.live.ts"
   },
   "dependencies": {
     "@particle-academy/prism-acp": "^0.6.1",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
   }
