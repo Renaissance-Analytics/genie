@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
     CONTEXT_DANGER_AT,
     CONTEXT_WARN_AT,
+    COMMS_LIVE_WITHIN,
+    COMMS_RECENT_WITHIN,
     commsOf,
     contextOf,
     groupByWorkspace,
@@ -16,7 +18,7 @@ function row(over: Partial<AgentRow> = {}): AgentRow {
         id: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'tynn',
         fidelity: 'declared', state: 'working', duration: '12m',
         ask: null, reason: null, fixes: [], step: '4/7', target: 'Passkey enrolment endpoint',
-        activity: null, delivery: null, collaborators: 4, commsLive: true,
+        activity: null, delivery: null, collaborators: 4, commsAgeSeconds: 8,
         contextUsed: null, contextSize: 200_000,
         ...over,
     };
@@ -107,8 +109,52 @@ describe('the context cell — a warning, not a readout', () => {
 });
 
 describe('the comms cell — a zero would claim an agent works alone', () => {
-    it('renders a real count, and whether a link is live', () => {
-        expect(commsOf(row({ collaborators: 4, commsLive: true }))).toEqual({ count: 4, live: true });
+    it('reports the collaborator count and a RECENCY LEVEL for the edge', () => {
+        // The level feeds Fancy's `ActivityLight`, which is an EDGE indicator: it belongs to
+        // the pair, not to either party. Deciding the level here rather than in the component
+        // keeps it testable without a DOM — and it is a decision, not a rendering.
+        expect(commsOf(row({ collaborators: 4, commsAgeSeconds: 8 }))).toEqual({ count: 4, level: 'live' });
+    });
+
+    it('ramps live → recent → quiet on the board’s own 30s window', () => {
+        // 30s is the mockup's stated "carried traffic in the last 30s". The two steps after it
+        // are ours: five minutes is roughly a turn, so inside it the link is still part of what
+        // is happening now, and beyond it the honest word is quiet.
+        // The boundaries are LITERALS on purpose. Writing `commsAgeSeconds: COMMS_LIVE_WITHIN`
+        // compares the code to the expression that produced it: change the constant to 90 and
+        // the test still passes while the board still says 30. So the numbers are written out,
+        // and the constants are pinned to them separately.
+        expect(COMMS_LIVE_WITHIN).toBe(30);
+        expect(COMMS_RECENT_WITHIN).toBe(300);
+
+        expect(commsOf(row({ commsAgeSeconds: 30 }))?.level).toBe('live');
+        expect(commsOf(row({ commsAgeSeconds: 31 }))?.level).toBe('recent');
+        expect(commsOf(row({ commsAgeSeconds: 300 }))?.level).toBe('recent');
+        expect(commsOf(row({ commsAgeSeconds: 301 }))?.level).toBe('quiet');
+    });
+
+    it('never emits ‘unseen’, which is the Deck’s word and not the board’s', () => {
+        // `ActivityLight` offers an amber `unseen` level meaning "it moved and you have not
+        // looked". That is a BADGE, and the Deck is the only surface that carries badges — the
+        // spec says so outright. Count every level the view-model can emit; none may be it.
+        // Widened to `string` deliberately. `CommsLevel` does not contain 'unseen', so `tsc`
+        // calls the comparison below unreachable — which is the stronger guarantee, and it
+        // lasts exactly as long as nobody "aligns the union with Fancy's". The runtime check
+        // is what notices when they do.
+        const levels: readonly (string | null | undefined)[] =
+            [null, 0, 8, 30, 31, 299, 3_000, 86_400].map(
+                (age) => commsOf(row({ commsAgeSeconds: age }))?.level);
+
+        expect(levels.filter((l) => l === 'unseen')).toEqual([]);
+
+        // POSITIVE CONTROL, and it had to be rewritten once to be worth anything. The first
+        // draft read `expect(new Set(levels.filter(defined))).not.toEqual(new Set([null]))`,
+        // which passes on an EMPTY set — so it passed against the unimplemented function,
+        // where every level was `undefined`. An absence test that passes on a corpse is the
+        // exact shape this project keeps writing. Name the levels that must be there.
+        expect(new Set(levels)).toContain('live');
+        expect(new Set(levels)).toContain('quiet');
+        expect(new Set(levels).size).toBeGreaterThan(2);
     });
 
     it('renders NOTHING when the count could not be attributed', () => {
@@ -117,17 +163,24 @@ describe('the comms cell — a zero would claim an agent works alone', () => {
         expect(commsOf(row({ collaborators: null }))).toBeNull();
     });
 
+    it('keeps the COUNT but drops the LIGHT when recency is unobservable', () => {
+        // Two different nothings in one cell. The count is a fact we have; the recency is not.
+        // `level: null` makes `ActivityLight` render nothing at all — no dot, no grey
+        // placeholder — because a grey dot asserts "quiet", which is a claim we cannot make.
+        expect(commsOf(row({ collaborators: 4, commsAgeSeconds: null }))).toEqual({ count: 4, level: null });
+    });
+
     it('renders a MEASURED zero, because that is a fact', () => {
         // The other half of the discipline, and the half that is usually forgotten: a
         // declared agent reporting no collaborators HAS told us something. `null` means
         // Genie could not attribute the count; `0` means the agent genuinely works alone.
         // Only the first may render nothing.
         //
-        // `commsLive` is set explicitly rather than taken from the fixture default, because
-        // an agent with zero collaborators and live traffic is a contradictory state — there
-        // is no link for traffic to be on. The first draft of this test asserted exactly that
-        // nonsense and failed, which is the fixture being wrong rather than the code.
-        expect(commsOf(row({ collaborators: 0, commsLive: false }))).toEqual({ count: 0, live: false });
+        // And with no collaborators there is no edge, so there is no recency to report
+        // whatever the clock says — a light here would be traffic on a link that does not
+        // exist. An earlier draft of this suite asserted exactly that nonsense, from a
+        // fixture default, and the failure was the fixture rather than the code.
+        expect(commsOf(row({ collaborators: 0, commsAgeSeconds: 8 }))).toEqual({ count: 0, level: null });
     });
 
     it('gives observed and remote agents no comms cell', () => {

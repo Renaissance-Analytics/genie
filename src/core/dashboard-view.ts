@@ -67,8 +67,18 @@ export interface AgentRow {
     delivery: Delivery | null;
     /** `null` = Genie cannot attribute it. NEVER 0 — a zero claims the agent works alone. */
     collaborators: number | null;
-    /** Traffic on a link within the last 30s. */
-    commsLive: boolean;
+    /**
+     * Seconds since the most recent message on any of this agent's links.
+     *
+     * `null` = the edge is real but its recency is NOT observable, which is a different
+     * claim from "it has been quiet" and must not render as one.
+     *
+     * This replaced a `commsLive: boolean`. The boolean was *derived* — "traffic in the
+     * last 30s" is `age <= 30` — and keeping both let them disagree: a fixture with zero
+     * collaborators and `commsLive: true` asserted traffic on a link that did not exist, and
+     * the suite was green about it. One fact, stored once.
+     */
+    commsAgeSeconds: number | null;
     /** Tokens used. `null` = not reported (an observed agent never reports it). */
     contextUsed: number | null;
     contextSize: number | null;
@@ -146,19 +156,56 @@ export function contextOf(row: AgentRow): ContextCell {
     };
 }
 
-export type CommsCell = { count: number; live: boolean } | null;
+/**
+ * How recently an edge carried traffic. Structurally Fancy's `ActivityLevel`, declared here
+ * so that `src/core` stays free of anything that imports React — the assignment is checked
+ * at the component boundary instead.
+ *
+ * `'unseen'` exists in the component and is deliberately NOT in this union: it means "it
+ * moved and you have not looked", which is a badge, and **the Deck is the only surface that
+ * carries badges**.
+ */
+export type CommsLevel = 'live' | 'recent' | 'quiet';
+
+/** The board's own words: "a violet pulsing dot when a link carried traffic in the last 30s". */
+export const COMMS_LIVE_WITHIN = 30;
+/**
+ * Beyond live, still part of what is happening now. Five minutes is roughly one turn, so
+ * inside it a link belongs to the current work; past it the honest word is quiet.
+ */
+export const COMMS_RECENT_WITHIN = 300;
+
+export type CommsCell = { count: number; level: CommsLevel | null } | null;
 
 /**
- * The comms cell, or `null`.
+ * The comms cell, or `null` for "this cell does not exist".
  *
- * Observed and remote agents have no comms cell at all — not an empty one. And a declared
- * agent whose collaborator count could not be attributed renders **nothing**, because a `0`
- * would claim it works alone when the truth is that Genie could not join the table.
+ * **Three different nothings live in this one function**, and collapsing any two of them is
+ * the mistake §5 is about:
+ *
+ *  1. **No cell.** An observed or remote agent does not report collaborators, so the cell is
+ *     absent — not empty, not zero.
+ *  2. **No cell.** A declared agent whose count could not be attributed. `0` here would say
+ *     it works alone, when the truth is Genie could not join the table.
+ *  3. **A cell with no light.** `level: null` — the count is a fact we hold, the recency is
+ *     not. `ActivityLight` renders nothing for it, because a grey dot asserts "quiet".
+ *
+ * And the case that is NOT nothing: a measured `0`. The agent told us it works alone, which
+ * is information, and suppressing it would be indistinguishable from never having looked.
+ * With no collaborators there is no edge, so there is no recency either — whatever the clock
+ * says, a light there would be traffic on a link that does not exist.
  */
 export function commsOf(row: AgentRow): CommsCell {
     if (row.fidelity !== 'declared') return null;
     if (row.collaborators === null) return null;
-    return { count: row.collaborators, live: row.commsLive };
+
+    const level: CommsLevel | null =
+        row.collaborators === 0 || row.commsAgeSeconds === null ? null
+        : row.commsAgeSeconds <= COMMS_LIVE_WITHIN ? 'live'
+        : row.commsAgeSeconds <= COMMS_RECENT_WITHIN ? 'recent'
+        : 'quiet';
+
+    return { count: row.collaborators, level };
 }
 
 /** What occupies the "current target" column — they are mutually exclusive. */
