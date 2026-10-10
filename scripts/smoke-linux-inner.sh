@@ -19,6 +19,12 @@ npm ci --no-audit --no-fund >/tmp/ci.log 2>&1 || { tail -40 /tmp/ci.log; exit 1;
 echo "=== build ==="
 npm run build >/tmp/build.log 2>&1 || { tail -40 /tmp/build.log; exit 1; }
 
+# Seed a workspace and an agent, so the smoke can prove a CLICK reaches a surface — not just
+# that an empty Dashboard renders. See the note in `smoke-seed.mjs`: this writes the two files
+# a real machine would already have, and changes nothing about how the app behaves.
+echo "=== seeding a workspace and an agent ==="
+node scripts/smoke-seed.mjs
+
 echo "=== launching Electron under Xvfb ==="
 #
 # `--no-sandbox` is a CONTAINER concession, not a product change: Chromium's sandbox needs user
@@ -53,9 +59,10 @@ fi
 
 # The screenshot goes back to the host through the output mount, so a human can look at it.
 # Writing one is not the same as somebody having seen it.
-if [ -f /work/smoke-dashboard.png ] && [ -d /out ]; then
-    cp /work/smoke-dashboard.png /out/smoke-dashboard.png
-    echo "screenshot copied to the host"
+if [ -d /out ]; then
+    for shot in smoke-dashboard.png smoke-agent.png; do
+        [ -f "/work/$shot" ] && cp "/work/$shot" "/out/$shot" && echo "$shot copied to the host"
+    done
 fi
 
 exit "$status"

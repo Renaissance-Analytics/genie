@@ -285,10 +285,115 @@ check(
     `iiiiii=${Math.round(widths.narrow)}px mmmmmm=${Math.round(widths.wide)}px`,
 );
 
+/*
+ * THE FLOW: a seeded agent appears, and CLICKING IT OPENS IT.
+ *
+ * §0.4's exact shape. A finished Conversation UI was built, shipped and unreachable for three
+ * releases because one condition decided it should not render — and every test of that feature
+ * was green, because each one rendered the feature directly rather than asking whether the
+ * screen would. **The only check that would have caught it is a click.**
+ */
+const agentRow = await cdp.evaluate(`
+    (() => {
+        const row = document.querySelector('[data-agent]');
+        return row ? JSON.stringify({ id: row.getAttribute('data-agent'), text: row.textContent }) : null;
+    })()
+`);
+check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboard', String(agentRow));
+
+if (typeof agentRow === 'string') {
+    await cdp.evaluate(`document.querySelector('[data-agent]').click(); true`);
+
+    const opened = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-surface="agent"]'))`,
+        'the Agent view after clicking a row',
+    );
+    check(opened, '17. clicking the row OPENS the Agent view');
+
+    // And the Stream is PRESENT and showing — not hidden behind a fidelity check, which is the
+    // precise mechanism that hid it for three releases.
+    const stream = await cdp.evaluate(`
+        (() => {
+            const tab = document.querySelector('[data-tab="stream"]');
+            const body = document.querySelector('[data-stream]');
+            return JSON.stringify({
+                tab: Boolean(tab),
+                active: tab?.getAttribute('data-active') === 'true',
+                body: body?.getAttribute('data-stream') ?? null,
+            });
+        })()
+    `);
+    const s = JSON.parse(stream || '{}');
+    check(s.tab === true && s.active === true, '18. the Stream tab is present and selected');
+    check(s.body !== null, '19. the Stream body renders — an empty state, not nothing', String(s.body));
+
+    /*
+     * The composer is REACHABLE from here.
+     *
+     * The chat flyout is the only place a human types to an agent, so a screen with no route
+     * to it is read-only — someone can open an agent and then do nothing with it. The first
+     * screenshot of this view showed exactly that, and no test said a word about it.
+     */
+    const chatButton = await cdp.evaluate(`Boolean(document.querySelector('[data-action="chat"]'))`);
+    check(chatButton === true, '20. the Agent view offers a route to the composer');
+
+    if (chatButton) {
+        await cdp.evaluate(`document.querySelector('[data-action="chat"]').click(); true`);
+        const composer = await waitFor(
+            cdp,
+            `Boolean(document.querySelector('[data-chat]') && document.querySelector('textarea'))`,
+            'the chat flyout and its composer',
+        );
+        check(composer, '21. clicking it opens the flyout with a real composer');
+    }
+
+    // A screenshot of the AGENT VIEW, while we are on it. The Dashboard one is taken at the
+    // end, after Back, so without this there would be no picture of the screen that matters
+    // most — and a surface nobody has looked at is how this product got here.
+    const agentShot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    if (agentShot.result?.data) {
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync('/work/smoke-agent.png', Buffer.from(agentShot.result.data, 'base64'));
+    }
+
+    // The route followed the click, which is what makes the place linkable.
+    const routeNow = await cdp.evaluate('document.querySelector("[data-route]")?.textContent ?? ""');
+    check(routeNow.startsWith('genie://agent/'), '22. the route names the agent', routeNow);
+
+    /*
+     * BACK, twice, and both steps mean something.
+     *
+     * Opening the chat is a NAVIGATION — its subject lives in the route — so one Back closes
+     * the flyout and leaves you on the agent, and a second returns to the Dashboard. All view
+     * state is in the URL precisely so this works.
+     *
+     * The first version of this check went back once and expected the Dashboard. It failed,
+     * and the failure was the EXPECTATION: adding the chat step added a history entry. Worth
+     * saying plainly, because "the back button is broken" was the easier conclusion and the
+     * wrong one.
+     */
+    await cdp.evaluate('history.back(); true');
+    const chatClosed = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-chat]')`,
+        'the flyout closing on Back',
+    );
+    check(chatClosed, '23. Back closes the chat and leaves you on the agent');
+
+    await cdp.evaluate('history.back(); true');
+    const backHome = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-surface="dashboard"]'))`,
+        'the Dashboard after Back',
+    );
+    check(backHome, '24. Back again returns to the Dashboard');
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
-check(parsed.length === 0, '16. the console is clean', parsed.join(' | ') || 'no errors');
+check(parsed.length === 0, '25. the console is clean', parsed.join(' | ') || 'no errors');
 
 // A screenshot, for a human to look at. Writing one is not the same as somebody having seen
 // it, and this script does not claim otherwise.
@@ -303,7 +408,7 @@ cdp.close();
 
 console.log('');
 if (failures.length > 0) {
-    console.log(`SMOKE FAILED — ${failures.length} of 16:\n  ${failures.join('\n  ')}`);
+    console.log(`SMOKE FAILED — ${failures.length} of 25:\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');

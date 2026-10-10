@@ -218,3 +218,53 @@ describe('the Inspector', () => {
         expect(html).toContain('did not report');
     });
 });
+
+describe('found by looking at the running Agent view', () => {
+    it('does not draw the rail AT ALL when it has nothing to put in it', () => {
+        /**
+         * *"A section that can never populate is not drawn for that agent — absence of the
+         * rail, not an empty rail."*
+         *
+         * The screenshot showed a 260px column with a left border and nothing inside it. An
+         * empty bordered panel reads as one that failed to load, and it costs a fifth of the
+         * width of the screen that matters most.
+         */
+        const html = render({ session: null });
+
+        expect(html).not.toContain('data-rail-column');
+        expect(html).not.toContain('data-rail=');
+
+        // POSITIVE CONTROL: with a plan it IS drawn, so the absence is a reading.
+        const withPlan = render({
+            session: session({ plan: { step: 3, of: 7, doing: 'Passkey enrolment endpoint' } }),
+        });
+        expect(withPlan).toContain('data-rail-column');
+        expect(withPlan).toContain('data-rail="plan"');
+    });
+
+    it('draws the rail for a budget alone, not only for a plan', () => {
+        // Either panel is enough. Requiring both would hide a context warning on an agent that
+        // never reported a plan, which is most of them.
+        const html = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }) });
+        expect(html).toContain('data-rail-column');
+        expect(html).toContain('data-rail="budget"');
+    });
+
+    it('offers a way to TALK to the agent', () => {
+        /**
+         * The screenshot had no composer and no route to one. The chat flyout is the only place
+         * a human types to an agent — it replaces the Agent view's composer — so without a
+         * control that opens it, this screen is read-only and a person can open an agent and
+         * then do nothing with it.
+         *
+         * P3's bar is *"a real day's work done through the Stream"*. A screen you cannot type
+         * into does not clear it.
+         */
+        const html = render();
+
+        expect(html).toContain('data-action="chat"');
+        // It navigates to the route that opens the flyout on THIS agent, so the conversation
+        // is linkable and a pinned chat's subject is in the URL rather than in a component.
+        expect(html).toContain('chat=kai');
+    });
+});

@@ -76,6 +76,8 @@ export function AgentView({
     // body under a tab strip that does not contain the selected tab.
     const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'files');
 
+    const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
+
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
         selectedRow && selectedRow.event.kind === 'tool' ? inspectorFor(selectedRow.event) : null;
@@ -97,6 +99,33 @@ export function AgentView({
                 </span>
 
                 <div className="ml-auto flex items-center gap-1">
+                    {/*
+                     * The way to TALK to this agent.
+                     *
+                     * The chat flyout is the only place a human types to an agent — it replaces
+                     * this view's composer — so without a control that opens it, the Agent view
+                     * is read-only and somebody can open an agent and then do nothing with it.
+                     * That is what the first screenshot of this screen showed.
+                     *
+                     * It navigates rather than toggling local state, so the conversation is
+                     * linkable and the subject lives in the URL.
+                     */}
+                    <button
+                        type="button"
+                        data-action="chat"
+                        // The destination as an ATTRIBUTE, matching the rail's `data-nav`
+                        // convention. A route that exists only inside a click handler cannot be
+                        // asserted from markup, and "there is a button" is not the same claim as
+                        // "the button goes somewhere" — which is precisely the gap that let a
+                        // finished Conversation UI ship unreachable.
+                        data-nav={chatRoute}
+                        onClick={() => onNavigate(chatRoute)}
+                        className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
+                    >
+                        <Icon name="message-square" size="xs" />
+                        Chat
+                    </button>
+
                     <button
                         type="button"
                         data-action="take-over"
@@ -149,7 +178,19 @@ export function AgentView({
                  * those is pinned at a time; the rail is part of this surface and does not
                  * compete for that slot.
                  */}
-                <aside className="flex w-[260px] shrink-0 flex-col gap-4 border-l border-[var(--border-1)] p-4 text-xs">
+                {/*
+                 * *"A section that can never populate is not drawn for that agent — absence of
+                 * the rail, not an empty rail."*
+                 *
+                 * The first screenshot of this screen showed a 260px column with a left border
+                 * and nothing inside it. An empty bordered panel reads as one that failed to
+                 * load, and it costs a fifth of the width of the screen that matters most.
+                 *
+                 * EITHER panel is enough to draw it. Requiring both would hide a context
+                 * warning on an agent that never reported a plan, which is most of them.
+                 */}
+                {plan || budget ? (
+                <aside data-rail-column className="flex w-[260px] shrink-0 flex-col gap-4 border-l border-[var(--border-1)] p-4 text-xs">
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
                      * panel reads as an agent working without a plan; the truth is that it has
@@ -197,6 +238,7 @@ export function AgentView({
                         </section>
                     ) : null}
                 </aside>
+                ) : null}
             </div>
         </div>
     );
