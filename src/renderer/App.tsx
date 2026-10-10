@@ -3,7 +3,7 @@ import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
-import { EMPTY_SNAPSHOT, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_TERMINALS, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
@@ -217,6 +217,7 @@ export function App({ bridge }: AppProps) {
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={() => resolvedBridge?.addWorkspace()}
+            terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

@@ -103,6 +103,28 @@ export interface GenieBridge {
      * a folder before showing what it found there.
      */
     addWorkspace(): void;
+
+    /**
+     * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
+     *
+     * Keyed by WORKSPACE, never by agent: there is no way to express "a terminal for this
+     * agent" through this contract, which is the renderer's half of the one rule. Output and
+     * exits are pushed; the renderer holds them in `workspace-view.ts` and hands the buffer to
+     * `fancy-term`'s controlled `output` prop.
+     */
+    terminals: {
+        open(
+            workspaceId: string,
+            options: { cols: number; rows: number; command?: string },
+        ): Promise<{ id: string; pid: number; shell: string; scrollback: string }>;
+        write(id: string, data: string): void;
+        resize(id: string, cols: number, rows: number): void;
+        close(id: string): void;
+        /** Open terminals in one workspace — so a window that reloads can re-attach (§6.5). */
+        list(workspaceId: string): Promise<readonly { id: string; pid: number; shell: string }[]>;
+        onData(listener: (id: string, data: string) => void): () => void;
+        onExit(listener: (id: string, exitCode: number) => void): () => void;
+    };
 }
 
 /**
@@ -114,7 +136,22 @@ export interface GenieBridge {
  *
  * **Add a surface in the commit that makes it render, never before.**
  */
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace'];
+
+/**
+ * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`
+ * exists. Every call is a no-op and every list is empty, which is the honest answer: nothing
+ * is opened, nothing is written, nothing is claimed. Never a fake terminal.
+ */
+export const NO_TERMINALS: GenieBridge['terminals'] = {
+    open: () => Promise.reject(new Error('no terminal engine is attached')),
+    write: () => {},
+    resize: () => {},
+    close: () => {},
+    list: () => Promise.resolve([]),
+    onData: () => () => {},
+    onExit: () => () => {},
+};
 
 declare global {
     interface Window {
