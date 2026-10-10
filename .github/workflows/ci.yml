@@ -199,3 +199,58 @@ jobs:
             release/*.AppImage
             release/*.yml
           if-no-files-found: error
+
+  smoke-windows:
+    name: a real window (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # EVERY window this build has opened has been Linux, and the owner works on Windows.
+      #
+      # That is not a small difference for this app: `src/main/paths.ts` case-folds there and
+      # not elsewhere, the renderer picks `Ctrl` over the Apple key, Electron's window chrome
+      # differs, and a path separator bug on one platform is invisible on the other. This
+      # repository has already had a test that passed on Windows and broke on ubuntu for
+      # exactly that reason.
+      #
+      # A GitHub runner is not the owner's desktop, so the standing rule is satisfied — this is
+      # the "or in a VM" half of it.
+      - run: node scripts/smoke-seed.mjs
+
+      - name: open the app and drive it
+        shell: pwsh
+        run: |
+          # Windows runners have a desktop session, so Electron opens a real window with no
+          # virtual display needed. `--no-sandbox` is NOT passed: the sandbox works here, and
+          # weakening it to match the container would be testing a weaker product.
+          $app = Start-Process -FilePath "npx" -ArgumentList "electron",".","--remote-debugging-port=9222" `
+                               -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
+          try {
+              node scripts/smoke-cdp.mjs
+          } finally {
+              if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+
+      - name: the app's own output, on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-Content electron-err.log -Tail 60 -ErrorAction SilentlyContinue
+          Get-Content electron-out.log -Tail 20 -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshots-windows
+          path: smoke-*.png
+          if-no-files-found: warn
