@@ -370,3 +370,70 @@ describe('a parked approval renders in exactly ONE place', () => {
         expect(render({ session: parked() })).toContain('data-pill="waiting on you"');
     });
 });
+
+describe('the lane bar', () => {
+    it('shows all four lanes with REAL counts', () => {
+        const html = render();
+
+        for (const lane of ['messages', 'thoughts', 'tools', 'edits']) {
+            expect(html).toContain(`data-lane="${lane}"`);
+        }
+        // One message and one edit in the fixture, and a measured zero for the rest. A turn
+        // with no thoughts genuinely has none, and a reader asking "did it change anything?"
+        // is answered by the number.
+        expect(html).toMatch(/data-lane="messages"[\s\S]*?data-lane-count="1"/);
+        expect(html).toMatch(/data-lane="thoughts"[\s\S]*?data-lane-count="0"/);
+    });
+
+    it('draws a timeline when rows are timed, and a SENTENCE when none are', () => {
+        /**
+         * *"With no timestamped rows, Lanes renders a sentence, not four empty tracks."* Empty
+         * tracks read as "nothing happened"; the truth is "Genie has no times for these".
+         *
+         * The sentence replaces the timeline rather than captioning it — a caption under an
+         * empty drawing is read as a note about an accurate drawing.
+         */
+        expect(render()).toContain('data-lanes-timeline');
+
+        const untimed = ROWS.map((r) => ({ ...r, at: null }));
+        const html = render({ rows: untimed });
+
+        expect(html).toContain('data-lanes-reason');
+        expect(html).not.toContain('data-lanes-timeline');
+        expect(html).toContain('no times');
+        // The counts survive: what is missing is WHEN, not whether.
+        expect(html).toMatch(/data-lane="messages"[\s\S]*?data-lane-count="1"/);
+    });
+
+    it('says something different for an empty turn than for an untimed one', () => {
+        // "Nothing has happened yet" and "we have no times for what happened" are different,
+        // and a reader needs to know which they are looking at.
+        const empty = render({ rows: [] });
+        expect(empty).toContain('Nothing has happened');
+        expect(empty).not.toContain('no times');
+    });
+
+    it('marks every lane ON when nothing is filtered, and offers no Clear', () => {
+        // `null` is "not filtering". A Clear button there would be a control that does nothing.
+        const html = render();
+        expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
+        expect(html).not.toContain('data-lanes-clear');
+    });
+
+    it('marks only the selected lanes ON, and offers Clear', () => {
+        const html = render({ lanes: ['edits'] });
+
+        expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
+        expect(html).toMatch(/data-lane="messages"[^>]*data-on="false"/);
+        expect(html).toContain('data-lanes-clear');
+    });
+
+    it('filters the STREAM, not just the bar', () => {
+        // The bar agreeing with itself proves nothing. With only `edits` selected, the message
+        // row must be gone from the ledger below.
+        const html = render({ lanes: ['edits'] });
+
+        expect(html).toContain('data-stream-row="ed1"');
+        expect(html).not.toContain('data-stream-row="m1"');
+    });
+});

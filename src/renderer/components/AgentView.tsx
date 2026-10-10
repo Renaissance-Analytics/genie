@@ -7,6 +7,7 @@ import type { LiveSession } from '../../core/roster.js';
 import type { AgentTab } from '../../core/route.js';
 import type { Lane, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
+import { Lanes } from './Lanes.js';
 import { Stream } from './Stream.js';
 
 /**
@@ -67,12 +68,14 @@ export interface AgentViewProps {
     onAnswerApproval?: ((optionId: string) => void) | undefined;
     onNavigate: (route: string) => void;
     onSelect: (rowId: string | null) => void;
+    /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
+    onLanes?: ((lanes: readonly Lane[] | null) => void) | undefined;
     now?: (() => number) | undefined;
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval,
+    chatSubject, answeringApproval, onAnswerApproval, onLanes,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const pill = statePill(session, now ?? (() => Date.now()));
@@ -178,6 +181,8 @@ export function AgentView({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
+                            <Lanes rows={rows} selected={lanes} onChange={(next) => onLanes?.(next)} />
+
                             <div className="min-h-0 flex-1">
                                 <Stream
                                     rows={rows}

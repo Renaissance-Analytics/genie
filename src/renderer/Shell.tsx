@@ -1,3 +1,4 @@
+import { formatLanes, parseLanes } from '../core/lanes.js';
 import { parseRoute } from '../core/route.js';
 import { dockReserve, type DockPanel } from '../core/dock.js';
 import { Deck } from './components/Deck.js';
@@ -168,7 +169,7 @@ export function Shell({
                             session={agentDetail.session}
                             rows={agentDetail.rows}
                             tab={parsed.tab}
-                            lanes={null}
+                            lanes={parseLanes(parsed.lane)}
                             at={parsed.at}
                             selectedId={selectedRowId}
                             turns={agentDetail.turns}
@@ -176,6 +177,11 @@ export function Shell({
                             onNavigate={onNavigate}
                             onSelect={onSelectRow}
                             chatSubject={parsed.chat}
+                            onLanes={(next) => {
+                                const value = formatLanes(next);
+                                const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
+                                onNavigate(value === null ? base : `${base}&lane=${value}`);
+                            }}
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
                         />
