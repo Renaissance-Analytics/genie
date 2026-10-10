@@ -131,8 +131,15 @@ export interface AgentSessionOptions {
     driverFactory: SessionDriverFactory;
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
-    /** Notified for every ledger row, so a surface can render without re-reading the thread. */
-    onEvent?: (event: StreamEvent) => void;
+    /**
+     * Notified for every ledger row, so a surface can render without re-reading the thread.
+     *
+     * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
+     * same message, with another chunk of text on the end. A reply arrives as a stream of
+     * chunks and a reader watches it type, so each one is emitted — but they are one row, not
+     * one row per frame.
+     */
+    onEvent?: (event: StreamEvent, meta?: { replacesLast: boolean }) => void;
     /**
      * Something a SURFACE renders has changed — a parked approval, an answered one, a turn
      * ending, a provider failing.
@@ -221,6 +228,26 @@ export class AgentSession {
     #exited = false;
     /** The session id already reported to the listener, so it is reported exactly once. */
     #reportedSessionId: string | null = null;
+    /**
+     * The message currently being streamed, if one is.
+     *
+     * **A reply is one row, not one row per frame.** It arrives as a stream of
+     * `agent_message_chunk` updates, each of which was mapped to its own `message` row with
+     * nothing joining them — so a recalled token came back as `zephyr-bfd` and `ae2b6` on two
+     * separate rows, and `OK` as `O` then `K`. On screen that is a column of fragments, each
+     * with its own speaker label and timestamp, where §4.2 says a message is one row of
+     * speaker, time and text.
+     *
+     * Every test passed, because they all assert that *a* message row exists and renders. It
+     * took a live check whose assertion used a random token: "does it remember" would have
+     * been satisfied by `zephyr-bfd`.
+     *
+     * `persisted` tracks whether the thread already holds this message, so a growing message is
+     * written once when it closes rather than once per chunk.
+     */
+    #openMessage: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null = null;
+    /** Writes in flight, chained so the thread records rows in the order they were emitted. */
+    #writes: Promise<void> = Promise.resolve();
     /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
@@ -352,6 +379,10 @@ export class AgentSession {
                         this.#options.onStateChange?.();
                     }),
                 onTurnEnd: (outcome) => {
+                    // Two turns are two replies even with nothing between them. Without this a
+                    // whole conversation would accumulate into one unbounded row.
+                    this.#closeMessage();
+
                     this.#turns += 1;
                     this.#changed();
 
@@ -373,6 +404,10 @@ export class AgentSession {
                     }
                 },
                 onExit: () => {
+                    // Persist whatever of the last reply arrived. A provider dying mid-sentence
+                    // should cost the rest of the sentence, not the part it already said.
+                    this.#closeMessage();
+
                     this.#alive = false;
                     this.#exited = true;
 
@@ -477,6 +512,48 @@ export class AgentSession {
         this.#options.onSessionId?.(id);
     }
 
+    /**
+     * Finish the message being streamed and write it to the thread, once.
+     *
+     * Called when a different speaker starts, when any other kind of row arrives, when the turn
+     * ends, and when the provider exits. Writing per chunk would put a row in the thread for
+     * every few tokens, and reassembling them on read would mean the same joining rule
+     * implemented in two places — which is how the two copies drift apart.
+     */
+    #closeMessage(): void {
+        const open = this.#openMessage;
+        this.#openMessage = null;
+        this.#enqueue(open);
+    }
+
+    /**
+     * Queue a finished message's write, preserving the order rows were emitted in.
+     *
+     * Writing per chunk would put a row in the thread for every few tokens, and reassembling
+     * them on read would mean the same joining rule implemented in two places — which is how
+     * two copies of one rule drift apart. So a message is written once, when it closes, and
+     * the queue is what stops it landing after the row that closed it.
+     *
+     * A rejected write never breaks the chain: `then(fn, fn)` means the next write runs whether
+     * the last one failed or not. A storage fault must not stop the conversation from being
+     * recorded from then on — it is counted instead, so a surface can say this conversation is
+     * not being saved.
+     */
+    #enqueue(open: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null): void {
+        if (!open || open.persisted || open.event.text.length === 0) return;
+        open.persisted = true;
+
+        const write = async (): Promise<void> => {
+            try {
+                const thread = openAgentThread(this.#options.store, this.agentId);
+                await thread.record([persistable(open.event)]);
+            } catch {
+                this.#unpersisted += 1;
+            }
+        };
+        this.#writes = this.#writes.then(write, write);
+    }
+
     #changed(): void {
         this.#options.onStateChange?.();
     }
@@ -495,10 +572,63 @@ export class AgentSession {
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
 
-        this.#options.onEvent?.(event);
+        /*
+         * A MESSAGE joins the one being streamed, when it is the same speaker.
+         *
+         * "The same speaker" is `speaker` AND `peerName`, not just `speaker`: `atlas -> wren`
+         * and `kora -> wren` are both `peer`, and joining them would put one agent's words in
+         * another's mouth. The owner's own `you` chunks merging into an agent's reply would
+         * misattribute both.
+         */
+        /*
+         * A MESSAGE joins the one being streamed, when it is the same speaker.
+         *
+         * "The same speaker" is `speaker` AND `peerName`, not just `speaker`: `atlas -> wren`
+         * and `kora -> wren` are both `peer`, and joining them would put one agent's words in
+         * another's mouth. The owner's own `you` chunks merging into an agent's reply would
+         * misattribute both.
+         *
+         * **Emission is synchronous, writes are queued.** The first version awaited the
+         * previous message's write before emitting, which moved every row into a microtask —
+         * the renderer would have learned about a frame a tick after it arrived, and the whole
+         * suite went quiet because nothing had been emitted yet by the time it asserted. A
+         * surface should see a frame when it arrives; only the ORDER of what reaches the thread
+         * has to be preserved, and `#enqueue` is what preserves it.
+         */
+        if (event.kind === 'message') {
+            const open = this.#openMessage;
+            if (open && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
+                open.event = { ...open.event, text: open.event.text + event.text };
+                this.#options.onEvent?.(open.event, { replacesLast: true });
+                return; // Written to the thread once, when it closes.
+            }
+
+            // A different speaker: the previous message is finished, and must reach the thread
+            // before this one does.
+            this.#openMessage = { event, persisted: false };
+            this.#options.onEvent?.(event, { replacesLast: false });
+            this.#enqueue(open);
+            return;
+        }
+
+        /*
+         * Anything else CLOSES the open message.
+         *
+         * A reply, a tool call, then more reply is three rows in that order — which is the
+         * point of a ledger. Joining across the tool call would reorder the account of what
+         * happened, and the queue is what keeps the tool call from being written before the
+         * words that preceded it.
+         */
+        const closing = this.#openMessage;
+        this.#openMessage = null;
+
+        this.#options.onEvent?.(event, { replacesLast: false });
+
+        this.#enqueue(closing);
 
         try {
             const thread = openAgentThread(this.#options.store, this.agentId);
+            await this.#writes; // The open message lands first, so the ledger keeps its order.
             await thread.record([persistable(event)]);
         } catch {
             // A storage fault must not take the turn down with it — but it must also not

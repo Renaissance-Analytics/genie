@@ -13,7 +13,8 @@
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "verify": "npm run typecheck && npm test && npm run build",
     "verify:live": "tsx test/live/claude-session.live.ts",
-    "verify:flow": "tsx test/live/agent-flow.live.ts"
+    "verify:flow": "tsx test/live/agent-flow.live.ts",
+    "verify:resume": "tsx test/live/resume.live.ts"
   },
   "dependencies": {
     "@particle-academy/fancy-diff": "^0.5.1",
