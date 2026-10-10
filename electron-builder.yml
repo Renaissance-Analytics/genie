@@ -11,8 +11,31 @@ directories:
 files:
   - dist/**
   - package.json
+  # node-pty is NOT listed here on purpose. electron-builder packs node_modules from its own
+  # dependency walk (`dependencies` + `optionalDependencies`, never peers, never `files`
+  # globs — app-builder-lib's nodeModulesCollector), so when node-pty was fancy-term-host's
+  # PEER every installer shipped without it, and the afterPack hook said so on both platforms:
+  # "node-pty not found under appOutDir". fancy-term-host 0.9.0 declares it as an
+  # optionalDependency, which the collector follows. The hook below is what proves that.
 
 asar: true
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# TERMINALS IN THE INSTALLED APP — node-pty is native, and the asar cannot hold it.
+#
+# `fancy-term-host/docs/packaging.md`: a standard packaged Electron build spawns NO terminal at
+# all until three per-OS breakages are patched. node-pty's `.node` binaries and its helpers
+# (`conpty.dll` + `OpenConsole.exe` on Windows, `spawn-helper` on macOS/Linux) must live outside
+# the archive, and each OS needs a fix the package ships as an `afterPack` hook. Both halves
+# are required: the unpack alone leaves Windows without the `conpty/` subdir node-pty loads.
+#
+# `scripts/after-pack.cjs` turns the hook's `skipped`/`failed` result into a build failure,
+# because an installer that silently cannot open a terminal is the exact green build this
+# project exists to stop. The CI `it packages` jobs run it on both platforms.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+afterPack: ./scripts/after-pack.cjs
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # PUBLISH — and the pair this half belongs to.

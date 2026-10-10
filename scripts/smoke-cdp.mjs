@@ -572,6 +572,55 @@ if (!approvalEnabled) {
     }
 }
 
+/*
+ * 35–38. A REAL TERMINAL, through the whole stack.
+ *
+ * Rail → Workspace surface → `+ terminal` → fancy-term-host spawns the user's shell →
+ * keystrokes through xterm → preload → main → pty → output back the same way → xterm's rows.
+ * Nothing is mocked above the shell. This is P5's done-when: a command runs in a terminal, and
+ * no agent has one.
+ *
+ * The token is random, and the assertion is a COUNT: once Enter is pressed the token must
+ * appear at least twice in xterm's rows — the line as typed, and the line the shell PRINTED.
+ * Before Enter it appears exactly once (the positive control that the typed text landed in the
+ * terminal at all). A single occurrence after Enter would mean the keystrokes reached xterm and
+ * the pty never ran them, which is the failure this check exists to see.
+ */
+{
+    const token = `genie-${Math.random().toString(16).slice(2, 10)}`;
+    await cdp.evaluate(`document.querySelector('[data-nav="genie://workspace/tynn"]').click(); true`);
+    const onWorkspace = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the Workspace surface');
+    check(onWorkspace, '35. the rail reaches the Workspace surface');
+
+    await cdp.evaluate(`document.querySelector('[data-terminal-add]').click(); true`);
+    const paneUp = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-terminal-pane] .xterm-rows'))`,
+        'an xterm to mount for the new terminal',
+    );
+    check(paneUp, '36. "+ terminal" opens a real terminal pane with xterm mounted');
+
+    // Let the shell print its prompt, then focus xterm's textarea and type.
+    await new Promise((r) => setTimeout(r, 1200));
+    await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+    await cdp.send('Input.insertText', { text: `echo ${token}` });
+    const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '')`;
+    const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
+    check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
+
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    const ran = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 >= 2`, 'the shell to print the token back');
+    const count = await cdp.evaluate(`${rowsText}.split('${token}').length - 1`);
+    check(ran, '38. the SHELL ran it — the token comes back as output, not just as typed', `${count} occurrence(s)`);
+
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    if (shot.result?.data) {
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(shotPath('smoke-terminal.png'), Buffer.from(shot.result.data, 'base64'));
+    }
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
@@ -590,7 +639,7 @@ cdp.close();
 
 console.log('');
 if (failures.length > 0) {
-    console.log(`SMOKE FAILED — ${failures.length} of 34:\n  ${failures.join('\n  ')}`);
+    console.log(`SMOKE FAILED — ${failures.length} of 38:\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');

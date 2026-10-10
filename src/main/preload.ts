@@ -65,6 +65,35 @@ const bridge: GenieBridge = {
     addWorkspace: () => {
         void ipcRenderer.invoke('genie:add-workspace');
     },
+
+    /**
+     * TERMINALS — keyed by workspace, never by agent. Output and exits are PUSHED on two
+     * channels carrying the terminal id, so one listener per window serves every terminal;
+     * the renderer's reducer keeps what belongs to its workspace.
+     */
+    terminals: {
+        open: (workspaceId, options) =>
+            ipcRenderer.invoke('genie:terminal-open', workspaceId, options) as Promise<{
+                id: string; pid: number; shell: string; scrollback: string;
+            }>,
+        write: (id, data) => { void ipcRenderer.invoke('genie:terminal-write', id, data); },
+        resize: (id, cols, rows) => { void ipcRenderer.invoke('genie:terminal-resize', id, cols, rows); },
+        close: (id) => { void ipcRenderer.invoke('genie:terminal-close', id); },
+        list: (workspaceId) =>
+            ipcRenderer.invoke('genie:terminal-list', workspaceId) as Promise<
+                readonly { id: string; pid: number; shell: string }[]
+            >,
+        onData: (listener) => {
+            const handler = (_e: unknown, payload: { id: string; data: string }) => listener(payload.id, payload.data);
+            ipcRenderer.on('genie:terminal-data', handler);
+            return () => { ipcRenderer.removeListener('genie:terminal-data', handler); };
+        },
+        onExit: (listener) => {
+            const handler = (_e: unknown, payload: { id: string; exitCode: number }) => listener(payload.id, payload.exitCode);
+            ipcRenderer.on('genie:terminal-exit', handler);
+            return () => { ipcRenderer.removeListener('genie:terminal-exit', handler); };
+        },
+    },
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);

@@ -8,7 +8,8 @@ import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
-import type { AgentDetail, GenieSnapshot } from './bridge.js';
+import { Workspace } from './components/Workspace.js';
+import { NO_TERMINALS, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 
 /**
  * THE SHELL — chrome, route, surface, and **no effects**.
@@ -58,6 +59,8 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
+    /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
+    terminals?: GenieBridge['terminals'];
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
 }
@@ -75,6 +78,7 @@ export function Shell({
     onOpenAgent,
     onAddAgent,
     onAddWorkspace,
+    terminals = NO_TERMINALS,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -85,6 +89,8 @@ export function Shell({
     onAnswerDeckItem,
 }: ShellProps) {
     const parsed = parseRoute(route);
+    /** The workspace a route names, from the snapshot — `null` both for unknown and not-yet-loaded; the caller tells them apart. */
+    const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
     const canServe = servable.includes(parsed.surface);
 
     /**
@@ -187,6 +193,35 @@ export function Shell({
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
                         />
+                    ) : null}
+
+                    {/*
+                     * The Workspace surface — §4.6, terminals for shells and builds. Looked up
+                     * from the snapshot's workspace list; an unknown id gets the same honest
+                     * not-found as an unknown agent, below, rather than a blank body.
+                     */}
+                    {canServe && parsed.surface === 'workspace' && workspaceFor(parsed.workspaceId) ? (
+                        <Workspace
+                            key={parsed.workspaceId}
+                            workspace={workspaceFor(parsed.workspaceId)!}
+                            terminals={terminals}
+                        />
+                    ) : null}
+                    {canServe && parsed.surface === 'workspace' && snapshot.workspaces !== null && !workspaceFor(parsed.workspaceId) ? (
+                        <div data-surface="workspace-unknown" className="flex h-full flex-col items-center justify-center gap-3 text-[13px] text-[var(--fg-3)]">
+                            <p>
+                                No workspace is registered as{' '}
+                                <span className="font-mono text-[var(--fg-2)]">{parsed.workspaceId}</span>.
+                            </p>
+                            <button
+                                type="button"
+                                data-nav="genie://dashboard"
+                                onClick={() => onNavigate('genie://dashboard')}
+                                className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]"
+                            >
+                                Back to the Dashboard
+                            </button>
+                        </div>
                     ) : null}
 
                     {/*

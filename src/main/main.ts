@@ -1,4 +1,6 @@
-import { BrowserWindow, app, dialog, ipcMain } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, safeStorage } from 'electron';
+import { realFancyTermPort } from './fancy-term-port.js';
+import { TerminalHost } from './terminal-host.js';
 import { hostname } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +47,7 @@ if (!app.requestSingleInstanceLock()) {
 
 let window: BrowserWindow | null = null;
 let registry: Registry | null = null;
+let terminals: TerminalHost | null = null;
 let host: SessionHost | null = null;
 
 function createWindow(): BrowserWindow {
@@ -153,6 +156,32 @@ async function boot(): Promise<void> {
     await registry.load({ name: hostname(), healthy: true });
     registry.setProbe((id) => host?.probe(id) ?? null);
 
+    /*
+     * TERMINALS — for shells, builds, services and hosted sites. No agent has one.
+     *
+     * The engine is fancy-term-host behind the PtyPort seam. Snapshots are encrypted with
+     * Electron's safeStorage; on a machine that genuinely cannot encrypt the engine takes its
+     * own documented plaintext fallback, which is its call and not decided here.
+     */
+    terminals = new TerminalHost(
+        realFancyTermPort(app.getPath('userData'), {
+            isAvailable: () => safeStorage.isEncryptionAvailable(),
+            encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
+            decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
+        }),
+    );
+    // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
+    terminals.onData((id, data) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('genie:terminal-data', { id, data });
+        }
+    });
+    terminals.onExit((id, exitCode) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('genie:terminal-exit', { id, exitCode });
+        }
+    });
+
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
     ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
@@ -203,6 +232,35 @@ async function boot(): Promise<void> {
         return { ok: true, id: record.id };
     });
 
+    /*
+     * The terminal handlers. Every argument is `unknown` and narrowed here — the renderer is
+     * sandboxed and its values are not trusted. A terminal is opened for a WORKSPACE, which is
+     * looked up in the registry: an unknown workspace is refused, and there is no way to name
+     * an agent through this surface.
+     */
+    ipcMain.handle('genie:terminal-open', (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
+        if (!terminals || typeof rawWorkspaceId !== 'string') return null;
+        const workspace = registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null;
+        if (!workspace) return null;
+        const options = (rawOptions ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
+        const cols = typeof options.cols === 'number' && options.cols > 0 ? Math.floor(options.cols) : undefined;
+        const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
+        const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
+        return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows });
+    });
+    ipcMain.handle('genie:terminal-write', (_event, id: unknown, data: unknown) =>
+        typeof id === 'string' && typeof data === 'string' ? (terminals?.write(id, data) ?? false) : false);
+    ipcMain.handle('genie:terminal-resize', (_event, id: unknown, cols: unknown, rows: unknown) =>
+        typeof id === 'string' && typeof cols === 'number' && typeof rows === 'number'
+            ? (terminals?.resize(id, Math.floor(cols), Math.floor(rows)) ?? false)
+            : false);
+    ipcMain.handle('genie:terminal-close', (_event, id: unknown) =>
+        typeof id === 'string' ? (terminals?.close(id) ?? false) : false);
+    ipcMain.handle('genie:terminal-list', (_event, rawWorkspaceId: unknown) =>
+        typeof rawWorkspaceId === 'string'
+            ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
+            : []);
+
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };
 
@@ -251,6 +309,9 @@ app.on('second-instance', () => {
  */
 app.on('before-quit', () => {
     host?.stopAll();
+    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
+    // OpenConsole.exe processes with no message, because nothing reaped them.
+    terminals?.closeAll();
 });
 
 app.whenReady().then(boot).catch((error: unknown) => {

@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { registerAppIcons } from './icons.js';
 import './styles.css';
+// xterm's stylesheet, via Fancy's kit-named export rather than the third-party package name.
+// Without it the terminal's character-measure element is visible and the grid never lays out.
+import '@particle-academy/fancy-term/styles.css';
 
 /**
  * THE RENDERER'S ENTRY POINT. Four statements, in an order that matters.
