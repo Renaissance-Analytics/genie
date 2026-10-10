@@ -11,12 +11,12 @@ directories:
 files:
   - dist/**
   - package.json
-  # node-pty, EXPLICITLY. It is a peer of fancy-term-host rather than a dependency of ours, and
-  # electron-builder's dependency walk follows `dependencies`, never peers — so without this
-  # line every installer shipped without it, and the first run of the afterPack hook reported
-  # exactly that on both platforms: "node-pty not found under appOutDir". The main bundle
-  # keeps it external (`vite.main.config.ts`) and `asarUnpack` keeps it outside the archive.
-  - node_modules/node-pty/**
+  # node-pty is NOT listed here on purpose. electron-builder packs node_modules from its own
+  # dependency walk (`dependencies` + `optionalDependencies`, never peers, never `files`
+  # globs — app-builder-lib's nodeModulesCollector), so when node-pty was fancy-term-host's
+  # PEER every installer shipped without it, and the afterPack hook said so on both platforms:
+  # "node-pty not found under appOutDir". fancy-term-host 0.9.0 declares it as an
+  # optionalDependency, which the collector follows. The hook below is what proves that.
 
 asar: true
 
