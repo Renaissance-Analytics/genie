@@ -233,7 +233,11 @@ jobs:
           # Windows runners have a desktop session, so Electron opens a real window with no
           # virtual display needed. `--no-sandbox` is NOT passed: the sandbox works here, and
           # weakening it to match the container would be testing a weaker product.
-          $app = Start-Process -FilePath "npx" -ArgumentList "electron",".","--remote-debugging-port=9222" `
+          # `npx.cmd`, not `npx`. Start-Process launches an executable directly rather than
+          # through a shell, so a extensionless shim fails with
+          # "%1 is not a valid Win32 application" — which names neither the file nor the
+          # reason. The sibling Genie repo has hit this exact class before.
+          $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
           try {
               node scripts/smoke-cdp.mjs

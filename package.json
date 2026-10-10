@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Genie 2 — an agent is a session, never a terminal.",
+  "description": "Genie 2 \u2014 an agent is a session, never a terminal.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",

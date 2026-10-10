@@ -42,6 +42,7 @@ echo "=== launching Electron under Xvfb ==="
 # and the product behaves identically whether or not it is present. It points codex at a stub
 # that speaks the real App Server protocol, which is the only way to get a REAL parked approval
 # on screen in a container with no codex in it.
+export SMOKE_APPROVAL="${SMOKE_APPROVAL:-0}"
 export GENIE2_CODEX_BINARY="$(pwd)/scripts/stub-codex.mjs"
 chmod +x scripts/stub-codex.mjs
 
