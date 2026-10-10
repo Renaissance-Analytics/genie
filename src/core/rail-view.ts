@@ -107,3 +107,28 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
     { label: 'Flows', icon: 'workflow', route: 'genie://flows' },
     { label: 'Genie OSA', icon: 'sparkles', route: 'genie://agent/genie' },
 ];
+
+/** Every surface a route can name. */
+export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace';
+
+/** The rail's fixed rows. */
+export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace';
+
+/**
+ * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
+ *
+ * One source of truth, and the reason is drift. Two lists — "surfaces the shell renders" and
+ * "rows the rail shows" — have to be edited together, and the failure when they are not is
+ * silent in both directions: a row that navigates to a surface the shell cannot render leaves
+ * a blank body, and a surface that renders with no row is §0.4 again, built and unreachable.
+ *
+ * The `genie` row is the OS agent, so it rides the AGENT surface rather than one of its own.
+ */
+export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurface[] {
+    const rows: RailSurface[] = [];
+    if (servable.includes('deck')) rows.push('deck');
+    if (servable.includes('dashboard')) rows.push('dashboard');
+    if (servable.includes('agent')) rows.push('genie');
+    if (servable.includes('workspace')) rows.push('workspace');
+    return rows;
+}

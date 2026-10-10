@@ -1,5 +1,7 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { deckBadge, type RailItem } from '../../core/rail-view.js';
+import { deckBadge, type RailItem, type RailSurface } from '../../core/rail-view.js';
+
+export type { RailSurface };
 
 /**
  * THE RAIL — 208px, persistent, labelled.
@@ -26,9 +28,6 @@ import { deckBadge, type RailItem } from '../../core/rail-view.js';
  * Not from a `selected` prop the shell remembers. All view state lives in the URL, so refresh,
  * back and a deep link an agent sent all agree with the rail without anything synchronising.
  */
-
-/** The fixed rows of the rail, named so a shell can say which of them it can serve. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace';
 
 export interface SidebarProps {
     /** The current route. The active row is derived from it, never tracked separately. */

@@ -114,8 +114,11 @@ describe('counting what is running', () => {
         await registry.load(WORKSTATION);
         const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
 
+        // Probed BY ID. A blanket `() => live()` also answers for the OS agent, which really
+        // is a live session and really does count towards capacity — so the earlier version of
+        // this fixture was asserting 1 while describing 2.
         let session: LiveSession | null = live();
-        registry.setProbe(() => session);
+        registry.setProbe((id) => (id === a.id ? session : null));
         expect(registry.runningCount).toBe(1);
 
         session = null;
@@ -165,5 +168,57 @@ describe('push, never poll', () => {
         const clean = new Registry(new Store(await mkdtemp(join(tmpdir(), 'genie2-clean-'))));
         await clean.load(WORKSTATION);
         expect(clean.faults).toEqual([]);
+    });
+});
+
+describe('the OS agent', () => {
+    it('is seeded on first load, because the rail says it is always present', async () => {
+        /**
+         * The rail carries a `genie` row unconditionally — *"the OS agent — always present"*.
+         * A row that navigates to an agent which does not exist is a row that lands on a
+         * not-found, which is the same class of failure as a disabled control: the product
+         * offering something it cannot deliver.
+         *
+         * So the registry seeds it rather than the rail hiding it. It is a real record with a
+         * real id, and it persists like any other.
+         */
+        await registry.load(WORKSTATION);
+
+        const os = registry.osAgent();
+        expect(os).toMatchObject({ provider: 'claude', name: 'genie' });
+        // Findable by the id the UI looks it up with, which is what the rail's row needs.
+        expect(registry.find(os!.id)).toBe(os);
+    });
+
+    it('is seeded ONCE, not again on every load', async () => {
+        // The bug this guards is a workspace filling with `genie` agents across restarts.
+        await registry.load(WORKSTATION);
+        const first = registry.osAgent();
+
+        const reopened = new Registry(new Store(dir));
+        await reopened.load(WORKSTATION);
+        await reopened.load(WORKSTATION);
+
+        // The SAME record, by the id the UI looks it up with — not a second one.
+        expect(reopened.osAgent()?.id).toBe(first?.id);
+    });
+
+    it('is NOT in the Dashboard’s census at all', async () => {
+        /**
+         * It is *"the one agent that is not in a workspace"*, so it appears in no workspace
+         * group — and a header chip counting it would read `1 working` with no working row
+         * anywhere to account for it. **A number a reader cannot trace to a row is worse than
+         * no number.**
+         *
+         * It is reached from the rail, by its own route.
+         */
+        await registry.load(WORKSTATION);
+        await registry.addWorkspace({ id: 'tynn', path: 'C:/_Projects/tynn.ai' });
+        await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+
+        expect(registry.snapshot().agents.map((a) => a.name)).toEqual(['atlas']);
+
+        // POSITIVE CONTROL: it exists and is findable; it is the CENSUS it stays out of.
+        expect(registry.osAgent()).not.toBeNull();
     });
 });

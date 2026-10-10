@@ -25,6 +25,15 @@ import { Store, type WorkspaceRecord } from './store.js';
  * nothing.
  */
 
+/**
+ * The OS agent's name and its non-workspace.
+ *
+ * `OS_WORKSPACE` is not a workspace anybody has and never appears in the rail: it exists so
+ * the one agent that belongs to no workspace still has a well-formed record.
+ */
+export const OS_AGENT_NAME = 'genie';
+export const OS_WORKSPACE = '__genie__';
+
 /** What the registry can see of a running session. Supplied by whatever owns the sessions. */
 export type SessionProbe = (id: AgentId) => LiveSession | null;
 
@@ -50,7 +59,34 @@ export class Registry {
         this.faults.push(...this.#store.dropped);
         this.#workstation = workstation;
         this.#loaded = true;
+
+        await this.#seedOsAgent();
         this.#emit();
+    }
+
+    /**
+     * The OS agent, seeded once.
+     *
+     * The rail carries a `genie` row unconditionally — *"the OS agent, always present"* — and
+     * a row that navigates to an agent which does not exist lands on a not-found. That is the
+     * same class of failure as a disabled control: the product offering something it cannot
+     * deliver. So the record is real, has a real id, and persists like any other.
+     *
+     * Its `workspaceId` is `OS_WORKSPACE`, which is deliberately not a workspace anybody has.
+     * It is *"the one agent that is not in a workspace"*, and filing it under a real one would
+     * inflate that workspace's count — the group header's `4 agents` is a census people read.
+     */
+    async #seedOsAgent(): Promise<void> {
+        if (this.#agents.some((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME)) return;
+
+        const record = agentRecord({
+            id: mintAgentId(),
+            workspaceId: OS_WORKSPACE,
+            provider: 'claude',
+            name: OS_AGENT_NAME,
+        });
+        this.#agents = [...this.#agents, record];
+        await this.#store.writeAgents(this.#agents);
     }
 
     setProbe(probe: SessionProbe): void {
@@ -66,7 +102,22 @@ export class Registry {
         const now = () => Date.now();
 
         return {
-            agents: this.#agents.map((record) => agentRowFor(record, this.#probe(record.id), now)),
+            /**
+             * The Dashboard's census — **workspace agents only**.
+             *
+             * The OS agent is deliberately excluded. It appears in no workspace group, so a
+             * header chip counting it would read `1 working` with no working row anywhere to
+             * account for it, and a number a reader cannot trace to a row is worse than no
+             * number. It is reachable by its own route from the rail, and `find` still
+             * resolves it.
+             *
+             * This was the other way round for one commit: seeding the OS agent into `agents`
+             * broke six tests that asserted exact counts, and mass fixture churn is the signal
+             * to suspect the guard rather than the fixtures. It was the guard.
+             */
+            agents: this.#agents
+                .filter((record) => record.workspaceId !== OS_WORKSPACE)
+                .map((record) => agentRowFor(record, this.#probe(record.id), now)),
             // `agentsKnown` is TRUE only once the store has actually been read. Before that the
             // rail must render no counts at all: a `0` on first paint says "this workspace is
             // empty" when the truth is "nobody has looked yet".
@@ -108,6 +159,11 @@ export class Registry {
         await this.#store.writeAgents(this.#agents);
         this.#emit();
         return record;
+    }
+
+    /** The OS agent's record. Always present after `load`. */
+    osAgent(): AgentRecord | null {
+        return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
     }
 
     find(id: AgentId): AgentRecord | null {

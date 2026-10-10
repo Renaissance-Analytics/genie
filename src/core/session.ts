@@ -22,12 +22,49 @@ export interface SessionDriver {
     start(): void;
     prompt(text: string): void;
     kill(signal?: NodeJS.Signals): void;
-    readonly running: boolean;
+    /**
+     * OPTIONAL, and that is a measurement rather than a guess.
+     *
+     * In `prism-acp` 0.6.1 `ClaudeDriver` has a `running` getter and **`CodexDriver` does
+     * not** — and the shared `AgentDriver` interface does not declare one either. This used to
+     * be required, read as `driver?.running ?? false`, which for codex answered
+     * `undefined ?? false`: a working codex agent reporting **not running**. On the Dashboard
+     * that is `idle` with no duration — an agent burning tokens while the board says nothing
+     * is happening.
+     *
+     * Nothing caught it because every test used a fake driver that had the property.
+     */
+    readonly running?: boolean;
     readonly cliSessionId: string | null;
+}
+
+/** A turn's outcome, as `prism-acp` reports it. */
+export interface TurnOutcomeLike {
+    /**
+     * `null` when the turn did NOT finish cleanly.
+     *
+     * Deliberate in prism-acp and honoured here: ACP's five stop reasons all describe a turn
+     * that finished, and none of them describes a crash. Answering `end_turn` for a failed
+     * turn would report a clean finish that never happened.
+     */
+    readonly stopReason: 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled' | null;
+    readonly isError: boolean;
+    /** The CLI's own reason string, kept even when it maps to nothing. */
+    readonly raw: string | null;
 }
 
 export interface DriverEvents {
     onUpdate?: (update: Record<string, unknown>) => void;
+    /**
+     * A TURN ended. **Not the same event as the process exiting.**
+     *
+     * With `--input-format stream-json` the CLI stays alive across turns, so without this
+     * signal a session goes to `working` on the first prompt and never comes back: every
+     * agent anyone had ever prompted would read `Working` on the Dashboard forever, with a
+     * duration counting up beside it. prism-acp keeps the two events separate for exactly
+     * this reason.
+     */
+    onTurnEnd?: (outcome: TurnOutcomeLike) => void;
     onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
@@ -45,7 +82,13 @@ export type SessionDriverFactory = (options: {
     events: DriverEvents;
 }) => SessionDriver;
 
-export type TurnState = 'idle' | 'working' | 'stopped' | 'unknown';
+/**
+ * What the session is doing, as far as the PROTOCOL has said.
+ *
+ * `unknown` is a real member and is never a synonym for idle: it means nothing has told us,
+ * and a surface renders it as "we cannot see" rather than as "nothing is happening".
+ */
+export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 
 export interface AgentSessionOptions {
     agentId: AgentId;
@@ -71,6 +114,10 @@ export class AgentSession {
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
     #unpersisted = 0;
+    /** Completed turns, failed ones included — a failed turn still happened and still cost. */
+    #turns = 0;
+    /** The provider's own words for why a turn did not finish. `null` when none did. */
+    #failure: string | null = null;
     /**
      * This session's own subtree, captured just after start.
      *
@@ -80,6 +127,11 @@ export class AgentSession {
      * room.
      */
     #ownedPids: readonly number[] = [];
+    /**
+     * Our own record of whether the provider is alive: true from `start`, false on exit or
+     * stop. Used when the driver does not expose `running` — see {@link SessionDriver.running}.
+     */
+    #alive = false;
 
     constructor(options: AgentSessionOptions) {
         this.#options = options;
@@ -95,12 +147,33 @@ export class AgentSession {
         return this.#driver?.cliSessionId ?? null;
     }
 
+    /**
+     * Whether the provider is alive.
+     *
+     * The driver's own reading is preferred when it has one: a provider process can die
+     * without an exit event reaching us, and `ClaudeDriver.running` is closer to the truth
+     * than our bookkeeping. When the driver has no such property — `CodexDriver` — we fall
+     * back to what we know for certain, which is that we started it and have not seen it end.
+     *
+     * What this never does is answer `false` because the property was missing.
+     */
     get running(): boolean {
-        return this.#driver?.running ?? false;
+        if (!this.#driver) return false;
+        return this.#driver.running ?? this.#alive;
     }
 
     get unpersistedEvents(): number {
         return this.#unpersisted;
+    }
+
+    /** Turns this session has completed. The Budget panel's count comes from here. */
+    get turns(): number {
+        return this.#turns;
+    }
+
+    /** Why the last turn failed, in the provider's own words, or `null`. */
+    get failure(): string | null {
+        return this.#failure;
     }
 
     start(): void {
@@ -112,9 +185,30 @@ export class AgentSession {
             ...(resumeSessionId ? { resumeSessionId } : {}),
             events: {
                 onUpdate: (update) => void this.#ingest(update),
+                onTurnEnd: (outcome) => {
+                    this.#turns += 1;
+
+                    // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
+                    // idle would present a crashed turn as a completed one, which is the
+                    // quietest way to lose work: the agent stops, the board says nothing is
+                    // wrong, and nobody looks.
+                    //
+                    // A CANCELLED turn is the exception and is idle: cancelling is something
+                    // the human did, and painting it as a fault blames the agent for being
+                    // stopped.
+                    const crashed = outcome.stopReason === null || outcome.isError;
+                    if (crashed) {
+                        this.#turnState = 'failed';
+                        this.#failure = outcome.raw;
+                    } else {
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                    }
+                },
                 onExit: () => {
                     // The provider ended. `stopped` is a fact; what it was DOING when it
                     // ended is not knowable from an exit code, so nothing claims it.
+                    this.#alive = false;
                     this.#turnState = 'stopped';
                 },
             },
@@ -123,6 +217,7 @@ export class AgentSession {
         const before = new Set(tree.descendantsOf(process.pid));
         this.#driver.start();
         this.#ownedPids = tree.descendantsOf(process.pid).filter((pid) => !before.has(pid));
+        this.#alive = true;
         this.#turnState = 'working';
     }
 
@@ -158,6 +253,7 @@ export class AgentSession {
         const tree = this.#options.processTree ?? systemProcessTree;
         tree.killTree(this.#ownedPids);
 
+        this.#alive = false;
         this.#turnState = 'stopped';
     }
 

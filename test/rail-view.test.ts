@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
-import { FEATURE_ICONS, deckBadge, railWorkspaces, type RailWorkspace } from '../src/core/rail-view.js';
+import {
+    FEATURE_ICONS,
+    deckBadge,
+    railSurfacesFor,
+    railWorkspaces,
+    type RailWorkspace,
+} from '../src/core/rail-view.js';
 
 function row(over: Partial<AgentRow> = {}): AgentRow {
     return {
@@ -119,5 +125,40 @@ describe('the four feature icons', () => {
     it('gives each a DISTINCT icon and route, because four of the same glyph is no signpost', () => {
         expect(new Set(FEATURE_ICONS.map((f) => f.icon)).size).toBe(4);
         expect(new Set(FEATURE_ICONS.map((f) => f.route)).size).toBe(4);
+    });
+});
+
+describe('the rail’s rows are DERIVED from what the shell can serve', () => {
+    it('offers a row only for a surface that renders', () => {
+        /**
+         * One source of truth, because two lists drift and the failure is silent in BOTH
+         * directions: a row navigating to a surface the shell cannot render leaves a blank
+         * body, and a surface that renders with no row pointing at it is §0.4 again — built,
+         * shipped and unreachable.
+         */
+        expect(railSurfacesFor(['dashboard'])).toEqual(['dashboard']);
+        expect(railSurfacesFor(['dashboard', 'agent'])).toEqual(['dashboard', 'genie']);
+        expect(railSurfacesFor(['dashboard', 'deck', 'agent', 'workspace']))
+            .toEqual(['deck', 'dashboard', 'genie', 'workspace']);
+    });
+
+    it('rides the genie row on the AGENT surface, because that is what it navigates to', () => {
+        // The OS agent is an agent. Giving it a surface of its own would mean a row that can
+        // render while the thing it renders cannot.
+        expect(railSurfacesFor(['agent'])).toEqual(['genie']);
+        expect(railSurfacesFor(['dashboard'])).not.toContain('genie');
+    });
+
+    it('offers nothing for a build that serves nothing', () => {
+        // Degenerate, and worth pinning: the empty case must be empty rather than defaulting
+        // to the full rail.
+        expect(railSurfacesFor([])).toEqual([]);
+    });
+
+    it('keeps the rail’s own order regardless of the order it is told', () => {
+        // The rail reads top to bottom in a fixed order. Deriving it from the caller's array
+        // order would let a refactor reshuffle somebody's navigation.
+        expect(railSurfacesFor(['workspace', 'agent', 'dashboard', 'deck']))
+            .toEqual(['deck', 'dashboard', 'genie', 'workspace']);
     });
 });

@@ -1,5 +1,7 @@
-import type { AgentRow } from '../core/dashboard-view.js';
-import type { RailWorkspace } from '../core/rail-view.js';
+import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
+import type { RailWorkspace, Surface } from '../core/rail-view.js';
+import type { LiveSession } from '../core/roster.js';
+import type { TimedEvent } from '../core/stream-view.js';
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -31,15 +33,54 @@ export interface GenieSnapshot {
     workstation: { name: string; healthy: boolean } | null;
 }
 
+/**
+ * One agent's full state — what the Agent view needs.
+ *
+ * Fetched per agent rather than carried in the snapshot: a ledger is thousands of rows, and
+ * pushing every agent's to every renderer on every event would send the whole estate's
+ * history down the wire to redraw one line.
+ */
+export interface AgentDetail {
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string };
+    /** `null` when the agent is registered but not running. Not an error. */
+    session: LiveSession | null;
+    rows: readonly TimedEvent[];
+    turns: number;
+    /** `null` when the provider reports no cost. codex reports none — so there is no row. */
+    cost: number | null;
+    /** Why a start was refused, if one was. Reported, never swallowed. */
+    refusal: string | null;
+}
+
 export interface GenieBridge {
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */
     snapshot(): Promise<GenieSnapshot>;
     /** Called whenever the main process's view of the world changes. Returns an unsubscribe. */
     subscribe(onChange: (snapshot: GenieSnapshot) => void): () => void;
-    /** Open an agent's session. Idempotent — reattaches rather than creating a second. */
+
+    /** One agent's detail, or `null` for an id that is not registered. */
+    agentDetail(agentId: string): Promise<AgentDetail | null>;
+    /** Changes to one agent. Separate from `subscribe` so a ledger is not broadcast. */
+    subscribeAgent(agentId: string, onChange: (detail: AgentDetail | null) => void): () => void;
+
+    /** Start or REATTACH a session. Never creates a second for the same agent. */
     openAgent(agentId: string): void;
+    /** Stop means stop: the provider tree goes, and the capacity slot frees. */
+    stopAgent(agentId: string): void;
+    prompt(agentId: string, text: string): void;
     addAgent(workspaceId: string): void;
 }
+
+/**
+ * Which surfaces this build can actually render.
+ *
+ * Exported from here because both the shell and the rail read it, and the rail's rows are
+ * DERIVED from it — see `railSurfacesFor`. Two lists would drift, and the failure is silent in
+ * both directions: a row that navigates nowhere, or a surface nothing points at.
+ *
+ * **Add a surface in the commit that makes it render, never before.**
+ */
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent'];
 
 declare global {
     interface Window {

@@ -9,6 +9,7 @@ import {
     type DriverEvents,
     type SessionDriver,
     type SessionDriverFactory,
+    type TurnOutcomeLike,
 } from '../src/core/session.js';
 
 /**
@@ -58,8 +59,13 @@ function fakeDriver() {
         calls,
         resumeSeen: () => seenResume,
         setSessionId: (id: string) => { cliSessionId = id; },
+        setRunning: (value: boolean) => { running = value; },
         emit: (u: Record<string, unknown>) => events.onUpdate?.(u),
         exit: () => events.onExit?.(0, null),
+        // Typed as the interface, not inferred from the default — inference narrows
+        // `stopReason` to `'end_turn'` and `raw` to `null`, so a test could not pass a crash.
+        endTurn: (outcome: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: null }) =>
+            events.onTurnEnd?.(outcome),
     };
 }
 
@@ -194,5 +200,167 @@ describe('AgentSession', () => {
         // A storage fault must not take the turn down — and must not vanish either. A surface
         // can say "this conversation is not being saved" rather than showing a partial one.
         await vi.waitFor(() => expect(session.unpersistedEvents).toBe(1));
+    });
+});
+
+describe('a turn ending — the signal without which every agent reads Working forever', () => {
+    it('returns to IDLE when the provider reports the turn finished', async () => {
+        /**
+         * `turnState` went to `working` on a prompt and only ever to `stopped` on exit. With
+         * `--input-format stream-json` the CLI **stays alive across turns**, so the process
+         * does not exit between them — and every agent anyone had ever prompted would read
+         * `Working` on the Dashboard forever, with a duration counting up.
+         *
+         * `onTurnEnd` is a separate driver event from `onExit` for exactly this reason:
+         * prism-acp's own comment says a server that conflated them would resolve every prompt
+         * only when the agent shut down.
+         */
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        session.prompt('go');
+        expect(session.turnState).toBe('working');
+
+        d.endTurn();
+        expect(session.turnState).toBe('idle');
+    });
+
+    it('records a turn that did not finish cleanly as BROKEN, not idle', () => {
+        // `stopReason: null` is prism-acp refusing to name a reason for a crash — ACP's five
+        // reasons all describe a turn that FINISHED. Reporting `idle` there would present a
+        // crashed turn as a completed one.
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        d.endTurn({ stopReason: null, isError: true, raw: 'api error' });
+
+        expect(session.turnState).toBe('failed');
+        expect(session.failure).toBe('api error');
+    });
+
+    it('counts turns, because the budget panel has to come from somewhere real', () => {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        expect(session.turns).toBe(0);
+
+        d.endTurn();
+        d.endTurn();
+        expect(session.turns).toBe(2);
+
+        // A turn that failed still happened, and still cost something.
+        d.endTurn({ stopReason: null, isError: true, raw: 'api error' });
+        expect(session.turns).toBe(3);
+    });
+
+    it('a CANCELLED turn is idle, not failed', () => {
+        // Cancelling is something the human did. Painting it as a fault would blame the agent
+        // for being stopped.
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        d.endTurn({ stopReason: 'cancelled', isError: false, raw: 'cancelled' });
+
+        expect(session.turnState).toBe('idle');
+        expect(session.failure).toBeNull();
+    });
+});
+
+describe('a driver that does not expose `running` — which CodexDriver does not', () => {
+    /**
+     * Measured in prism-acp 0.6.1: `ClaudeDriver` has a `running` getter and **`CodexDriver`
+     * does not**, and the shared `AgentDriver` interface does not declare one either.
+     *
+     * `AgentSession.running` read `this.#driver?.running ?? false`, so for codex it answered
+     * `undefined ?? false` — **false**. A working codex agent would have reported "not
+     * running", which is `idle` on the Dashboard with no duration: an agent burning tokens
+     * while the board says nothing is happening.
+     *
+     * Nothing would have caught it, because every existing test used a fake driver that HAS
+     * the property. So the fake here deliberately omits it.
+     */
+    function codexLikeDriver() {
+        let events: DriverEvents = {};
+        let killed = false;
+        const factory: SessionDriverFactory = (options) => {
+            events = options.events;
+            // No `running` getter. This is the real shape of CodexDriver.
+            return {
+                start: () => {},
+                prompt: () => {},
+                kill: () => { killed = true; },
+                get cliSessionId() { return null; },
+            };
+        };
+        return { factory, exit: () => events.onExit?.(0, null), wasKilled: () => killed };
+    }
+
+    it('reports RUNNING after start, from the session’s own bookkeeping', () => {
+        const dir = tempDir();
+        const d = codexLikeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        expect(session.running).toBe(false);
+        session.start();
+        expect(session.running).toBe(true);
+    });
+
+    it('reports NOT running once the provider exits', () => {
+        const dir = tempDir();
+        const d = codexLikeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        d.exit();
+        expect(session.running).toBe(false);
+    });
+
+    it('reports NOT running after a stop', () => {
+        const dir = tempDir();
+        const d = codexLikeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        session.stop();
+        expect(session.running).toBe(false);
+        expect(d.wasKilled()).toBe(true);
+    });
+
+    it('still prefers a driver that DOES report it — a more direct reading than our own', () => {
+        // POSITIVE CONTROL, and the reason this is not simply "own the flag and ignore the
+        // driver": a provider process can die without an exit event reaching us, and
+        // `ClaudeDriver.running` is closer to the truth than our bookkeeping is.
+        const d = fakeDriver();
+        const dir = tempDir();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+
+        session.start();
+        expect(session.running).toBe(true);
+        d.setRunning(false);
+        expect(session.running).toBe(false);
     });
 });
