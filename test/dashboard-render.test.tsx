@@ -301,3 +301,31 @@ describe('the first run \u2014 found by opening the window, not by a test', () =
         expect([...html.matchAll(/>\s*0\s*</g)]).toEqual([]);
     });
 });
+
+describe('the column headers cannot spill out of their row', () => {
+    it('truncates every one of them', () => {
+        /**
+         * Found by looking at a 1024px-wide Windows window: "Current target" wrapped onto two
+         * lines, and the header row is a fixed 28px, so the second line spilled over the first
+         * agent beneath it.
+         *
+         * Invisible at the 1440px the design board is drawn at — which is the only width I had
+         * been looking at, and the reason this is a COUNT rather than a check on the one header
+         * that happened to break. Any two-word label in a narrow column has the same problem.
+         */
+        const html = render([row()], [{ id: 'tynn', path: 'C:/x' }]);
+
+        const headerRow = html.slice(html.indexOf('uppercase'), html.indexOf('data-workspace='));
+        const spans = [...headerRow.matchAll(/<span[^>]*>/g)];
+
+        expect(spans.length).toBe(6);
+        expect(spans.filter((s) => !s[0].includes('truncate'))).toEqual([]);
+    });
+
+    it('keeps the header row at its stated 28px', () => {
+        // The height is the other half: truncating is what KEEPS it at 28px under a label that
+        // would otherwise wrap, so asserting the class without the height would miss the point.
+        const html = render([row()], [{ id: 'tynn', path: 'C:/x' }]);
+        expect(html).toContain(' h-7 ');
+    });
+});

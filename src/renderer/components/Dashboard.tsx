@@ -388,15 +388,28 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 </div>
             </div>
 
+            {/*
+             * `truncate` on every header, and it is not cosmetic.
+             *
+             * The header row is a fixed 28px. A two-word label in a narrow column WRAPS, and
+             * the second line has nowhere to go — it spills out of the row and over the first
+             * agent beneath it. Seen on a 1024px-wide Windows window, where "Current target"
+             * broke across two lines; invisible at the 1440px the board is drawn at, which is
+             * the only width I had been looking at.
+             *
+             * Truncating is the right answer rather than shrinking the type: a clipped header
+             * is still readable from its neighbours and its column, and a reader who needs the
+             * full word can widen the window.
+             */}
             <div
                 className={`${GRID} h-7 items-center border-b border-[var(--border-1)] text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]`}
             >
-                <span>Agent</span>
-                <span>Status</span>
-                <span>Current target</span>
-                <span>Latest delivery</span>
-                <span>Comms</span>
-                <span>Context</span>
+                <span className="truncate">Agent</span>
+                <span className="truncate">Status</span>
+                <span className="truncate">Current target</span>
+                <span className="truncate">Latest delivery</span>
+                <span className="truncate">Comms</span>
+                <span className="truncate">Context</span>
             </div>
 
             {groups.map((group) => (
