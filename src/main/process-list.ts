@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import type { RunningProcess } from './upgrade.js';
 
 /**
@@ -43,7 +43,7 @@ export function killProcess(pid: number): boolean {
 function win32(): RunningProcess[] {
     // ExecutablePath is null for processes we cannot query (SYSTEM's); those cannot be ours.
     const script =
-        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)" }';
+        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$($_.ExecutablePath)" }';
     const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
         encoding: 'utf8',
         timeout: 30_000,
@@ -53,11 +53,27 @@ function win32(): RunningProcess[] {
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .flatMap((line) => {
-            const sep = line.indexOf('|');
-            const pid = Number.parseInt(line.slice(0, sep), 10);
-            const executable = line.slice(sep + 1);
-            return Number.isFinite(pid) && executable ? [{ pid, executable }] : [];
+            const [pidText, parentText, ...rest] = line.split('|');
+            const pid = Number.parseInt(pidText ?? '', 10);
+            const parent = Number.parseInt(parentText ?? '', 10);
+            // The path itself may contain '|' (it cannot on Windows, but join rather than assume).
+            const executable = rest.join('|');
+            return Number.isFinite(pid) && executable
+                ? [{ pid, executable, parentPid: Number.isFinite(parent) ? parent : null }]
+                : [];
         });
+}
+
+/** The 4th field of /proc/<pid>/stat, after the parenthesised comm (which may itself contain spaces). */
+function parentOf(entry: string): number | null {
+    try {
+        const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+        const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+        const ppid = Number.parseInt(after[1] ?? '', 10);
+        return Number.isFinite(ppid) ? ppid : null;
+    } catch {
+        return null;
+    }
 }
 
 function posix(): RunningProcess[] {
@@ -68,7 +84,7 @@ function posix(): RunningProcess[] {
         try {
             // A process that exited between readdir and readlink, or one we may not inspect,
             // is simply not listed — it cannot hold our files open in either case.
-            found.push({ pid, executable: readlinkSync(`/proc/${entry}/exe`) });
+            found.push({ pid, executable: readlinkSync(`/proc/${entry}/exe`), parentPid: parentOf(entry) });
         } catch {
             // skip
         }

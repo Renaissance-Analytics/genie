@@ -26,6 +26,8 @@ export interface RunningProcess {
     pid: number;
     /** Absolute path to the executable. */
     executable: string;
+    /** The parent's pid, or `null` when the lister could not tell. */
+    parentPid: number | null;
 }
 
 /**
@@ -37,12 +39,16 @@ export interface RunningProcess {
 export const ORPHAN_REPORT_LIMIT = 12;
 
 /**
- * Every process running from the install directory, except our own.
+ * Every process running from the install directory, except our own TREE.
  *
  * Our own executable lives there too, and a teardown that killed the process performing the
- * upgrade would be an impressive way to fail. The sibling-prefix check is `isInside`'s, so
- * `…/Genie2` is never mistaken for `…/Genie` — that mistake would reach into a different
- * installation during our upgrade.
+ * upgrade would be an impressive way to fail. So would killing its children: Electron's
+ * renderer, GPU and utility processes are the same executable under other pids, and on
+ * 2026-10-10 the installed app's teardown named its own three and stopped them — the window
+ * went blank mid-install. Descent is followed through `parentPid`; a process whose parent the
+ * lister could not name stays IN, because an unplaceable process still holds our files. The
+ * sibling-prefix check is `isInside`'s, so `…/Genie2` is never mistaken for `…/Genie` — that
+ * mistake would reach into a different installation during our upgrade.
  */
 export function orphansUnder(
     processes: readonly RunningProcess[],
@@ -50,9 +56,16 @@ export function orphansUnder(
     ownPid: number,
     caseInsensitive: boolean = process.platform === 'win32',
 ): readonly RunningProcess[] {
-    return processes.filter(
-        (p) => p.pid !== ownPid && isInside(p.executable, installDir, caseInsensitive),
-    );
+    const ours = new Set<number>([ownPid]);
+    // Children can be listed before their parents, so walk until nothing new joins.
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (const p of processes) {
+            if (!ours.has(p.pid) && p.parentPid !== null && ours.has(p.parentPid)) { ours.add(p.pid); grew = true; }
+        }
+    }
+    return processes.filter((p) => !ours.has(p.pid) && isInside(p.executable, installDir, caseInsensitive));
 }
 
 /**

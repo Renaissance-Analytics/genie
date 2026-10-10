@@ -191,11 +191,11 @@ describe('download', () => {
 
 describe('install — §7.2 teardown first', () => {
     const procs: RunningProcess[] = [
-        { pid: OWN_PID, executable: `${INSTALL}\\Genie.exe` },                                   // us — never
-        { pid: 5001, executable: `${INSTALL}\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty\\OpenConsole.exe` },
-        { pid: 5002, executable: `${INSTALL.toLowerCase()}\\genie.exe` },                        // case-folded, Windows
-        { pid: 6001, executable: 'C:\\Users\\u\\AppData\\Local\\Programs\\Genie2\\Genie.exe' }, // sibling install — never
-        { pid: 7001, executable: 'C:\\Windows\\System32\\svchost.exe' },
+        { pid: OWN_PID, executable: `${INSTALL}\\Genie.exe`, parentPid: 1 },                                   // us — never
+        { pid: 5001, executable: `${INSTALL}\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty\\OpenConsole.exe`, parentPid: null },
+        { pid: 5002, executable: `${INSTALL.toLowerCase()}\\genie.exe`, parentPid: 1 },                        // case-folded, Windows
+        { pid: 6001, executable: 'C:\\Users\\u\\AppData\\Local\\Programs\\Genie2\\Genie.exe', parentPid: 1 }, // sibling install — never
+        { pid: 7001, executable: 'C:\\Windows\\System32\\svchost.exe', parentPid: 1 },
     ];
 
     async function downloaded() {
