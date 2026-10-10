@@ -8,10 +8,13 @@
 //
 // CommonJS because electron-builder loads hooks with `require`.
 //
-// It never throws on its own; it returns a result. A `skipped` result means node-pty was not
-// found under the packed app — almost always a wrong `asarUnpack` glob — and that is turned
-// into a hard failure here, because an installer that silently cannot open a terminal is the
-// exact kind of green build this project exists to stop.
+// It never throws on its own; it returns a result, and `ok` — "the terminal should now work" —
+// is the signal, NOT the action string. `skipped` is emitted for two opposite outcomes: Linux
+// with no spawn-helper (benign — node-pty only builds one on macOS; `ok: true`) and node-pty
+// not found under the packed app at all (`ok: false`, almost always a wrong `asarUnpack` glob
+// or a peer the collector never walked). `!ok` is turned into a hard failure here, because an
+// installer that silently cannot open a terminal is the exact kind of green build this project
+// exists to stop. Fancy may add a distinct `'not-found'` action in 0.10.0; `ok` stays the gate.
 
 const { fancyTermAfterPack } = require('@particle-academy/fancy-term-host/electron');
 
