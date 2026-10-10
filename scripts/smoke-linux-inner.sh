@@ -57,7 +57,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== driving it over CDP ==="
-if node scripts/smoke-cdp.mjs; then
+if node scripts/smoke-cdp.mjs && node scripts/layout-sweep.mjs; then
     status=0
 else
     status=$?

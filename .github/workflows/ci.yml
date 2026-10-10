@@ -241,6 +241,7 @@ jobs:
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
           try {
               node scripts/smoke-cdp.mjs
+          node scripts/layout-sweep.mjs
           } finally {
               if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           }
