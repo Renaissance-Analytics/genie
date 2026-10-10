@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Terminal } from '@particle-academy/fancy-term';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import {
     activate,
     emptyWorkspace,
@@ -11,6 +10,7 @@ import {
 } from '../../core/workspace-view.js';
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
+import type { TerminalPaneProps } from './TerminalPane.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -41,6 +41,20 @@ export interface WorkspaceProps {
 
 export function Workspace({ workspace, terminals }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(emptyWorkspace);
+    /*
+     * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
+     * evaluation, so a static import of `fancy-term` anywhere Node can reach — the SSR render
+     * tests — throws before any component runs. `TerminalPane.tsx` is the one module that
+     * imports it, and it is reached only from this effect, which never runs under
+     * `react-dom/server`. Until it resolves the pane renders nothing; the empty state and the
+     * tab strip do not wait for it.
+     */
+    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
+    useEffect(() => {
+        let live = true;
+        void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
+        return () => { live = false; };
+    }, []);
     /** A pane size the engine can be opened at, so the first paint is not the wrong shape. */
     const lastSize = useRef<{ cols: number; rows: number }>({ cols: 120, rows: 30 });
 
@@ -155,11 +169,10 @@ export function Workspace({ workspace, terminals }: WorkspaceProps) {
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
             <div className="min-h-0 flex-1 bg-[var(--bg-0)]">
-                {active ? (
-                    <Terminal
+                {active && Pane ? (
+                    <Pane
                         key={active.id}
-                        data-terminal-pane={active.id}
-                        className="h-full w-full"
+                        paneId={active.id}
                         output={state.output[active.id] ?? ''}
                         readOnly={active.exited !== null}
                         onData={(data) => terminals.write(active.id, data)}
@@ -168,7 +181,7 @@ export function Workspace({ workspace, terminals }: WorkspaceProps) {
                             terminals.resize(active.id, cols, rows);
                         }}
                     />
-                ) : (
+                ) : active ? null : (
                     <div data-terminal-empty="" className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-[var(--fg-3)]">
                         <p>No terminals open in {workspace.name ?? workspace.id}.</p>
                         <button
