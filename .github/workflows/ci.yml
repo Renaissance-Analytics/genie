@@ -142,6 +142,7 @@ jobs:
         run: |
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
           node scripts/smoke-cdp.mjs
+          node scripts/layout-sweep.mjs
 
       - name: electron's own output, on failure
         if: failure()
@@ -241,7 +242,7 @@ jobs:
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
           try {
               node scripts/smoke-cdp.mjs
-          node scripts/layout-sweep.mjs
+              node scripts/layout-sweep.mjs
           } finally {
               if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           }
