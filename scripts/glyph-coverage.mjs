@@ -27,7 +27,10 @@
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 
 const SUBJECTS = [
-    ['U+21C4', '⇄', 'ActivityLight direction="both"'],
+    // Was `ActivityLight direction="both"` until react-fancy 5.35.1 replaced it with U+2194.
+    // Kept as a known-absent reference: it is the character this whole investigation started
+    // from, and a probe list with no confirmed failures in it cannot tell you it still works.
+    ['U+21C4', '⇄', 'replaced in 5.35.1 — kept as a known-absent reference'],
     ['U+2190', '←', 'ActivityLight direction="in"'],
     ['U+2192', '→', 'ActivityLight / "Open workspace"'],
     ['U+2713', '✓', 'Checkbox tick'],
