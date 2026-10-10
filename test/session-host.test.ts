@@ -6,7 +6,7 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import { agentRowFor } from '../src/core/roster.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { SessionHost, type DriverFor } from '../src/main/session-host.js';
+import { SessionHost, providerBinary, type DriverFor } from '../src/main/session-host.js';
 
 /**
  * THE RUNNING AGENTS.
@@ -335,5 +335,69 @@ describe('the process tree the host uses', () => {
         host.start(r, dir);
         host.stop(r.id);
         expect(reaped[0]).toEqual([]);
+    });
+});
+
+describe('which provider binary to run', () => {
+    /**
+     * Real configuration, not a test hook — and the distinction is the one the previous build
+     * got wrong. Its `GENIE_E2E` env var CHANGED BEHAVIOUR: it short-circuited the
+     * single-instance lock, so the suite exercised an application that behaved differently
+     * from the shipped one, and the measured result was two instances opening windows on the
+     * owner's desktop while real agents were mid-turn.
+     *
+     * A binary path changes nothing about how Genie behaves. It is the same need a user with
+     * an nvm install, a pinned version or a non-standard path has, and the toolchain manager
+     * exists to answer it.
+     */
+    it('uses the provider default when nothing is configured', () => {
+        expect(providerBinary('claude', {})).toBeUndefined();
+        expect(providerBinary('codex', {})).toBeUndefined();
+    });
+
+    it('honours a configured path, per provider', () => {
+        const env = { GENIE2_CLAUDE_BINARY: '/opt/claude/bin/claude', GENIE2_CODEX_BINARY: '/opt/codex' };
+
+        expect(providerBinary('claude', env)).toBe('/opt/claude/bin/claude');
+        expect(providerBinary('codex', env)).toBe('/opt/codex');
+    });
+
+    it('does NOT let one provider’s path be used for another', () => {
+        // The failure this prevents is subtle and would be baffling: Genie launching claude
+        // and getting codex, because one variable was read for both.
+        const env = { GENIE2_CLAUDE_BINARY: '/opt/claude' };
+
+        expect(providerBinary('claude', env)).toBe('/opt/claude');
+        expect(providerBinary('codex', env)).toBeUndefined();
+    });
+
+    it('treats an EMPTY value as unset rather than as an empty path', () => {
+        // `GENIE2_CLAUDE_BINARY=` in a shell profile sets it to the empty string. Passing that
+        // through would spawn `""` and fail with something that names neither the variable nor
+        // the cause.
+        expect(providerBinary('claude', { GENIE2_CLAUDE_BINARY: '' })).toBeUndefined();
+        expect(providerBinary('claude', { GENIE2_CLAUDE_BINARY: '   ' })).toBeUndefined();
+    });
+
+    it('reads the ambient environment when none is passed', () => {
+        /**
+         * The production call site passes nothing, so the default has to actually work.
+         *
+         * `vi.stubEnv` is scoped and restored by the runner — this is not the forbidden thing
+         * of mutating the machine's environment to make a test pass, it is a fixture that
+         * exists only inside this assertion.
+         *
+         * An earlier version asserted `providerBinary.length === 2`, which is false:
+         * `Function.length` counts parameters BEFORE the first default, so it is 1. The
+         * assertion was about the signature when the claim was about the behaviour.
+         */
+        expect(providerBinary('claude')).toBeUndefined();
+
+        vi.stubEnv('GENIE2_CLAUDE_BINARY', '/opt/claude/bin/claude');
+        expect(providerBinary('claude')).toBe('/opt/claude/bin/claude');
+        vi.unstubAllEnvs();
+
+        // And it is gone again, so the stub did not leak into the rest of the suite.
+        expect(providerBinary('claude')).toBeUndefined();
     });
 });

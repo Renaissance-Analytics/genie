@@ -37,6 +37,14 @@ echo "=== launching Electron under Xvfb ==="
 # windows on the owner's desktop while real agents were mid-turn. **A harness that requires the
 # product to behave differently is a harness that tests a different product.**
 #
+# `GENIE2_CODEX_BINARY` is the test of that principle rather than an exception to it: it is
+# ordinary provider configuration — the same variable a user with a non-standard install sets —
+# and the product behaves identically whether or not it is present. It points codex at a stub
+# that speaks the real App Server protocol, which is the only way to get a REAL parked approval
+# on screen in a container with no codex in it.
+export GENIE2_CODEX_BINARY="$(pwd)/scripts/stub-codex.mjs"
+chmod +x scripts/stub-codex.mjs
+
 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' \
     npx electron . --no-sandbox --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
 ELECTRON_PID=$!

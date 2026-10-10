@@ -90,6 +90,8 @@ function fakeDriver() {
         // Typed as the interface, not inferred from the default — inference narrows
         // `toolCall` to `{ title: string }`, so a test could not pass the empty call that
         // exercises the refusal path.
+        protocolError: (problem: string) => events.onProtocolError?.(problem),
+        stderr: (line: string) => events.onStderr?.(line),
         askPermission: (
             request: PermissionRequestLike = {
                 toolCall: { title: 'php artisan migrate --force' },
@@ -495,5 +497,80 @@ describe('a parked approval', () => {
 
         expect(await pending).toEqual({ outcome: 'cancelled' });
         expect(session.pendingApproval).toBeNull();
+    });
+});
+
+describe('a provider that fails to start must not fail SILENTLY', () => {
+    /**
+     * Found while trying to get a real approval on screen: the stub provider never completed
+     * its handshake and **nothing anywhere said so**. The agent sat idle, the board showed no
+     * fault, and the only way to learn anything was to instrument the app by hand.
+     *
+     * `prism-acp` reports both `onProtocolError` and `onStderr`, and genie2's wiring dropped
+     * them on the floor. A provider that cannot start is exactly the case where an agent
+     * looking idle is the most expensive possible rendering — it is indistinguishable from one
+     * that is simply waiting for you.
+     */
+    function open() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
+        });
+        session.start();
+        return { d, session };
+    }
+
+    it('records a protocol error as a FAILURE, with the provider’s own words', () => {
+        const { d, session } = open();
+
+        d.protocolError('thread/start response did not contain thread.id');
+
+        expect(session.turnState).toBe('failed');
+        expect(session.failure).toBe('thread/start response did not contain thread.id');
+    });
+
+    it('keeps the FIRST protocol error, not the last', () => {
+        /**
+         * A failing handshake usually produces a cascade, and the later ones are consequences.
+         * Reporting the most recent would show the symptom and bury the cause — which is the
+         * same reason a stack trace is read from the top.
+         */
+        const { d, session } = open();
+
+        d.protocolError('thread/start response did not contain thread.id');
+        d.protocolError('transport closed');
+
+        expect(session.failure).toBe('thread/start response did not contain thread.id');
+    });
+
+    it('keeps recent stderr, which is where a provider usually explains itself', () => {
+        const { d, session } = open();
+
+        d.stderr('codex: command not found');
+        expect(session.recentStderr).toContain('codex: command not found');
+    });
+
+    it('bounds the stderr it keeps, because a chatty provider must not grow without limit', () => {
+        // A provider logging a line a second would otherwise be an unbounded buffer in a
+        // process that stays up for days.
+        const { d, session } = open();
+        for (let i = 0; i < 500; i += 1) d.stderr(`line ${i}`);
+
+        expect(session.recentStderr.length).toBeLessThanOrEqual(50);
+        // And it keeps the LATEST, because the last thing a dying provider says is the useful
+        // part.
+        expect(session.recentStderr.at(-1)).toBe('line 499');
+    });
+
+    it('does not invent a failure when the provider is merely chatty', () => {
+        // POSITIVE CONTROL: stderr alone is not a fault. Plenty of tools log to it normally,
+        // and a build that painted every one of them red would teach people to ignore red.
+        const { d, session } = open();
+
+        d.stderr('note: using cached index');
+        expect(session.turnState).not.toBe('failed');
+        expect(session.failure).toBeNull();
     });
 });

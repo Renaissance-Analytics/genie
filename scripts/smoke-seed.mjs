@@ -30,6 +30,17 @@ const now = new Date().toISOString();
 // would make this seed silently invisible.
 const id = `agent_${'a1b2c3d4'.repeat(4)}`;
 
+/**
+ * A second agent, on CODEX.
+ *
+ * It exists so the smoke can see a REAL parked approval. `ClaudeDriver.permissionRequests` is
+ * false in prism-acp 0.6.1 — claude does not send them over ACP yet — and `CodexDriver`'s is
+ * true. It is pointed at `scripts/stub-codex.mjs` through `GENIE2_CODEX_BINARY`, which is
+ * ordinary provider configuration rather than a hook: the product behaves identically either
+ * way, which is exactly what the previous build's `GENIE_E2E` did not.
+ */
+const codexId = `agent_${'b2c3d4e5'.repeat(4)}`;
+
 writeFileSync(
     join(runtime, 'workspaces.json'),
     JSON.stringify([{ id: 'tynn', path: '/work' }], null, 2),
@@ -51,10 +62,22 @@ writeFileSync(
                 mode: 'manual',
                 accessScope: 'none',
             },
+            {
+                id: codexId,
+                workspaceId: 'tynn',
+                provider: 'codex',
+                name: 'wren',
+                instructions: null,
+                threadId: null,
+                createdAt: now,
+                lastUsedAt: null,
+                mode: 'manual',
+                accessScope: 'none',
+            },
         ],
         null,
         2,
     ),
 );
 
-console.log(`seeded one workspace and one agent (${id}) into ${runtime}`);
+console.log(`seeded one workspace and two agents (${id}, ${codexId}) into ${runtime}`);

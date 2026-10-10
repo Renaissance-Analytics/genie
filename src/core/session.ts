@@ -76,6 +76,17 @@ export interface DriverEvents {
      */
     onRequestPermission?: (request: PermissionRequestLike) => Promise<PermissionOutcomeLike>;
     /**
+     * The provider could not be spoken to — a malformed frame, a failed handshake, a transport
+     * that died mid-exchange.
+     *
+     * Dropping this is how a provider that cannot start becomes an agent that merely looks
+     * idle, which is the most expensive possible rendering: indistinguishable from one that is
+     * simply waiting for you.
+     */
+    onProtocolError?: (problem: string) => void;
+    /** The provider's own output. Not a fault on its own — plenty of tools log here normally. */
+    onStderr?: (line: string) => void;
+    /**
      * A TURN ended. **Not the same event as the process exiting.**
      *
      * With `--input-format stream-json` the CLI stays alive across turns, so without this
@@ -110,6 +121,9 @@ export type SessionDriverFactory = (options: {
  */
 export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 
+/** How many lines of provider output to keep. Enough to explain a failure, bounded. */
+const STDERR_KEPT = 50;
+
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
@@ -138,6 +152,15 @@ export class AgentSession {
     #turns = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
     #failure: string | null = null;
+    /**
+     * The provider's recent output, bounded.
+     *
+     * Where a provider usually explains itself — `command not found`, a bad flag, an expired
+     * login. Bounded because a chatty provider in a process that stays up for days would
+     * otherwise be an unbounded buffer; the LATEST lines are kept, since the last thing a
+     * dying provider says is the useful part.
+     */
+    #stderr: string[] = [];
     /**
      * This session's own subtree, captured just after start.
      *
@@ -204,6 +227,11 @@ export class AgentSession {
         return this.#failure;
     }
 
+    /** The provider's recent output, oldest first. Empty when it has said nothing. */
+    get recentStderr(): readonly string[] {
+        return this.#stderr;
+    }
+
     /** The question waiting on a human, or `null`. This is what makes a row `waiting`. */
     get pendingApproval(): Approval | null {
         return this.#approval?.approval ?? null;
@@ -237,6 +265,24 @@ export class AgentSession {
             ...(resumeSessionId ? { resumeSessionId } : {}),
             events: {
                 onUpdate: (update) => void this.#ingest(update),
+                onProtocolError: (problem) => {
+                    this.#turnState = 'failed';
+                    /*
+                     * The FIRST error, not the last.
+                     *
+                     * A failing handshake produces a cascade and the later entries are
+                     * consequences — "transport closed" after "thread/start response did not
+                     * contain thread.id" is the symptom reported over the cause. Same reason a
+                     * stack trace is read from the top.
+                     */
+                    this.#failure ??= problem;
+                },
+                onStderr: (line) => {
+                    // Kept, never promoted to a fault. Plenty of providers log here normally,
+                    // and a build that painted every one of them red would teach people to
+                    // ignore red.
+                    this.#stderr = [...this.#stderr, line].slice(-STDERR_KEPT);
+                },
                 onRequestPermission: (request) =>
                     new Promise<PermissionOutcomeLike>((resolve) => {
                         const approval = approvalFrom(request);

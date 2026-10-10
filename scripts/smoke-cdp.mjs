@@ -431,10 +431,98 @@ if (deckRow) {
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard again');
 }
 
+/*
+ * A REAL APPROVAL, ON SCREEN, ANSWERED.
+ *
+ * The last item on this build's status that no unit test could close: producing one needs a
+ * provider that sends permission requests. `ClaudeDriver.permissionRequests` is false in
+ * prism-acp 0.6.1 and `CodexDriver`'s is true, so the smoke points codex at a stub that speaks
+ * the real App Server protocol.
+ *
+ * **Nothing above that stub is mocked.** The real `CodexDriver`, the real session holding the
+ * real promise the provider is blocked on, the real host, bridge, registry and UI.
+ *
+ * SKIPPED rather than failed when no codex agent is seeded: the approval path and the rest of
+ * the smoke are separable, and a missing seed should not read as a broken surface.
+ */
+const codexRow = await cdp.evaluate(`
+    (() => {
+        const rows = [...document.querySelectorAll('[data-agent]')];
+        const row = rows.find((r) => r.textContent && r.textContent.includes('codex'));
+        return row ? row.getAttribute('data-agent') : null;
+    })()
+`);
+
+if (typeof codexRow !== 'string') {
+    console.log('  SKIP  the approval round trip — no codex agent was seeded');
+} else {
+    await cdp.evaluate(`document.querySelector('[data-agent="${codexRow}"]').click(); true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
+
+    // Open the composer and send: a turn is what makes the provider ask, and the stub asks on
+    // its first turn.
+    await cdp.evaluate(`document.querySelector('[data-action="chat"]')?.click(); true`);
+    await waitFor(cdp, `Boolean(document.querySelector('textarea'))`, 'the composer');
+
+    await cdp.evaluate(`
+        (() => {
+            const box = document.querySelector('textarea');
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+            setter.call(box, 'run the migration');
+            box.dispatchEvent(new Event('input', { bubbles: true }));
+            box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+            return true;
+        })()
+    `);
+
+    const parked = await waitFor(cdp, `Boolean(document.querySelector('[data-approval]'))`, 'the approval card');
+    check(parked, '29. a REAL parked approval renders on screen');
+
+    if (parked) {
+        const question = await cdp.evaluate(`document.querySelector('[data-approval-question]')?.textContent ?? ''`);
+        check(question.includes('migrate'), "30. showing the PROVIDER's own words, not ours", question);
+
+        const options = await cdp.evaluate(`
+            JSON.stringify([...document.querySelectorAll('[data-approval-option]')]
+                .map((b) => ({ id: b.getAttribute('data-approval-option'), tone: b.getAttribute('data-tone') })))
+        `);
+        const parsedOptions = JSON.parse(options || '[]');
+        check(parsedOptions.length >= 2, "31. with the provider's own options", options);
+
+        /*
+         * Tone comes from the protocol's `kind`, never from the label. A provider could ship an
+         * option called "Allow once and remember" that denies, and a substring match on "allow"
+         * would paint a deny button green — the most dangerous way this surface could be wrong.
+         */
+        check(
+            parsedOptions.some((o) => o.tone === 'ok') && parsedOptions.some((o) => o.tone === 'bad'),
+            '32. coloured from the protocol kind, not from the label',
+        );
+
+        const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+        if (shot.result?.data) {
+            const { writeFileSync } = await import('node:fs');
+            writeFileSync(shotPath('smoke-approval.png'), Buffer.from(shot.result.data, 'base64'));
+        }
+
+        // ANSWER IT. The provider is blocked on one promise, so this is the whole round trip:
+        // click → bridge → host → session → driver → the stub, which logs the decision it got.
+        const first = parsedOptions[0]?.id;
+        await cdp.evaluate(`document.querySelector('[data-approval-option="${first}"]').click(); true`);
+
+        const cleared = await waitFor(
+            cdp,
+            `!document.querySelector('[data-approval]')`,
+            'the approval clearing once answered',
+        );
+        check(cleared, '33. answering it CLEARS it — the round trip completed');
+    }
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
-check(parsed.length === 0, '28. the console is clean', parsed.join(' | ') || 'no errors');
+check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no errors');
 
 // A screenshot, for a human to look at. Writing one is not the same as somebody having seen
 // it, and this script does not claim otherwise.
@@ -449,7 +537,7 @@ cdp.close();
 
 console.log('');
 if (failures.length > 0) {
-    console.log(`SMOKE FAILED — ${failures.length} of 28:\n  ${failures.join('\n  ')}`);
+    console.log(`SMOKE FAILED — ${failures.length} of 34:\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');

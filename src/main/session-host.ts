@@ -39,23 +39,57 @@ export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: stri
  * `null` is a refusal. An agent whose provider Genie cannot drive does not get a terminal as a
  * consolation prize; it stays registered, idle, and reports what is missing.
  */
+/**
+ * Which binary to run for a provider, or `undefined` for its default.
+ *
+ * **Configuration, not a test hook**, and the distinction is the one the previous build got
+ * wrong. Its `GENIE_E2E` variable CHANGED BEHAVIOUR — it short-circuited the single-instance
+ * lock — so the suite exercised an application that behaved differently from the shipped one,
+ * and the measured result was two instances opening windows on the owner's desktop while real
+ * agents were mid-turn.
+ *
+ * A path changes nothing about how Genie behaves. It is the same need a user with an nvm
+ * install, a pinned version, or a provider outside `PATH` has.
+ *
+ * One variable per provider: reading a single one for both would mean Genie launching claude
+ * and getting codex, which fails in a way that names neither the variable nor the cause. An
+ * EMPTY value is treated as unset, because `GENIE2_CLAUDE_BINARY=` in a shell profile is how
+ * somebody un-sets it, and passing `""` through would spawn nothing with an opaque error.
+ */
+export function providerBinary(
+    provider: string,
+    env: Record<string, string | undefined> = process.env,
+): string | undefined {
+    const configured = env[`GENIE2_${provider.toUpperCase()}_BINARY`];
+    const trimmed = configured?.trim();
+    return trimmed ? trimmed : undefined;
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
+    const configured = providerBinary(record.provider);
+    const binary = configured ? { binary: configured } : {};
 
     switch (record.provider) {
         case 'claude':
             return (options) =>
-                new ClaudeDriver({ cwd, ...resume }, {
+                new ClaudeDriver({ cwd, ...resume, ...binary }, {
                     onUpdate: (u) => options.events.onUpdate?.(u as Record<string, unknown>),
                     onTurnEnd: (o) => options.events.onTurnEnd?.(o),
+                    // Both of these used to be dropped, which is how a provider that cannot
+                    // start became an agent that merely looked idle.
+                    onProtocolError: (problem) => options.events.onProtocolError?.(problem),
+                    onStderr: (line) => options.events.onStderr?.(line),
                     onExit: (code, signal) => options.events.onExit?.(code, signal),
                 });
 
         case 'codex':
             return (options) =>
-                new CodexDriver({ cwd, ...resume }, {
+                new CodexDriver({ cwd, ...resume, ...binary }, {
                     onUpdate: (u) => options.events.onUpdate?.(u as Record<string, unknown>),
                     onTurnEnd: (o) => options.events.onTurnEnd?.(o),
+                    onProtocolError: (problem) => options.events.onProtocolError?.(problem),
+                    onStderr: (line) => options.events.onStderr?.(line),
                     onExit: (code, signal) => options.events.onExit?.(code, signal),
                 });
 
@@ -234,10 +268,21 @@ export class SessionHost {
             }
         }
 
+        /*
+         * A failure, with the provider's LAST WORDS attached when it said any.
+         *
+         * `recentStderr` is where a provider explains itself — `command not found`, a bad flag,
+         * an expired login — and a reason of "the turn did not finish" with that text sitting
+         * unread in memory is the difference between an actionable row and a shrug.
+         */
+        const lastWords = session.recentStderr.at(-1);
         const failure =
             session.turnState === 'failed'
                 ? {
-                      reason: session.failure ?? 'The turn did not finish, and the provider gave no reason.',
+                      reason:
+                          session.failure ??
+                          lastWords ??
+                          'The turn did not finish, and the provider gave no reason.',
                       fixes: ['Restart'],
                   }
                 : null;
