@@ -1,3 +1,4 @@
+import { formatRange, parseRange, type TimeRange } from './lanes.js';
 /**
  * ROUTES — the application's state, written down.
  *
@@ -49,7 +50,7 @@ export type WorkspacePanel = 'files';
 export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
     | ({ surface: 'deck' } & Common)
-    | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null } & Common)
+    | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
     | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common);
 
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
@@ -94,6 +95,8 @@ export function parseRoute(input: string): Route {
                 tab,
                 lane: params.get('lane') || null,
                 at: params.get('at') || null,
+                // Malformed is DROPPED, not fatal: the lane and anchor beside it still open.
+                range: parseRange(params.get('range')),
                 ...common,
             };
         }
@@ -126,6 +129,7 @@ export function formatRoute(route: Route): string {
         case 'agent':
             params.set('tab', route.tab);
             if (route.lane) params.set('lane', route.lane);
+            if (route.range) params.set('range', formatRange(route.range) as string);
             if (route.at) params.set('at', route.at);
             break;
         case 'workspace':
