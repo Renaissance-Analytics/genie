@@ -97,6 +97,15 @@ if (-not $SkipSource) {
     Run 'npm test' 'test.log'
     Get-Content test.log -Tail 12
 
+    # The two LIVE terminal checks, through the real engine (node-pty via fancy-term-host).
+    # verify:leak is the measurement genie#805 lacked, and Windows (conpty) is where that
+    # incident's numbers came from, so this is the baseline that can actually go red.
+    Step 'live terminal + leak baseline'
+    Run 'npm run verify:terminal' 'terminal.log'
+    Get-Content terminal.log -Tail 10
+    Run 'npm run verify:leak' 'leak.log'
+    Get-Content leak.log -Tail 14
+
     Step 'build'
     Run 'npm run build' 'build.log'
 
