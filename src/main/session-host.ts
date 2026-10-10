@@ -315,8 +315,32 @@ export class SessionHost {
                 }
                 this.#onThreadId?.(record.id, threadId);
             },
-            onEvent: (event: StreamEvent) => {
-                rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
+            onEvent: (event: StreamEvent, meta) => {
+                /*
+                 * `replacesLast` means the SAME message with another chunk of text on the end.
+                 *
+                 * The row is updated in place rather than appended, and keeps its id and its
+                 * arrival time:
+                 *
+                 *  - **the id**, because a row whose id changed on every chunk would remount on
+                 *    every frame, losing a selection, a scroll position and the Inspector's
+                 *    subject mid-reply;
+                 *  - **the time**, because the ledger's times are arrival times. Re-stamping
+                 *    per chunk would report a message as having happened when it FINISHED,
+                 *    which moves it in the timeline and drags Lanes with it.
+                 *
+                 * Without this the host appended every emission, so three chunks became three
+                 * rows whose texts were each a longer prefix of the last — the reply repeated
+                 * with a growing prefix, which is worse than the fragments it replaced. The
+                 * session-level test asserted the FLAG was sent and passed the whole time; only
+                 * a row COUNT could have caught it.
+                 */
+                const last = rows.at(-1);
+                if (meta?.replacesLast && last) {
+                    rows[rows.length - 1] = { ...last, event };
+                } else {
+                    rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
+                }
                 this.#emit(record.id);
             },
         });

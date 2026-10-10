@@ -453,17 +453,102 @@ describe('the ledger', () => {
     it('gives every row a UNIQUE id, prefixed by the agent it belongs to', () => {
         const r = record();
         host.start(r, dir);
+
+        /*
+         * Five DISTINCT rows, which is why this is not five message chunks.
+         *
+         * It was, and the fixture stopped producing five rows the moment consecutive chunks
+         * began coalescing into one message — correctly. The rule under test is unrelated to
+         * coalescing: every row the UI holds needs its own id, prefixed by its agent. So the
+         * fixture changed and the assertion did not.
+         */
         for (let i = 0; i < 5; i += 1) {
             events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${i}` } });
+            events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: `t${i}`, name: 'Bash', title: `step ${i}` });
         }
 
         const ids = host.rowsFor(r.id).map((row) => row.id);
-        expect(new Set(ids).size).toBe(5);
+        expect(ids).toHaveLength(10);
+        expect(new Set(ids).size).toBe(10);
         expect(ids.every((id) => id.startsWith(r.id))).toBe(true);
     });
 
     it('is EMPTY for an agent that has never run, which is not an error', () => {
         expect(host.rowsFor(record().id)).toEqual([]);
+    });
+});
+
+describe('a streamed reply is ONE row in the ledger the UI reads', () => {
+    /**
+     * THE HALF I MISSED, and the way I missed it is the lesson.
+     *
+     * The session coalesces chunks into one message and persists it once. I tested that, and I
+     * tested that it tells the host to REPLACE rather than append — **the flag**. I never
+     * tested that the host acts on it. It did not: `onEvent` pushed every emission, so three
+     * chunks became three rows whose texts were each a longer prefix of the last.
+     *
+     * The live resume check showed it: `zephyr-3704e zephyr-3704e9a6`. On screen that is the
+     * reply repeated with a growing prefix, which is worse than the fragments it replaced.
+     *
+     * Asserting the flag is asserting that a message was SENT. This asserts what a reader
+     * actually gets, which is a COUNT — and a count is the only form of this assertion that
+     * could have failed.
+     */
+    it('holds one row for a reply that arrived in three chunks', () => {
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'zephyr-' } });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '3704' } });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'e9a6' } });
+
+        const messages = host.rowsFor(r.id).filter((row) => row.event.kind === 'message');
+        expect(messages).toHaveLength(1);
+        expect(messages[0]?.event).toMatchObject({ speaker: 'agent', text: 'zephyr-3704e9a6' });
+    });
+
+    it('keeps the row’s identity while it grows, so the UI updates rather than re-adds', () => {
+        // A row whose id changed on every chunk would remount on every frame — losing a
+        // selection, a scroll position and the Inspector's subject mid-reply.
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } });
+        const firstId = host.rowsFor(r.id)[0]?.id;
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'b' } });
+
+        expect(host.rowsFor(r.id)[0]?.id).toBe(firstId);
+    });
+
+    it('keeps its ARRIVAL time, not the time of the last chunk', () => {
+        // The ledger's times are arrival times. A row that re-stamped itself per chunk would
+        // report a message as having happened when it FINISHED, which moves it in the timeline
+        // and drags Lanes with it.
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } });
+        const at = host.rowsFor(r.id)[0]?.at;
+        now += 5_000;
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'b' } });
+
+        expect(host.rowsFor(r.id)[0]?.at).toBe(at);
+    });
+
+    it('still appends when the row is a DIFFERENT thing', () => {
+        /**
+         * POSITIVE CONTROL. Without it, "one row for three chunks" passes on a host that
+         * replaces the last row every time — which would collapse an entire turn into a single
+         * row and lose every tool call in it.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'looking' } });
+        events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Bash', title: 'npm test' });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'found it' } });
+
+        expect(host.rowsFor(r.id).map((row) => row.event.kind)).toEqual(['message', 'tool', 'message']);
     });
 });
 
