@@ -104,6 +104,36 @@ const PROBE = `
     })()
 `;
 
+/*
+ * LAND ON A KNOWN SURFACE FIRST.
+ *
+ * This measured whatever the smoke happened to leave on screen, which made the measurement
+ * depend on the previous script's last click. Switching the approval round trip on moved that
+ * last click from the Dashboard to an agent, and the count of fixed-height rows went from
+ * eight to seven -- so the POSITIVE CONTROL failed and reported, correctly, that "nothing
+ * overflows" had passed on too little to mean anything.
+ *
+ * That is the control doing its job, not a threshold being too strict. Lowering the eight
+ * would have been loosening an assertion to get green; the actual defect was a sweep with no
+ * stated subject.
+ */
+const landed = await evaluate(`(() => {
+    const row = document.querySelector('[data-nav^="genie://dashboard"]');
+    if (!row) return 'no Dashboard row in the rail';
+    row.click();
+    return 'clicked';
+})()`);
+if (landed !== 'clicked') {
+    console.error(`LAYOUT SWEEP could not reach the Dashboard: ${landed}`);
+    process.exit(1);
+}
+// One frame for the route change to render before the first width is measured.
+await new Promise((r) => setTimeout(r, 300));
+if (!(await evaluate(`Boolean(document.querySelector('[data-surface="dashboard"]'))`))) {
+    console.error('LAYOUT SWEEP clicked the Dashboard row and the Dashboard did not render');
+    process.exit(1);
+}
+
 console.log('\nLAYOUT SWEEP — does it hold at widths nobody has looked at?\n');
 
 for (const width of WIDTHS) {
