@@ -1,0 +1,109 @@
+/**
+ * THE CHROME'S DECISIONS — the rail, the Deck badge, the four feature icons.
+ *
+ * ## Why there is a view-model for a navigation rail at all
+ *
+ * Because the rail makes claims. A number beside a workspace says *"this many agents are in
+ * there"*, and a dot says *"something in here needs you"*. Both are assertions about state
+ * Genie may not have read yet, and both have exactly the failure mode §5 is about: a `0` on
+ * first paint that means "we have not looked" and reads as "it is empty".
+ *
+ * Navigation itself is not a decision — but what the rail *asserts* is, so it is decided here
+ * and tested without a DOM.
+ *
+ * ## The rail is persistent and labelled, and ⌘K is an accelerator
+ *
+ * Stated here because it was the third failure of the previous attempt: navigation was
+ * deleted and the command palette was called its replacement. A palette helps you find a
+ * surface you already know exists; it cannot be the only route to the default screen. A
+ * person given no instructions must reach the Dashboard without a keyboard shortcut.
+ */
+
+import type { AgentRow } from './dashboard-view.js';
+
+/** A workspace as the rail receives it. */
+export interface RailWorkspace {
+    id: string;
+    path: string;
+    /**
+     * Whether Genie has actually read this workspace's agents.
+     *
+     * `false` is the launch state, and it is the whole reason this field exists: without it
+     * "no agents yet read" and "no agents" are the same `0`.
+     */
+    agentsKnown: boolean;
+}
+
+export interface RailItem {
+    id: string;
+    path: string;
+    /** `null` = not read yet. Renders nothing — never a `0`, and never a skeleton's leftovers. */
+    count: number | null;
+    /** `null` = not read yet. `false` = read, and nothing in here wants you. */
+    alert: boolean | null;
+}
+
+/**
+ * The workspace rows, in the order Genie was given them.
+ *
+ * **Not sorted.** The rail's order is the user's arrangement, and re-sorting it alphabetically
+ * would move a workspace under the cursor between renders.
+ *
+ * The alert dot fires for **waiting and broken only**. Not for `remote`: a workstation being
+ * offline is not work waiting on a human, and a dot that fires for it teaches the reader to
+ * stop trusting the dot. That signal belongs on the Deck's strip, where it comes with a door.
+ */
+export function railWorkspaces(
+    workspaces: readonly RailWorkspace[],
+    rows: readonly AgentRow[],
+): readonly RailItem[] {
+    return workspaces.map((w) => {
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null };
+
+        const mine = rows.filter((r) => r.workspaceId === w.id);
+        return {
+            id: w.id,
+            path: w.path,
+            count: mine.length,
+            alert: mine.some((r) => r.state === 'waiting' || r.state === 'broken'),
+        };
+    });
+}
+
+/**
+ * The Deck's count, or `null` for no badge.
+ *
+ * **The Deck is the only place a badge exists in Genie.** If a badge appears anywhere else,
+ * the design has failed — which is also why the comms column's recency level deliberately
+ * excludes Fancy's amber `unseen`.
+ *
+ * Zero produces no badge. A badge that is sometimes `0` is furniture, and furniture is what
+ * people learn to stop reading; the Deck being empty is said by the Deck itself.
+ */
+export function deckBadge(waiting: number | null): number | null {
+    if (waiting === null || waiting <= 0) return null;
+    return waiting;
+}
+
+export interface FeatureIcon {
+    label: string;
+    icon: string;
+    route: string;
+}
+
+/**
+ * The four feature icons, in the title bar, right of the logo.
+ *
+ * **The owner's decision, and the one thing the design board does not carry** — the board
+ * predates it. They match the bar's existing icon metrics.
+ *
+ * Every one has a label, and the label is not decoration: four unexplained glyphs in the
+ * chrome is how a finished feature ships and nobody ever finds it. That is §0.4's entire
+ * story — a Conversation UI that was built, shipped and unreachable.
+ */
+export const FEATURE_ICONS: readonly FeatureIcon[] = [
+    { label: 'GApps', icon: 'layout-grid', route: 'genie://gapps' },
+    { label: 'Knowledge Graph', icon: 'network', route: 'genie://knowledge' },
+    { label: 'Flows', icon: 'workflow', route: 'genie://flows' },
+    { label: 'Genie OSA', icon: 'sparkles', route: 'genie://agent/genie' },
+];

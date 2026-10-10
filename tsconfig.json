@@ -15,7 +15,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": [
-      "node"
+      "node",
+      "vite/client"
     ],
     "jsx": "react-jsx"
   },

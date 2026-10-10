@@ -44,3 +44,41 @@ jobs:
       - run: npm run typecheck
 
       - run: npm test
+
+      # THE BUILD IS A GATE, not a release step.
+      #
+      # A typecheck says the sources agree with each other; it says nothing about whether the
+      # three bundles can be produced. Three ways this job has already earned its place:
+      #
+      #  - the renderer loads over `file://` in Electron, so `base` must stay relative — an
+      #    absolute `/assets/...` 404s into a blank white window that no unit test can see;
+      #  - the preload MUST come out as CommonJS, because a sandboxed preload supports only
+      #    CJS and an ESM one loads as nothing at all. `window.genie` is then simply absent and
+      #    the app opens looking like a Dashboard with no agents rather than a broken bridge;
+      #  - Tailwind only emits a class it finds in a scanned file, so a wrong `@source` ships
+      #    a stylesheet with none of the board's metrics in it and every surface collapses.
+      - run: npm run build
+
+      # The three artifacts, asserted individually. A green build step proves the commands
+      # exited 0; this proves they produced the files the app loads, with the content that
+      # makes them work. "It built" is not "it is there".
+      - name: the bundles exist, and are the right shape
+        run: |
+          set -euo pipefail
+          test -f dist/renderer/index.html
+          test -f dist/main/main.js
+          test -f dist/main/preload.cjs
+
+          # CommonJS, not ESM. `require`/`exports` present and no bare `import ... from`.
+          grep -q "require(" dist/main/preload.cjs
+          ! grep -qE "^import .* from" dist/main/preload.cjs
+
+          # Relative asset paths, or the window is white.
+          ! grep -qE '(src|href)="/' dist/renderer/index.html
+
+          # Tailwind actually scanned our sources: the board's exact column template, the
+          # 280px palette box and the rail's 30px rows all have to be in the stylesheet.
+          css=$(ls dist/renderer/assets/*.css)
+          grep -q "150px_minmax" "$css"
+          grep -q "280px" "$css"
+          grep -q "30px" "$css"

@@ -1,0 +1,263 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Fancy UI Kit — Design Tokens
+   Color and type variables for the Particle-Academy / Fancy UI ecosystem.
+   Color foundation = Tailwind v4 default palette (50→950 ramps).
+   Accessibility target: WCAG AA across light + dark.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* The published token file fetches Geist from Google Fonts here. Removed deliberately: a
+   desktop app must not depend on a third-party CDN at boot, and must not fall back to a
+   different face when the machine is offline. See the FONTS note in styles.css. */
+
+:root {
+  /* ─── Brand ───────────────────────────────────────────────────────────── */
+  /* The "F" mark is a sky→violet gradient on a near-black / off-white split.
+     These are the canonical brand stops used in the logo and brand surfaces. */
+  --brand-grad-from:  #7dd3fc;  /* sky-300 */
+  --brand-grad-via:   #818cf8;  /* indigo-400 */
+  --brand-grad-to:    #c4b5fd;  /* violet-300 */
+  --brand-ink:        #0b0f1a;  /* logo dark plate */
+  --brand-paper:      #f4f4f5;  /* logo light plate */
+
+  /* ─── Tailwind core color ramps (subset most used by react-fancy) ────── */
+  --blue-50:#eff6ff; --blue-100:#dbeafe; --blue-200:#bfdbfe; --blue-300:#93c5fd;
+  --blue-400:#60a5fa; --blue-500:#3b82f6; --blue-600:#2563eb; --blue-700:#1d4ed8;
+  --blue-800:#1e40af; --blue-900:#1e3a8a; --blue-950:#172554;
+
+  --indigo-50:#eef2ff; --indigo-100:#e0e7ff; --indigo-200:#c7d2fe; --indigo-300:#a5b4fc;
+  --indigo-400:#818cf8; --indigo-500:#6366f1; --indigo-600:#4f46e5; --indigo-700:#4338ca;
+  --indigo-800:#3730a3; --indigo-900:#312e81; --indigo-950:#1e1b4b;
+
+  --violet-50:#f5f3ff; --violet-100:#ede9fe; --violet-200:#ddd6fe; --violet-300:#c4b5fd;
+  --violet-400:#a78bfa; --violet-500:#8b5cf6; --violet-600:#7c3aed; --violet-700:#6d28d9;
+  --violet-800:#5b21b6; --violet-900:#4c1d95; --violet-950:#2e1065;
+
+  --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc;
+  --sky-400:#38bdf8; --sky-500:#0ea5e9; --sky-600:#0284c7; --sky-700:#0369a1;
+
+  --emerald-50:#ecfdf5; --emerald-100:#d1fae5; --emerald-400:#34d399;
+  --emerald-500:#10b981; --emerald-600:#059669; --emerald-700:#047857;
+
+  --amber-50:#fffbeb; --amber-100:#fef3c7; --amber-300:#fcd34d;
+  --amber-500:#f59e0b; --amber-600:#d97706; --amber-700:#b45309;
+
+  --rose-50:#fff1f2; --rose-300:#fda4af; --rose-500:#f43f5e; --rose-600:#e11d48;
+
+  --orange-50:#fff7ed; --orange-500:#f97316; --orange-600:#ea580c;
+
+  --red-50:#fef2f2; --red-300:#fca5a5; --red-500:#ef4444; --red-600:#dc2626; --red-700:#b91c1c;
+
+  --zinc-50:#fafafa; --zinc-100:#f4f4f5; --zinc-200:#e4e4e7; --zinc-300:#d4d4d8;
+  --zinc-400:#a1a1aa; --zinc-500:#71717a; --zinc-600:#52525b; --zinc-700:#3f3f46;
+  --zinc-800:#27272a; --zinc-900:#18181b; --zinc-950:#09090b;
+
+  /* ─── Semantic tokens — LIGHT ──────────────────────────────────────────
+     fancy-flux/react-fancy resolves colors per-component via Tailwind utility
+     classes; these semantic vars exist for app-shell + non-component surfaces
+     (page backgrounds, custom overlays, hand-rolled cards). */
+  --fg-1: var(--zinc-900);   /* primary text — headings, body emphasis */
+  --fg-2: var(--zinc-700);   /* secondary text — body, captions */
+  --fg-3: var(--zinc-500);   /* tertiary / muted — placeholders, helpers */
+  --fg-4: var(--zinc-400);   /* quaternary — disabled, decorative */
+
+  --bg-0: #ffffff;            /* page */
+  --bg-1: var(--zinc-50);    /* recessed surfaces, table stripes */
+  --bg-2: var(--zinc-100);   /* hover, soft chips */
+  --bg-3: var(--zinc-200);   /* selected, dividers */
+
+  --surface:          #ffffff;        /* cards, modals, popovers */
+  --surface-raised:   var(--zinc-50);  /* nested cards, tooltips */
+  --surface-overlay:  rgba(9, 9, 11, .45); /* modal scrim */
+
+  --border-1: var(--zinc-200);  /* default borders */
+  --border-2: var(--zinc-300);  /* hover/focus borders */
+
+  --primary:        var(--blue-500);   /* default react-fancy accent */
+  --primary-hover:  var(--blue-600);
+  --primary-fg:     #ffffff;
+
+  --accent:         var(--violet-500); /* brand accent — use sparingly */
+  --accent-hover:   var(--violet-600);
+
+  --success: var(--emerald-500);
+  --warning: var(--amber-500);
+  --danger:  var(--red-500);
+  --info:    var(--sky-500);
+
+  --ring:       rgba(59, 130, 246, .35);  /* focus ring (blue-500/35) */
+  --ring-dark:  rgba(96, 165, 250, .15);  /* dark-mode focus ring (blue-400/15) */
+
+  /* ─── Spacing scale (Tailwind 4 default — 0.25rem base) ───────────────── */
+  --space-0: 0;
+  --space-1: 0.25rem;  /* 4px  */
+  --space-2: 0.5rem;   /* 8px  */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-8: 2rem;     /* 32px */
+  --space-10: 2.5rem;  /* 40px */
+  --space-12: 3rem;    /* 48px */
+  --space-16: 4rem;    /* 64px */
+
+  /* ─── Radius scale ───────────────────────────────────────────────────── */
+  --radius-sm: 0.25rem;   /* badges, inline pills */
+  --radius-md: 0.375rem;  /* inputs */
+  --radius-lg: 0.5rem;    /* buttons (Action) — react-fancy default */
+  --radius-xl: 0.75rem;   /* cards */
+  --radius-2xl: 1rem;     /* modals */
+  --radius-full: 9999px;  /* circle buttons, avatars */
+
+  /* ─── Shadow scale ───────────────────────────────────────────────────── */
+  /* Note: react-fancy components rely on Tailwind `shadow-*` utilities; these
+     mirror them for hand-rolled surfaces. */
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,.07), 0 2px 4px -2px rgba(0,0,0,.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,.08), 0 4px 6px -4px rgba(0,0,0,.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0,0,0,.10), 0 8px 10px -6px rgba(0,0,0,.08);
+
+  /* ─── Motion ─────────────────────────────────────────────────────────── */
+  /* No "snapping" or "jarring" changes — every state change rides an ease. */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --dur-instant: 100ms;
+  --dur-fast:    150ms;   /* input border / focus */
+  --dur-base:    200ms;   /* Action transition-all duration-200 default */
+  --dur-slow:    300ms;   /* drawers, large overlays */
+
+  /* ─── Type tokens ────────────────────────────────────────────────────── */
+  --font-sans:   "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:   "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-display: "Geist", var(--font-sans);  /* same family, heavier weights */
+
+  /* Sizes — match react-fancy size scale (xs/sm/md/lg/xl) */
+  --text-xs:   0.75rem;   /* 12 */
+  --text-sm:   0.875rem;  /* 14 */
+  --text-base: 1rem;      /* 16 — body default */
+  --text-lg:   1.125rem;  /* 18 */
+  --text-xl:   1.25rem;   /* 20 */
+  --text-2xl:  1.5rem;    /* 24 */
+  --text-3xl:  1.875rem;  /* 30 */
+  --text-4xl:  2.25rem;   /* 36 */
+  --text-5xl:  3rem;      /* 48 */
+  --text-6xl:  3.75rem;   /* 60 */
+
+  --leading-tight:   1.15;
+  --leading-snug:    1.3;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight:  -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+
+  --weight-light: 300;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+}
+
+/* ─── Semantic tokens — DARK ───────────────────────────────────────────── */
+/* Mirrors react-fancy's dark mode (.dark class on <html>). Surfaces shift to
+   #1e1e24 / #27272a / #3f3f46 as seen in src/styles.css. */
+.dark, [data-theme="dark"] {
+  --fg-1: var(--zinc-50);
+  --fg-2: var(--zinc-300);
+  --fg-3: var(--zinc-400);
+  --fg-4: var(--zinc-500);
+
+  --bg-0: #0a0a0c;
+  --bg-1: #15151a;
+  --bg-2: #1e1e24;        /* input field background per react-fancy */
+  --bg-3: var(--zinc-700);
+
+  --surface:        #1c1c22;
+  --surface-raised: #27272a;
+  --surface-overlay: rgba(0, 0, 0, .65);
+
+  --border-1: #3f3f46;     /* react-fancy default dark border */
+  --border-2: var(--zinc-600);
+
+  --primary:        var(--blue-400);
+  --primary-hover:  var(--blue-300);
+  --primary-fg:     var(--zinc-950);
+
+  --accent:        var(--violet-400);
+  --accent-hover:  var(--violet-300);
+
+  --ring: rgba(96, 165, 250, .15);
+}
+
+/* ─── Semantic typography ──────────────────────────────────────────────── */
+/* Hand-rolled surfaces (non-react-fancy pages, marketing, slides). */
+html { font-family: var(--font-sans); color: var(--fg-1); background: var(--bg-0); }
+
+.h1, h1.fancy {
+  font-family: var(--font-display);
+  font-size: var(--text-5xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-1);
+}
+.h2, h2.fancy {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-tight);
+}
+.h3, h3.fancy {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+.h4, h4.fancy {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+.h5, h5.fancy { font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.h6, h6.fancy { font-size: var(--text-base); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: var(--fg-3); }
+
+.body, p.fancy {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--fg-2);
+}
+.small  { font-size: var(--text-sm);  color: var(--fg-2); }
+.muted  { color: var(--fg-3); }
+
+.code, code.fancy, kbd.fancy {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-2);
+  color: var(--fg-1);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-1);
+}
+
+.eyebrow {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-weight: var(--weight-semibold);
+  color: var(--fg-3);
+}
+
+/* ─── Brand gradient utility ───────────────────────────────────────────── */
+.brand-gradient {
+  background: linear-gradient(110deg, var(--brand-grad-from) 0%, var(--brand-grad-via) 50%, var(--brand-grad-to) 100%);
+}
+.brand-gradient-text {
+  background: linear-gradient(110deg, var(--brand-grad-from) 0%, var(--brand-grad-via) 50%, var(--brand-grad-to) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
