@@ -16,10 +16,11 @@ import { LANES, type Lane } from './stream-view.js';
  *   Esc     close the Inspector FIRST, and only then leave for the Deck
  *   t       toggle the Thought lane (the one letter; no other lane gets one)
  *   a / d   allow / deny the parked approval  E   next edit
+ *   ⌘⇧T     Take Over — the ONE chord; Meta on macOS, Ctrl elsewhere, Shift on both
  *
  * Not bound here: `L` (the Lanes pulldown — Lanes is always visible in this build), `/` (find
- * in stream — not built), `⌘↵` (the composer's, in the chat flyout), `⌘⇧T` (Take Over — P6).
- * Each is a deliberate addition with its own test when it comes, never a fall-through.
+ * in stream — not built), `⌘↵` (the composer's, in the chat flyout). Each is a deliberate
+ * addition with its own test when it comes, never a fall-through.
  */
 
 /** The shape of an event target this module cares about. `null` when the event has none. */
@@ -41,6 +42,7 @@ export interface KeyPress {
     ctrlKey: boolean;
     metaKey: boolean;
     altKey: boolean;
+    shiftKey: boolean;
     /** The result of {@link isTypingTarget} for the event's target. */
     typing: boolean;
 }
@@ -53,7 +55,8 @@ export type AgentViewAction =
     | 'escape'
     | 'toggle-thoughts'
     | 'allow'
-    | 'deny';
+    | 'deny'
+    | 'take-over';
 
 /**
  * What a key means in the Agent view, or `null`.
@@ -62,8 +65,17 @@ export type AgentViewAction =
  * the OS or the browser (Ctrl+E, ⌘E). While TYPING every letter is text and answers `null`;
  * the one exception is `Escape`, which in a field means "stop typing" and is reported so the
  * handler can blur rather than navigate — the decision stays the handler's.
+ *
+ * `⌘⇧T` is the one CHORD, and it is decided before the modifier rule because it is the rule's
+ * complement: a modified key is the OS's unless §4.2 claims it, and §4.2 claims exactly this
+ * one. A chord is not a letter, so it acts while typing too — the composer must not swallow
+ * the shortcut that opens the Take Over window. Meta is the ⌘ of macOS; Ctrl stands in for it
+ * elsewhere; Alt on top makes it something else, so it answers `null`.
  */
 export function agentViewAction(press: KeyPress): AgentViewAction | null {
+    if ((press.key === 't' || press.key === 'T') && press.shiftKey && (press.metaKey || press.ctrlKey) && !press.altKey) {
+        return 'take-over';
+    }
     if (press.ctrlKey || press.metaKey || press.altKey) return null;
     if (press.key === 'Escape') return 'escape';
     if (press.typing) return null;

@@ -117,7 +117,7 @@ export function AgentView({
         const onKey = (e: KeyboardEvent) => {
             const target = e.target instanceof HTMLElement ? e.target : null;
             const typing = isTypingTarget(target);
-            const action = agentViewAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, typing });
+            const action = agentViewAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing });
             if (action === null) return;
 
             // The rows a cursor can land on are the ones on screen: inside the range AND the
@@ -177,13 +177,21 @@ export function AgentView({
                     onAnswerApproval?.(optionId);
                     return;
                 }
+                case 'take-over': {
+                    // The same call the header button makes (§1: a NEW window, an Observed
+                    // row, never a managed agent on a pty). The host de-duplicates per agent,
+                    // so holding the chord focuses the window rather than opening a second TUI.
+                    e.preventDefault();
+                    onTakeOver?.(agent.id);
+                    return;
+                }
                 default:
                     return;
             }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval]);
+    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval, onTakeOver, agent.id]);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
