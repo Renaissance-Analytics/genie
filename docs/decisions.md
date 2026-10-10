@@ -112,3 +112,35 @@ the corrupt file.
   root typechecks clean and throws `resolveIcon is not a function` at runtime. The `./icon`
   subpath works. A types/runtime mismatch, which is the one class of bug a green `tsc` is
   guaranteed not to catch.
+
+## D7 — Packaging, and what the audit noise means
+
+`electron-builder` (dev) and `electron-updater` (runtime) join the declared exceptions in D4.
+Neither has a Fancy equivalent and both are what makes an Electron app installable.
+
+**`npm audit` reports 8 moderate advisories and none of them reach the shipped app.** They all
+trace to `sprintf-js` under `roarr` → `global-agent` → `@electron/get` → `app-builder-lib` →
+`electron-builder`, which is a devDependency; `npm ls --omit=dev --all` finds none of them in
+the production tree. The remaining fix is `npm audit fix --force`, which downgrades
+`electron-builder` across a major version — a real change to the build for no change to what
+users run. `electron-builder` was pinned to `26.5.0` and `npm audit fix` applied on arrival,
+which cleared a CRITICAL `node-tar` chain and two HIGH `electron-updater` advisories, one of
+which (`builder-util-runtime` leaking `Authorization` on a cross-origin redirect) DID reach the
+runtime.
+
+Recheck this when `electron-builder` ships a release whose `@electron/get` is current.
+
+## D8 — The updater's channel is a PAIR, asserted on both sides
+
+§0.8: the previous build's updater **could never see a release**, for the entire life of the
+product. Every release published as a prerelease, `allowPrerelease` defaults to false in
+`electron-updater`, and it was never set.
+
+So `releaseType: prerelease` in `electron-builder.yml` and `allowPrerelease: true` in
+`src/main/upgrade.ts` are asserted **together**. Changing either alone fails the test — probed
+both ways, each going red on its own. Asserting only the flag would let somebody switch the
+channel later and leave a flag that is true, inert and reassuring.
+
+**Not yet verified end to end.** The config is right and tested; whether an in-app update
+actually arrives cannot be known until a real release exists to check against, and this
+document will not pretend otherwise.

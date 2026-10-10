@@ -155,3 +155,42 @@ jobs:
           name: smoke-screenshots
           path: smoke-*.png
           if-no-files-found: warn
+
+  package:
+    name: it packages
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # `--publish never`, and it is not a formality.
+      #
+      # This job BUILDS an installer; it does not release one. Implementation authorisation is
+      # not release authorisation, and nothing here may create a tag, a release or an
+      # auto-update feed entry. Publishing is a separate, human-approved step.
+      - name: build the installers
+        run: npx electron-builder --publish never
+
+      # The artifacts, so somebody can actually install one and find out. A build that produced
+      # a file nobody can reach proves only that the command exited zero.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+            release/*.yml
+          if-no-files-found: error

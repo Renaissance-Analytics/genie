@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Genie 2 \u2014 an agent is a session, never a terminal.",
+  "description": "Genie 2 — an agent is a session, never a terminal.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -21,6 +21,7 @@
     "@particle-academy/prism-acp": "^0.6.1",
     "@particle-academy/prism-harness": "^0.6.0",
     "@particle-academy/react-fancy": "^5.34.0",
+    "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -30,6 +31,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "electron": "^44.7.0",
+    "electron-builder": "^26.5.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
