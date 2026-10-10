@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
+import { TakeOverWindow } from './components/TakeOverWindow.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
 import { EMPTY_SNAPSHOT, NO_TERMINALS, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
@@ -169,6 +170,12 @@ export function App({ bridge }: AppProps) {
         if (!SERVABLE.includes(surface)) window.location.replace(`#${DEFAULT_ROUTE}`);
     }, [surface]);
 
+    // A TAKE OVER WINDOW renders the terminal and nothing else: no rail, no bar, no Deck. The
+    // TUI is the window (§1).
+    if (parsed.surface === 'takeover') {
+        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} />;
+    }
+
     return (
         <Shell
             route={route}
@@ -218,6 +225,7 @@ export function App({ bridge }: AppProps) {
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={() => resolvedBridge?.addWorkspace()}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
+            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

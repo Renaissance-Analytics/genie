@@ -76,12 +76,14 @@ export interface AgentViewProps {
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
+    /** Take Over (§1): open this agent's TUI in a new window. */
+    onTakeOver?: ((agentId: string) => void) | undefined;
     now?: (() => number) | undefined;
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange,
+    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const pill = statePill(session, now ?? (() => Date.now()));
@@ -176,6 +178,7 @@ export function AgentView({
                     <button
                         type="button"
                         data-action="take-over"
+                        onClick={() => onTakeOver?.(agent.id)}
                         className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="square-terminal" size="xs" />

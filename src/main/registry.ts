@@ -1,3 +1,4 @@
+import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem } from '../core/deck.js';
@@ -43,6 +44,7 @@ export class Registry {
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
     #probe: SessionProbe = () => null;
+    #observed: (id: AgentId) => TakeOverProbe | null = () => null;
     #listeners = new Set<(snapshot: GenieSnapshot) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #loaded = false;
@@ -94,6 +96,11 @@ export class Registry {
         this.#probe = probe;
     }
 
+    /** What the Take Over host knows about an agent's TUI, or `null`. Drives the Observed row. */
+    setObservedProbe(probe: (id: AgentId) => TakeOverProbe | null): void {
+        this.#observed = probe;
+    }
+
     /** Count of live sessions — the only correct source for "how many agents are running". */
     get runningCount(): number {
         return this.#agents.filter((a) => this.#probe(a.id)?.running === true).length;
@@ -118,7 +125,12 @@ export class Registry {
              */
             agents: this.#agents
                 .filter((record) => record.workspaceId !== OS_WORKSPACE)
-                .map((record) => agentRowFor(record, this.#probe(record.id), now)),
+                // An agent with a live Take Over is OBSERVED: Genie sees its bytes and nothing
+                // else, and the row says so (§4.1). Otherwise the declared row as before.
+                .map((record) => {
+                    const observed = this.#observed(record.id);
+                    return observed ? observedRowFor(record, observed, now()) : agentRowFor(record, this.#probe(record.id), now);
+                }),
             // `agentsKnown` is TRUE only once the store has actually been read. Before that the
             // rail must render no counts at all: a `0` on first paint says "this workspace is
             // empty" when the truth is "nobody has looked yet".

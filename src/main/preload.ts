@@ -71,6 +71,11 @@ const bridge: GenieBridge = {
      * channels carrying the terminal id, so one listener per window serves every terminal;
      * the renderer's reducer keeps what belongs to its workspace.
      */
+    takeOver: (agentId) =>
+        ipcRenderer.invoke('genie:take-over', agentId) as Promise<
+            { ok: true; terminalId: string } | { ok: false; reason: string }
+        >,
+
     terminals: {
         open: (workspaceId, options) =>
             ipcRenderer.invoke('genie:terminal-open', workspaceId, options) as Promise<{

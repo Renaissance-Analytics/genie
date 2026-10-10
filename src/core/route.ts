@@ -51,7 +51,9 @@ export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
     | ({ surface: 'deck' } & Common)
     | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
-    | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common);
+    | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common)
+    /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
+    | ({ surface: 'takeover'; terminalId: string } & Common);
 
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
@@ -101,6 +103,12 @@ export function parseRoute(input: string): Route {
             };
         }
 
+        case 'takeover': {
+            // No id is not a window. Same honesty as an empty agent id: the Dashboard.
+            if (!tail) return dashboard('workspace', common);
+            // No modifiers: a TUI window has no chat flyout to open and no pin to keep.
+            return { surface: 'takeover', terminalId: tail, chat: null, pin: null };
+        }
         case 'workspace': {
             if (!tail) return dashboard('workspace', common);
             return {
@@ -135,6 +143,8 @@ export function formatRoute(route: Route): string {
         case 'workspace':
             if (route.panel) params.set('panel', route.panel);
             break;
+        case 'takeover':
+            break;
         case 'deck':
             break;
     }
@@ -145,6 +155,7 @@ export function formatRoute(route: Route): string {
     const path =
         route.surface === 'agent' ? `agent/${route.agentId}`
         : route.surface === 'workspace' ? `workspace/${route.workspaceId}`
+        : route.surface === 'takeover' ? `takeover/${route.terminalId}`
         : route.surface;
 
     // No trailing `?` when there is nothing to say. Small, but it is the difference between
