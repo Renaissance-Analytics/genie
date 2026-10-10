@@ -233,7 +233,47 @@ export class SessionHost {
         entry.session = session;
         this.#running.set(record.id, entry);
 
-        session.start();
+        /**
+         * A provider can fail to spawn SYNCHRONOUSLY, and that path reaches none of the
+         * driver's event handlers.
+         *
+         * Measured on Windows with the real binary:
+         *
+         *     spawn('…/npm/codex.cmd', ['app-server', …])  ->  EINVAL, thrown synchronously
+         *
+         * npm installs CLIs on Windows as `.cmd` shims and Node refuses to spawn one without
+         * `shell: true` (the CVE-2024-27980 fix). `claude` happens to be a `.exe` so it is
+         * fine; `codex` is a `.cmd` and is not.
+         *
+         * Because the throw is synchronous it never reaches `onExit` or `onProtocolError`, and
+         * the renderer calls `openAgent` through `void ipcRenderer.invoke(...)`, which swallows
+         * a rejection. **Clicking a codex agent on Windows did nothing at all, silently** — no
+         * red row, no message, no console error. The same silent-failure class as the dropped
+         * `onProtocolError`, arriving by a different door.
+         *
+         * The half-started session is removed rather than left in the map: capacity consumed by
+         * nothing, and a row that reads as running when no process exists.
+         */
+        try {
+            session.start();
+        } catch (error) {
+            this.#running.delete(record.id);
+
+            const configured = providerBinary(record.provider);
+            const reason = [
+                `Genie could not start ${record.provider}: ${String((error as Error).message ?? error)}.`,
+                // The PATH is the whole diagnosis on Windows, where the `.cmd` extension IS the
+                // cause. "spawn EINVAL" alone sends somebody to the wrong place entirely.
+                configured ? `Configured binary: ${configured}` : null,
+            ]
+                .filter(Boolean)
+                .join(' ');
+
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+
         this.#emit(record.id);
         return { ok: true };
     }

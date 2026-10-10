@@ -458,3 +458,94 @@ describe('every driver event the session offers is FORWARDED', () => {
         expect(() => forwarded.onExit?.(0, null)).not.toThrow();
     });
 });
+
+describe('a provider that THROWS on spawn', () => {
+    /**
+     * Measured on the owner's Windows machine, with the real binary:
+     *
+     *     spawn('C:\...\npm\codex.cmd', ['app-server', ...])  ->  EINVAL, thrown SYNCHRONOUSLY
+     *
+     * npm installs CLIs on Windows as `.cmd` shims, and Node refuses to spawn one without
+     * `shell: true` (the CVE-2024-27980 fix). `claude` happens to be a `.exe` there so it is
+     * fine; `codex` is a `.cmd` and is not.
+     *
+     * The throw is SYNCHRONOUS, so it never reaches `onExit` or `onProtocolError` — it
+     * propagates straight out of `start()`. And the renderer calls `openAgent` through
+     * `void ipcRenderer.invoke(...)`, which swallows a rejection.
+     *
+     * So clicking a codex agent on Windows did **nothing at all, silently**. No row went red,
+     * no message, no console error. The same silent-failure class as the dropped
+     * `onProtocolError`, arriving by a different door.
+     */
+    function throwingDriverFor(code: string): DriverFor {
+        return () => () => {
+            const error = new Error(`spawn ${code}`) as NodeJS.ErrnoException;
+            error.code = code;
+            throw error;
+        };
+    }
+
+    it('reports the failure instead of letting it escape', () => {
+        const host = new SessionHost({
+            userData: dir, driverFor: throwingDriverFor('EINVAL'), processTree: noProcessTree,
+        });
+        const r = record();
+
+        const result = host.start(r, dir);
+
+        expect(result.ok).toBe(false);
+        expect(result.ok === false && result.reason).toContain('EINVAL');
+    });
+
+    it('leaves NO half-started session behind', () => {
+        // A session in the map that never started is capacity consumed by nothing, and a row
+        // that reads as running when no process exists.
+        const host = new SessionHost({
+            userData: dir, driverFor: throwingDriverFor('EINVAL'), processTree: noProcessTree,
+        });
+        const r = record();
+
+        host.start(r, dir);
+
+        expect(host.count).toBe(0);
+        expect(host.probe(r.id)).toBeNull();
+    });
+
+    it('records it as a REFUSAL, so the surface can show it', () => {
+        // The refusal is what reaches the UI. Without it the agent is simply idle, which is
+        // indistinguishable from one nobody has started.
+        const host = new SessionHost({
+            userData: dir, driverFor: throwingDriverFor('EINVAL'), processTree: noProcessTree,
+        });
+        const r = record();
+
+        host.start(r, dir);
+
+        expect(host.refusals.get(r.id)).toContain('EINVAL');
+    });
+
+    it('names the BINARY in the reason when one is configured', () => {
+        // "spawn EINVAL" alone sends somebody to the wrong place. The path is the whole
+        // diagnosis on Windows, where the `.cmd` extension IS the cause.
+        vi.stubEnv('GENIE2_CLAUDE_BINARY', 'C:/npm/claude.cmd');
+        const host = new SessionHost({
+            userData: dir, driverFor: throwingDriverFor('EINVAL'), processTree: noProcessTree,
+        });
+        const r = record();
+
+        host.start(r, dir);
+
+        expect(host.refusals.get(r.id)).toContain('claude.cmd');
+        vi.unstubAllEnvs();
+    });
+
+    it('still starts normally when the driver does NOT throw', () => {
+        // POSITIVE CONTROL: the catch does not swallow a good start.
+        const host = new SessionHost({
+            userData: dir, driverFor: fakeDriverFor, processTree: noProcessTree,
+        });
+
+        expect(host.start(record(), dir)).toEqual({ ok: true });
+        expect(host.count).toBe(1);
+    });
+});

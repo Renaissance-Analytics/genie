@@ -140,6 +140,12 @@ jobs:
       # test framework and no test-only code in the product.
       - name: open the app and drive it
         run: |
+          # Point codex at the stub, exactly as `smoke-linux-inner.sh` does. Ordinary provider
+          # configuration — the product behaves identically with or without it — and it is what
+          # lets a REAL parked approval reach the screen in an environment with no codex.
+          chmod +x scripts/stub-codex.mjs
+          export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
+
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
           node scripts/smoke-cdp.mjs
           node scripts/layout-sweep.mjs
@@ -238,6 +244,20 @@ jobs:
           # through a shell, so a extensionless shim fails with
           # "%1 is not a valid Win32 application" — which names neither the file nor the
           # reason. The sibling Genie repo has hit this exact class before.
+          # The approval round trip is OFF here, and the reason is a measured product finding
+          # rather than a harness limitation. Measured on the owner's Windows machine, with the
+          # real binary and exactly the call prism-acp makes:
+          #
+          #   spawn of an npm-installed "codex.cmd" app-server  ->  EINVAL, thrown synchronously
+          #
+          # npm installs CLIs on Windows as `.cmd` shims, and Node refuses to spawn one without
+          # `shell: true` (the CVE-2024-27980 fix). prism-acp spawns without it, so the stub —
+          # and a REAL npm-installed codex — cannot be launched here at all.
+          #
+          # Genie now REPORTS that instead of swallowing it, which is what this build can do
+          # about it; the spawn itself belongs to prism-acp and is reported upstream.
+          $env:SMOKE_APPROVAL = "0"
+
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
           try {
