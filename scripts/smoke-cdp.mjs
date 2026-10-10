@@ -31,6 +31,16 @@
  * look at, and until a human looks at it that remains unverified.
  */
 
+/**
+ * Where screenshots go: beside whatever is running this, not at a fixed path.
+ *
+ * It was hardcoded to `/work`, which exists inside the smoke container and nowhere else. On
+ * the CI runner the whole job failed on the LAST step with `ENOENT: /work/smoke-agent.png`
+ * after twenty-one checks had already passed — a harness bug reported as a red build, which is
+ * the most expensive kind because the obvious reading is that the app broke.
+ */
+const shotPath = (name) => `${process.cwd()}/${name}`;
+
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const DEADLINE_MS = 60_000;
 
@@ -354,7 +364,7 @@ if (typeof agentRow === 'string') {
     const agentShot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (agentShot.result?.data) {
         const { writeFileSync } = await import('node:fs');
-        writeFileSync('/work/smoke-agent.png', Buffer.from(agentShot.result.data, 'base64'));
+        writeFileSync(shotPath('smoke-agent.png'), Buffer.from(agentShot.result.data, 'base64'));
     }
 
     // The route followed the click, which is what makes the place linkable.
@@ -400,7 +410,7 @@ check(parsed.length === 0, '25. the console is clean', parsed.join(' | ') || 'no
 const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
 if (shot.result?.data) {
     const { writeFileSync } = await import('node:fs');
-    writeFileSync('/work/smoke-dashboard.png', Buffer.from(shot.result.data, 'base64'));
+    writeFileSync(shotPath('smoke-dashboard.png'), Buffer.from(shot.result.data, 'base64'));
     console.log('\n  screenshot written to smoke-dashboard.png (NOT yet looked at by anybody)');
 }
 
