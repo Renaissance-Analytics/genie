@@ -244,19 +244,26 @@ jobs:
           # through a shell, so a extensionless shim fails with
           # "%1 is not a valid Win32 application" — which names neither the file nor the
           # reason. The sibling Genie repo has hit this exact class before.
-          # The approval round trip is OFF here, and the reason is a measured product finding
-          # rather than a harness limitation. Measured on the owner's Windows machine, with the
-          # real binary and exactly the call prism-acp makes:
+          # The approval round trip runs HERE TOO, and getting to that took a wrong turn
+          # worth recording, because the wrong version of this comment was briefly committed.
           #
-          #   spawn of an npm-installed "codex.cmd" app-server  ->  EINVAL, thrown synchronously
+          # A bare spawn of an npm-installed "codex.cmd" app-server throws EINVAL
+          # synchronously on Windows: npm installs CLIs as .cmd shims and Node refuses to
+          # spawn one without `shell: true` (the CVE-2024-27980 fix). I measured that, and
+          # concluded codex could not be started here at all.
           #
-          # npm installs CLIs on Windows as `.cmd` shims, and Node refuses to spawn one without
-          # `shell: true` (the CVE-2024-27980 fix). prism-acp spawns without it, so the stub —
-          # and a REAL npm-installed codex — cannot be launched here at all.
+          # It was the wrong call to measure. prism-acp passes
+          # `shell: process.platform === 'win32'` at BOTH of its spawn sites — verified in the
+          # installed 0.6.1 — so the library never makes the call I reproduced. Through the
+          # REAL driver, codex starts on Windows and reports a session id. Copying a
+          # library's binary and args faithfully while dropping its options object produces a
+          # repro that looks complete and is not.
           #
-          # Genie now REPORTS that instead of swallowing it, which is what this build can do
-          # about it; the spawn itself belongs to prism-acp and is reported upstream.
-          $env:SMOKE_APPROVAL = "0"
+          # The stub is reached through a .cmd WRAPPER rather than directly, because
+          # `shell: true` means cmd.exe runs the binary and cmd.exe cannot execute a .mjs.
+          # That wrapper is also the shape a user actually has: a real npm-installed codex
+          # IS a .cmd.
+          $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.cmd"
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log

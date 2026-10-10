@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
@@ -205,6 +206,36 @@ export class SessionHost {
             return { ok: false, reason };
         }
 
+        /**
+         * THE WORKSPACE FOLDER, checked before anything is spawned.
+         *
+         * Genie knows this path. A provider handed a directory that is not there fails inside
+         * its own spawn, and what comes back is the provider's sentence about itself —
+         * measured, from prism-acp: `failed to spawn Codex (Error)`.
+         *
+         * That sentence is true and it points at the wrong component. It cost this build a
+         * wrong diagnosis, a commit blaming a library that handles its own case correctly, and
+         * a CI exception written with the wrong reason in it. The cause was a folder that had
+         * been moved.
+         *
+         * `statSync` rather than `existsSync`, because a repo entry pointing at `project.json`
+         * instead of its directory is an ordinary typo and `existsSync` waves it straight
+         * through to the same opaque failure.
+         *
+         * This is a refusal, not a fault: the agent stays registered and idle, nothing is
+         * consumed, and the reason names the path so the repair is obvious. §6.2 — diagnose
+         * names a CAUSE and the repair that fits.
+         */
+        const folder = statSync(cwd, { throwIfNoEntry: false });
+        if (!folder?.isDirectory()) {
+            const reason = folder
+                ? `Genie cannot run an agent in "${cwd}" — that is a file, not a folder.`
+                : `Genie cannot run an agent in "${cwd}" — the folder is not there. It stays registered and idle.`;
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
@@ -237,22 +268,36 @@ export class SessionHost {
          * A provider can fail to spawn SYNCHRONOUSLY, and that path reaches none of the
          * driver's event handlers.
          *
-         * Measured on Windows with the real binary:
+         * Because the throw happens inside `start()` it never becomes an `onExit` or an
+         * `onProtocolError`, and the renderer calls `openAgent` through
+         * `void ipcRenderer.invoke(...)`, which swallows a rejection. Without this the click
+         * would do **nothing at all, silently** — no red row, no message, no console error.
+         * The same silent-failure class as the dropped `onProtocolError`, by a different door.
          *
-         *     spawn('…/npm/codex.cmd', ['app-server', …])  ->  EINVAL, thrown synchronously
+         * The half-started session is removed rather than left in the map: capacity consumed
+         * by nothing, and a row that reads as running when no process exists.
          *
-         * npm installs CLIs on Windows as `.cmd` shims and Node refuses to spawn one without
-         * `shell: true` (the CVE-2024-27980 fix). `claude` happens to be a `.exe` so it is
-         * fine; `codex` is a `.cmd` and is not.
+         * ## What this is NOT, because the first version of this comment said it was
          *
-         * Because the throw is synchronous it never reaches `onExit` or `onProtocolError`, and
-         * the renderer calls `openAgent` through `void ipcRenderer.invoke(...)`, which swallows
-         * a rejection. **Clicking a codex agent on Windows did nothing at all, silently** — no
-         * red row, no message, no console error. The same silent-failure class as the dropped
-         * `onProtocolError`, arriving by a different door.
+         * I measured `spawn('…/npm/codex.cmd', ['app-server', …])` throwing EINVAL on Windows —
+         * npm installs CLIs as `.cmd` shims and Node refuses to spawn one without
+         * `shell: true`, the CVE-2024-27980 fix — and wrote that codex therefore could not run
+         * here at all.
          *
-         * The half-started session is removed rather than left in the map: capacity consumed by
-         * nothing, and a row that reads as running when no process exists.
+         * **That was the wrong call to measure.** prism-acp passes
+         * `shell: process.platform === 'win32'` at both of its spawn sites, verified in the
+         * installed 0.6.1, so the library never makes the call I reproduced. Through the real
+         * driver, codex starts on Windows and reports a session id.
+         *
+         * The repro copied the binary and the args faithfully and dropped the options object,
+         * which is what made it look complete. Reproducing a library's call means reproducing
+         * its options too, or going in at the library's own entry point and letting it build
+         * the call.
+         *
+         * So this guard defends a real shape — `child_process.spawn` does throw synchronously,
+         * for a bad cwd type, a bad option, a path the OS rejects — and no longer claims to
+         * know which provider hits it. The failure it was first aimed at was a missing
+         * workspace folder, which is now refused above, by name, before anything spawns.
          */
         try {
             session.start();
@@ -262,8 +307,10 @@ export class SessionHost {
             const configured = providerBinary(record.provider);
             const reason = [
                 `Genie could not start ${record.provider}: ${String((error as Error).message ?? error)}.`,
-                // The PATH is the whole diagnosis on Windows, where the `.cmd` extension IS the
-                // cause. "spawn EINVAL" alone sends somebody to the wrong place entirely.
+                // The configured PATH, when there is one. An error like "spawn EINVAL" names
+                // no file, so on its own it sends the reader looking in the wrong place — and
+                // a `GENIE2_<PROVIDER>_BINARY` pointing somewhere stale is a cause nothing
+                // else in the message would reveal.
                 configured ? `Configured binary: ${configured}` : null,
             ]
                 .filter(Boolean)

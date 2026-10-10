@@ -195,6 +195,19 @@ export class AgentSession {
      */
     #alive = false;
     /**
+     * Whether we have SEEN the provider exit.
+     *
+     * Separate from {@link #alive} because it outranks the driver's own reading. `running`
+     * prefers `driver.running` — correct, because a process can die without an exit event
+     * reaching us and the driver is closer to it than our bookkeeping. But that preference
+     * only makes sense in one direction: a driver answering `true` after we have watched it
+     * exit is reporting a process that is gone, and there is no reading of an exit event that
+     * leaves the provider alive.
+     *
+     * An exit is a fact; a `running` property is an opinion. The fact wins.
+     */
+    #exited = false;
+    /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
      * Held together because they are one fact: a parked approval that nobody can resolve is a
@@ -229,6 +242,7 @@ export class AgentSession {
      */
     get running(): boolean {
         if (!this.#driver) return false;
+        if (this.#exited) return false;
         return this.#driver.running ?? this.#alive;
     }
 
@@ -345,10 +359,42 @@ export class AgentSession {
                     }
                 },
                 onExit: () => {
-                    // The provider ended. `stopped` is a fact; what it was DOING when it
-                    // ended is not knowable from an exit code, so nothing claims it.
                     this.#alive = false;
-                    this.#turnState = 'stopped';
+                    this.#exited = true;
+
+                    /*
+                     * **An exit is the end of the story, not an eraser.**
+                     *
+                     * `stopped` used to be unconditional here, and on its own that was right:
+                     * an exit code says nothing about what the provider was DOING, so nothing
+                     * claims it. The bug was that it also said nothing about what we had
+                     * already been TOLD.
+                     *
+                     * Every failure ends in an exit. So `onProtocolError` would record the
+                     * provider's own words and set `failed`, and milliseconds later this
+                     * handler overwrote it with `stopped` — and `SessionHost.probe()` reports
+                     * a failure only for `failed`, so the reason was dropped on the floor.
+                     * The harder the failure, the more certainly its explanation vanished: a
+                     * provider that could not spawn at all rendered as nothing whatsoever.
+                     *
+                     * Measured on CI, with a codex agent whose cwd did not exist: prism-acp
+                     * said `failed to spawn Codex (Error)` and exited, and the screen showed
+                     * `{"running":false,"turnState":"stopped","failure":null}`.
+                     *
+                     * A clean exit is still `stopped` — see the positive control in
+                     * `test/session.test.ts`. Calling every exit a fault would paint a red row
+                     * every time somebody stops an agent on purpose, which teaches people to
+                     * stop reading red.
+                     */
+                    this.#turnState = this.#failure ? 'failed' : 'stopped';
+
+                    /*
+                     * And TELL somebody. This notified nobody, so a provider dying left its
+                     * row reading `working` until some unrelated event pushed the next
+                     * snapshot — and when a provider dies there is nothing next. Exactly the
+                     * parked-approval defect, one handler along.
+                     */
+                    this.#changed();
                 },
             },
         });

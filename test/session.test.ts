@@ -82,7 +82,8 @@ function fakeDriver() {
         setSessionId: (id: string) => { cliSessionId = id; },
         setRunning: (value: boolean) => { running = value; },
         emit: (u: Record<string, unknown>) => events.onUpdate?.(u),
-        exit: () => events.onExit?.(0, null),
+        exit: (code: number | null = 0, signal: NodeJS.Signals | null = null) =>
+            events.onExit?.(code, signal),
         // Typed as the interface, not inferred from the default — inference narrows
         // `stopReason` to `'end_turn'` and `raw` to `null`, so a test could not pass a crash.
         endTurn: (outcome: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: null }) =>
@@ -663,5 +664,96 @@ describe('the UI is TOLD when something it renders changes', () => {
         d.stderr('note: using cached index');
 
         expect(changes.length).toBe(before);
+    });
+});
+
+describe('the EXIT that follows a failure must not erase the reason for it', () => {
+    /**
+     * THE DEFECT THIS SUITE EXISTS FOR, and it hid behind a suite that already tested both
+     * halves separately.
+     *
+     * `onProtocolError` records the provider's own words and turns the state `failed` — proven
+     * above. `onExit` sets `stopped`, because an exit code says nothing about what the provider
+     * was doing. Both are right on their own. Together they are a bug, because **a provider
+     * that fails ALWAYS exits afterwards**: the error arrives, the reason is stored, and the
+     * exit a few milliseconds later overwrites `failed` with `stopped`.
+     *
+     * `SessionHost.probe()` then reports `failure: null`, because it asks
+     * `turnState === 'failed'` — so the harder the failure, the more certainly its explanation
+     * is thrown away. A provider that could not spawn at all is the worst case and the one
+     * that renders as nothing whatsoever.
+     *
+     * Measured in a real window on CI: a codex agent whose working directory did not exist.
+     * prism-acp reported `failed to spawn Codex (Error)` and then exited, and the screen showed
+     * `{"running":false,"turnState":"stopped","failure":null}` — the app knew why and said
+     * nothing. I then spent a commit blaming the wrong cause, which is what a swallowed reason
+     * costs beyond the blank screen.
+     *
+     * An exit is not an eraser. It is the END of the story, not a replacement for it.
+     */
+    function openWatched() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const changes: string[] = [];
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
+            onStateChange: () => changes.push('change'),
+        });
+        session.start();
+        return { d, session, changes };
+    }
+
+    it('still reads FAILED after the provider exits, and keeps the reason', () => {
+        const { d, session } = openWatched();
+
+        d.protocolError('failed to spawn Codex (Error)');
+        d.exit(1, null);
+
+        expect(session.turnState).toBe('failed');
+        expect(session.failure).toBe('failed to spawn Codex (Error)');
+    });
+
+    it('reports STOPPED for a provider that ended with nothing wrong', () => {
+        /**
+         * POSITIVE CONTROL, and the whole reason the fix is not "always say failed".
+         *
+         * A session the user stopped, or one that finished and closed, is `stopped` and has no
+         * failure. Without this the test above passes on a build that calls every exit a fault
+         * — which would paint a red row every time somebody stops an agent on purpose, and
+         * teach them to ignore red.
+         */
+        const { d, session } = openWatched();
+
+        d.endTurn();
+        d.exit(0, null);
+
+        expect(session.turnState).toBe('stopped');
+        expect(session.failure).toBeNull();
+    });
+
+    it('is not alive either way — the exit still means the provider is gone', () => {
+        // The half that already worked, asserted so a fix to the state cannot quietly cost it.
+        const { d, session } = openWatched();
+
+        d.protocolError('transport closed');
+        d.exit(1, null);
+
+        expect(session.running).toBe(false);
+    });
+
+    it('notifies when the provider EXITS, because the row changes', () => {
+        /**
+         * `onExit` notified NOBODY. A provider dying mid-turn left the row reading `working`
+         * until something unrelated pushed the next snapshot — and when a provider dies there
+         * IS nothing next, which is precisely the case that matters. Same shape as the parked
+         * approval that notified nobody, one handler along.
+         */
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.exit(1, null);
+
+        expect(changes.length).toBeGreaterThan(before);
     });
 });

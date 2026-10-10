@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -205,6 +206,55 @@ describe('probing — what the Dashboard reads', () => {
         expect(agentRowFor(r, live, () => now)).toMatchObject({ state: 'broken', reason: 'api error 529' });
     });
 
+    it('reports a provider that DIED with the reason it gave on the way out', () => {
+        /**
+         * The join that was broken, at the layer the UI reads.
+         *
+         * `probe()` reports a failure only when `turnState === 'failed'`, and every failing
+         * provider exits straight afterwards — so the exit overwrote `failed` with `stopped`
+         * and this method returned `failure: null` for every real crash. The session had the
+         * provider's own words the whole time.
+         *
+         * Measured on CI in a real window: a codex agent whose cwd did not exist produced
+         * `{"running":false,"turnState":"stopped","failure":null}` on screen, while prism-acp
+         * had said `failed to spawn Codex (Error)`.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onProtocolError?.('failed to spawn Codex (Error)');
+        events.onExit?.(1, null);
+
+        const live = host.probe(r.id);
+        expect(live?.failure).toEqual({ reason: 'failed to spawn Codex (Error)', fixes: ['Restart'] });
+        expect(live?.running).toBe(false);
+
+        // And the Dashboard reads it as broken, with the reason on the row — the whole point.
+        expect(agentRowFor(r, live, () => now)).toMatchObject({
+            state: 'broken',
+            reason: 'failed to spawn Codex (Error)',
+        });
+    });
+
+    it('does NOT call a clean exit broken', () => {
+        /**
+         * POSITIVE CONTROL, computed through the same two calls as the test above so it cannot
+         * drift away from it. Without this, the fix "treat every exit as a failure" passes the
+         * test above — and then stopping an agent on purpose paints a red row, which is how a
+         * board teaches people to ignore red.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        events.onExit?.(0, null);
+
+        const live = host.probe(r.id);
+        expect(live?.failure).toBeNull();
+        expect(live?.turnState).toBe('stopped');
+        expect(agentRowFor(r, live, () => now)).not.toMatchObject({ state: 'broken' });
+    });
+
     it('gives a failed turn a reason even when the provider gave none', () => {
         // `stopReason: null` with no `raw` is a crash the CLI did not explain. "Broken" with no
         // reason is an unactionable row; saying the provider gave no reason at least tells the
@@ -214,6 +264,72 @@ describe('probing — what the Dashboard reads', () => {
         events.onTurnEnd?.({ stopReason: null, isError: true, raw: null });
 
         expect(host.probe(r.id)?.failure?.reason).toContain('gave no reason');
+    });
+});
+
+describe('a workspace folder that is not there', () => {
+    /**
+     * The failure that cost most to diagnose in this build, because it reported the wrong
+     * layer.
+     *
+     * A seeded workspace pointed at a path that existed in the smoke container and not on a CI
+     * runner. Genie handed the missing directory to prism-acp, which spawned, failed, and said
+     * `failed to spawn Codex (Error)`. That sentence sent me to the provider — I measured the
+     * wrong spawn, wrote a commit blaming a library that handles the case correctly, and put
+     * the wrong reason in a CI workflow. The cause was a missing folder.
+     *
+     * Genie knows the path before it spawns anything. Checking it is the difference between a
+     * row that names the fix and a row that names the wrong component.
+     *
+     * §6.2: diagnose "names a CAUSE and the repair that fits".
+     */
+    it('refuses to start, and names the FOLDER rather than the provider', () => {
+        const r = record();
+        const missing = join(dir, 'not-a-real-folder');
+
+        const result = host.start(r, missing);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain(missing);
+        // The provider is never blamed for a folder that is not there.
+        expect(result.ok === false && result.reason.toLowerCase()).not.toContain('spawn');
+    });
+
+    it('consumes no capacity and leaves no half-started row', () => {
+        // The same discipline as the synchronous-throw path: a session that never ran must not
+        // hold a slot, and must not read as running with no process behind it.
+        const r = record();
+
+        host.start(r, join(dir, 'not-a-real-folder'));
+
+        expect(host.count).toBe(0);
+        expect(host.probe(r.id)).toBeNull();
+        expect(host.refusals.get(r.id)).toContain('not-a-real-folder');
+    });
+
+    it('starts normally when the folder IS there', () => {
+        /**
+         * POSITIVE CONTROL. Without it, "refuses when the folder is missing" passes on a build
+         * that refuses always — which would stop every agent on the machine and report it as a
+         * missing directory.
+         */
+        const r = record();
+
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.count).toBe(1);
+    });
+
+    it('refuses a path that exists but is a FILE', () => {
+        // A repo entry pointing at `project.json` instead of its folder is an ordinary typo,
+        // and `existsSync` alone would wave it through to the same opaque spawn failure.
+        const r = record();
+        const file = join(dir, 'project.json');
+        writeFileSync(file, '{}');
+
+        const result = host.start(r, file);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain(file);
     });
 });
 
