@@ -211,3 +211,11 @@ if (failures.length > 0) {
     process.exit(1);
 }
 console.log(`LAYOUT SWEEP PASSED — ${WIDTHS.length} widths, nothing spilled.`);
+
+// Same rule as smoke-cdp.mjs: the work is done, so exit — and name any handle that would have
+// kept the process alive, because "it hung" is not a diagnosis.
+const open = (process._getActiveHandles?.() ?? []).map((h) => h?.constructor?.name ?? typeof h);
+if (open.length > 0) {
+    console.log(`  (handles still open at exit: ${open.join(', ')} — exiting explicitly)`);
+}
+process.exit(0);
