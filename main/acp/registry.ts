@@ -176,7 +176,10 @@ export function terminalIsLive(specId: string, ports: LivenessPorts): boolean {
  * still only describe as "we could not check". Here it can be said plainly, and the
  * message names the thing to do instead.
  */
-export function writeRefusal(engine: AgentEngine): string | null {
-    if (engine === 'pty') return null;
+export function writeRefusal(_engine: AgentEngine): string | null {
+    // Previously: `if (engine === 'pty') return null` — a keystroke write was allowed through
+    // for a pty agent. There are no pty agents now (`AgentEngine` has one member), so every
+    // agent write is refused with the same explanation. The parameter is kept so call sites
+    // and the signature are unchanged, and so a future second engine has to decide here.
     return 'This agent runs as a structured ACP session, so there is no terminal to type into. Send it a prompt instead.';
 }

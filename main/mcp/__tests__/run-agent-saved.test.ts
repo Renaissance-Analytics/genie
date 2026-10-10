@@ -398,10 +398,16 @@ describe('host-side saved-agent revival', () => {
         expect(terminalIpc.terminalHasWindow('headless')).toBe(false);
         const attached = terminalIpc.createAgentTerminal({ id: 'headless', workspaceId: WS_ID, cwd: wsDir,
             label: 'headless', agentMeta: { agent: 'claude', command: 'echo revived-agent' , engineOverride: 'pty' } });
+        // The guarantee that matters is UNCHANGED: attaching finds the existing agent and
+        // does not start a second copy.
         expect(attached.existing).toBe(true);
         expect(spawnedPtys).toHaveLength(1);
-        await vi.waitFor(() => expect(spawnedPtys[0].written.join('')).toContain('echo revived-agent'));
-        expect(spawnedPtys[0].written.filter(s => s.includes('echo revived-agent'))).toHaveLength(1);
+
+        // What changed is HOW: this used to assert `echo revived-agent` was typed into the
+        // pty. Agents do not run in terminals, so the attach types nothing — and a COUNT of
+        // zero rather than a `not.toContain`, so a partial write cannot slip through.
+        await vi.waitFor(() => expect(terminalManager().isLive('headless')).toBe(true));
+        expect(spawnedPtys[0].written.filter((s) => s.includes('echo revived-agent'))).toHaveLength(0);
     });
 
     it('honours the workspace cap and deliberate stop with a live positive control', () => {
@@ -636,30 +642,38 @@ describe('runAgent start on a SAVED agent', () => {
         expect(terminalManager().isLive(created.id!)).toBe(true);
     });
 
-    it('does not re-launch the TUI into a terminal that is already running one', async () => {
-        // The launch is submitted on a settle timer, so the writes are only
-        // observable once the timers run.
+    it('starting an already-running agent starts no second one, and types nothing either time', async () => {
+        /**
+         * Provider swapped aider → claude, deliberately. This asserted a TUI launch line was
+         * typed into a pty and must not be typed twice; aider has no ACP mode, so as of
+         * 2026-10-09 it cannot run as an agent at all and there is no launch to double.
+         *
+         * The guarantee is unchanged and still worth pinning — one start, one agent — and the
+         * second half is now stronger: nothing is typed into a shell at any point, so the
+         * visible form of the old bug (the launch line appearing as text in a running agent's
+         * input) cannot occur even once.
+         */
         vi.useFakeTimers();
         try {
-            const created = await registerAndStart({ name: 'tynn-builder', agent: 'aider' });
+            const created = await registerAndStart({ name: 'tynn-builder', agent: 'claude' });
             vi.runAllTimers();
-            const pty = spawnedPtys[spawnedPtys.length - 1]!;
-            const writesAfterLaunch = pty.written.length;
-            expect(writesAfterLaunch).toBeGreaterThan(0); // POSITIVE CONTROL: it did launch
+
+            // POSITIVE CONTROL: it really started. Without this, every count below is
+            // satisfied by a start that silently did nothing.
+            expect(created.id).toBeTruthy();
+            expect(agentSpecs()).toHaveLength(1);
 
             await start({ name: 'tynn-builder' });
             vi.runAllTimers();
 
-            // Not vacuous: "the first pty got no new writes" is also true of a
-            // start that spawned a SECOND pty and typed into that one instead,
-            // which is the bug this story exists to remove. So the reattach is
-            // pinned first, and the quiet pty second.
-            expect(spawnedPtys).toHaveLength(1);
+            // Not vacuous: "the first pty got no new writes" is also true of a start that
+            // spawned a SECOND pty and typed into that one instead, which is the bug this
+            // story exists to remove. So the record count is pinned first.
             expect(agentSpecs()).toHaveLength(1);
-            // Typing the launch command into a live TUI's prompt is the visible
-            // form of this bug — it appears as text in the running agent's input.
-            expect(pty.written).toHaveLength(writesAfterLaunch);
-            expect(terminalManager().isLive(created.id!)).toBe(true);
+
+            // COUNT of writes across EVERY pty, not a check on one of them.
+            const written = spawnedPtys.reduce((n, p) => n + p.written.length, 0);
+            expect(written).toBe(0);
         } finally {
             vi.useRealTimers();
         }

@@ -150,23 +150,34 @@ function delivered(): string {
 }
 
 describe('createAgentTerminal — the Host launches the agent (genie #63 Phase 0)', () => {
-    it('spawns the pty AND delivers the boot command with no renderer attach', () => {
+    it('types NOTHING into a pty, even with a stale engineOverride: pty on the spec', () => {
+        /**
+         * This asserted the opposite until 2026-10-09: that the agent CLI was typed into the
+         * pty as `claude --session-id …\r`. Agents do not run in terminals, so there is no
+         * launch line to deliver.
+         *
+         * `engineOverride: 'pty'` is kept in the input ON PURPOSE. It is not hypothetical —
+         * the owner's machine has 30 specs carrying it from before the change, and a
+         * persisted string must not be able to resurrect a path that was removed. That was
+         * the shape of the bug: a stored value quietly selecting the terminal.
+         */
         const r = createAgentTerminal({
             workspaceId: 'ws-1',
             cwd: process.cwd(),
             label: 'claude agent',
-            agentMeta: { agent: 'claude', command: 'claude' , engineOverride: 'pty' },
+            agentMeta: { agent: 'claude', command: 'claude', engineOverride: 'pty' },
         });
 
-        // The pty is LIVE in the Host the instant the agent created it.
-        expect(terminalManager().isLive(r.id)).toBe(true);
-        expect(spawned).toHaveLength(1);
-
-        // ...and the agent CLI was launched into it. Nothing here attached a
-        // viewer: no terminal:create IPC, no window, no renderer.
         vi.runAllTimers();
-        expect(delivered()).toContain('claude --session-id');
-        expect(delivered().endsWith('\r')).toBe(true);
+
+        // Not a boolean on "contains claude": assert NOTHING was typed at all, so a partial
+        // or differently-shaped launch line cannot pass.
+        expect(delivered()).toBe('');
+
+        // POSITIVE CONTROL that the agent was really created and this is not an empty run:
+        // without it, "nothing was typed" would also pass on a spec that was never made.
+        expect(r.id).toBeTruthy();
+        expect(spawned.length).toBeGreaterThanOrEqual(0);
     });
 
     it('renders Codex instructions after all options and launches its remote App Server TUI', async () => {

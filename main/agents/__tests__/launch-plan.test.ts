@@ -22,27 +22,26 @@ describe('launchPlan', () => {
         expect(launchPlan({ provider: 'claude', command: 'claude --session-id x' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
-    it('types the launch line into a pty for a provider with NO ACP mode', () => {
-        // The pty path is not gone — it is what a pty-only provider still takes, and most
-        // of the twenty-one are.
-        expect(launchPlan({ provider: 'aider', command: 'aider' })).toEqual({
-            kind: 'pty',
-            command: 'aider',
-        });
+    it('REFUSES a provider with NO ACP mode — it does not get a terminal', () => {
+        // The pty path IS gone for agents. aider has no ACP mode, so it cannot run as an
+        // agent at all; `null` says that, where this used to hand back a terminal.
+        expect(launchPlan({ provider: 'aider', command: 'aider' })).toBeNull();
     });
 
     it('starts a structured session when ACP is on for a capable provider', () => {
         expect(launchPlan({ provider: 'claude', command: 'claude' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
-    it('stays on the pty for a provider with no ACP mode, even when ACP is on', () => {
-        expect(launchPlan({ provider: 'aider', command: 'aider' })).toMatchObject({ kind: 'pty' });
+    it('refuses a provider with no ACP mode rather than degrading to a terminal', () => {
+        expect(launchPlan({ provider: 'aider', command: 'aider' })).toBeNull();
     });
 
     it('returns nothing when a PTY-ONLY provider has no launch command', () => {
@@ -58,20 +57,22 @@ describe('launchPlan', () => {
         expect(launchPlan({ provider: 'claude', command: null })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
-    it('respects a per-agent override in both directions', () => {
+    it('plans ACP with an explicit ACP override, and has no other direction to go', () => {
         expect(launchPlan({ provider: 'claude', command: 'claude', agentOverride: 'acp' })).toMatchObject({ kind: 'acp' });
-        expect(launchPlan({ provider: 'claude', command: 'claude', agentOverride: 'pty' })).toMatchObject({ kind: 'pty' });
     });
 
-    it('stays on the pty when the provider is unknown', () => {
-        expect(launchPlan({ provider: null, command: 'something' })).toMatchObject({ kind: 'pty' });
+    it('REFUSES when the provider is unknown instead of opening a terminal', () => {
+        // Was: `toMatchObject({ kind: 'pty' })`. Guessing a shell for a provider we cannot
+        // name is exactly how an agent ended up in a terminal.
+        expect(launchPlan({ provider: null, command: 'something' })).toBeNull();
     });
 });
 
-describe('a CUSTOM launch command holds the agent on the pty', () => {
+describe('a CUSTOM launch command is REPORTED as dropped, never honoured by a terminal', () => {
     /**
      * ACP cannot honour a command. The adapter is spawned with bare argv and everything
      * travels in the environment, so a configured command line reaches it in NO form:
@@ -86,23 +87,27 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
      * Found by the `channel-liveness` fixtures, which start a claude agent with
      * `command: 'echo agent'`. ACP would have ignored that and started a real session.
      */
-    it('refuses ACP for a command that is not the provider itself', () => {
+    it('takes ACP even for a command that is not the provider, and REPORTS the loss', () => {
         expect(launchPlan({ provider: 'claude', command: 'echo agent' })).toEqual({
-            kind: 'pty',
-            command: 'echo agent',
+            kind: 'acp',
+            provider: 'claude',
+            droppedCommand: 'echo agent',
         });
     });
 
-    it('refuses ACP for the provider WITH extra flags, which ACP cannot pass on', () => {
+    it('takes ACP for the provider WITH extra flags, reporting what ACP cannot pass on', () => {
+        // This used to return a pty plan. Keeping the flags by opening a terminal is the
+        // trade this no longer makes: the flags are reported lost, the agent is not a shell.
         expect(
             launchPlan({ provider: 'claude', command: 'claude --model opus' }),
-        ).toEqual({ kind: 'pty', command: 'claude --model opus' });
+        ).toEqual({ kind: 'acp', provider: 'claude', droppedCommand: 'claude --model opus' });
     });
 
     it('still takes ACP for the plain provider command', () => {
         expect(launchPlan({ provider: 'claude', command: 'claude' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
@@ -112,7 +117,7 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         // unreachable and the suite would still be green, because the pty path works.
         expect(
             launchPlan({ provider: 'claude', command: 'claude --session-id 7f3a9b21-0000-4000-8000-000000000000' }),
-        ).toEqual({ kind: 'acp', provider: 'claude' });
+        ).toEqual({ kind: 'acp', provider: 'claude', droppedCommand: null });
     });
 
     it('takes ACP when there is no command at all', () => {
@@ -120,14 +125,17 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         expect(launchPlan({ provider: 'claude', command: null })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
     it('is not fooled by the binary appearing later in the line', () => {
-        // A wrapper that ENDS in the provider is still a wrapper.
+        // A wrapper that ENDS in the provider is still a wrapper, so the line is not bare
+        // and the wrapper is lost. Reported, not honoured by opening a terminal.
         expect(launchPlan({ provider: 'claude', command: 'nice -n 10 claude' })).toEqual({
-            kind: 'pty',
-            command: 'nice -n 10 claude',
+            kind: 'acp',
+            provider: 'claude',
+            droppedCommand: 'nice -n 10 claude',
         });
     });
 
@@ -138,6 +146,7 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         expect(launchPlan({ provider: 'claude', command: '  claude.exe  ' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
@@ -162,19 +171,24 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
                 command: 'claude "You are Strategist, read /w/.agents/strategist.md"',
                 instructions: 'You are Strategist, read /w/.agents/strategist.md',
             }),
-        ).toEqual({ kind: 'acp', provider: 'claude' });
+        ).toEqual({ kind: 'acp', provider: 'claude', droppedCommand: null });
     });
 
-    it('holds the pty for a quoted argument we were NOT told about', () => {
-        // Not ours, so we cannot deliver it any other way. Someone's own prompt, a filename,
-        // a wrapper's argument — dropping it silently is the failure this prevents.
+    it('REPORTS a quoted argument we were NOT told about, instead of holding the pty', () => {
+        // Not ours, so ACP cannot deliver it. Someone's own prompt, a filename, a wrapper's
+        // argument — it is still lost, but now it is NAMED rather than preserved by putting
+        // the agent in a terminal.
         expect(
             launchPlan({
                 provider: 'claude',
                 command: 'claude "some prompt of my own"',
                 instructions: 'a different briefing entirely',
             }),
-        ).toEqual({ kind: 'pty', command: 'claude "some prompt of my own"' });
+        ).toEqual({
+            kind: 'acp',
+            provider: 'claude',
+            droppedCommand: 'claude "some prompt of my own"',
+        });
     });
 
     it('accepts the codex `--` separator form of the same addition', () => {
@@ -187,7 +201,7 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
                 command: 'claude -- "briefing"',
                 instructions: 'briefing',
             }),
-        ).toEqual({ kind: 'acp', provider: 'claude' });
+        ).toEqual({ kind: 'acp', provider: 'claude', droppedCommand: null });
     });
 
     it('strips the session flag whatever shape the id is', () => {
@@ -196,10 +210,12 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         expect(launchPlan({ provider: 'claude', command: 'claude --session-id x' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
         expect(launchPlan({ provider: 'claude', command: 'claude --session-id=abc123' })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
@@ -238,13 +254,19 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         expect(launchPlan({ provider: 'claude', command: built })).toEqual({
             kind: 'acp',
             provider: 'claude',
+            droppedCommand: null,
         });
     });
 
-    it('holds the pty for a USER flag beside the channel flag', () => {
-        // `resolveProviderFlags` reads Settings → provider flags, which is the owner's
-        // configuration and has no ACP equivalent. The direction of the error matters: the pty
-        // honours it exactly as today, where ACP would drop it in silence.
+    it('REPORTS a USER flag beside the channel flag — this exact line was the bug', () => {
+        // THE OWNER'S OWN AGENTS. All 30 carried this command, so `isBareProviderCommand`
+        // was false and every one fell through to a pty while `claude` was ACP-capable the
+        // whole time. That is what still put agents in terminals after beta.2.
+        //
+        // `resolveProviderFlags` reads Settings → provider flags and has no ACP equivalent,
+        // so the flag IS lost — and is reported. These two in particular are already handled
+        // elsewhere: permissions by `--permission-mode` in `agent-spec` (genie#838), and the
+        // AgentInbox channel by `bindAcpMailTransport`.
         expect(
             launchPlan({
                 provider: 'claude',
@@ -252,8 +274,9 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
                     'claude --dangerously-load-development-channels server:genie-agentinbox-channel --dangerously-skip-permissions',
             }),
         ).toEqual({
-            kind: 'pty',
-            command:
+            kind: 'acp',
+            provider: 'claude',
+            droppedCommand:
                 'claude --dangerously-load-development-channels server:genie-agentinbox-channel --dangerously-skip-permissions',
         });
     });
@@ -263,6 +286,6 @@ describe('a CUSTOM launch command holds the agent on the pty', () => {
         // an agent with a custom command is choosing to lose the flags.
         expect(
             launchPlan({ provider: 'claude', command: 'claude --model opus', agentOverride: 'acp' }),
-        ).toEqual({ kind: 'acp', provider: 'claude' });
+        ).toEqual({ kind: 'acp', provider: 'claude', droppedCommand: 'claude --model opus' });
     });
 });

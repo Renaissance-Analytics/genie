@@ -13,11 +13,26 @@ import { withStartupInstructions } from './startup';
  * It lives in a 115 KB file that imports electron and the database and ships with no test,
  * so the decision is here and the file gets two lines.
  */
-export type LaunchPlan =
-    /** Type the TUI's launch line into the pty, as today. */
-    | { kind: 'pty'; command: string }
-    /** Start a structured session. No command: an ACP adapter takes bare argv. */
-    | { kind: 'acp'; provider: string };
+/**
+ * THERE IS NO PTY PLAN. An agent runs as a structured session or it does not run.
+ *
+ * `kind` is a single member on purpose rather than a bare object: it keeps every existing
+ * `plan.kind === 'acp'` call site valid, and a future second engine has somewhere to go.
+ * What it must never regain is a terminal.
+ */
+export type LaunchPlan = {
+    kind: 'acp';
+    provider: string;
+    /**
+     * The configured launch line ACP cannot carry, when there was one.
+     *
+     * ACP adapters take bare argv and everything else travels in the environment, so flags
+     * on a stored `agent_command` are genuinely lost. They used to be "kept" by routing the
+     * agent to a pty, which traded a visible loss for an invisible one — a terminal. Now the
+     * loss is reported so a caller can show it, and `null` means nothing was dropped.
+     */
+    droppedCommand: string | null;
+};
 
 export interface LaunchPlanInput {
     provider: string | null;
@@ -113,21 +128,24 @@ export function launchPlan(input: LaunchPlanInput): LaunchPlan | null {
         agentOverride: input.agentOverride,
     });
 
+    // No engine means the provider cannot speak ACP, and there is nowhere else for an agent
+    // to go. REFUSE — `null` is "not runnable as an agent", and the caller has to say so.
+    // It must not open a terminal, which is what the old fallthrough did.
+    if (engine === null || !input.provider) return null;
+
     // ACP does not use the launch line at all — the adapter is spawned with bare argv and
-    // everything travels in the environment — so a missing command is not a reason to
-    // refuse, where for the pty it means there is nothing to type.
+    // everything travels in the environment — so a missing command was never a reason to
+    // refuse here.
     //
-    // It is also why a CONFIGURED command keeps its agent on the pty: ACP would drop it
-    // silently and the agent would come up answering, but not as the agent that was
-    // configured. An explicit override is honoured anyway — someone who pins ACP for an
-    // agent with a custom command is choosing to lose the flags.
-    if (engine === 'acp' && input.provider) {
-        const honoursCommand =
-            input.agentOverride === 'acp'
-            || !input.command
-            || isBareProviderCommand(input.provider, input.command, input.instructions);
-        if (honoursCommand) return { kind: 'acp', provider: input.provider };
-    }
-    if (!input.command) return null;
-    return { kind: 'pty', command: input.command };
+    // A CONFIGURED command used to hold its agent on the pty, on the reasoning that ACP
+    // drops the line silently and the agent would "come up answering, but not as the agent
+    // that was configured". That is a real cost, but the price it paid was a terminal, and
+    // the owner's 30 agents all carry flags — so every one of them was routed to a pty while
+    // `claude` was ACP-capable the whole time. The loss is now REPORTED instead of avoided.
+    const dropped =
+        input.command && !isBareProviderCommand(input.provider, input.command, input.instructions)
+            ? input.command
+            : null;
+
+    return { kind: 'acp', provider: input.provider, droppedCommand: dropped };
 }

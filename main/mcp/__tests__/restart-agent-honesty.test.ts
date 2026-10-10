@@ -125,6 +125,7 @@ import {
     resetProviderAvailabilityCache,
 } from '../../agents/availability';
 import { terminalManager } from '@particle-academy/fancy-term-host';
+import { acpRegistry } from '../../acp/registry';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-restart-honesty-'));
 const dataDir = path.join(tmpRoot, 'userData');
@@ -223,29 +224,40 @@ afterAll(() => {
 });
 
 describe('genie#364 — the restart types a RESUME, never a second create', () => {
-    it('mints --session-id on the first launch and resumes THAT id on the restart', async () => {
-        const { id, firstCommand } = await launchAgent();
+    it('keeps the SAME conversation across a restart, and types no launch line to do it', async () => {
+        /**
+         * genie#364's GUARANTEE survives; its MECHANISM does not.
+         *
+         * This asserted the pty resume grammar end to end: the first launch typed
+         * `claude … --session-id <uuid>` into a shell, and the restart typed
+         * `--resume <that same uuid>`. Agents do not run in terminals as of 2026-10-09, so
+         * there is no launch line and nothing is typed.
+         *
+         * What genie#364 was actually protecting is the part worth keeping: a restart must
+         * continue the SAME conversation rather than silently starting a fresh one, which
+         * "looks like a fix" while losing the chat. Under ACP that is `meta.chat_session_id`
+         * being preserved and replayed through `session/load` — the same field the pty path
+         * wrote, which is why the guarantee transfers at all.
+         */
+        const { id } = await launchAgent();
 
-        // POSITIVE CONTROL: session capture is intact — the first launch pins
-        // the conversation by minting an id and passing it in.
-        expect(firstCommand).toMatch(
-            /^claude --dangerously-skip-permissions --session-id [0-9a-fA-F-]{8,}$/,
-        );
+        // POSITIVE CONTROL: session capture is intact. Without this, "the id did not change"
+        // would pass just as well on an agent that never captured one.
         const sid = getTerminalSpec(id)?.meta?.chat_session_id;
         expect(sid).toBeTruthy();
-        expect(firstCommand).toContain(sid!);
         plantTranscript(wsDir, sid!);
 
         const r = await restartAgentTerminal(id);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
-        // SAME conversation, RESUME verb — the create flag is gone, and the id
-        // is not a new one (which would lose the chat while looking like a fix).
+        // THE conversation, not A conversation. A new id here is the failure mode.
+        expect(getTerminalSpec(id)?.meta?.chat_session_id).toBe(sid);
+
+        // And no shell was driven to achieve it — neither grammar appears anywhere.
         const relaunch = submitted(spawnedPtys.at(-1));
         expect(relaunch).not.toContain('--session-id');
-        expect(relaunch).toContain(sid!);
-        expect(relaunch).toMatch(/--(resume|continue)\b/);
+        expect(relaunch).not.toMatch(/--(resume|continue)\b/);
     });
 
     it('resumes a spec whose session id survives only in its stored command', async () => {
@@ -346,20 +358,29 @@ describe('genie#364 — a restart does not claim more than it checked', () => {
         expect(terminalManager().isLive(id)).toBe(true);
     });
 
-    it('REFUSES when the relaunched terminal is not running', async () => {
+    it('REFUSES when the relaunched agent is not running', async () => {
         const { id } = await launchAgent();
-        // A pty that cannot be brought back is decidable right there, and it is
-        // the one thing a restart genuinely can falsify at return time.
-        const spy = vi
+        /**
+         * An agent that cannot be brought back is decidable right there, and it is the one
+         * thing a restart genuinely can falsify at return time.
+         *
+         * Liveness for an agent is `ptyLive || acpLive` (`isTerminalLive`), and an agent is
+         * now an ACP session — so mocking ONLY the pty leaves the session reporting live and
+         * the restart correctly succeeds. Both halves have to be dead for "cannot be brought
+         * back" to be true, which is why this mocks the registry too.
+         */
+        const ptySpy = vi
             .spyOn(terminalManager(), 'isLive')
             .mockImplementation((termId: string) => termId !== id);
+        const acpSpy = vi.spyOn(acpRegistry, 'isLive').mockImplementation((specId: string) => specId !== id);
 
         try {
             const r = await restartAgentTerminal(id);
             expect(r.ok).toBe(false);
-            expect(!r.ok && r.error).toMatch(/terminal/i);
+            expect(!r.ok && r.error).toMatch(/terminal|agent/i);
         } finally {
-            spy.mockRestore();
+            ptySpy.mockRestore();
+            acpSpy.mockRestore();
         }
     });
 });

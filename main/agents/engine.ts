@@ -48,7 +48,15 @@ import { ACP_PROVIDERS } from '../acp/agent-spec';
  * side and nothing reappears on screen. Honest rather than complete — the alternative is
  * re-prompting the agent with a transcript it never had, which looks resumed and is not.
  */
-export type AgentEngine = 'pty' | 'acp';
+/**
+ * THE ONLY ENGINE AN AGENT RUNS ON.
+ *
+ * `'pty'` was removed 2026-10-09 by owner directive — *"agents do not run in terminals. PTY
+ * is not a fucking option."* It is deleted as a TYPE MEMBER rather than merely avoided, so
+ * the compiler finds every site that could still route an agent to a terminal instead of
+ * leaving the state reachable and relying on nobody reaching it.
+ */
+export type AgentEngine = 'acp';
 
 export interface EngineInput {
     /** The provider id, or null when the record does not say. */
@@ -71,10 +79,18 @@ function canDoAcp(provider: string | null): boolean {
     return (ACP_PROVIDERS as readonly string[]).includes(provider);
 }
 
-export function engineFor(input: EngineInput): AgentEngine {
-    // Capability first: an override is a preference, not a capability.
-    if (!canDoAcp(input.provider)) return 'pty';
-    if (input.agentOverride) return input.agentOverride;
-    // No flag. ACP is the mechanism — see the header.
+/**
+ * The engine this agent runs on, or `null` meaning **it cannot run as an agent**.
+ *
+ * `null` replaces the old `'pty'` return. That fallback read as a graceful degradation and
+ * was not one: it is what put every one of the owner's 30 claude agents in a terminal, and
+ * a caller that treats "cannot" as "terminal" is the bug this signature removes.
+ */
+export function engineFor(input: EngineInput): AgentEngine | null {
+    // Capability first: an override is a preference, not a capability. A provider with no
+    // ACP mode has nothing to connect to, and there is no second engine to fall back to.
+    if (!canDoAcp(input.provider)) return null;
+    // An override can no longer name a terminal — `AgentEngine` has one member — so the only
+    // thing it can now say is 'acp', which is also what capability already decided.
     return 'acp';
 }
