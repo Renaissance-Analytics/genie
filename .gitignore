@@ -8,4 +8,5 @@ dist/
 # The smoke run writes one here for a human to look at. Regenerable, and a PNG in git is a
 # PNG somebody will later diff.
 smoke-*.png
+installed-smoke-*.png
 release/
