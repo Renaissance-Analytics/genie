@@ -4,36 +4,69 @@
  * This file exists to make that sentence enforceable rather than merely true today. The
  * previous build's failure was not a decision, it was an ORDER: `createAgentTerminal` spawned
  * a pty unconditionally about seventy lines *before* anything decided which engine an agent
- * would use, so removing the pty engine changed nothing a user could see — agents still held
+ * would use, so removing the pty *engine* changed nothing a user could see — agents still held
  * ptys and still read `claude · pty` on screen.
  *
  * Three layers keep it from coming back, and none of them is "we were careful":
  *
  *  1. **The type system.** `AgentEngine` has one member, so "agent on a pty" does not compile.
- *  2. **The shape of this API.** `open` takes a workspace and a command. There is no agent
- *     parameter, so "a terminal for this agent" cannot be *expressed* — the same reasoning as
- *     `railIsCollapsed` taking only a width.
+ *  2. **The shape of this API.** {@link TerminalOptions} takes a workspace and a command. There
+ *     is no agent parameter, so "a terminal for this agent" cannot be *expressed* — the same
+ *     reasoning as `railIsCollapsed` taking only a width.
  *  3. **A counted test.** `test/no-agent-pty.test.ts` starts every provider and counts the
  *     ptys, with a positive control proving a plain terminal still spawns exactly one.
  *
- * ## The port is narrow because it is the seam
+ * ## The port is the seam
  *
- * The real engine is `fancy-term-host` — in-kit, with `node-pty` as its declared peer — and it
- * lands with P5 along with multi-attach, scrollback replay, snapshots and the rest. What is
- * here is the boundary that rule 2 is enforced at, injected so a test can prove no pty was
- * asked for without spawning one to find out.
+ * The real engine is `fancy-term-host` — in-kit, with `node-pty` as its declared peer — and
+ * `fancy-term-port.ts` adapts it to {@link PtyPort}. Nothing in this file knows what a pty is.
+ * That keeps the no-agent rule provable without spawning anything, and keeps the engine
+ * replaceable: snapshot replay, retained ptys, the detached host and the OSC-7 cwd hook are
+ * the package's job, not Genie's.
  */
 
 export interface PtySpawnOptions {
     cwd: string;
-    command: string;
+    /**
+     * What to run. **Absent means the user's own login shell**, resolved by the engine.
+     *
+     * Optional because `+terminal` is the common case and names no command. A required
+     * command would make the ordinary thing the special case and force a default to be
+     * invented here — which is how a build ends up spawning `/bin/sh` for somebody whose
+     * shell is fish.
+     */
+    command?: string | undefined;
+    cols?: number | undefined;
+    rows?: number | undefined;
 }
 
-/** The one thing Genie asks of a pty engine. Deliberately four lines wide. */
+/** A live pty, as the engine reports it. */
+export interface PtyOpened {
+    id: string;
+    pid: number;
+    shell: string;
+    /** Bounded history, so a window joining a running build sees what it missed. */
+    scrollback: string;
+}
+
+/**
+ * What Genie asks of a pty engine.
+ *
+ * Deliberately smaller than `fancy-term-host`'s own `PtyBackend`: retained ptys, the detached
+ * host and snapshot encryption are the package's concerns, and naming them here would invite
+ * Genie to reimplement them.
+ */
 export interface PtyPort {
-    /** Returns an opaque id for the spawned pty. */
-    spawn(options: PtySpawnOptions): string;
-    kill(id: string): void;
+    /** Spawn, or rejoin an existing pty. */
+    open(options: PtySpawnOptions): PtyOpened;
+    write(id: string, data: string): boolean;
+    resize(id: string, cols: number, rows: number): boolean;
+    kill(id: string): boolean;
+    scrollback(id: string): string | undefined;
+    /** Subscribe to output. Returns an unsubscribe. */
+    onData(listener: (id: string, data: string) => void): () => void;
+    /** Subscribe to a pty ending on its own. Returns an unsubscribe. */
+    onExit(listener: (id: string, exitCode: number) => void): () => void;
 }
 
 export interface TerminalOptions {
@@ -41,24 +74,48 @@ export interface TerminalOptions {
      * The workspace this terminal belongs to.
      *
      * **A workspace, never an agent.** There is no `agentId` here and there will not be one:
-     * the absence is the API's half of the one rule.
+     * the absence is this API's half of the one rule.
      */
     workspaceId: string;
     cwd: string;
-    command: string;
+    command?: string | undefined;
+    cols?: number | undefined;
+    rows?: number | undefined;
 }
 
-interface Terminal {
+export interface Terminal {
     id: string;
     workspaceId: string;
+    pid: number;
+    shell: string;
 }
 
 export class TerminalHost {
     readonly #pty: PtyPort;
     #terminals: Terminal[] = [];
+    readonly #dataListeners = new Set<(id: string, data: string) => void>();
+    readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
 
     constructor(pty: PtyPort) {
         this.#pty = pty;
+
+        this.#pty.onData((id, data) => {
+            for (const listener of this.#dataListeners) listener(id, data);
+        });
+
+        this.#pty.onExit((id, exitCode) => {
+            /*
+             * FORGET IT FIRST, then tell anybody watching.
+             *
+             * A shell that ends on its own — `exit`, a build finishing, a crash — has to leave
+             * the list, or the count keeps a dead terminal in it forever and `closeWorkspace`
+             * later tries to kill something that is already gone. Removing it before the
+             * listeners run means a listener that asks `list()` sees the truth rather than the
+             * state from a moment ago.
+             */
+            this.#terminals = this.#terminals.filter((t) => t.id !== id);
+            for (const listener of this.#exitListeners) listener(id, exitCode);
+        });
     }
 
     /** How many terminals are open. **Never** a source for agent capacity. */
@@ -66,15 +123,49 @@ export class TerminalHost {
         return this.#terminals.length;
     }
 
-    open(options: TerminalOptions): string {
-        const id = this.#pty.spawn({ cwd: options.cwd, command: options.command });
-        this.#terminals = [...this.#terminals, { id, workspaceId: options.workspaceId }];
-        return id;
+    list(): readonly Terminal[] {
+        return this.#terminals;
+    }
+
+    open(options: TerminalOptions): PtyOpened {
+        const opened = this.#pty.open({
+            cwd: options.cwd,
+            command: options.command,
+            ...(options.cols === undefined ? {} : { cols: options.cols }),
+            ...(options.rows === undefined ? {} : { rows: options.rows }),
+        });
+
+        this.#terminals = [
+            ...this.#terminals,
+            { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell },
+        ];
+        return opened;
+    }
+
+    /**
+     * Every one of these answers `false` for an id it does not have, rather than throwing.
+     *
+     * A renderer holding a stale id is ordinary — a window that was open when the terminal
+     * closed. `false` is something it can act on; a throw from an IPC handler is an unhandled
+     * rejection in the main process.
+     */
+    write(id: string, data: string): boolean {
+        if (!this.#has(id)) return false;
+        return this.#pty.write(id, data);
+    }
+
+    resize(id: string, cols: number, rows: number): boolean {
+        if (!this.#has(id)) return false;
+        return this.#pty.resize(id, cols, rows);
+    }
+
+    scrollback(id: string): string | undefined {
+        if (!this.#has(id)) return undefined;
+        return this.#pty.scrollback(id);
     }
 
     close(id: string): boolean {
-        const found = this.#terminals.some((t) => t.id === id);
-        if (!found) return false;
+        if (!this.#has(id)) return false;
 
         this.#pty.kill(id);
         this.#terminals = this.#terminals.filter((t) => t.id !== id);
@@ -84,7 +175,7 @@ export class TerminalHost {
     /**
      * Close every terminal in one workspace, and nothing outside it.
      *
-     * Hibernating a workspace stops its work; it must not reach into another one's. The same
+     * Hibernating a workspace stops its work; it must not reach into another's. The same
      * scoping discipline as `killTree` taking only this session's own pids — on a machine
      * running a dozen agents, the difference is stopping one thing or stopping the room.
      */
@@ -93,5 +184,34 @@ export class TerminalHost {
         for (const terminal of mine) this.#pty.kill(terminal.id);
         this.#terminals = this.#terminals.filter((t) => t.workspaceId !== workspaceId);
         return mine.length;
+    }
+
+    /**
+     * Close everything, for a real quit or an upgrade.
+     *
+     * §7.1: an upgrade jammed on 31 orphaned `OpenConsole.exe` processes with no error message
+     * at all, because nothing reaped what the app had spawned.
+     */
+    closeAll(): number {
+        const all = this.#terminals;
+        for (const terminal of all) this.#pty.kill(terminal.id);
+        this.#terminals = [];
+        return all.length;
+    }
+
+    /** Subscribe to output from any terminal. Returns an unsubscribe. */
+    onData(listener: (id: string, data: string) => void): () => void {
+        this.#dataListeners.add(listener);
+        return () => this.#dataListeners.delete(listener);
+    }
+
+    /** Subscribe to any terminal ending. Returns an unsubscribe. */
+    onExit(listener: (id: string, exitCode: number) => void): () => void {
+        this.#exitListeners.add(listener);
+        return () => this.#exitListeners.delete(listener);
+    }
+
+    #has(id: string): boolean {
+        return this.#terminals.some((t) => t.id === id);
     }
 }
