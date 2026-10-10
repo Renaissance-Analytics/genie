@@ -102,7 +102,17 @@ jobs:
       - name: install Electron's runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6             libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2             libpangocairo-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3             libxrandr2 fonts-liberation fontconfig
+          # Each package, with a `t64` fallback.
+          #
+          # Ubuntu 24.04 renamed several of these in the 64-bit time_t transition —
+          # `libasound2` became `libasound2t64`, and on noble the old name is a virtual package
+          # with "no installation candidate". The list here was taken from Debian bookworm,
+          # where the old names are correct, so a single flat `apt-get install` is wrong on one
+          # of the two and this survives both. It also survives the runner image moving again,
+          # which it will.
+          for pkg in xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6                      libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2                      libpangocairo-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3                      libxrandr2 fonts-liberation fontconfig; do
+            sudo apt-get install -y --no-install-recommends "$pkg"               || sudo apt-get install -y --no-install-recommends "${pkg}t64"               || { echo "could not install $pkg or ${pkg}t64"; exit 1; }
+          done
 
       # Make font resolution representative of a desktop. Measured: without this the runner's
       # `system-ui` can resolve to a MONOSPACE face, the whole app renders monospaced, and that

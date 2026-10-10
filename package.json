@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Genie 2 — an agent is a session, never a terminal.",
+  "description": "Genie 2 \u2014 an agent is a session, never a terminal.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -12,7 +12,8 @@
     "build:preload": "vite build -c vite.preload.config.ts",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "verify": "npm run typecheck && npm test && npm run build",
-    "verify:live": "tsx test/live/claude-session.live.ts"
+    "verify:live": "tsx test/live/claude-session.live.ts",
+    "verify:flow": "tsx test/live/agent-flow.live.ts"
   },
   "dependencies": {
     "@particle-academy/fancy-diff": "^0.5.1",
