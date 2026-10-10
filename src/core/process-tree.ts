@@ -1,53 +1,160 @@
 import { execFileSync } from 'node:child_process';
 
 /**
- * STOP MEANS STOP — reaping what the driver's `kill` leaves behind.
+ * STOP MEANS STOP — reaping what the driver's `kill` leaves behind, without reaping the machine.
  *
- * ## What was actually measured, including the mistake
+ * ## What was measured, including both mistakes
  *
- * The live check first reported **2 processes surviving `stop()`**, and the obvious reading
- * was damning: `ClaudeDriver.kill(signal)` is `this.#child?.kill(signal)`, signalling the
- * DIRECT child only, with `#child` private so its pid is unreachable. That looked exactly
- * like the previous build's defect, where a stop reported success and agents kept running.
+ * The live check first reported **2 processes surviving `stop()`**, and the obvious reading was
+ * damning: `ClaudeDriver.kill(signal)` signals the DIRECT child only. That looked exactly like
+ * the previous build's defect, where a stop reported success and agents kept running.
  *
- * **It was wrong, and a diagnostic caught it before it became a false bug report.** The
- * surviving pids CHANGED IDENTITY between consecutive scans (56372, then 960). They were not
- * agents at all: one was a pre-existing descendant of the tsx wrapper, and the other was the
- * PowerShell that the scan itself spawns to do the counting. The measuring instrument was
- * contaminating the measurement.
+ * **It was wrong.** The surviving pids CHANGED IDENTITY between consecutive scans (56372, then
+ * 960): one was a pre-existing descendant of the tsx wrapper, the other was the PowerShell the
+ * scan itself spawns. The measuring instrument was contaminating the measurement.
  *
  * Measured truth, 2026-10-10: `driver.kill('SIGTERM')` terminated **all nine** provider
- * processes, and after a stop the descendant count returns exactly to its baseline. There is
- * no `prism-acp` defect here.
+ * processes, and after a stop the descendant count returns exactly to its baseline. There is no
+ * `prism-acp` defect here, and **the reaper below is defence in depth, not the mechanism.**
  *
- * ## So why keep this file
+ * ## The second mistake, which cost the owner a morning
  *
- * Because "stop means stop" has to be VERIFIABLE, not assumed, and that is the one promise
- * the previous build broke. Two things earn their place:
- *  - `descendantsOf` is the instrument the live check uses to prove a stop — and it now
- *    excludes its own subtree, which is the fix for the observer effect above;
- *  - `killTree` is defence in depth for the cases a single signal does not cover (a
- *    detached grandchild, a provider that re-parents, a platform that handles signals
- *    differently). It is a no-op when the driver has already done the job, which on this
- *    platform it does.
+ * 06:14 local, same day. `npm run verify:resume` — which reaps for real — ran on the OWNER'S
+ * DESKTOP. Six minutes later Genie's host service wrote its last log line and stayed down for
+ * four and a half hours, taking the terminal the work was running in with it.
+ *
+ * Unproven: there is no kill record, the log simply stops. But the reap is the only thing in
+ * that window that kills processes by enumeration.
+ *
+ * **The mechanism is a property of Windows, not a bug in the walk.** `win32Descendants` follows
+ * WMI `ParentProcessId`. Windows recycles pids, so a process whose parent has exited keeps a
+ * parent pointer that can now name a different, LIVE process — ours. The walk then returns
+ * processes that were never ours, and `taskkill /T` took each one's whole tree.
+ *
+ * Re-walking does not help: the bad pointer is in the data, so the second walk agrees with the
+ * first. **The enumeration cannot be made trustworthy, so the blast radius is bounded instead:**
+ *
+ *  1. **No `/T`.** Every genuine descendant is already in the set; expanding each kill into a
+ *     tree only adds processes nobody verified.
+ *  2. **A plausibility cap.** A session that started one provider asks to reap a handful of
+ *     pids. If the walk claims dozens, the walk is wrong — somebody else's tree has been
+ *     grafted onto ours by a recycled pointer. The reap is REFUSED and reported. That is
+ *     exactly the case where killing is most destructive and least necessary.
+ *  3. **Never on a failed walk.** A scan that cannot run reports nothing, and nothing must
+ *     never be read as "kill everything".
+ *  4. **No walk at all for an empty list** — the common case, since the driver normally reaps
+ *     itself. A machine-wide PowerShell enumeration on every stop is its own cost.
+ *
+ * A defence that can kill the machine's agent host is worse than the leak it defends against.
  *
  * ## Why descendants of OUR pid, and not "any claude"
  *
  * This runs on a workstation with other agents live. A name-matching sweep would kill a
- * colleague's work, and that has happened on this machine. A process that is a descendant of
- * *this* process can only be something this process started, so the blast radius is exactly
- * what we are responsible for and nothing else.
- *
- * The right long-term fix is upstream — a driver that owns a process should own its tree, or
- * expose the pid so a caller can. This is reported to `prism-acp`; until it lands, the
- * promise is kept here rather than quietly broken.
+ * colleague's work, and that has happened on this machine. The right long-term fix is upstream —
+ * a driver that owns a process should own its tree, or expose the pid so a caller can — and it
+ * is reported to `prism-acp`.
  */
 
 export interface ProcessTree {
-    /** Pids of every live descendant of `pid`, at any depth. */
+    /** Pids of every live descendant of `pid`, at any depth. Empty when it cannot look. */
     descendantsOf(pid: number): readonly number[];
-    /** Terminate these pids and everything beneath them. Best-effort, never throws. */
-    killTree(pids: readonly number[]): void;
+    /**
+     * Terminate these pids, if they are still ours and the request is plausible.
+     *
+     * Never throws. The result says what happened, because `stop()` has to be able to tell
+     * "reaped three" from "reaped nothing because the scan failed" — a stop that cannot
+     * distinguish those is the promise the previous build broke.
+     */
+    killTree(pids: readonly number[]): ReapResult;
+}
+
+export interface ReapResult {
+    killed: number;
+    /** True when the reap was declined as unsafe. `reason` says why, for a surface to report. */
+    refused: boolean;
+    reason?: string;
+}
+
+/** The OS calls, injected so the safety rules above are testable without touching a machine. */
+export interface ProcessTreeIo {
+    /** Live descendants of `pid`, at any depth. May throw; callers treat a throw as "cannot look". */
+    descendants(pid: number): number[];
+    /** Terminate exactly this pid. Not its tree. Never throws for an already-dead pid. */
+    killOne(pid: number): void;
+}
+
+/**
+ * How far beyond what the caller claims to own an enumeration may reach before it is disbelieved.
+ *
+ * Nine provider processes is the measured real case, so the floor has to clear it comfortably.
+ * Sixty was what a recycled parent pointer could graft on. The number is a judgement, and the
+ * test pins both sides of it: a normal nine-process tree reaps, a sixty-process claim refuses.
+ */
+const PLAUSIBLE_REAP = 24;
+
+export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () => process.pid): ProcessTree {
+    return {
+        descendantsOf(pid) {
+            try {
+                return io.descendants(pid);
+            } catch {
+                // A scan that cannot run reports NOTHING, which the caller must not read as
+                // "nothing is running" — `stop()` treats an empty reap as unverified rather
+                // than as success.
+                return [];
+            }
+        },
+
+        killTree(pids) {
+            // Nothing to do, and no reason to walk the machine to find that out.
+            if (pids.length === 0) return { killed: 0, refused: false };
+
+            if (pids.length > PLAUSIBLE_REAP) {
+                return {
+                    killed: 0,
+                    refused: true,
+                    reason:
+                        `Refusing to reap ${pids.length} processes for one session — more than ` +
+                        `${PLAUSIBLE_REAP} means the parent-pid walk has picked up processes that ` +
+                        `are not ours. The provider's own kill has already run.`,
+                };
+            }
+
+            let live: number[];
+            try {
+                live = io.descendants(selfPid());
+            } catch {
+                return {
+                    killed: 0,
+                    refused: true,
+                    reason: 'Refusing to reap: could not confirm which processes are ours.',
+                };
+            }
+
+            if (live.length > PLAUSIBLE_REAP) {
+                return {
+                    killed: 0,
+                    refused: true,
+                    reason:
+                        `Refusing to reap: the walk reports ${live.length} descendants, which is ` +
+                        'more than this process can plausibly own.',
+                };
+            }
+
+            const ours = new Set(live);
+            let killed = 0;
+            for (const pid of pids) {
+                // Still ours, RIGHT NOW. A pid that has exited and had its number reused would
+                // otherwise be somebody else's process — and on this machine that is another
+                // agent's work.
+                if (!ours.has(pid)) continue;
+
+                io.killOne(pid);
+                killed += 1;
+            }
+            return { killed, refused: false };
+        },
+    };
 }
 
 function win32Descendants(pid: number): number[] {
@@ -61,9 +168,9 @@ function win32Descendants(pid: number): number[] {
         '  }',
         '}',
         // THE OBSERVER EFFECT, measured: this scan spawns a PowerShell, which is itself a
-        // descendant of the process being scanned. Counting it made a clean stop look like
-        // two survivors and nearly produced a false bug report against prism-acp. Exclude
-        // this process and anything under it.
+        // descendant of the process being scanned. Counting it made a clean stop look like two
+        // survivors and nearly produced a false bug report against prism-acp. Exclude this
+        // process and anything under it.
         '$mine = @{}; $q2 = @($PID); while ($q2.Count -gt 0) { $h = $q2[0]; $q2 = @($q2 | Select-Object -Skip 1); $mine[$h] = $true; foreach ($c in $all | Where-Object { $_.ParentProcessId -eq $h }) { if (-not $mine.ContainsKey($c.ProcessId)) { $q2 += $c.ProcessId } } }',
         '(@($seen.Keys | Where-Object { -not $mine.ContainsKey($_) })) -join ","',
     ].join(' ');
@@ -78,39 +185,31 @@ function win32Descendants(pid: number): number[] {
 function posixDescendants(pid: number): number[] {
     const out = execFileSync('bash', ['-lc', `pgrep -P ${pid} || true`], { encoding: 'utf8', timeout: 20_000 });
     const direct = out.trim().split('\n').map((n) => Number.parseInt(n, 10)).filter((n) => Number.isFinite(n));
-    // Same observer effect as win32: the shell doing the scan is a child of the process
-    // being scanned, so it would count itself.
+    // Same observer effect as win32: the shell doing the scan is a child of the process being
+    // scanned, so it would count itself.
     return direct.filter((n) => n !== process.pid).flatMap((child) => [child, ...posixDescendants(child)]);
 }
 
-export const systemProcessTree: ProcessTree = {
-    descendantsOf(pid) {
-        try {
-            return process.platform === 'win32' ? win32Descendants(pid) : posixDescendants(pid);
-        } catch {
-            // A scan that cannot run reports NOTHING, which the caller must not read as
-            // "nothing is running" — `stop()` treats an empty reap as unverified rather than
-            // as success.
-            return [];
-        }
-    },
+export const systemProcessTree: ProcessTree = makeProcessTree({
+    descendants: (pid) => (process.platform === 'win32' ? win32Descendants(pid) : posixDescendants(pid)),
 
-    killTree(pids) {
-        for (const pid of pids) {
-            try {
-                if (process.platform === 'win32') {
-                    // `/T` takes the tree, `/F` forces. The tree flag is the whole point: the
-                    // provider's own children are what survive a signal to its parent.
-                    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-                        stdio: 'ignore',
-                        timeout: 20_000,
-                    });
-                } else {
-                    process.kill(pid, 'SIGKILL');
-                }
-            } catch {
-                // Already gone is the common case and is a success, not an error.
+    killOne: (pid) => {
+        try {
+            if (process.platform === 'win32') {
+                /*
+                 * NO `/T`, and that is the whole correction.
+                 *
+                 * `/T` takes the pid's entire tree, so one wrongly-enumerated pid becomes
+                 * everything beneath it — which is how a reap of one provider can reach an
+                 * unrelated service. Every genuine descendant is already in the verified set,
+                 * so the tree flag adds only processes nobody checked.
+                 */
+                execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000 });
+            } else {
+                process.kill(pid, 'SIGKILL');
             }
+        } catch {
+            // Already gone is the common case and is a success, not an error.
         }
     },
-};
+});

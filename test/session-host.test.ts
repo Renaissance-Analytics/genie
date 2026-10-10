@@ -54,7 +54,7 @@ const fakeDriverFor: DriverFor = (record) => {
 let reaped: readonly (readonly number[])[] = [];
 const noProcessTree: ProcessTree = {
     descendantsOf: () => [],
-    killTree: (pids) => { reaped = [...reaped, pids]; },
+    killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
 beforeEach(async () => {
