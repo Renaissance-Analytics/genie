@@ -170,9 +170,19 @@ different CHARACTER rather than an SVG icon. They asked for the candidate (U+219
 unprompted, for the falsifier beside it (U+21C6 `⇆`, which should fail if the theory holds).
 
 Measured, with four extra boundary probes because confirming one candidate is not testing a
-theory: **seven predictions, seven correct.**  draws,  is tofu, U+2195/21A8/25CA/2660 all
-draw, U+2756 is tofu. The control failing as predicted is what makes it evidence. `⇄` is the one that matters most to Genie, because `ActivityLight direction="both"`
-emits it and the Dashboard uses that component.
+theory: **seven predictions, seven correct.** `↔` draws, `⇆` is tofu, U+2195/21A8/25CA/2660 all
+draw, U+2756 is tofu. The control failing as predicted is what makes it evidence rather than
+agreement.
+
+**So the fix is one character, not five icons.** `⇄` is the one that mattered to Genie —
+`ActivityLight direction="both"` emits it and the Dashboard uses that component — and the
+argument that closed it was not coverage but INCONSISTENCY: of the three directions, `in` and
+`out` draw arrows and `both` draws a box, so a reader sees two working indicators and one
+broken one with no way to tell a font gap from a state.
+
+`✓` `✕` `✦` are Dingbats with no in-repertoire substitute, so those genuinely are the
+glyph-versus-icon trade — and that one is not worth paying for an environment nobody ships a
+desktop app into. `⌘` needs nothing: it only renders where somebody has that key.
 
 ### The first method was wrong, and its own control said so
 
