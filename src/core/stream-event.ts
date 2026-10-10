@@ -46,6 +46,21 @@ export type StreamEvent =
           title: string | null;
           /** `null` = the agent did not report one. Never defaulted to 'pending'. */
           status: ToolStatus | null;
+          /**
+           * ACP's tool category, and **`null` is not `'other'`**.
+           *
+           * `prism-acp` OMITS `kind` when its table does not recognise the tool, and `other`
+           * is a value that same table emits on purpose. The two are different claims:
+           * `other` is "we know what this is and it fits no category", `null` is "we do not
+           * know what this is". Collapsing them would file every MCP tool and every future
+           * provider tool under a category the provider never claimed.
+           *
+           * This is what the Stream reads to know a call is an EDIT — the one row type that
+           * gets tinted, anchors the diff inspector and carries line counts. Deriving it from
+           * the tool's NAME here would be Genie second-guessing a mapping the provider layer
+           * already did, with a table of fifteen names to maintain in a second place.
+           */
+          toolKind: ToolKind | null;
           rawInput: unknown;
       }
     | {
@@ -84,6 +99,21 @@ function numberOrNull(value: unknown): number | null {
 
 function stringOrNull(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * ACP's tool categories, as `prism-acp`'s own table emits them.
+ *
+ * Validated rather than passed through: a value outside this list would reach the UI and
+ * select no icon, no tint and no inspector, which renders as a row that exists and does
+ * nothing. `null` is the honest reading of a kind we cannot interpret.
+ */
+export type ToolKind = 'read' | 'edit' | 'execute' | 'search' | 'fetch' | 'think' | 'other';
+
+const TOOL_KINDS: readonly string[] = ['read', 'edit', 'execute', 'search', 'fetch', 'think', 'other'];
+
+function toolKindOf(value: unknown): ToolKind | null {
+    return typeof value === 'string' && TOOL_KINDS.includes(value) ? (value as ToolKind) : null;
 }
 
 const TOOL_STATUSES: readonly string[] = ['pending', 'in_progress', 'completed', 'failed'];
@@ -129,6 +159,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 name: stringOrNull(update['name']),
                 title: stringOrNull(update['title']),
                 status: toolStatusOf(update['status']),
+                toolKind: toolKindOf(update['kind']),
                 rawInput: update['rawInput'] ?? null,
             };
 

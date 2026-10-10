@@ -66,6 +66,48 @@ describe('toStreamEvent', () => {
         });
     });
 
+    it('carries the tool KIND when prism-acp recognised it', () => {
+        // `kind` is how the Stream knows a call is an EDIT, which is the one row type the
+        // design tints, anchors a diff inspector to, and shows line counts on. Deriving it
+        // from the tool's name here instead would be Genie second-guessing a mapping the
+        // provider layer already did — and it maintains a table of fifteen names to do it.
+        const edited = toStreamEvent({
+            sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Edit',
+            title: 'src/core/session.ts', kind: 'edit',
+        });
+        expect(edited).toMatchObject({ kind: 'tool', toolKind: 'edit' });
+
+        const ran = toStreamEvent({ sessionUpdate: 'tool_call', toolCallId: 't2', name: 'Bash', kind: 'execute' });
+        expect(ran).toMatchObject({ toolKind: 'execute' });
+    });
+
+    it('reports an unrecognised kind as NULL, which is not “other”', () => {
+        /**
+         * prism-acp OMITS `kind` when its table does not recognise the tool, and `other` is a
+         * value that table can also emit on purpose (`todowrite`). They are different claims:
+         * `other` is "we know what this is and it fits no category", `null` is "we do not
+         * know". The design gives them different marks and says `(kind not reported)` once,
+         * inline, for the second.
+         *
+         * Collapsing them would silently file every MCP tool and every future provider tool
+         * under a category the provider never claimed.
+         */
+        const unknownTool = toStreamEvent({ sessionUpdate: 'tool_call', toolCallId: 't3', name: 'mcp__tynn__create' });
+        expect(unknownTool).toMatchObject({ kind: 'tool', toolKind: null });
+
+        const deliberatelyOther = toStreamEvent({
+            sessionUpdate: 'tool_call', toolCallId: 't4', name: 'TodoWrite', kind: 'other',
+        });
+        expect(deliberatelyOther).toMatchObject({ toolKind: 'other' });
+    });
+
+    it('refuses a kind the protocol does not define, rather than passing it through', () => {
+        // A junk value would reach the UI and select no icon, no tint and no inspector — which
+        // renders as a row that exists and does nothing. Unknown is the honest reading.
+        expect(toStreamEvent({ sessionUpdate: 'tool_call', toolCallId: 't5', name: 'X', kind: 'sudo' }))
+            .toMatchObject({ toolKind: null });
+    });
+
     it('carries a tool status through an update, and NO status when none was sent', () => {
         const running = toStreamEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'tool_3', status: 'in_progress' });
         expect(running).toMatchObject({ kind: 'tool', status: 'in_progress' });
