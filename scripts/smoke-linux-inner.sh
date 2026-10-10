@@ -8,6 +8,10 @@
 
 set -euo pipefail
 
+# Mirror everything to the output mount, so a long run cannot lose its result to a timeout
+# on the calling side. Reading a file beats re-running a five-minute container.
+[ -d /out ] && exec > >(tee /out/smoke.txt) 2>&1
+
 mkdir -p /work
 cd /src
 tar cf - --exclude=node_modules --exclude=dist --exclude=.git . | (cd /work && tar xf -)
@@ -42,7 +46,7 @@ echo "=== launching Electron under Xvfb ==="
 # and the product behaves identically whether or not it is present. It points codex at a stub
 # that speaks the real App Server protocol, which is the only way to get a REAL parked approval
 # on screen in a container with no codex in it.
-export SMOKE_APPROVAL="${SMOKE_APPROVAL:-0}"
+export SMOKE_APPROVAL="${SMOKE_APPROVAL:-1}"
 export GENIE2_CODEX_BINARY="$(pwd)/scripts/stub-codex.mjs"
 chmod +x scripts/stub-codex.mjs
 
@@ -69,7 +73,7 @@ fi
 # The screenshot goes back to the host through the output mount, so a human can look at it.
 # Writing one is not the same as somebody having seen it.
 if [ -d /out ]; then
-    for shot in smoke-dashboard.png smoke-agent.png; do
+    for shot in smoke-dashboard.png smoke-agent.png smoke-approval.png; do
         [ -f "/work/$shot" ] && cp "/work/$shot" "/out/$shot" && echo "$shot copied to the host"
     done
 fi

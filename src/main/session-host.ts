@@ -217,6 +217,13 @@ export class SessionHost {
             driverFactory,
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
+            /*
+             * A change the UI renders — a parked approval, an answered one, a turn ending.
+             *
+             * Without this the renderer learned about an approval only when the NEXT ledger row
+             * happened to arrive, and a blocked agent produces no further rows by definition.
+             */
+            onStateChange: () => this.#emit(record.id),
             onEvent: (event: StreamEvent) => {
                 rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
                 this.#emit(record.id);

@@ -446,18 +446,22 @@ if (deckRow) {
  * the smoke are separable, and a missing seed should not read as a broken surface.
  */
 /*
- * OPT-IN, and that is a deliberate retreat rather than a design.
+ * THE APPROVAL ROUND TRIP — on by default, because it passes.
  *
- * This round trip does not pass yet: the stub completes its handshake and the approval does not
- * reach the screen. I put it in the merge gate before it worked and turned `main` red, which is
- * the one thing a gate must never be — a red build nobody can act on teaches people to stop
- * reading red, and then the gate is worth nothing when it means something.
+ * It was opt-in for a while: I put it in the merge gate before it worked and turned `main` red,
+ * which is the one thing a gate must never be. It is back in now that it earns its place.
  *
- * So it runs under `SMOKE_APPROVAL=1` (`npm run verify:approval`) until it passes, and it is
- * recorded as unfinished in the build status rather than hidden behind a check that always
- * says PENDING. A check that cannot fail is not a check.
+ * `SMOKE_APPROVAL=0` turns it off, for an environment where the stub cannot run. Nothing in CI
+ * sets that — the escape hatch exists for a person debugging, not for the gate.
+ *
+ * Three defects came out of building it, every one of which would have shipped:
+ *  - a provider that could not start failed SILENTLY (`onProtocolError`/`onStderr` dropped);
+ *  - `onRequestPermission` was never forwarded, so the whole feature was unreachable;
+ *  - a parked approval notified NOBODY, so the screen stayed blank while the session held it.
+ *
+ * None was findable by a unit test. All three were found by insisting on seeing it happen.
  */
-const approvalEnabled = process.env.SMOKE_APPROVAL === '1';
+const approvalEnabled = process.env.SMOKE_APPROVAL !== '0';
 
 const codexRow = approvalEnabled
     ? await cdp.evaluate(`
@@ -470,30 +474,61 @@ const codexRow = approvalEnabled
     : null;
 
 if (!approvalEnabled) {
-    console.log('  ----  the approval round trip is OFF (set SMOKE_APPROVAL=1); it does not pass yet');
+    console.log('  ----  the approval round trip is OFF (SMOKE_APPROVAL=0)');
 } else if (typeof codexRow !== 'string') {
     console.log('  SKIP  the approval round trip — no codex agent was seeded');
 } else {
     await cdp.evaluate(`document.querySelector('[data-agent="${codexRow}"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
-    // Open the composer and send: a turn is what makes the provider ask, and the stub asks on
-    // its first turn.
+    // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
     await cdp.evaluate(`document.querySelector('[data-action="chat"]')?.click(); true`);
-    await waitFor(cdp, `Boolean(document.querySelector('textarea'))`, 'the composer');
+    const composer = await waitFor(cdp, `Boolean(document.querySelector('textarea'))`, 'the composer');
+    check(composer, '28a. the composer is open on the codex agent');
 
-    await cdp.evaluate(`
-        (() => {
-            const box = document.querySelector('textarea');
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-            setter.call(box, 'run the migration');
-            box.dispatchEvent(new Event('input', { bubbles: true }));
-            box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
-            return true;
-        })()
-    `);
+    /*
+     * Send through the BRIDGE rather than by faking keystrokes.
+     *
+     * The first version set the textarea's value through the native setter and dispatched a
+     * synthetic Ctrl+Enter. That is re-testing Fancy's `PromptInput` keybinding — a controlled
+     * component with its own state, already covered by its own suite — and when it silently did
+     * not fire, the failure read as "the approval never appeared" rather than "the prompt was
+     * never sent". A harness that fails for a reason it does not name costs more than it saves.
+     *
+     * `window.genie.prompt` is the real IPC path: preload → main → host → session → driver.
+     * Everything this check is actually about is downstream of here.
+     */
+    await cdp.evaluate(`window.genie.prompt(${JSON.stringify(codexRow)}, 'run the migration'); true`);
 
     const parked = await waitFor(cdp, `Boolean(document.querySelector('[data-approval]'))`, 'the approval card');
+
+    /*
+     * When it does not appear, SAY WHERE IT STOPPED.
+     *
+     * A timeout on "the approval card" is true and useless: it cannot distinguish a provider
+     * that never asked, a session that never parked it, a bridge that did not carry it, and a
+     * component that did not render it. Four quite different problems behind one message.
+     *
+     * So the state is read back through the bridge and printed. This stays in permanently — a
+     * check that explains its own failure is worth more than one that only passes.
+     */
+    if (!parked) {
+        const state = await cdp.evaluate(`
+            (async () => {
+                const d = await window.genie.agentDetail(${JSON.stringify(codexRow)});
+                return JSON.stringify({
+                    running: d?.session?.running ?? null,
+                    turnState: d?.session?.turnState ?? null,
+                    pendingApproval: d?.session?.pendingApproval ?? null,
+                    failure: d?.session?.failure ?? null,
+                    refusal: d?.refusal ?? null,
+                    rowCount: d?.rows.length ?? null,
+                    rowKinds: [...new Set((d?.rows ?? []).map((r) => r.event.kind))],
+                });
+            })()
+        `);
+        console.log(`        session state: ${state}`);
+    }
     check(parked, '29. a REAL parked approval renders on screen');
 
     if (parked) {

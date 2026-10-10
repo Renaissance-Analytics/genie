@@ -134,6 +134,25 @@ export interface AgentSessionOptions {
     /** Notified for every ledger row, so a surface can render without re-reading the thread. */
     onEvent?: (event: StreamEvent) => void;
     /**
+     * Something a SURFACE renders has changed — a parked approval, an answered one, a turn
+     * ending, a provider failing.
+     *
+     * Separate from `onEvent`, which is ledger rows. A parked approval is not a row: it happens
+     * inside the driver's permission callback, changes what the Dashboard and the Deck both
+     * show, and used to fire nothing at all. Measured in a real window: the session held a
+     * pending approval while the screen showed nothing, and the agent was blocked on a human
+     * who was never told.
+     *
+     * It would have surfaced eventually, on the next ledger row — which is the worst version of
+     * the bug. It works in testing, where something else always happens next, and hangs in the
+     * one case that matters, where the agent has stopped precisely BECAUSE it is waiting.
+     *
+     * Deliberately NOT fired for everything: a notification per stderr line from a chatty
+     * provider would make the push channel the reason the app is slow. It fires when something
+     * on screen would differ.
+     */
+    onStateChange?: () => void;
+    /**
      * How a session reaps what the driver leaves behind. Injected so a test can assert the
      * reap happened without killing anything on the machine running the test.
      */
@@ -253,6 +272,7 @@ export class AgentSession {
 
         this.#approval = null;
         held.resolve({ outcome: 'selected', optionId });
+        this.#changed();
         return true;
     }
 
@@ -267,6 +287,7 @@ export class AgentSession {
                 onUpdate: (update) => void this.#ingest(update),
                 onProtocolError: (problem) => {
                     this.#turnState = 'failed';
+                    this.#changed();
                     /*
                      * The FIRST error, not the last.
                      *
@@ -300,9 +321,11 @@ export class AgentSession {
                         // first resolver — a provider waiting forever on a promise nobody holds.
                         this.#approval?.resolve({ outcome: 'cancelled' });
                         this.#approval = { approval, resolve };
+                        this.#options.onStateChange?.();
                     }),
                 onTurnEnd: (outcome) => {
                     this.#turns += 1;
+                    this.#changed();
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -376,6 +399,11 @@ export class AgentSession {
 
         this.#alive = false;
         this.#turnState = 'stopped';
+    }
+
+    /** Tell whoever is watching that something a surface renders has changed. */
+    #changed(): void {
+        this.#options.onStateChange?.();
     }
 
     async #ingest(update: Record<string, unknown>): Promise<void> {

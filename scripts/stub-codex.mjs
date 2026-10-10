@@ -63,9 +63,23 @@ function askForApproval() {
         method: 'item/commandExecution/requestApproval',
         params: {
             threadId: THREAD_ID,
-            callId: 'stub_call_0001',
+            itemId: 'stub_call_0001',
             command: 'php artisan migrate --force',
             cwd: process.cwd(),
+            /**
+             * **The decisions the server is willing to accept**, and the stub was silently
+             * wrong without them.
+             *
+             * `prism-acp` builds the option list from this array — it does not assume a
+             * default set, because what codex will accept depends on the request. With it
+             * absent the driver added NO options and fell back to a lone `cancel`, so the
+             * approval rendered on screen with one red button and no way to say yes.
+             *
+             * That read as a UI bug for a while. It was the stub not speaking the protocol,
+             * which is the risk every stub carries: it is only as honest as the frames it
+             * sends, and a thin one teaches you something false about the product.
+             */
+            availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
         },
     });
 }

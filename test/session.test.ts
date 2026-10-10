@@ -574,3 +574,94 @@ describe('a provider that fails to start must not fail SILENTLY', () => {
         expect(session.failure).toBeNull();
     });
 });
+
+describe('the UI is TOLD when something it renders changes', () => {
+    /**
+     * The defect: an approval parked and **nothing notified anybody**.
+     *
+     * `onEvent` fires for ledger rows, and the host re-emits on that — so the renderer learns
+     * about a message or a tool call. A parked approval is not a ledger row: it happens inside
+     * the driver's `onRequestPermission`, changes state the Dashboard and the Deck both render,
+     * and fired nothing at all.
+     *
+     * Measured in a real window: the session held
+     * `pendingApproval: { question: 'php artisan migrate --force', ... }` while the screen
+     * showed nothing. The agent was blocked on a human who was never told.
+     *
+     * It would have surfaced eventually — the next ledger row pushes a snapshot — which is the
+     * worst version: it works in testing, where something else always happens next, and hangs
+     * in the one case that matters, where the agent has stopped precisely BECAUSE it is
+     * waiting.
+     */
+    function openWatched() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const changes: string[] = [];
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
+            onStateChange: () => changes.push('change'),
+        });
+        session.start();
+        return { d, session, changes };
+    }
+
+    const ask = {
+        toolCall: { title: 'php artisan migrate --force' },
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    };
+
+    it('notifies when an approval PARKS', () => {
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.askPermission(ask);
+
+        expect(changes.length).toBeGreaterThan(before);
+    });
+
+    it('notifies when it is ANSWERED', async () => {
+        const { d, session, changes } = openWatched();
+        const pending = d.askPermission(ask);
+        const before = changes.length;
+
+        session.answerApproval('allow');
+        await pending;
+
+        expect(changes.length).toBeGreaterThan(before);
+    });
+
+    it('notifies when a TURN ENDS, which changes the state pill and the row', () => {
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.endTurn();
+
+        expect(changes.length).toBeGreaterThan(before);
+    });
+
+    it('notifies when the provider FAILS, which is the row going red', () => {
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.protocolError('thread/start response did not contain thread.id');
+
+        expect(changes.length).toBeGreaterThan(before);
+    });
+
+    it('does NOT notify for something nobody renders', () => {
+        /**
+         * POSITIVE CONTROL, in the other direction. A session that notified on every internal
+         * tick would push a snapshot per stderr line from a chatty provider, and the push
+         * channel would become the thing that makes the app slow.
+         *
+         * stderr is kept and is not a fault; nothing on screen changes when a line arrives.
+         */
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.stderr('note: using cached index');
+
+        expect(changes.length).toBe(before);
+    });
+});

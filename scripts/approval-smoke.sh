@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 #
-# THE APPROVAL ROUND TRIP — opt-in, because it does not pass yet.
+# THE APPROVAL ROUND TRIP, on its own.
 #
-# It drives a REAL parked approval: a stub that speaks the codex App Server protocol, through
-# the real `CodexDriver`, the real session holding the promise the provider is blocked on, the
-# real host, bridge and UI. Nothing above the stub is mocked.
+# The same thing the main smoke now runs — this just isolates it when you are working on that
+# path specifically. A stub speaking the real codex App Server protocol, through the real
+# `CodexDriver`, the real session holding the promise the provider is blocked on, the real
+# host, bridge and UI. Nothing above the stub is mocked.
 #
-# It is NOT in the merge gate. I put it there before it worked and turned `main` red, which is
-# the one thing a gate must never be: a red build nobody can act on teaches people to stop
-# reading red, and then the gate is worth nothing on the day it means something.
-#
-# Two product defects have already come out of building it, both of which would have shipped:
-# a provider that could not start failed silently, and `onRequestPermission` was never
-# forwarded to the driver at all — so the whole approval feature was unreachable in the running
-# application while every unit test passed.
+# Three defects came out of building it, all of which would have shipped, and none of which a
+# unit test could have found:
+#   - a provider that could not start failed SILENTLY;
+#   - `onRequestPermission` was never forwarded to the driver, so the feature was unreachable;
+#   - a parked approval notified nobody, so the screen stayed blank while the session held it.
 #
 # Usage:  bash scripts/approval-smoke.sh
 
