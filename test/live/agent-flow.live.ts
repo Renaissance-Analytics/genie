@@ -91,9 +91,23 @@ async function main(): Promise<void> {
 
         host.prompt(record.id, 'Reply with exactly the word: ok');
 
-        const gotRows = await until(() => host.rowsFor(record.id).length > 0, 120_000);
+        /**
+         * Wait for the MESSAGE, not for any row.
+         *
+         * The first version waited for `rows.length > 0` and then looked for an agent message
+         * in whatever had arrived — which is a race, and it lost: one row was in the ledger and
+         * it was not the reply. The check failed while reporting nothing about the product.
+         *
+         * A turn produces several kinds of row and the reply is rarely first, so the wait has
+         * to name what it is waiting for.
+         */
+        const hasMessage = () =>
+            host.rowsFor(record.id).some((r) => r.event.kind === 'message' && r.event.speaker === 'agent');
+
+        const gotMessage = await until(hasMessage, 180_000);
         const rows = host.rowsFor(record.id);
-        check(gotRows, '2. real protocol frames became ledger rows', `${rows.length} rows`);
+        const kinds = [...new Set(rows.map((r) => r.event.kind))].join(', ');
+        check(rows.length > 0, '2. real protocol frames became ledger rows', `${rows.length} rows: ${kinds}`);
 
         // Timestamps are recorded on ARRIVAL, because the wire carries none. A row with no time
         // is why Lanes renders a sentence rather than four empty tracks.
@@ -103,7 +117,7 @@ async function main(): Promise<void> {
         );
 
         const message = rows.find((r) => r.event.kind === 'message' && r.event.speaker === 'agent');
-        check(Boolean(message), '3. an agent message reached the ledger');
+        check(gotMessage && Boolean(message), '3. an agent message reached the ledger', `kinds seen: ${kinds}`);
 
         if (message) {
             // The whole chain, ending at what a person actually reads.
