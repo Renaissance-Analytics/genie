@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs';
 import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
-import type { AgentId, AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
 import {
@@ -150,8 +150,21 @@ export class SessionHost {
 
     /** Why a start was refused, by agent. Reported, never swallowed. */
     readonly refusals = new Map<AgentId, string>();
+    /**
+     * Session ids the PROVIDER reported and Genie refused to keep, by agent.
+     *
+     * Not silence. An agent whose id was refused cannot be resumed, which means its
+     * conversation will not survive a restart — a real degradation, and one the user has to be
+     * able to learn about. Held here rather than painted red: the turn in progress is fine,
+     * and failing it would be a worse lie in the other direction.
+     *
+     * **Surfacing this is not built yet** and is named as an open item rather than quietly
+     * dropped. It is recorded, with the value, so it is diagnosable today.
+     */
+    readonly unusableThreadIds = new Map<AgentId, string>();
 
     readonly #processTree: ProcessTree | undefined;
+    readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
 
     /**
      * `processTree` is INJECTABLE, and that is not a convenience — it is a safety fix.
@@ -170,11 +183,21 @@ export class SessionHost {
         driverFor?: DriverFor;
         clock?: () => number;
         processTree?: ProcessTree;
+        /**
+         * The provider identified its conversation, and it is a value Genie is willing to keep.
+         *
+         * Called at most once per session, with an id that has already passed
+         * `threadIdIsResumable`. The listener's job is to persist it — without one, nothing
+         * ever writes a thread id down and every restart begins a new conversation while every
+         * test about resume passes.
+         */
+        onThreadId?: (agentId: AgentId, threadId: string) => void;
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
+        this.#onThreadId = options.onThreadId;
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
@@ -226,6 +249,28 @@ export class SessionHost {
          * consumed, and the reason names the path so the repair is obvious. §6.2 — diagnose
          * names a CAUSE and the repair that fits.
          */
+        /**
+         * A STORED thread id, before it is handed to a provider as a command-line argument.
+         *
+         * The other end of `threadIdIsResumable`. This file is editable by anything running as
+         * the user, so a value in it is trusted today purely because Genie wrote it — and on
+         * Windows prism-acp must spawn with `shell: true`, where cmd.exe interprets `&`, `|`
+         * and `&&` **inside arguments**.
+         *
+         * A refusal rather than a quiet fresh start: §6.2 says a graceful resume that cannot
+         * happen refuses instead of silently opening a new chat, because a new conversation
+         * presented as a resumed one is how a day of context disappears with no message.
+         */
+        if (record.threadId && !threadIdIsResumable(record.threadId)) {
+            const reason =
+                `Genie will not resume "${record.name}": the stored thread id is not a value it ` +
+                `is willing to pass to a provider — "${record.threadId}". Restart it fresh to ` +
+                `start a new conversation.`;
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+
         const folder = statSync(cwd, { throwIfNoEntry: false });
         if (!folder?.isDirectory()) {
             const reason = folder
@@ -255,6 +300,21 @@ export class SessionHost {
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
             onStateChange: () => this.#emit(record.id),
+            /*
+             * The provider's own id, guarded at the EARLIEST point Genie controls it.
+             *
+             * It arrives from the provider — prism-acp's only check is `typeof === 'string'` —
+             * so it is untrusted here, not merely when it is read back off disk. Guarding on
+             * read alone would defend against a tampered file and not against the party that
+             * chose the string.
+             */
+            onSessionId: (threadId) => {
+                if (!threadIdIsResumable(threadId)) {
+                    this.unusableThreadIds.set(record.id, threadId);
+                    return;
+                }
+                this.#onThreadId?.(record.id, threadId);
+            },
             onEvent: (event: StreamEvent) => {
                 rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
                 this.#emit(record.id);

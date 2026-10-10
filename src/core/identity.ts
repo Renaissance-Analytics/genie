@@ -83,6 +83,42 @@ export interface AgentRecord {
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
 }
 
+/**
+ * Whether a stored thread id is one Genie is willing to hand to a provider.
+ *
+ * ## This value is UNTRUSTED, and it does not look it
+ *
+ * The id originates with the provider: the CLI emits it, prism-acp passes it through as
+ * `_meta["particle.academy/cli_session_id"]` with `typeof === "string"` as the only check,
+ * Genie persists it, and on reattach it goes back as `resumeSessionId` — which prism-acp puts
+ * **straight into argv** (`--resume <id>`). On Windows it spawns with `shell: true`, because
+ * npm installs CLIs as `.cmd` shims and Node refuses to spawn one otherwise (the
+ * CVE-2024-27980 fix), and **cmd.exe interprets `&`, `|` and `&&` inside arguments** — the
+ * prism maintainer measured `a&echo PWNED` executing.
+ *
+ * So the chain is: provider output → a meta field → a JSON file → a command line. By the time
+ * it reaches `spawn` it is three hops from looking like provider output, and **being stored is
+ * what makes it read as configuration instead of as input.** Data does not stop being
+ * attacker-influenced because it has been written down.
+ *
+ * ## An ALLOWLIST
+ *
+ * Not a list of metacharacters to reject. Quoting rules differ per shell and per OS, and a
+ * blocklist is a bet that nobody will ever find a character you forgot. Everything a real
+ * provider actually reports fits inside this: a UUID, `stub_thread_0001`, `sess-ABC.123:7` —
+ * all measured, not imagined. A guard that rejects a real session id breaks every resume,
+ * which is why the accepting test uses ids taken off the wire.
+ *
+ * prism-acp owns the quoting and is fixing it. This stays after that lands: a value we hand to
+ * another process is ours to keep well-formed, and defence in depth is the only kind that
+ * survives somebody else's refactor.
+ */
+const RESUMABLE_THREAD_ID = /^[A-Za-z0-9._:-]{1,200}$/;
+
+export function threadIdIsResumable(value: string): boolean {
+    return RESUMABLE_THREAD_ID.test(value);
+}
+
 /** The record's own field list, so a test can assert the shape rather than trusting prose. */
 export const AGENT_RECORD_FIELDS = [
     'id', 'workspaceId', 'provider', 'name', 'instructions',

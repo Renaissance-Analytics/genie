@@ -153,6 +153,18 @@ export interface AgentSessionOptions {
      */
     onStateChange?: () => void;
     /**
+     * The provider has identified its own conversation, once.
+     *
+     * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
+     * the thing the app has to write down for a thread to survive a restart at all. Separate
+     * from `onStateChange` because it is not a redraw: nothing on screen changes, and the
+     * listener's job is to persist.
+     *
+     * **Once.** A provider emits hundreds of updates per turn, and this firing on each would
+     * be a disk write per token.
+     */
+    onSessionId?: (threadId: string) => void;
+    /**
      * How a session reaps what the driver leaves behind. Injected so a test can assert the
      * reap happened without killing anything on the machine running the test.
      */
@@ -207,6 +219,8 @@ export class AgentSession {
      * An exit is a fact; a `running` property is an opinion. The fact wins.
      */
     #exited = false;
+    /** The session id already reported to the listener, so it is reported exactly once. */
+    #reportedSessionId: string | null = null;
     /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
@@ -448,11 +462,36 @@ export class AgentSession {
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */
+    /**
+     * Report the provider's own session id the first time it is known.
+     *
+     * Read from the DRIVER rather than scraped out of the update: prism-acp already parses it
+     * and exposes `cliSessionId`, and a second parser for the same field is a second thing to
+     * be wrong. §2.1 — Genie never infers from bytes what the protocol reports.
+     */
+    #noticeSessionId(): void {
+        const id = this.#driver?.cliSessionId ?? null;
+        if (!id || id === this.#reportedSessionId) return;
+
+        this.#reportedSessionId = id;
+        this.#options.onSessionId?.(id);
+    }
+
     #changed(): void {
         this.#options.onStateChange?.();
     }
 
     async #ingest(update: Record<string, unknown>): Promise<void> {
+        /*
+         * Checked BEFORE the early return below, and that ordering is the whole thing.
+         *
+         * The frame that carries the provider's session id is a `notice` — measured, from a
+         * real codex: `notice: "Codex session started"` with the id in `_meta`. `toStreamEvent`
+         * maps it to no ledger row, correctly, because nobody wants a row for it. So a check
+         * placed after that return would never run on the one update that matters.
+         */
+        this.#noticeSessionId();
+
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
 

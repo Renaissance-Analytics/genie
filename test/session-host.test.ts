@@ -22,6 +22,7 @@ let host: SessionHost;
 let events: DriverEvents = {};
 let killed = 0;
 let now = 1_760_000_000_000;
+let reportedSessionId: string | null = null;
 
 /** A driver shaped like `CodexDriver`: no `running` getter. The harder of the two shapes. */
 const fakeDriverFor: DriverFor = (record) => {
@@ -32,7 +33,9 @@ const fakeDriverFor: DriverFor = (record) => {
                 start: () => {},
                 prompt: () => {},
                 kill: () => { killed += 1; },
-                get cliSessionId() { return null; },
+                // Reported by the PROVIDER, after its init frame — so a test can only set it
+                // through this, never by constructing a record with it already in place.
+                get cliSessionId() { return reportedSessionId; },
             };
         };
         return factory;
@@ -58,6 +61,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-host-'));
     killed = 0;
     reaped = [];
+    reportedSessionId = null;
     now = 1_760_000_000_000;
     host = new SessionHost({
         userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
@@ -330,6 +334,106 @@ describe('a workspace folder that is not there', () => {
 
         expect(result).toMatchObject({ ok: false });
         expect(result.ok === false && result.reason).toContain(file);
+    });
+});
+
+describe('the provider’s thread id — captured, guarded, and handed back', () => {
+    /**
+     * P1's done-when says the thread survives a restart. It did at the session layer, where a
+     * `resumeSessionId` passed in is passed through — and **nothing in the app ever stored
+     * one**, so restarting Genie began a fresh conversation every time while every test about
+     * resume passed. The session was asked to resume an id the app never kept.
+     *
+     * The id arrives from the provider, which is what makes capturing it the same job as
+     * guarding it: see `threadIdIsResumable`. It is written down once and then looks like
+     * configuration, which is exactly what makes it dangerous — it ends up in argv.
+     */
+    it('reports the id the provider gave, so it can be persisted', () => {
+        const r = record();
+        const seen: Array<{ id: string; threadId: string }> = [];
+        host = new SessionHost({
+            userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+            onThreadId: (id, threadId) => seen.push({ id, threadId }),
+        });
+
+        host.start(r, dir);
+        // Nothing yet: the provider has not said who it is.
+        expect(seen).toEqual([]);
+
+        reportedSessionId = '01a12564-30a8-7961-8aa9-6d145dd2e179';
+        events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'started' } });
+
+        expect(seen).toEqual([{ id: r.id, threadId: '01a12564-30a8-7961-8aa9-6d145dd2e179' }]);
+    });
+
+    it('reports it ONCE, not on every frame after it', () => {
+        // A provider emits hundreds of updates per turn. Reporting on each would rewrite
+        // `agents.json` hundreds of times per turn — a disk write per token.
+        const r = record();
+        const seen: string[] = [];
+        host = new SessionHost({
+            userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+            onThreadId: (_id, threadId) => seen.push(threadId),
+        });
+        host.start(r, dir);
+        reportedSessionId = 'sess-ABC.123';
+
+        for (let i = 0; i < 20; i += 1) {
+            events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: `f${i}` } });
+        }
+
+        expect(seen).toEqual(['sess-ABC.123']);
+    });
+
+    it('does NOT report an id it would not be willing to hand back', () => {
+        /**
+         * COUNTED, and at the EARLIEST point Genie controls. The value is untrusted when it
+         * arrives, not when it is read back — so guarding only on read would protect against a
+         * tampered file and not against the provider that chose the string.
+         */
+        const hostile = ['a&echo PWNED', 'a|b', 'a&&b', 'two words', 'a$(b)', 'a;b'];
+        const accepted: string[] = [];
+
+        for (const value of hostile) {
+            const r = record();
+            host = new SessionHost({
+                userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+                onThreadId: (_id, threadId) => accepted.push(threadId),
+            });
+            host.start(r, dir);
+            reportedSessionId = value;
+            events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'x' } });
+        }
+
+        expect(accepted).toEqual([]);
+        // And it is not thrown away in silence: a provider that cannot be resumed is a real
+        // degradation, and the reason names the value so it is diagnosable.
+        expect(host.unusableThreadIds.size).toBe(1);
+    });
+
+    it('refuses to RESUME a stored id that is not well formed, and names it', () => {
+        /**
+         * The other end of the same guard, for a file edited by something that is not Genie.
+         * §6.2: a graceful resume that cannot happen **refuses** rather than silently starting
+         * a new chat — a fresh conversation presented as a resumed one is how a day's context
+         * disappears without a message.
+         */
+        const r = { ...record(), threadId: 'a&echo PWNED' };
+
+        const result = host.start(r, dir);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain('a&echo PWNED');
+        expect(host.count).toBe(0);
+    });
+
+    it('resumes a well-formed one, which is the control that keeps the guard honest', () => {
+        // POSITIVE CONTROL. Without it, "refuses a malformed id" passes on a build that
+        // refuses every resume — which would quietly mean no agent ever resumes anything.
+        const r = { ...record(), threadId: '01a12564-30a8-7961-8aa9-6d145dd2e179' };
+
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.count).toBe(1);
     });
 });
 

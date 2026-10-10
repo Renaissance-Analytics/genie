@@ -121,8 +121,31 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 
 async function boot(): Promise<void> {
     const store = new Store(app.getPath('userData'));
-    registry = new Registry(store);
-    host = new SessionHost({ userData: app.getPath('userData') });
+    // A local binding as well as the module-level one, so the callback below closes over a
+    // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
+    const theRegistry = new Registry(store);
+    registry = theRegistry;
+    host = new SessionHost({
+        userData: app.getPath('userData'),
+        /**
+         * THE LINE THAT MAKES RESUME REAL.
+         *
+         * The session layer resumed whatever `resumeSessionId` it was handed, the registry can
+         * store a thread id, and nothing connected the two — so every restart began a fresh
+         * conversation while every test about resume passed. §0.4's shape again: a finished
+         * capability behind a missing connection.
+         *
+         * A rejected write is reported rather than thrown: the agent is mid-turn and working,
+         * and taking its session down over a failed disk write would cost the user the thing
+         * the write was meant to protect. What it costs instead is resume, which is why it is
+         * said out loud here.
+         */
+        onThreadId: (agentId, threadId) => {
+            void theRegistry.recordThread(agentId, threadId).then((result) => {
+                if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
+            });
+        },
+    });
 
     // Healthy means this process is up and answering, which is the only claim the local
     // workstation chip can honestly make from in here. A real health model belongs with
