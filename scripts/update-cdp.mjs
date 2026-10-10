@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+/**
+ * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
+ * `window.genie.updates` the Deck's signal strip uses.
+ *
+ *   EXPECT_VERSION=0.0.1 node scripts/update-cdp.mjs
+ *
+ * Runs against an INSTALLED app launched with `--remote-debugging-port=9222`, whose
+ * `resources/app-update.yml` points at `serve-feed.mjs`. Every claim is checked against the
+ * state the main process reports, and the Deck is visited so the signal strip's rendering of
+ * each phase is seen in a real window, not only its model in a unit test.
+ *
+ * The last step quits the app to apply the update, so the socket dropping at the end is the
+ * expected outcome; what happens after is the caller's to verify (the installed version).
+ */
+const PORT = Number(process.env.CDP_PORT ?? 9222);
+const EXPECT = process.env.EXPECT_VERSION;
+if (!EXPECT) { console.error('EXPECT_VERSION is required'); process.exit(2); }
+
+const failures = [];
+function check(ok, label, detail = '') {
+    console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
+    if (!ok) failures.push(label);
+}
+
+async function findTarget() {
+    const until = Date.now() + 60_000;
+    let last = 'no attempt';
+    while (Date.now() < until) {
+        try {
+            const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            if (page) return page;
+            last = `no page yet (${targets.length})`;
+        } catch (e) { last = String(e); }
+        await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(`no window on the debugger port: ${last}`);
+}
+
+class Cdp {
+    #ws; #id = 1; #pending = new Map();
+    static async connect(url) {
+        const c = new Cdp();
+        c.#ws = new WebSocket(url);
+        c.#ws.addEventListener('message', (ev) => {
+            const f = JSON.parse(ev.data);
+            const r = c.#pending.get(f.id);
+            if (r) { c.#pending.delete(f.id); r(f); }
+        });
+        await new Promise((res, rej) => {
+            c.#ws.addEventListener('open', res, { once: true });
+            c.#ws.addEventListener('error', () => rej(new Error('CDP socket error')), { once: true });
+        });
+        return c;
+    }
+    send(method, params = {}) {
+        const id = this.#id++;
+        return new Promise((r) => { this.#pending.set(id, r); this.#ws.send(JSON.stringify({ id, method, params })); });
+    }
+    async evaluate(expression) {
+        const f = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+        if (f.error) throw new Error(`CDP: ${JSON.stringify(f.error)}`);
+        if (f.result.exceptionDetails) throw new Error(`page threw: ${f.result.exceptionDetails.exception?.description ?? '?'}`);
+        return f.result.result.value;
+    }
+    async screenshot(file) {
+        const f = await this.send('Page.captureScreenshot', { format: 'png' });
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(file, Buffer.from(f.result.data, 'base64'));
+    }
+    close() { this.#ws.close(); }
+}
+
+const state = (cdp) => cdp.evaluate('window.genie.updates.state()');
+const until = async (cdp, pred, ms, what) => {
+    const end = Date.now() + ms;
+    let s = await state(cdp);
+    while (!pred(s) && Date.now() < end) { await new Promise((r) => setTimeout(r, 300)); s = await state(cdp); }
+    if (!pred(s)) throw new Error(`timed out waiting for ${what}; last state ${JSON.stringify(s)}`);
+    return s;
+};
+
+console.log('\nTHE UPDATE PATH — check, download, install, through the installed app\n');
+const page = await findTarget();
+const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
+try {
+    await cdp.evaluate('document.readyState');
+
+    const idle = await state(cdp);
+    check(idle.phase === 'idle' && idle.version === null, '1. the updater starts idle, claiming nothing', JSON.stringify(idle));
+
+    const checked = await cdp.evaluate('window.genie.updates.check()');
+    check(checked.phase === 'available', '2. a check finds the feed\'s update', `phase ${checked.phase}${checked.error ? ` error ${checked.error}` : ''}`);
+    check(checked.version === EXPECT, `3. the offered version is the one the feed serves  — expected ${EXPECT}`, String(checked.version));
+    check(typeof checked.checkedAt === 'number', '4. the check is timestamped', String(checked.checkedAt));
+
+    // Nothing downloads by itself: the state must still be `available` after a pause.
+    await new Promise((r) => setTimeout(r, 1500));
+    const still = await state(cdp);
+    check(still.phase === 'available', '5. CONTROL: nothing downloads without being asked', still.phase);
+
+    await cdp.evaluate('location.hash = "#genie://deck"; true');
+    await new Promise((r) => setTimeout(r, 400));
+    const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
+    check(shown !== null && shown.action === 'update-download', '6. the Deck shows the update as a signal whose door is download', JSON.stringify(shown));
+    check(shown !== null && shown.text.includes(EXPECT), '7. the signal names the version', shown?.text ?? '');
+    await cdp.screenshot(`${process.cwd()}/update-available.png`);
+
+    // Click the door rather than call the bridge: this is the path a person takes.
+    await cdp.evaluate('document.querySelector("[data-signal=update]").click(); true');
+    const downloading = await until(cdp, (s) => s.phase === 'downloading' || s.phase === 'downloaded', 10_000, 'download to start');
+    check(downloading.phase === 'downloading' || downloading.phase === 'downloaded', '8. clicking the signal starts the download', downloading.phase);
+
+    const downloaded = await until(cdp, (s) => s.phase === 'downloaded' || s.phase === 'error', 120_000, 'download to finish');
+    check(downloaded.phase === 'downloaded', '9. the download lands', `phase ${downloaded.phase}${downloaded.error ? ` error ${downloaded.error}` : ''}`);
+    check(downloaded.percent === 100, '10. progress reached 100', String(downloaded.percent));
+
+    await new Promise((r) => setTimeout(r, 400));
+    const ready = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
+    check(ready !== null && ready.action === 'update-install', '11. the signal now offers install', JSON.stringify(ready));
+    await cdp.screenshot(`${process.cwd()}/update-downloaded.png`);
+
+    // §7.2 report, through the bridge this time so the caller gets the text.
+    const result = await cdp.evaluate('window.genie.updates.install()');
+    check(result !== null && typeof result.report === 'string', '12. install answers with the teardown report', result?.report?.split('\n')[0] ?? 'null');
+    console.log(`\n--- §7.2 report ---\n${result?.report ?? '(none)'}\n`);
+} catch (error) {
+    // The socket dropping after step 12 is the app quitting to install — expected. Anything
+    // before that is a failure.
+    if (failures.length === 0 && String(error).includes('socket')) console.log('  (socket closed — the app is quitting to install)');
+    else { check(false, 'the update path threw', String(error)); }
+} finally {
+    try { cdp.close(); } catch { /* already gone */ }
+}
+
+if (failures.length) { console.log(`\nUPDATE PATH FAILED — ${failures.length} check(s):\n${failures.map((f) => `  - ${f}`).join('\n')}`); process.exit(1); }
+console.log('\nUPDATE PATH DRIVEN — the app is applying the update; verify the installed version next.');
+process.exit(0);

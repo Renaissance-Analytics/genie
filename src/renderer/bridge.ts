@@ -132,7 +132,40 @@ export interface GenieBridge {
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
+
+    /**
+     * UPDATES — §7. The main process owns the state machine (`UpdateHost`); the renderer only
+     * asks and shows. Nothing downloads without `download()`, nothing installs without
+     * `install()`, and both answer honestly when refused: `false` / `null`, never a silent
+     * no-op. `install` answers with the §7.2 teardown report — what had to be stopped — before
+     * the app quits to apply.
+     */
+    updates: {
+        state(): Promise<UpdateState>;
+        subscribe(onChange: (state: UpdateState) => void): () => void;
+        check(): Promise<UpdateState>;
+        download(): Promise<boolean>;
+        install(): Promise<{ report: string } | null>;
+    };
 }
+
+/** Mirror of `src/main/updater.ts`'s state, crossed as-is — every unknown is `null`. */
+export interface UpdateState {
+    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+    version: string | null;
+    percent: number | null;
+    error: string | null;
+    checkedAt: number | null;
+}
+
+/** The updates bridge when there is no bridge: idle forever, every action refused. */
+export const NO_UPDATES: GenieBridge['updates'] = {
+    state: () => Promise.resolve({ phase: 'idle', version: null, percent: null, error: null, checkedAt: null }),
+    subscribe: () => () => {},
+    check: () => Promise.resolve({ phase: 'idle', version: null, percent: null, error: null, checkedAt: null }),
+    download: () => Promise.resolve(false),
+    install: () => Promise.resolve(null),
+};
 
 /**
  * Which surfaces this build can actually render.

@@ -15,7 +15,8 @@
     "verify:live": "tsx test/live/claude-session.live.ts",
     "verify:flow": "tsx test/live/agent-flow.live.ts",
     "verify:resume": "tsx test/live/resume.live.ts",
-    "verify:terminal": "tsx test/live/terminal.live.ts"
+    "verify:terminal": "tsx test/live/terminal.live.ts",
+    "verify:leak": "tsx test/live/terminal-leak.live.ts"
   },
   "dependencies": {
     "@particle-academy/fancy-diff": "^0.5.1",

@@ -164,3 +164,55 @@ describe('the signal strip — silent unless something is true', () => {
         expect(combos.flatMap(signalStrip).filter((s) => /\d/.test(s.label)).length).toBeGreaterThan(0);
     });
 });
+
+describe('the update signal — §7, the one signal whose door is an ACTION', () => {
+    const quiet = { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false };
+    const upd = (phase: string, version: string | null = '0.0.1', percent: number | null = null) =>
+        ({ ...quiet, update: { phase, version, percent } as never });
+
+    it('is silent while there is nothing to act on — idle, checking, none, error, and no updater at all', () => {
+        // COUNT across every quiet phase; a boolean on one would pass while another leaked.
+        const phases = ['idle', 'checking', 'none', 'error'];
+        const leaked = phases.flatMap((p) => signalStrip(upd(p, null))).filter((s) => s.kind === 'update');
+        expect(leaked).toEqual([]);
+        expect(signalStrip({ ...quiet, update: null })).toEqual([]);
+        expect(signalStrip(quiet)).toEqual([]);
+    });
+
+    it('announces an AVAILABLE version and offers the download as the door', () => {
+        const [s, ...rest] = signalStrip(upd('available', '0.0.1'));
+        expect(rest).toEqual([]);
+        expect(s).toMatchObject({ kind: 'update', action: 'update-download' });
+        expect(s!.label).toContain('0.0.1');
+        expect(s!.label.toLowerCase()).toContain('available');
+    });
+
+    it('shows the download in progress with its percent, and no door until it lands', () => {
+        const [s] = signalStrip(upd('downloading', '0.0.1', 42));
+        expect(s).toMatchObject({ kind: 'update' });
+        expect(s!.label).toContain('42%');
+        expect(s!.action).toBeUndefined();
+        // A download that has not reported progress yet says so without a number.
+        const [early] = signalStrip(upd('downloading', '0.0.1', null));
+        expect(early!.label).not.toMatch(/\d+%/);
+    });
+
+    it('offers the install as the door once DOWNLOADED, naming what it will do', () => {
+        const [s] = signalStrip(upd('downloaded', '0.0.1', 100));
+        expect(s).toMatchObject({ kind: 'update', action: 'update-install' });
+        expect(s!.label).toContain('0.0.1');
+        expect(s!.label.toLowerCase()).toMatch(/restart|install/);
+    });
+
+    it('says it is installing, with no door, while the app is going down to apply it', () => {
+        const [s] = signalStrip(upd('installing', '0.0.1', 100));
+        expect(s).toMatchObject({ kind: 'update' });
+        expect(s!.action).toBeUndefined();
+    });
+
+    it('still has a route, because the rule is every signal is a door', () => {
+        const all = ['available', 'downloading', 'downloaded', 'installing'].flatMap((p) => signalStrip(upd(p)));
+        expect(all).toHaveLength(4);
+        expect(all.filter((s: Signal) => !s.route.startsWith('genie://'))).toEqual([]);
+    });
+});

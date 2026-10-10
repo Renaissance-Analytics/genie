@@ -9,7 +9,23 @@ import { Dashboard } from './components/Dashboard.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace } from './components/Workspace.js';
-import { NO_TERMINALS, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import { useEffect, useState } from 'react';
+
+/**
+ * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
+ * anything" — which the strip renders as nothing (§5), not as "no update".
+ */
+function useUpdateState(updates: GenieBridge['updates']): UpdateState | null {
+    const [state, setState] = useState<UpdateState | null>(null);
+    useEffect(() => {
+        let live = true;
+        void updates.state().then((s) => { if (live) setState(s); });
+        const off = updates.subscribe((s) => { if (live) setState(s); });
+        return () => { live = false; off(); };
+    }, [updates]);
+    return state;
+}
 
 /**
  * THE SHELL — chrome, route, surface, and **no effects**.
@@ -61,6 +77,8 @@ export interface ShellProps {
     onAddWorkspace: () => void;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
     terminals?: GenieBridge['terminals'];
+    /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
+    updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
@@ -80,6 +98,7 @@ export function Shell({
     onAddAgent,
     onAddWorkspace,
     terminals = NO_TERMINALS,
+    updates = NO_UPDATES,
     onTakeOver,
     onOpenPalette,
     onSelectRow,
@@ -91,6 +110,7 @@ export function Shell({
     onAnswerDeckItem,
 }: ShellProps) {
     const parsed = parseRoute(route);
+    const updateState = useUpdateState(updates);
     /** The workspace a route names, from the snapshot — `null` both for unknown and not-yet-loaded; the caller tells them apart. */
     const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
     const canServe = servable.includes(parsed.surface);
@@ -163,11 +183,15 @@ export function Shell({
                     {canServe && parsed.surface === 'deck' ? (
                         <Deck
                             items={snapshot.deckItems ?? []}
-                            signals={snapshot.signals}
+                            signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
                             onAnswer={(item, optionId) => { if (item.agentId) onAnswerDeckItem(item.agentId, optionId); }}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
+                            onSignalAction={(action) => {
+                                if (action === 'update-download') void updates.download();
+                                else if (action === 'update-install') void updates.install();
+                            }}
                         />
                     ) : null}
 
