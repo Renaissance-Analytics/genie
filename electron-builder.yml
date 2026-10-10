@@ -20,6 +20,16 @@ files:
 
 asar: true
 
+# No native rebuild. The only native module is node-pty, and node-pty 1.x is Node-API
+# (`node-addon-api`): it ships `prebuilds/<platform>-<arch>/pty.node` and loads THAT at runtime —
+# ABI-independent, so the same binary serves Node 22 and Electron 44. electron-builder's default
+# `@electron/rebuild` pass does not know this and runs node-gyp from source anyway, which needs
+# Python + MSVC: present on GitHub's runners (so CI never noticed), absent on a clean machine
+# (the Windows test VM failed with "Could not find any Python installation to use"). The
+# prebuilt binary is what the dev tree's terminal smoke already runs on; packaging it unchanged
+# is the honest build. The afterPack hook and the installed-app terminal smoke measure it.
+npmRebuild: false
+
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # TERMINALS IN THE INSTALLED APP — node-pty is native, and the asar cannot hold it.
 #

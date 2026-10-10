@@ -20,6 +20,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Get-Location).Path
+# Everything below also lands in verify.log next to the tree, so a run whose SSH client died
+# (the host-side harness has a timeout; the VM does not) still leaves its whole story on the
+# VM's disk, readable over the next SSH session.
+Start-Transcript -Path (Join-Path $root 'verify.log') -Force | Out-Null
 function Step($n) { Write-Output ""; Write-Output "=== $n ===" }
 
 # npm/npx are .cmd shims; cmd.exe runs them without the EINVAL dance. Output is merged so a
@@ -73,6 +77,18 @@ if (-not $SkipSource) {
     Step 'npm ci'
     Run 'npm ci --no-audit --no-fund' 'ci.log'
     Write-Output ("node " + (& node --version) + ", npm " + (& cmd /c 'npm --version 2>nul'))
+    # Electron's binary arrives through its postinstall (a ~110 MB download). On the first VM run
+    # it was silently absent after a green `npm ci`, and the smoke then died on the debugger
+    # port with "Electron failed to install correctly". Say so here, with the postinstall's own
+    # lines, and run the install step once more where its output can be read.
+    if (-not (Test-Path node_modules\electron\path.txt)) {
+        Write-Output "electron binary MISSING after npm ci; what ci.log says about it:"
+        Select-String -Path ci.log -Pattern 'electron|error|ERR!' | Select-Object -First 30 | ForEach-Object { "   " + $_.Line }
+        Step 'electron postinstall, explicitly'
+        Run 'node node_modules\electron\install.js'
+        if (-not (Test-Path node_modules\electron\path.txt)) { throw 'electron binary still missing after install.js' }
+    }
+    Write-Output ("electron binary: " + (Get-Content node_modules\electron\path.txt))
 
     Step 'typecheck'
     Run 'npm run typecheck'
@@ -129,3 +145,4 @@ if (-not $SkipInstaller) {
 
 Write-Output ""
 Write-Output "VM VERIFY OK"
+Stop-Transcript | Out-Null
