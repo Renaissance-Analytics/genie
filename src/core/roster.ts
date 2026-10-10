@@ -1,3 +1,4 @@
+import type { Approval } from './approval.js';
 import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
 import type { TurnState } from './session.js';
@@ -34,8 +35,14 @@ export interface LiveSession {
     turnState: TurnState;
     /** Epoch ms. `null` when the session never recorded a start. */
     startedAt: number | null;
-    /** A parked question, verbatim. Its presence is what makes a row `waiting`. */
-    pendingAsk: string | null;
+    /**
+     * The approval waiting on a human, or `null`. Its presence is what makes a row `waiting`.
+     *
+     * The whole approval rather than just its question text, because the row is not the only
+     * reader: the Deck and the composer need the OPTIONS, and deriving the question here while
+     * carrying the options separately would be two copies of one fact.
+     */
+    pendingApproval: Approval | null;
     /** A reported failure and the routes out of it. `null` is not a fault — see below. */
     failure: { reason: string; fixes: readonly string[] } | null;
     contextUsed: number | null;
@@ -91,7 +98,7 @@ export function agentRowFor(
 
     const state: AgentRow['state'] =
         session === null ? 'idle'
-        : session.pendingAsk !== null ? 'waiting'
+        : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
         : session.running && session.turnState === 'working' ? 'working'
         : 'idle';
@@ -110,7 +117,7 @@ export function agentRowFor(
         // time is a fact; an idle row's would be the age of a session that is no longer doing
         // anything with it.
         duration: state === 'working' ? durationOf(session?.startedAt ?? null, now) : null,
-        ask: session?.pendingAsk ?? null,
+        ask: session?.pendingApproval?.question ?? null,
         reason: session?.failure?.reason ?? null,
         fixes: session?.failure?.fixes ?? [],
         step: session?.plan ? `${session.plan.step}/${session.plan.of}` : null,

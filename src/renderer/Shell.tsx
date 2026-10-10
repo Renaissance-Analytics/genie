@@ -45,6 +45,9 @@ export interface ShellProps {
     pinned: DockPanel | null;
     onNavigate: (route: string) => void;
     onSend: (agentId: string, text: string) => void;
+    /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
+    answeringApproval: string | null;
+    onAnswerApproval: (optionId: string) => void;
     onTogglePin: () => void;
     onCloseChat: () => void;
     onOpenAgent: (agentId: string) => void;
@@ -73,6 +76,8 @@ export function Shell({
     onSend,
     onTogglePin,
     onCloseChat,
+    answeringApproval,
+    onAnswerApproval,
 }: ShellProps) {
     const parsed = parseRoute(route);
     const canServe = servable.includes(parsed.surface);
@@ -94,6 +99,18 @@ export function Shell({
      * An unpinned flyout reserves nothing: it overlays the right edge and nothing moves.
      */
     const reserve = dockReserve(pinned);
+
+    /**
+     * The approval the FLYOUT may answer — only when this chat is the composer for the agent
+     * the approval belongs to. `approvalPlacement`'s decision, applied at the other end.
+     *
+     * Hoisted rather than inlined because a JSX expression container cannot sit between
+     * attributes, and the reasoning is worth more than the saved line.
+     */
+    const chatApproval =
+        chatThread && agentDetail?.agent.id === chatThread.agentId
+            ? agentDetail.session?.pendingApproval ?? null
+            : null;
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -143,6 +160,9 @@ export function Shell({
                             cost={agentDetail.cost}
                             onNavigate={onNavigate}
                             onSelect={onSelectRow}
+                            chatSubject={parsed.chat}
+                            answeringApproval={answeringApproval}
+                            onAnswerApproval={onAnswerApproval}
                         />
                     ) : null}
 
@@ -184,6 +204,9 @@ export function Shell({
                         thread={chatThread}
                         pinned={pinned === 'chat'}
                         contextTokens={200_000}
+                        approval={chatApproval}
+                        answeringApproval={answeringApproval}
+                        onAnswerApproval={onAnswerApproval}
                         onSend={(text) => onSend(chatThread?.agentId ?? '', text)}
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}

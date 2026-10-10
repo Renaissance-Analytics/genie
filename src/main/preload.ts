@@ -4,7 +4,7 @@ import type { AgentDetail, GenieBridge, GenieSnapshot } from '../renderer/bridge
 /**
  * THE PRELOAD — the entire surface the renderer is given.
  *
- * Eight methods, and nothing else. No `ipcRenderer`, no `require`, no `process`, no
+ * Nine methods, and nothing else. No `ipcRenderer`, no `require`, no `process`, no
  * filesystem. The renderer
  * receives exactly `GenieBridge` and can reach nothing else, which matters because a renderer
  * displays agent-authored text: a prompt injection that reaches `window.genie` can list
@@ -56,6 +56,10 @@ const bridge: GenieBridge = {
 
     addAgent: (workspaceId) => {
         void ipcRenderer.invoke('genie:add-agent', workspaceId);
+    },
+
+    answerApproval: (agentId, optionId) => {
+        void ipcRenderer.invoke('genie:answer-approval', agentId, optionId);
     },
 
     addWorkspace: () => {

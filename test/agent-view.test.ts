@@ -12,7 +12,7 @@ import {
 
 const session = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: Date.now() - 14_000,
-    pendingAsk: null, failure: null, contextUsed: null, contextSize: null,
+    pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
     lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
     ...over,
 });
@@ -64,7 +64,7 @@ describe('the state pill', () => {
     });
 
     it('reads the question when the turn is parked', () => {
-        const pill = statePill(session({ turnState: 'idle', pendingAsk: 'Allow migrate --force?' }), () => Date.now());
+        const pill = statePill(session({ turnState: 'idle', pendingApproval: { question: 'Allow migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }), () => Date.now());
         expect(pill).toMatchObject({ word: 'waiting on you', tone: 'warn' });
     });
 

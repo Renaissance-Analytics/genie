@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { agentRowFor } from '../src/core/roster.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -38,11 +39,28 @@ const fakeDriverFor: DriverFor = (record) => {
     return null;
 };
 
+/**
+ * A process tree that OBSERVES and never touches the machine.
+ *
+ * Without this the suite used the real one: on Windows that shells out to PowerShell to
+ * enumerate descendants and then kills whatever appeared between start and stop — in a test
+ * runner with parallel workers, that is a live sibling process. It also made a test that does
+ * no I/O take six and a half seconds, which is how the problem surfaced: as a flake.
+ */
+let reaped: readonly (readonly number[])[] = [];
+const noProcessTree: ProcessTree = {
+    descendantsOf: () => [],
+    killTree: (pids) => { reaped = [...reaped, pids]; },
+};
+
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-host-'));
     killed = 0;
+    reaped = [];
     now = 1_760_000_000_000;
-    host = new SessionHost({ userData: dir, driverFor: fakeDriverFor, clock: () => now });
+    host = new SessionHost({
+        userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+    });
 });
 
 afterEach(async () => {
@@ -137,7 +155,7 @@ describe('probing — what the Dashboard reads', () => {
 
         const nullable = [
             live?.contextUsed, live?.contextSize, live?.lastDelivery,
-            live?.collaborators, live?.commsAgeSeconds, live?.plan, live?.pendingAsk, live?.failure,
+            live?.collaborators, live?.commsAgeSeconds, live?.plan, live?.pendingApproval, live?.failure,
         ];
         expect(nullable.filter((v) => v !== null && v !== undefined)).toEqual([]);
     });
@@ -285,5 +303,37 @@ describe('push', () => {
         host.subscribe(seen);
         host.start(record({ provider: 'kimi' as never }), dir);
         expect(seen).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('the process tree the host uses', () => {
+    it('is the one it was GIVEN — the host never reaches for the system one itself', () => {
+        /**
+         * Found by a flake, which is the point.
+         *
+         * `AgentSession` falls back to the real system process tree when none is injected. On
+         * Windows that shells out to PowerShell to enumerate descendants and then **kills**
+         * whatever appeared between start and stop — so every unit test that started a session
+         * was spawning a shell and calling `killTree` on live pids, in a runner with parallel
+         * workers.
+         *
+         * The symptom was one failing run of a test that does no I/O, at 6.5 seconds. The
+         * duration was the tell; the assertion below is what stops it coming back.
+         */
+        const r = record();
+        host.start(r, dir);
+        host.stop(r.id);
+
+        // The reap went through the injected tree — exactly once, for this session.
+        expect(reaped).toHaveLength(1);
+    });
+
+    it('reaps only what it owns, and the injected tree reports none', () => {
+        // `descendantsOf` returns nothing here, so the owned set is empty and the reap is a
+        // no-op. That is the correct shape for a test: assert the call, not the carnage.
+        const r = record();
+        host.start(r, dir);
+        host.stop(r.id);
+        expect(reaped[0]).toEqual([]);
     });
 });

@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { budgetFor, planFor, statePill, tabsFor } from '../../core/agent-view.js';
+import { approvalPlacement, budgetFor, planFor, statePill, tabsFor } from '../../core/agent-view.js';
+import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { inspectorFor } from '../../core/inspector.js';
 import type { LiveSession } from '../../core/roster.js';
@@ -59,6 +60,11 @@ export interface AgentViewProps {
     /** Turn count and cost belong to the session's accounting, not to a single row. */
     turns: number;
     cost: number | null;
+    /** The agent the chat flyout is open on, from the route. Decides where an approval acts. */
+    chatSubject?: string | null | undefined;
+    /** `null` unless an answer is in flight. */
+    answeringApproval?: string | null | undefined;
+    onAnswerApproval?: ((optionId: string) => void) | undefined;
     onNavigate: (route: string) => void;
     onSelect: (rowId: string | null) => void;
     now?: (() => number) | undefined;
@@ -66,6 +72,7 @@ export interface AgentViewProps {
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
+    chatSubject, answeringApproval, onAnswerApproval,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const pill = statePill(session, now ?? (() => Date.now()));
@@ -77,6 +84,16 @@ export function AgentView({
     const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'files');
 
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
+
+    /**
+     * Where a parked approval is ACTIONABLE — exactly one place.
+     *
+     * The chat flyout is the only composer, so an open chat on this agent takes the approval
+     * with it and the Stream keeps a marker. Two live sets of buttons for one decision leaves
+     * one of them showing a question that has already been resolved.
+     */
+    const approval = session?.pendingApproval ?? null;
+    const placement = approvalPlacement(agent.id, chatSubject ?? null);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
@@ -160,13 +177,32 @@ export function AgentView({
             <div className="flex min-h-0 flex-1">
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
-                        <Stream
-                            rows={rows}
-                            lanes={lanes}
-                            at={at}
-                            selectedId={selectedId}
-                            onSelect={onSelect}
-                        />
+                        <>
+                            <div className="min-h-0 flex-1">
+                                <Stream
+                                    rows={rows}
+                                    lanes={lanes}
+                                    at={at}
+                                    selectedId={selectedId}
+                                    onSelect={onSelect}
+                                />
+                            </div>
+
+                            {/*
+                             * Inline, at the END of the stream — where the reader already is
+                             * when the agent stops. A question parked at the top of a long
+                             * ledger is a question nobody sees.
+                             */}
+                            {approval && placement === 'stream' ? (
+                                <ApprovalCard
+                                    approval={approval}
+                                    answering={answeringApproval ?? null}
+                                    onAnswer={(id) => onAnswerApproval?.(id)}
+                                />
+                            ) : null}
+
+                            {approval && placement === 'chat' ? <ApprovalMarker where="the chat" /> : null}
+                        </>
                     ) : null}
                 </div>
 

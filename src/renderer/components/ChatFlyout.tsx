@@ -1,5 +1,7 @@
 import { Icon, PromptInput } from '@particle-academy/react-fancy';
+import type { Approval } from '../../core/approval.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
+import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 
 /**
@@ -42,12 +44,24 @@ export interface ChatFlyoutProps {
     thread: ChatThread | null;
     pinned: boolean;
     contextTokens: number;
+    /**
+     * The approval to answer HERE, when this is where the composer is.
+     *
+     * Passed in rather than read from the thread, because which surface owns an approval is a
+     * decision (`approvalPlacement`) and not a property of the conversation.
+     */
+    approval?: Approval | null | undefined;
+    answeringApproval?: string | null | undefined;
+    onAnswerApproval?: ((optionId: string) => void) | undefined;
     onSend: (text: string) => void;
     onTogglePin: () => void;
     onClose: () => void;
 }
 
-export function ChatFlyout({ thread, pinned, contextTokens, onSend, onTogglePin, onClose }: ChatFlyoutProps) {
+export function ChatFlyout({
+    thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
+    onSend, onTogglePin, onClose,
+}: ChatFlyoutProps) {
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -139,6 +153,21 @@ export function ChatFlyout({ thread, pinned, contextTokens, onSend, onTogglePin,
                     </div>
                 ))}
             </div>
+
+            {/*
+             * Directly above the composer, because that is where the person already is. The
+             * approval renders wherever the composer is — one actionable rendering, and a
+             * marker everywhere else.
+             */}
+            {approval ? (
+                <div className="shrink-0 border-t border-[var(--border-1)]">
+                    <ApprovalCard
+                        approval={approval}
+                        answering={answeringApproval ?? null}
+                        onAnswer={(id) => onAnswerApproval?.(id)}
+                    />
+                </div>
+            ) : null}
 
             <div className="shrink-0 border-t border-[var(--border-1)] p-2">
                 {/*

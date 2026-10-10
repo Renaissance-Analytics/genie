@@ -136,6 +136,14 @@ export function App({ bridge }: AppProps) {
     const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
 
     /**
+     * The option id currently in flight, so the buttons refuse a second press.
+     *
+     * Cleared when the agent's detail changes — which is when the main process has pushed the
+     * answered state back. Clearing it on a timer would guess at when the provider replied.
+     */
+    const [answering, setAnswering] = useState<string | null>(null);
+
+    /**
      * The chat subject comes from the ROUTE, so a link can open a conversation — and so a
      * pinned chat's subject does not follow the view when you navigate elsewhere.
      */
@@ -173,6 +181,12 @@ export function App({ bridge }: AppProps) {
             pinned={pinned}
             onNavigate={navigate}
             onSend={(id, text) => { if (id) resolvedBridge?.prompt(id, text); }}
+            answeringApproval={answering}
+            onAnswerApproval={(optionId) => {
+                if (!agentId) return;
+                setAnswering(optionId);
+                resolvedBridge?.answerApproval(agentId, optionId);
+            }}
             onTogglePin={() => {
                 // The single slot's rule lives in `core/dock.ts`, including the file panel's
                 // refusal. No file panel exists until P5, so `false` is the honest argument

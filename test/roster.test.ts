@@ -24,7 +24,7 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}) =>
 
 const session = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: Date.now() - 12 * 60_000,
-    pendingAsk: null, failure: null, contextUsed: null, contextSize: null,
+    pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
     lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
     ...over,
 });
@@ -70,7 +70,7 @@ describe('a running session', () => {
     it('is WAITING, with the question itself, when the provider parked one', () => {
         const row = agentRowFor(
             record(),
-            session({ turnState: 'idle', pendingAsk: 'Allow php artisan migrate --force?' }),
+            session({ turnState: 'idle', pendingApproval: { question: 'Allow php artisan migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }),
             () => Date.now(),
         );
 

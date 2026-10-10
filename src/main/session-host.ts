@@ -1,6 +1,7 @@
 import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
+import type { ProcessTree } from '../core/process-tree.js';
 import { AgentSession, type SessionDriverFactory } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -82,10 +83,30 @@ export class SessionHost {
     /** Why a start was refused, by agent. Reported, never swallowed. */
     readonly refusals = new Map<AgentId, string>();
 
-    constructor(options: { userData: string; driverFor?: DriverFor; clock?: () => number }) {
+    readonly #processTree: ProcessTree | undefined;
+
+    /**
+     * `processTree` is INJECTABLE, and that is not a convenience — it is a safety fix.
+     *
+     * `AgentSession` falls back to the real system process tree, which on Windows shells out
+     * to PowerShell to enumerate descendants and then **kills** whatever appeared between
+     * start and stop. With the host not passing one, every unit test that started a session
+     * was spawning PowerShell and calling `killTree` on live pids — including, potentially, a
+     * sibling vitest worker.
+     *
+     * Found by a flake: one run of `stopAll` failed at 6.5 seconds for a test that does no I/O.
+     * The duration was the tell. A flaky test is a test telling you something.
+     */
+    constructor(options: {
+        userData: string;
+        driverFor?: DriverFor;
+        clock?: () => number;
+        processTree?: ProcessTree;
+    }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#clock = options.clock ?? (() => Date.now());
+        this.#processTree = options.processTree;
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
@@ -128,6 +149,7 @@ export class SessionHost {
             store: openDurableStore(sessionsDir(this.#userData)),
             driverFactory,
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onEvent: (event: StreamEvent) => {
                 rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
                 this.#emit(record.id);
@@ -140,6 +162,21 @@ export class SessionHost {
         session.start();
         this.#emit(record.id);
         return { ok: true };
+    }
+
+    /**
+     * Answer a parked approval, with the provider's own option id.
+     *
+     * Returns false when there was nothing parked or the id was not offered — the session
+     * checks, because the renderer is not trusted to send back a valid one.
+     */
+    answerApproval(agentId: AgentId, optionId: string): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+
+        const answered = entry.session.answerApproval(optionId);
+        if (answered) this.#emit(agentId);
+        return answered;
     }
 
     prompt(agentId: AgentId, text: string): boolean {
@@ -209,10 +246,15 @@ export class SessionHost {
             running: session.running,
             turnState: session.turnState,
             startedAt,
-            // Permission requests are a `prism-acp` 0.7.0 capability for claude; codex has
-            // them today. Until a driver reports one there is nothing parked, and claiming
-            // otherwise would put a question on the Deck that nobody asked.
-            pendingAsk: null,
+            /*
+             * The parked approval, straight from the session.
+             *
+             * `ClaudeDriver.permissionRequests` is false in prism-acp 0.6.1 — claude does not
+             * send these over ACP yet — and `CodexDriver`'s is true. So this is exercised today
+             * by codex and will light up for claude when 0.7.0 lands, with nothing here to
+             * change: only the driver's capability flips.
+             */
+            pendingApproval: session.pendingApproval,
             failure,
             contextUsed,
             contextSize,

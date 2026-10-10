@@ -79,6 +79,14 @@ export interface GenieBridge {
     /** Stop means stop: the provider tree goes, and the capacity slot frees. */
     stopAgent(agentId: string): void;
     prompt(agentId: string, text: string): void;
+    /**
+     * Answer a parked approval, with the PROVIDER'S own option id.
+     *
+     * The id goes back over the wire verbatim and the main process checks it against the
+     * request before sending it on — the renderer is not trusted to produce a valid one, and
+     * a provider receiving an option it never offered is a protocol error at best.
+     */
+    answerApproval(agentId: string, optionId: string): void;
     addAgent(workspaceId: string): void;
     /**
      * Open the folder picker and register what the user chose.

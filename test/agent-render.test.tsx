@@ -26,7 +26,7 @@ const timed = (event: StreamEvent, id: string): TimedEvent => ({ id, event, at }
 
 const session = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: at - 14_000,
-    pendingAsk: null, failure: null, contextUsed: null, contextSize: null,
+    pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
     lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
     ...over,
 });
@@ -136,7 +136,7 @@ describe('the header', () => {
     });
 
     it('reads the parked question as the state', () => {
-        const html = render({ session: session({ turnState: 'idle', pendingAsk: 'Allow migrate --force?' }) });
+        const html = render({ session: session({ turnState: 'idle', pendingApproval: { question: 'Allow migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }) });
         expect(html).toContain('data-pill="waiting on you"');
     });
 });
@@ -266,5 +266,107 @@ describe('found by looking at the running Agent view', () => {
         // It navigates to the route that opens the flyout on THIS agent, so the conversation
         // is linkable and a pinned chat's subject is in the URL rather than in a component.
         expect(html).toContain('chat=kai');
+    });
+});
+
+const APPROVAL = {
+    question: 'php artisan migrate --force',
+    options: [
+        { id: 'allow', label: 'Allow', tone: 'ok' as const },
+        { id: 'deny', label: 'Deny', tone: 'bad' as const },
+        { id: 'mystery', label: 'Allow once and remember', tone: 'neutral' as const },
+    ],
+};
+
+describe('a parked approval renders in exactly ONE place', () => {
+    const parked = () => session({ pendingApproval: APPROVAL });
+
+    it('is ACTIONABLE in the stream when no chat is open on this agent', () => {
+        const html = render({ session: parked(), chatSubject: null });
+
+        expect(html).toContain('data-approval');
+        expect(html).toContain('data-approval-option="allow"');
+        expect(html).toContain('data-approval-option="deny"');
+        expect(html).toContain('php artisan migrate --force');
+        // And no marker, because this IS the actionable copy.
+        expect(html).not.toContain('data-approval-marker');
+    });
+
+    it('becomes a MARKER when the chat is open on this agent', () => {
+        /**
+         * *"The approval renders wherever the composer is."* The chat flyout is the only place
+         * a human types to an agent, so an open chat takes the approval with it.
+         *
+         * Two live sets of buttons for one decision is not cosmetic: answering in one leaves
+         * the other showing a resolved question, and the reader cannot tell whether their
+         * answer landed.
+         */
+        const html = render({ session: parked(), chatSubject: 'kai' });
+
+        expect(html).toContain('data-approval-marker');
+        expect(html).not.toContain('data-approval-option');
+        // The marker still says a decision is parked and where to make it. Showing nothing
+        // would leave somebody reading a stream that has silently stopped.
+        expect(html).toContain('waiting on a decision');
+    });
+
+    it('is NEVER both at once \u2014 counted across every chat subject', () => {
+        // A boolean on one case passes while another renders both. Count the surfaces that
+        // carry live buttons; it may only ever be one or none.
+        const subjects = [null, 'kai', 'wren', 'genie'];
+        const doubles = subjects.filter((subject) => {
+            const html = render({ session: parked(), chatSubject: subject });
+            return html.includes('data-approval-option') && html.includes('data-approval-marker');
+        });
+
+        expect(doubles).toEqual([]);
+
+        // POSITIVE CONTROL: each subject renders ONE of them, so the absence is a reading.
+        const neither = subjects.filter((subject) => {
+            const html = render({ session: parked(), chatSubject: subject });
+            return !html.includes('data-approval-option') && !html.includes('data-approval-marker');
+        });
+        expect(neither).toEqual([]);
+    });
+
+    it('renders nothing at all when there is no approval', () => {
+        const html = render({ session: session(), chatSubject: null });
+        expect(html).not.toContain('data-approval');
+    });
+
+    it('does not colour an option whose kind the protocol did not name', () => {
+        /**
+         * `neutral` reaches the DOM as an uncoloured button. A provider could ship an option
+         * called "Allow once and remember" that denies, or one in another language — and a
+         * substring match on "allow" would paint a deny button green, which is the single most
+         * dangerous way this surface could be wrong.
+         */
+        const html = render({ session: parked(), chatSubject: null });
+
+        expect(html).toMatch(/data-approval-option="mystery"[^>]*data-tone="neutral"/);
+        expect(html).toMatch(/data-approval-option="allow"[^>]*data-tone="ok"/);
+        expect(html).toMatch(/data-approval-option="deny"[^>]*data-tone="bad"/);
+    });
+
+    it('stops accepting presses while an answer is in flight', () => {
+        // The provider is blocked on a SINGLE promise. A second answer resolves nothing, and
+        // the second press would look ignored.
+        const html = render({ session: parked(), chatSubject: null, answeringApproval: 'allow' });
+        expect(html).toMatch(/data-approval-option="deny"[^>]*disabled=""/);
+
+        // POSITIVE CONTROL: not disabled when nothing is in flight.
+        //
+        // It earned its keep immediately. The first version of this matched `[^>]*disabled`,
+        // which also matches the Tailwind class `disabled:opacity-50` sitting in the same tag —
+        // so the "not disabled" assertion failed, and the "is disabled" one would have passed
+        // on a button that was never disabled at all. The attribute is asserted with its `=""`.
+        const idle = render({ session: parked(), chatSubject: null });
+        expect(idle).not.toMatch(/data-approval-option="deny"[^>]*disabled=""/);
+    });
+
+    it('reads the agent as WAITING in the header pill', () => {
+        // The same fact, through the other reader. A row that is waiting and a pill that says
+        // thinking is the kind of disagreement that makes people stop trusting both.
+        expect(render({ session: parked() })).toContain('data-pill="waiting on you"');
     });
 });

@@ -60,7 +60,7 @@ function clock(from: number, now: number): string {
  */
 export function statePill(session: LiveSession | null, now: () => number): StatePill {
     if (!session) return { word: 'not started', elapsed: null, tone: 'muted' };
-    if (session.pendingAsk !== null) return { word: 'waiting on you', elapsed: null, tone: 'warn' };
+    if (session.pendingApproval !== null) return { word: 'waiting on you', elapsed: null, tone: 'warn' };
     if (session.failure !== null) return { word: 'broken', elapsed: null, tone: 'bad' };
 
     const running = session.running && session.turnState === 'working';

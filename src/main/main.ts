@@ -162,6 +162,14 @@ async function boot(): Promise<void> {
         return { ok: host.prompt(record.id, text) };
     });
 
+    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown) => {
+        const record = agentFromRenderer(raw);
+        if (!record || !host || typeof optionId !== 'string') return { ok: false };
+        // The session checks the id against the parked request. A refusal leaves the approval
+        // parked, which is recoverable; answering with something meaningless is not.
+        return { ok: host.answerApproval(record.id, optionId) };
+    });
+
     ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown) => {
         if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false };
         const record = await registry.register({

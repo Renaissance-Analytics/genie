@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
 import {
     AgentSession,
@@ -33,6 +34,25 @@ function tempDir(): string {
 afterAll(() => {
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
+
+/**
+ * A process tree that OBSERVES and never touches the machine.
+ *
+ * `AgentSession` falls back to the REAL system tree when none is injected. On Windows that
+ * shells out to PowerShell to enumerate descendants and then **kills** whatever appeared
+ * between start and stop — so this suite was spawning a shell per session and calling
+ * `killTree` on live pids, in a runner with parallel workers.
+ *
+ * It also made this file take **25.8 seconds for 21 tests that do no I/O**. That was the tell,
+ * and it surfaced as a flake in a sibling suite rather than as a failure here.
+ */
+let reaped: readonly (readonly number[])[] = [];
+const noProcessTree: ProcessTree = {
+    descendantsOf: () => [],
+    killTree: (pids) => { reaped = [...reaped, pids]; },
+};
+
+beforeEach(() => { reaped = []; });
 
 /** A driver that records what it was asked to do and lets a test push updates. */
 function fakeDriver() {
@@ -86,7 +106,9 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory });
+        const session = new AgentSession({
+            agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree,
+        });
         session.start();
 
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'on it' } });
@@ -105,7 +127,7 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory }).start();
+        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
         d.emit({ sessionUpdate: 'available_commands_update', availableCommands: [] });
 
         // POSITIVE CONTROL in the same test: a real row still lands, so "nothing was written"
@@ -122,6 +144,7 @@ describe('AgentSession', () => {
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -140,7 +163,7 @@ describe('AgentSession', () => {
 
         new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
-            driverFactory: d.factory, resumeSessionId: 'thread_abc',
+            driverFactory: d.factory, resumeSessionId: 'thread_abc', processTree: noProcessTree,
         }).start();
 
         expect(d.resumeSeen()).toBe('thread_abc');
@@ -151,7 +174,8 @@ describe('AgentSession', () => {
         const d = fakeDriver();
 
         new AgentSession({
-            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
         }).start();
 
         expect(d.resumeSeen()).toBeUndefined();
@@ -162,6 +186,7 @@ describe('AgentSession', () => {
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -179,6 +204,7 @@ describe('AgentSession', () => {
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
         session.start();
 
@@ -203,7 +229,7 @@ describe('AgentSession', () => {
             durability: () => 'durable' as const,
         };
 
-        const session = new AgentSession({ agentId: id, cwd: dir, store: broken, driverFactory: d.factory });
+        const session = new AgentSession({ agentId: id, cwd: dir, store: broken, driverFactory: d.factory, processTree: noProcessTree });
         session.start();
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'lost?' } });
 
@@ -229,6 +255,7 @@ describe('a turn ending — the signal without which every agent reads Working f
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -247,6 +274,7 @@ describe('a turn ending — the signal without which every agent reads Working f
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -261,6 +289,7 @@ describe('a turn ending — the signal without which every agent reads Working f
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -282,6 +311,7 @@ describe('a turn ending — the signal without which every agent reads Working f
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -326,6 +356,7 @@ describe('a driver that does not expose `running` — which CodexDriver does not
         const d = codexLikeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         expect(session.running).toBe(false);
@@ -338,6 +369,7 @@ describe('a driver that does not expose `running` — which CodexDriver does not
         const d = codexLikeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -350,6 +382,7 @@ describe('a driver that does not expose `running` — which CodexDriver does not
         const d = codexLikeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -366,6 +399,7 @@ describe('a driver that does not expose `running` — which CodexDriver does not
         const dir = tempDir();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
 
         session.start();
@@ -389,6 +423,7 @@ describe('a parked approval', () => {
         const d = fakeDriver();
         const session = new AgentSession({
             agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+            processTree: noProcessTree,
         });
         session.start();
         return { d, session };

@@ -65,6 +65,8 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onSend={() => {}}
             onTogglePin={() => {}}
             onCloseChat={() => {}}
+            answeringApproval={null}
+            onAnswerApproval={() => {}}
             {...over}
         />,
     );
@@ -154,6 +156,8 @@ describe('first paint, before the bridge has answered', () => {
                 onSend={() => {}}
                 onTogglePin={() => {}}
                 onCloseChat={() => {}}
+                answeringApproval={null}
+                onAnswerApproval={() => {}}
             />,
         );
 
@@ -204,7 +208,7 @@ describe('twenty agents on one board', () => {
 const DETAIL: AgentDetail = {
     agent: { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared', cwd: 'repos/genie2' },
     session: {
-        running: true, turnState: 'working', startedAt: null, pendingAsk: null, failure: null,
+        running: true, turnState: 'working', startedAt: null, pendingApproval: null, failure: null,
         contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null,
         commsAgeSeconds: null, plan: null,
     },
