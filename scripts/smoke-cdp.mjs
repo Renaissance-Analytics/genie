@@ -594,3 +594,22 @@ if (failures.length > 0) {
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');
+
+/*
+ * EXIT EXPLICITLY, and say what would have kept us alive.
+ *
+ * On Linux CI this script printed the line above and then did not exit — six runs on
+ * 2026-10-10, each eating the job's 15-minute limit (reported as "cancelled", which hid it),
+ * then `timeout 300` turning it into exit 124. The checks had all passed; the process simply
+ * never ended. Electron's own log was clean.
+ *
+ * A Node process stays alive for an open handle: a socket whose close handshake the peer never
+ * answers, a keep-alive connection, a timer. Which one it was is not knowable from "it hung",
+ * so this names them. The script's work is finished at this point; there is nothing legitimate
+ * for it to wait on, and exiting here is correct whatever the handle turns out to be.
+ */
+const open = (process._getActiveHandles?.() ?? []).map((h) => h?.constructor?.name ?? typeof h);
+if (open.length > 0) {
+    console.log(`  (handles still open at exit: ${open.join(', ')} — exiting explicitly)`);
+}
+process.exit(0);

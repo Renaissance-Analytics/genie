@@ -38,10 +38,34 @@ function check(ok, label, detail = '') {
     if (!ok) failures.push(label);
 }
 
+/*
+ * Progress lines through the connection sequence, because this script HUNG here on CI.
+ *
+ * Five consecutive Linux runs on 2026-10-10 printed `SMOKE PASSED` from the previous script and
+ * then nothing — no header, no PASS, no FAIL — until the job's 15-minute limit cancelled it.
+ * Everything below the header reports itself; nothing above it did, so the hang could have been
+ * the target list, the socket, or the landing step, and there was no way to tell from the log.
+ * A step that can stall must say it has started.
+ */
+const say = (what) => console.log(`  … ${what}`);
+
+say(`listing CDP targets on :${PORT}`);
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-const page = list.find((t) => t.type === 'page');
+const pages = list.filter((t) => t.type === 'page');
+say(`${list.length} target(s), ${pages.length} page(s): ${pages.map((p) => p.url).join(' | ') || '(none)'}`);
+const page = pages[0];
+if (!page) {
+    console.error('LAYOUT SWEEP found no page target to attach to');
+    process.exit(1);
+}
+
+say(`opening ${page.webSocketDebuggerUrl}`);
 const ws = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((r) => ws.addEventListener('open', r, { once: true }));
+await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', (e) => reject(new Error(`CDP socket error: ${e.message ?? 'unknown'}`)), { once: true });
+});
+say('socket open');
 
 let id = 0;
 const pending = new Map();
@@ -104,6 +128,40 @@ const PROBE = `
     })()
 `;
 
+/*
+ * LAND ON A KNOWN SURFACE FIRST.
+ *
+ * This measured whatever the smoke happened to leave on screen, which made the measurement
+ * depend on the previous script's last click. Switching the approval round trip on moved that
+ * last click from the Dashboard to an agent, and the count of fixed-height rows went from
+ * eight to seven -- so the POSITIVE CONTROL failed and reported, correctly, that "nothing
+ * overflows" had passed on too little to mean anything.
+ *
+ * That is the control doing its job, not a threshold being too strict. Lowering the eight
+ * would have been loosening an assertion to get green; the actual defect was a sweep with no
+ * stated subject.
+ */
+say('landing on the Dashboard');
+const landed = await evaluate(`(() => {
+    const row = document.querySelector('[data-nav^="genie://dashboard"]');
+    if (!row) return 'no Dashboard row in the rail';
+    row.click();
+    return 'clicked';
+})()`);
+say(`landing click: ${landed}`);
+if (landed !== 'clicked') {
+    console.error(`LAYOUT SWEEP could not reach the Dashboard: ${landed}`);
+    process.exit(1);
+}
+// One frame for the route change to render before the first width is measured.
+await new Promise((r) => setTimeout(r, 300));
+const onDashboard = await evaluate(`Boolean(document.querySelector('[data-surface="dashboard"]'))`);
+say(`Dashboard rendered: ${onDashboard}`);
+if (!onDashboard) {
+    console.error('LAYOUT SWEEP clicked the Dashboard row and the Dashboard did not render');
+    process.exit(1);
+}
+
 console.log('\nLAYOUT SWEEP — does it hold at widths nobody has looked at?\n');
 
 for (const width of WIDTHS) {
@@ -153,3 +211,11 @@ if (failures.length > 0) {
     process.exit(1);
 }
 console.log(`LAYOUT SWEEP PASSED — ${WIDTHS.length} widths, nothing spilled.`);
+
+// Same rule as smoke-cdp.mjs: the work is done, so exit — and name any handle that would have
+// kept the process alive, because "it hung" is not a diagnosis.
+const open = (process._getActiveHandles?.() ?? []).map((h) => h?.constructor?.name ?? typeof h);
+if (open.length > 0) {
+    console.log(`  (handles still open at exit: ${open.join(', ')} — exiting explicitly)`);
+}
+process.exit(0);

@@ -131,8 +131,15 @@ export interface AgentSessionOptions {
     driverFactory: SessionDriverFactory;
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
-    /** Notified for every ledger row, so a surface can render without re-reading the thread. */
-    onEvent?: (event: StreamEvent) => void;
+    /**
+     * Notified for every ledger row, so a surface can render without re-reading the thread.
+     *
+     * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
+     * same message, with another chunk of text on the end. A reply arrives as a stream of
+     * chunks and a reader watches it type, so each one is emitted — but they are one row, not
+     * one row per frame.
+     */
+    onEvent?: (event: StreamEvent, meta?: { replacesLast: boolean }) => void;
     /**
      * Something a SURFACE renders has changed — a parked approval, an answered one, a turn
      * ending, a provider failing.
@@ -152,6 +159,18 @@ export interface AgentSessionOptions {
      * on screen would differ.
      */
     onStateChange?: () => void;
+    /**
+     * The provider has identified its own conversation, once.
+     *
+     * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
+     * the thing the app has to write down for a thread to survive a restart at all. Separate
+     * from `onStateChange` because it is not a redraw: nothing on screen changes, and the
+     * listener's job is to persist.
+     *
+     * **Once.** A provider emits hundreds of updates per turn, and this firing on each would
+     * be a disk write per token.
+     */
+    onSessionId?: (threadId: string) => void;
     /**
      * How a session reaps what the driver leaves behind. Injected so a test can assert the
      * reap happened without killing anything on the machine running the test.
@@ -195,6 +214,41 @@ export class AgentSession {
      */
     #alive = false;
     /**
+     * Whether we have SEEN the provider exit.
+     *
+     * Separate from {@link #alive} because it outranks the driver's own reading. `running`
+     * prefers `driver.running` — correct, because a process can die without an exit event
+     * reaching us and the driver is closer to it than our bookkeeping. But that preference
+     * only makes sense in one direction: a driver answering `true` after we have watched it
+     * exit is reporting a process that is gone, and there is no reading of an exit event that
+     * leaves the provider alive.
+     *
+     * An exit is a fact; a `running` property is an opinion. The fact wins.
+     */
+    #exited = false;
+    /** The session id already reported to the listener, so it is reported exactly once. */
+    #reportedSessionId: string | null = null;
+    /**
+     * The message currently being streamed, if one is.
+     *
+     * **A reply is one row, not one row per frame.** It arrives as a stream of
+     * `agent_message_chunk` updates, each of which was mapped to its own `message` row with
+     * nothing joining them — so a recalled token came back as `zephyr-bfd` and `ae2b6` on two
+     * separate rows, and `OK` as `O` then `K`. On screen that is a column of fragments, each
+     * with its own speaker label and timestamp, where §4.2 says a message is one row of
+     * speaker, time and text.
+     *
+     * Every test passed, because they all assert that *a* message row exists and renders. It
+     * took a live check whose assertion used a random token: "does it remember" would have
+     * been satisfied by `zephyr-bfd`.
+     *
+     * `persisted` tracks whether the thread already holds this message, so a growing message is
+     * written once when it closes rather than once per chunk.
+     */
+    #openMessage: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null = null;
+    /** Writes in flight, chained so the thread records rows in the order they were emitted. */
+    #writes: Promise<void> = Promise.resolve();
+    /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
      * Held together because they are one fact: a parked approval that nobody can resolve is a
@@ -229,6 +283,7 @@ export class AgentSession {
      */
     get running(): boolean {
         if (!this.#driver) return false;
+        if (this.#exited) return false;
         return this.#driver.running ?? this.#alive;
     }
 
@@ -324,6 +379,10 @@ export class AgentSession {
                         this.#options.onStateChange?.();
                     }),
                 onTurnEnd: (outcome) => {
+                    // Two turns are two replies even with nothing between them. Without this a
+                    // whole conversation would accumulate into one unbounded row.
+                    this.#closeMessage();
+
                     this.#turns += 1;
                     this.#changed();
 
@@ -345,10 +404,46 @@ export class AgentSession {
                     }
                 },
                 onExit: () => {
-                    // The provider ended. `stopped` is a fact; what it was DOING when it
-                    // ended is not knowable from an exit code, so nothing claims it.
+                    // Persist whatever of the last reply arrived. A provider dying mid-sentence
+                    // should cost the rest of the sentence, not the part it already said.
+                    this.#closeMessage();
+
                     this.#alive = false;
-                    this.#turnState = 'stopped';
+                    this.#exited = true;
+
+                    /*
+                     * **An exit is the end of the story, not an eraser.**
+                     *
+                     * `stopped` used to be unconditional here, and on its own that was right:
+                     * an exit code says nothing about what the provider was DOING, so nothing
+                     * claims it. The bug was that it also said nothing about what we had
+                     * already been TOLD.
+                     *
+                     * Every failure ends in an exit. So `onProtocolError` would record the
+                     * provider's own words and set `failed`, and milliseconds later this
+                     * handler overwrote it with `stopped` — and `SessionHost.probe()` reports
+                     * a failure only for `failed`, so the reason was dropped on the floor.
+                     * The harder the failure, the more certainly its explanation vanished: a
+                     * provider that could not spawn at all rendered as nothing whatsoever.
+                     *
+                     * Measured on CI, with a codex agent whose cwd did not exist: prism-acp
+                     * said `failed to spawn Codex (Error)` and exited, and the screen showed
+                     * `{"running":false,"turnState":"stopped","failure":null}`.
+                     *
+                     * A clean exit is still `stopped` — see the positive control in
+                     * `test/session.test.ts`. Calling every exit a fault would paint a red row
+                     * every time somebody stops an agent on purpose, which teaches people to
+                     * stop reading red.
+                     */
+                    this.#turnState = this.#failure ? 'failed' : 'stopped';
+
+                    /*
+                     * And TELL somebody. This notified nobody, so a provider dying left its
+                     * row reading `working` until some unrelated event pushed the next
+                     * snapshot — and when a provider dies there is nothing next. Exactly the
+                     * parked-approval defect, one handler along.
+                     */
+                    this.#changed();
                 },
             },
         });
@@ -402,18 +497,138 @@ export class AgentSession {
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */
+    /**
+     * Report the provider's own session id the first time it is known.
+     *
+     * Read from the DRIVER rather than scraped out of the update: prism-acp already parses it
+     * and exposes `cliSessionId`, and a second parser for the same field is a second thing to
+     * be wrong. §2.1 — Genie never infers from bytes what the protocol reports.
+     */
+    #noticeSessionId(): void {
+        const id = this.#driver?.cliSessionId ?? null;
+        if (!id || id === this.#reportedSessionId) return;
+
+        this.#reportedSessionId = id;
+        this.#options.onSessionId?.(id);
+    }
+
+    /**
+     * Finish the message being streamed and write it to the thread, once.
+     *
+     * Called when a different speaker starts, when any other kind of row arrives, when the turn
+     * ends, and when the provider exits. Writing per chunk would put a row in the thread for
+     * every few tokens, and reassembling them on read would mean the same joining rule
+     * implemented in two places — which is how the two copies drift apart.
+     */
+    #closeMessage(): void {
+        const open = this.#openMessage;
+        this.#openMessage = null;
+        this.#enqueue(open);
+    }
+
+    /**
+     * Queue a finished message's write, preserving the order rows were emitted in.
+     *
+     * Writing per chunk would put a row in the thread for every few tokens, and reassembling
+     * them on read would mean the same joining rule implemented in two places — which is how
+     * two copies of one rule drift apart. So a message is written once, when it closes, and
+     * the queue is what stops it landing after the row that closed it.
+     *
+     * A rejected write never breaks the chain: `then(fn, fn)` means the next write runs whether
+     * the last one failed or not. A storage fault must not stop the conversation from being
+     * recorded from then on — it is counted instead, so a surface can say this conversation is
+     * not being saved.
+     */
+    #enqueue(open: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null): void {
+        if (!open || open.persisted || open.event.text.length === 0) return;
+        open.persisted = true;
+
+        const write = async (): Promise<void> => {
+            try {
+                const thread = openAgentThread(this.#options.store, this.agentId);
+                await thread.record([persistable(open.event)]);
+            } catch {
+                this.#unpersisted += 1;
+            }
+        };
+        this.#writes = this.#writes.then(write, write);
+    }
+
     #changed(): void {
         this.#options.onStateChange?.();
     }
 
     async #ingest(update: Record<string, unknown>): Promise<void> {
+        /*
+         * Checked BEFORE the early return below, and that ordering is the whole thing.
+         *
+         * The frame that carries the provider's session id is a `notice` — measured, from a
+         * real codex: `notice: "Codex session started"` with the id in `_meta`. `toStreamEvent`
+         * maps it to no ledger row, correctly, because nobody wants a row for it. So a check
+         * placed after that return would never run on the one update that matters.
+         */
+        this.#noticeSessionId();
+
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
 
-        this.#options.onEvent?.(event);
+        /*
+         * A MESSAGE joins the one being streamed, when it is the same speaker.
+         *
+         * "The same speaker" is `speaker` AND `peerName`, not just `speaker`: `atlas -> wren`
+         * and `kora -> wren` are both `peer`, and joining them would put one agent's words in
+         * another's mouth. The owner's own `you` chunks merging into an agent's reply would
+         * misattribute both.
+         */
+        /*
+         * A MESSAGE joins the one being streamed, when it is the same speaker.
+         *
+         * "The same speaker" is `speaker` AND `peerName`, not just `speaker`: `atlas -> wren`
+         * and `kora -> wren` are both `peer`, and joining them would put one agent's words in
+         * another's mouth. The owner's own `you` chunks merging into an agent's reply would
+         * misattribute both.
+         *
+         * **Emission is synchronous, writes are queued.** The first version awaited the
+         * previous message's write before emitting, which moved every row into a microtask —
+         * the renderer would have learned about a frame a tick after it arrived, and the whole
+         * suite went quiet because nothing had been emitted yet by the time it asserted. A
+         * surface should see a frame when it arrives; only the ORDER of what reaches the thread
+         * has to be preserved, and `#enqueue` is what preserves it.
+         */
+        if (event.kind === 'message') {
+            const open = this.#openMessage;
+            if (open && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
+                open.event = { ...open.event, text: open.event.text + event.text };
+                this.#options.onEvent?.(open.event, { replacesLast: true });
+                return; // Written to the thread once, when it closes.
+            }
+
+            // A different speaker: the previous message is finished, and must reach the thread
+            // before this one does.
+            this.#openMessage = { event, persisted: false };
+            this.#options.onEvent?.(event, { replacesLast: false });
+            this.#enqueue(open);
+            return;
+        }
+
+        /*
+         * Anything else CLOSES the open message.
+         *
+         * A reply, a tool call, then more reply is three rows in that order — which is the
+         * point of a ledger. Joining across the tool call would reorder the account of what
+         * happened, and the queue is what keeps the tool call from being written before the
+         * words that preceded it.
+         */
+        const closing = this.#openMessage;
+        this.#openMessage = null;
+
+        this.#options.onEvent?.(event, { replacesLast: false });
+
+        this.#enqueue(closing);
 
         try {
             const thread = openAgentThread(this.#options.store, this.agentId);
+            await this.#writes; // The open message lands first, so the ledger keeps its order.
             await thread.record([persistable(event)]);
         } catch {
             // A storage fault must not take the turn down with it — but it must also not

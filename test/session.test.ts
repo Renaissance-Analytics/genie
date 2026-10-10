@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
+import type { StreamEvent } from '../src/core/stream-event.js';
 import {
     AgentSession,
     type DriverEvents,
@@ -49,7 +50,7 @@ afterAll(() => {
 let reaped: readonly (readonly number[])[] = [];
 const noProcessTree: ProcessTree = {
     descendantsOf: () => [],
-    killTree: (pids) => { reaped = [...reaped, pids]; },
+    killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
 beforeEach(() => { reaped = []; });
@@ -82,7 +83,8 @@ function fakeDriver() {
         setSessionId: (id: string) => { cliSessionId = id; },
         setRunning: (value: boolean) => { running = value; },
         emit: (u: Record<string, unknown>) => events.onUpdate?.(u),
-        exit: () => events.onExit?.(0, null),
+        exit: (code: number | null = 0, signal: NodeJS.Signals | null = null) =>
+            events.onExit?.(code, signal),
         // Typed as the interface, not inferred from the default — inference narrows
         // `stopReason` to `'end_turn'` and `raw` to `null`, so a test could not pass a crash.
         endTurn: (outcome: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: null }) =>
@@ -136,6 +138,48 @@ describe('AgentSession', () => {
         // cannot pass against a session whose persistence is simply broken.
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } });
 
+        /*
+         * The turn ends, and THAT is when the message reaches the thread.
+         *
+         * A reply is one row built from a stream of chunks, so it is written once, when it
+         * closes — not once per chunk, which would put a row in the thread every few tokens
+         * and leave the joining rule to be re-implemented on read.
+         *
+         * Asserted as exactly 1: a growing message must not leave a trail of prefixes behind
+         * it, which is what per-chunk writes produced.
+         */
+        d.endTurn();
+
+        await vi.waitFor(async () => {
+            expect(await openAgentThread(store, id).count()).toBe(1);
+        });
+    });
+
+    it('does not write a message that is still being streamed', async () => {
+        /**
+         * The new contract, stated so it cannot be quietly reverted. A message in flight is not
+         * in the thread yet; it lands when the turn ends, a different speaker starts, or
+         * another kind of row arrives.
+         *
+         * The cost is bounded and named: a provider killed mid-sentence loses that sentence
+         * from Genie's ledger. `onExit` closes the message for every ordinary ending, and the
+         * provider keeps its own transcript — which is a better trade than a thread full of
+         * fragments nobody can read.
+         */
+        const dir = tempDir();
+        const store = openDurableStore(dir);
+        const id = mintAgentId();
+        const d = fakeDriver();
+
+        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
+        d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still typ' } });
+
+        // Long enough for a write to have happened if one were going to.
+        await new Promise((r) => setTimeout(r, 150));
+        expect(await openAgentThread(store, id).count()).toBe(0);
+
+        // POSITIVE CONTROL: it is not that persistence is broken — closing it writes it.
+        d.endTurn();
         await vi.waitFor(async () => {
             expect(await openAgentThread(store, id).count()).toBe(1);
         });
@@ -234,6 +278,9 @@ describe('AgentSession', () => {
         const session = new AgentSession({ agentId: id, cwd: dir, store: broken, driverFactory: d.factory, processTree: noProcessTree });
         session.start();
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'lost?' } });
+        // The write is attempted when the message closes, so the turn has to end for the
+        // storage fault to happen at all.
+        d.endTurn();
 
         // A storage fault must not take the turn down — and must not vanish either. A surface
         // can say "this conversation is not being saved" rather than showing a partial one.
@@ -663,5 +710,213 @@ describe('the UI is TOLD when something it renders changes', () => {
         d.stderr('note: using cached index');
 
         expect(changes.length).toBe(before);
+    });
+});
+
+describe('the EXIT that follows a failure must not erase the reason for it', () => {
+    /**
+     * THE DEFECT THIS SUITE EXISTS FOR, and it hid behind a suite that already tested both
+     * halves separately.
+     *
+     * `onProtocolError` records the provider's own words and turns the state `failed` — proven
+     * above. `onExit` sets `stopped`, because an exit code says nothing about what the provider
+     * was doing. Both are right on their own. Together they are a bug, because **a provider
+     * that fails ALWAYS exits afterwards**: the error arrives, the reason is stored, and the
+     * exit a few milliseconds later overwrites `failed` with `stopped`.
+     *
+     * `SessionHost.probe()` then reports `failure: null`, because it asks
+     * `turnState === 'failed'` — so the harder the failure, the more certainly its explanation
+     * is thrown away. A provider that could not spawn at all is the worst case and the one
+     * that renders as nothing whatsoever.
+     *
+     * Measured in a real window on CI: a codex agent whose working directory did not exist.
+     * prism-acp reported `failed to spawn Codex (Error)` and then exited, and the screen showed
+     * `{"running":false,"turnState":"stopped","failure":null}` — the app knew why and said
+     * nothing. I then spent a commit blaming the wrong cause, which is what a swallowed reason
+     * costs beyond the blank screen.
+     *
+     * An exit is not an eraser. It is the END of the story, not a replacement for it.
+     */
+    function openWatched() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const changes: string[] = [];
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
+            onStateChange: () => changes.push('change'),
+        });
+        session.start();
+        return { d, session, changes };
+    }
+
+    it('still reads FAILED after the provider exits, and keeps the reason', () => {
+        const { d, session } = openWatched();
+
+        d.protocolError('failed to spawn Codex (Error)');
+        d.exit(1, null);
+
+        expect(session.turnState).toBe('failed');
+        expect(session.failure).toBe('failed to spawn Codex (Error)');
+    });
+
+    it('reports STOPPED for a provider that ended with nothing wrong', () => {
+        /**
+         * POSITIVE CONTROL, and the whole reason the fix is not "always say failed".
+         *
+         * A session the user stopped, or one that finished and closed, is `stopped` and has no
+         * failure. Without this the test above passes on a build that calls every exit a fault
+         * — which would paint a red row every time somebody stops an agent on purpose, and
+         * teach them to ignore red.
+         */
+        const { d, session } = openWatched();
+
+        d.endTurn();
+        d.exit(0, null);
+
+        expect(session.turnState).toBe('stopped');
+        expect(session.failure).toBeNull();
+    });
+
+    it('is not alive either way — the exit still means the provider is gone', () => {
+        // The half that already worked, asserted so a fix to the state cannot quietly cost it.
+        const { d, session } = openWatched();
+
+        d.protocolError('transport closed');
+        d.exit(1, null);
+
+        expect(session.running).toBe(false);
+    });
+
+    it('notifies when the provider EXITS, because the row changes', () => {
+        /**
+         * `onExit` notified NOBODY. A provider dying mid-turn left the row reading `working`
+         * until something unrelated pushed the next snapshot — and when a provider dies there
+         * IS nothing next, which is precisely the case that matters. Same shape as the parked
+         * approval that notified nobody, one handler along.
+         */
+        const { d, changes } = openWatched();
+        const before = changes.length;
+
+        d.exit(1, null);
+
+        expect(changes.length).toBeGreaterThan(before);
+    });
+});
+
+describe('a streamed reply is ONE message, not one row per chunk', () => {
+    /**
+     * Found by the live resume check, and only because its assertion used a random token.
+     *
+     * A reply arrives as a stream of `agent_message_chunk` frames. Each one was mapped to its
+     * own `message` row and nothing joined them, so the recalled token came back as two rows —
+     * `zephyr-bfd` and `ae2b6` — and the first turn's `OK` as `O` then `K`. On screen that is a
+     * column of fragments, each with its own speaker label and timestamp, where §4.2 says a
+     * message is one row of speaker, time and text.
+     *
+     * **Every existing test passed**, because they all assert that *a* message row exists and
+     * renders. "A message reached the ledger" is half the behaviour, and a green assertion
+     * naming half the behaviour is the defect shape this build keeps finding. A check asking
+     * "does it remember" would have been satisfied by `zephyr-bfd` too; the token is what made
+     * the fragmentation impossible to read as success.
+     *
+     * The rule: consecutive chunks from the SAME speaker are one message. Anything else
+     * between them closes it, because a reply interrupted by a tool call is two things the
+     * reader needs to see in order.
+     */
+    function open() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const rows: StreamEvent[] = [];
+        const replaced: boolean[] = [];
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: d.factory, processTree: noProcessTree,
+            onEvent: (event, meta) => { rows.push(event); replaced.push(meta?.replacesLast === true); },
+        });
+        session.start();
+        return { d, session, rows, replaced };
+    }
+
+    const chunk = (text: string) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+
+    it('joins consecutive chunks into one row, with the text intact', () => {
+        const { d, rows } = open();
+
+        d.emit(chunk('zephyr-bfd'));
+        d.emit(chunk('ae2b6'));
+        d.emit(chunk('!'));
+
+        // Three frames arrived, so three emissions — a reader watches it type. But the LAST
+        // emission carries the whole message and the two before it are superseded, which is
+        // what `replacesLast` tells the host.
+        const messages = rows.filter((r) => r.kind === 'message');
+        expect(messages.at(-1)).toMatchObject({ speaker: 'agent', text: 'zephyr-bfdae2b6!' });
+    });
+
+    it('tells the host to REPLACE rather than append, after the first chunk', () => {
+        const { d, replaced } = open();
+
+        d.emit(chunk('a'));
+        d.emit(chunk('b'));
+        d.emit(chunk('c'));
+
+        // The first is a new row; the rest update it. Without this the host would hold three
+        // rows whose texts are each a prefix of the last.
+        expect(replaced).toEqual([false, true, true]);
+    });
+
+    it('does NOT join two different speakers', () => {
+        // POSITIVE CONTROL, and the thing a naive "join adjacent messages" would break: the
+        // owner's own words merged into the agent's reply would misattribute both.
+        const { d, rows } = open();
+
+        d.emit(chunk('agent says'));
+        d.emit({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'you say' } });
+
+        const messages = rows.filter((r) => r.kind === 'message');
+        expect(messages).toHaveLength(2);
+        expect(messages.map((m) => m.kind === 'message' && m.text)).toEqual(['agent says', 'you say']);
+    });
+
+    it('does NOT join two different peers', () => {
+        // Same rule one level down: `atlas → wren` and `kora → wren` are two messages, and
+        // joining them would put one agent's words in another's mouth.
+        const { d, rows } = open();
+
+        d.emit({ sessionUpdate: 'session_message', from: 'atlas', content: { type: 'text', text: 'from atlas' } });
+        d.emit({ sessionUpdate: 'session_message', from: 'kora', content: { type: 'text', text: 'from kora' } });
+
+        expect(rows.filter((r) => r.kind === 'message')).toHaveLength(2);
+    });
+
+    it('closes the message when something else happens in between', () => {
+        /**
+         * A reply, a tool call, then more reply is three rows in that order — which is the
+         * whole point of a ledger. Joining across the tool call would reorder the account of
+         * what happened.
+         */
+        const { d, rows } = open();
+
+        d.emit(chunk('looking'));
+        d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash', status: 'completed' });
+        d.emit(chunk('found it'));
+
+        expect(rows.map((r) => r.kind)).toEqual(['message', 'tool', 'message']);
+        const messages = rows.filter((r) => r.kind === 'message');
+        expect(messages.map((m) => m.kind === 'message' && m.text)).toEqual(['looking', 'found it']);
+    });
+
+    it('starts a new message on the next turn', () => {
+        // Two turns are two replies even when nothing else came between them. Without this, a
+        // whole conversation would accumulate into one unbounded row.
+        const { d, rows } = open();
+
+        d.emit(chunk('first answer'));
+        d.endTurn();
+        d.emit(chunk('second answer'));
+
+        const messages = rows.filter((r) => r.kind === 'message');
+        expect(messages.at(-1)).toMatchObject({ text: 'second answer' });
     });
 });

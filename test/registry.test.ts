@@ -247,3 +247,67 @@ describe('workspaces before the store has been read', () => {
         expect(loaded.snapshot().workspaces).toEqual([]);
     });
 });
+
+describe('writing down the provider’s thread id', () => {
+    /**
+     * Without this the registry could register an agent and never update it again, so a
+     * `threadId` captured from a provider had nowhere to go. P1's "the thread survives a
+     * restart" held at the session layer and nowhere else: the app asked the session to resume
+     * an id it had never kept.
+     */
+    async function loaded() {
+        await registry.load(WORKSTATION);
+        await registry.addWorkspace({ id: 'tynn', path: dir });
+        return registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+    }
+
+    it('persists it, so a RESTART finds it', async () => {
+        const r = await loaded();
+
+        await registry.recordThread(r.id, '01a12564-30a8-7961-8aa9-6d145dd2e179');
+
+        // Read back through a SECOND registry over the same directory, which is what a restart
+        // is. Asserting the in-memory copy would prove only that a setter ran.
+        const reopened = new Registry(new Store(dir));
+        await reopened.load(WORKSTATION);
+        expect(reopened.find(r.id)?.threadId).toBe('01a12564-30a8-7961-8aa9-6d145dd2e179');
+    });
+
+    it('refuses a value it would not hand to a provider, and does not write it', async () => {
+        const r = await loaded();
+
+        const result = await registry.recordThread(r.id, 'a&echo PWNED');
+
+        expect(result).toMatchObject({ ok: false });
+        const reopened = new Registry(new Store(dir));
+        await reopened.load(WORKSTATION);
+        expect(reopened.find(r.id)?.threadId).toBeNull();
+    });
+
+    it('says so about an agent it does not have, rather than writing a new one', async () => {
+        // A stale callback after an agent was deleted must not resurrect it as a record with a
+        // thread id and nothing else.
+        await registry.load(WORKSTATION);
+        const before = registry.snapshot().agents.length;
+
+        const result = await registry.recordThread('agent_ffffffffffffffffffffffffffffffff' as AgentId, 'sess-1');
+
+        expect(result).toMatchObject({ ok: false });
+        expect(registry.snapshot().agents.length).toBe(before);
+    });
+
+    it('leaves every other agent exactly as it was', async () => {
+        // POSITIVE CONTROL on the write itself: `writeAgents` rewrites the whole file, so a
+        // bad update is a bad update to everybody. One agent gains a thread id; the other must
+        // be byte-identical afterwards.
+        await registry.load(WORKSTATION);
+        await registry.addWorkspace({ id: 'tynn', path: dir });
+        const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        const b = await registry.register({ workspaceId: 'tynn', provider: 'codex', name: 'wren' });
+        const bBefore = JSON.stringify(registry.find(b.id));
+
+        await registry.recordThread(a.id, 'sess-ABC.123');
+
+        expect(JSON.stringify(registry.find(b.id))).toBe(bBefore);
+    });
+});

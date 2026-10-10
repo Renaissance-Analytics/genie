@@ -1,5 +1,6 @@
+import { statSync } from 'node:fs';
 import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
-import type { AgentId, AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
 import {
@@ -149,8 +150,21 @@ export class SessionHost {
 
     /** Why a start was refused, by agent. Reported, never swallowed. */
     readonly refusals = new Map<AgentId, string>();
+    /**
+     * Session ids the PROVIDER reported and Genie refused to keep, by agent.
+     *
+     * Not silence. An agent whose id was refused cannot be resumed, which means its
+     * conversation will not survive a restart — a real degradation, and one the user has to be
+     * able to learn about. Held here rather than painted red: the turn in progress is fine,
+     * and failing it would be a worse lie in the other direction.
+     *
+     * **Surfacing this is not built yet** and is named as an open item rather than quietly
+     * dropped. It is recorded, with the value, so it is diagnosable today.
+     */
+    readonly unusableThreadIds = new Map<AgentId, string>();
 
     readonly #processTree: ProcessTree | undefined;
+    readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
 
     /**
      * `processTree` is INJECTABLE, and that is not a convenience — it is a safety fix.
@@ -169,11 +183,21 @@ export class SessionHost {
         driverFor?: DriverFor;
         clock?: () => number;
         processTree?: ProcessTree;
+        /**
+         * The provider identified its conversation, and it is a value Genie is willing to keep.
+         *
+         * Called at most once per session, with an id that has already passed
+         * `threadIdIsResumable`. The listener's job is to persist it — without one, nothing
+         * ever writes a thread id down and every restart begins a new conversation while every
+         * test about resume passes.
+         */
+        onThreadId?: (agentId: AgentId, threadId: string) => void;
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
+        this.#onThreadId = options.onThreadId;
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
@@ -205,6 +229,58 @@ export class SessionHost {
             return { ok: false, reason };
         }
 
+        /**
+         * THE WORKSPACE FOLDER, checked before anything is spawned.
+         *
+         * Genie knows this path. A provider handed a directory that is not there fails inside
+         * its own spawn, and what comes back is the provider's sentence about itself —
+         * measured, from prism-acp: `failed to spawn Codex (Error)`.
+         *
+         * That sentence is true and it points at the wrong component. It cost this build a
+         * wrong diagnosis, a commit blaming a library that handles its own case correctly, and
+         * a CI exception written with the wrong reason in it. The cause was a folder that had
+         * been moved.
+         *
+         * `statSync` rather than `existsSync`, because a repo entry pointing at `project.json`
+         * instead of its directory is an ordinary typo and `existsSync` waves it straight
+         * through to the same opaque failure.
+         *
+         * This is a refusal, not a fault: the agent stays registered and idle, nothing is
+         * consumed, and the reason names the path so the repair is obvious. §6.2 — diagnose
+         * names a CAUSE and the repair that fits.
+         */
+        /**
+         * A STORED thread id, before it is handed to a provider as a command-line argument.
+         *
+         * The other end of `threadIdIsResumable`. This file is editable by anything running as
+         * the user, so a value in it is trusted today purely because Genie wrote it — and on
+         * Windows prism-acp must spawn with `shell: true`, where cmd.exe interprets `&`, `|`
+         * and `&&` **inside arguments**.
+         *
+         * A refusal rather than a quiet fresh start: §6.2 says a graceful resume that cannot
+         * happen refuses instead of silently opening a new chat, because a new conversation
+         * presented as a resumed one is how a day of context disappears with no message.
+         */
+        if (record.threadId && !threadIdIsResumable(record.threadId)) {
+            const reason =
+                `Genie will not resume "${record.name}": the stored thread id is not a value it ` +
+                `is willing to pass to a provider — "${record.threadId}". Restart it fresh to ` +
+                `start a new conversation.`;
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+
+        const folder = statSync(cwd, { throwIfNoEntry: false });
+        if (!folder?.isDirectory()) {
+            const reason = folder
+                ? `Genie cannot run an agent in "${cwd}" — that is a file, not a folder.`
+                : `Genie cannot run an agent in "${cwd}" — the folder is not there. It stays registered and idle.`;
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
@@ -224,8 +300,47 @@ export class SessionHost {
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
             onStateChange: () => this.#emit(record.id),
-            onEvent: (event: StreamEvent) => {
-                rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
+            /*
+             * The provider's own id, guarded at the EARLIEST point Genie controls it.
+             *
+             * It arrives from the provider — prism-acp's only check is `typeof === 'string'` —
+             * so it is untrusted here, not merely when it is read back off disk. Guarding on
+             * read alone would defend against a tampered file and not against the party that
+             * chose the string.
+             */
+            onSessionId: (threadId) => {
+                if (!threadIdIsResumable(threadId)) {
+                    this.unusableThreadIds.set(record.id, threadId);
+                    return;
+                }
+                this.#onThreadId?.(record.id, threadId);
+            },
+            onEvent: (event: StreamEvent, meta) => {
+                /*
+                 * `replacesLast` means the SAME message with another chunk of text on the end.
+                 *
+                 * The row is updated in place rather than appended, and keeps its id and its
+                 * arrival time:
+                 *
+                 *  - **the id**, because a row whose id changed on every chunk would remount on
+                 *    every frame, losing a selection, a scroll position and the Inspector's
+                 *    subject mid-reply;
+                 *  - **the time**, because the ledger's times are arrival times. Re-stamping
+                 *    per chunk would report a message as having happened when it FINISHED,
+                 *    which moves it in the timeline and drags Lanes with it.
+                 *
+                 * Without this the host appended every emission, so three chunks became three
+                 * rows whose texts were each a longer prefix of the last — the reply repeated
+                 * with a growing prefix, which is worse than the fragments it replaced. The
+                 * session-level test asserted the FLAG was sent and passed the whole time; only
+                 * a row COUNT could have caught it.
+                 */
+                const last = rows.at(-1);
+                if (meta?.replacesLast && last) {
+                    rows[rows.length - 1] = { ...last, event };
+                } else {
+                    rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
+                }
                 this.#emit(record.id);
             },
         });
@@ -237,22 +352,36 @@ export class SessionHost {
          * A provider can fail to spawn SYNCHRONOUSLY, and that path reaches none of the
          * driver's event handlers.
          *
-         * Measured on Windows with the real binary:
+         * Because the throw happens inside `start()` it never becomes an `onExit` or an
+         * `onProtocolError`, and the renderer calls `openAgent` through
+         * `void ipcRenderer.invoke(...)`, which swallows a rejection. Without this the click
+         * would do **nothing at all, silently** — no red row, no message, no console error.
+         * The same silent-failure class as the dropped `onProtocolError`, by a different door.
          *
-         *     spawn('…/npm/codex.cmd', ['app-server', …])  ->  EINVAL, thrown synchronously
+         * The half-started session is removed rather than left in the map: capacity consumed
+         * by nothing, and a row that reads as running when no process exists.
          *
-         * npm installs CLIs on Windows as `.cmd` shims and Node refuses to spawn one without
-         * `shell: true` (the CVE-2024-27980 fix). `claude` happens to be a `.exe` so it is
-         * fine; `codex` is a `.cmd` and is not.
+         * ## What this is NOT, because the first version of this comment said it was
          *
-         * Because the throw is synchronous it never reaches `onExit` or `onProtocolError`, and
-         * the renderer calls `openAgent` through `void ipcRenderer.invoke(...)`, which swallows
-         * a rejection. **Clicking a codex agent on Windows did nothing at all, silently** — no
-         * red row, no message, no console error. The same silent-failure class as the dropped
-         * `onProtocolError`, arriving by a different door.
+         * I measured `spawn('…/npm/codex.cmd', ['app-server', …])` throwing EINVAL on Windows —
+         * npm installs CLIs as `.cmd` shims and Node refuses to spawn one without
+         * `shell: true`, the CVE-2024-27980 fix — and wrote that codex therefore could not run
+         * here at all.
          *
-         * The half-started session is removed rather than left in the map: capacity consumed by
-         * nothing, and a row that reads as running when no process exists.
+         * **That was the wrong call to measure.** prism-acp passes
+         * `shell: process.platform === 'win32'` at both of its spawn sites, verified in the
+         * installed 0.6.1, so the library never makes the call I reproduced. Through the real
+         * driver, codex starts on Windows and reports a session id.
+         *
+         * The repro copied the binary and the args faithfully and dropped the options object,
+         * which is what made it look complete. Reproducing a library's call means reproducing
+         * its options too, or going in at the library's own entry point and letting it build
+         * the call.
+         *
+         * So this guard defends a real shape — `child_process.spawn` does throw synchronously,
+         * for a bad cwd type, a bad option, a path the OS rejects — and no longer claims to
+         * know which provider hits it. The failure it was first aimed at was a missing
+         * workspace folder, which is now refused above, by name, before anything spawns.
          */
         try {
             session.start();
@@ -262,8 +391,10 @@ export class SessionHost {
             const configured = providerBinary(record.provider);
             const reason = [
                 `Genie could not start ${record.provider}: ${String((error as Error).message ?? error)}.`,
-                // The PATH is the whole diagnosis on Windows, where the `.cmd` extension IS the
-                // cause. "spawn EINVAL" alone sends somebody to the wrong place entirely.
+                // The configured PATH, when there is one. An error like "spawn EINVAL" names
+                // no file, so on its own it sends the reader looking in the wrong place — and
+                // a `GENIE2_<PROVIDER>_BINARY` pointing somewhere stale is a cause nothing
+                // else in the message would reveal.
                 configured ? `Configured binary: ${configured}` : null,
             ]
                 .filter(Boolean)

@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +22,7 @@ let host: SessionHost;
 let events: DriverEvents = {};
 let killed = 0;
 let now = 1_760_000_000_000;
+let reportedSessionId: string | null = null;
 
 /** A driver shaped like `CodexDriver`: no `running` getter. The harder of the two shapes. */
 const fakeDriverFor: DriverFor = (record) => {
@@ -31,7 +33,9 @@ const fakeDriverFor: DriverFor = (record) => {
                 start: () => {},
                 prompt: () => {},
                 kill: () => { killed += 1; },
-                get cliSessionId() { return null; },
+                // Reported by the PROVIDER, after its init frame — so a test can only set it
+                // through this, never by constructing a record with it already in place.
+                get cliSessionId() { return reportedSessionId; },
             };
         };
         return factory;
@@ -50,13 +54,14 @@ const fakeDriverFor: DriverFor = (record) => {
 let reaped: readonly (readonly number[])[] = [];
 const noProcessTree: ProcessTree = {
     descendantsOf: () => [],
-    killTree: (pids) => { reaped = [...reaped, pids]; },
+    killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-host-'));
     killed = 0;
     reaped = [];
+    reportedSessionId = null;
     now = 1_760_000_000_000;
     host = new SessionHost({
         userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
@@ -205,6 +210,55 @@ describe('probing — what the Dashboard reads', () => {
         expect(agentRowFor(r, live, () => now)).toMatchObject({ state: 'broken', reason: 'api error 529' });
     });
 
+    it('reports a provider that DIED with the reason it gave on the way out', () => {
+        /**
+         * The join that was broken, at the layer the UI reads.
+         *
+         * `probe()` reports a failure only when `turnState === 'failed'`, and every failing
+         * provider exits straight afterwards — so the exit overwrote `failed` with `stopped`
+         * and this method returned `failure: null` for every real crash. The session had the
+         * provider's own words the whole time.
+         *
+         * Measured on CI in a real window: a codex agent whose cwd did not exist produced
+         * `{"running":false,"turnState":"stopped","failure":null}` on screen, while prism-acp
+         * had said `failed to spawn Codex (Error)`.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onProtocolError?.('failed to spawn Codex (Error)');
+        events.onExit?.(1, null);
+
+        const live = host.probe(r.id);
+        expect(live?.failure).toEqual({ reason: 'failed to spawn Codex (Error)', fixes: ['Restart'] });
+        expect(live?.running).toBe(false);
+
+        // And the Dashboard reads it as broken, with the reason on the row — the whole point.
+        expect(agentRowFor(r, live, () => now)).toMatchObject({
+            state: 'broken',
+            reason: 'failed to spawn Codex (Error)',
+        });
+    });
+
+    it('does NOT call a clean exit broken', () => {
+        /**
+         * POSITIVE CONTROL, computed through the same two calls as the test above so it cannot
+         * drift away from it. Without this, the fix "treat every exit as a failure" passes the
+         * test above — and then stopping an agent on purpose paints a red row, which is how a
+         * board teaches people to ignore red.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        events.onExit?.(0, null);
+
+        const live = host.probe(r.id);
+        expect(live?.failure).toBeNull();
+        expect(live?.turnState).toBe('stopped');
+        expect(agentRowFor(r, live, () => now)).not.toMatchObject({ state: 'broken' });
+    });
+
     it('gives a failed turn a reason even when the provider gave none', () => {
         // `stopReason: null` with no `raw` is a crash the CLI did not explain. "Broken" with no
         // reason is an unactionable row; saying the provider gave no reason at least tells the
@@ -214,6 +268,172 @@ describe('probing — what the Dashboard reads', () => {
         events.onTurnEnd?.({ stopReason: null, isError: true, raw: null });
 
         expect(host.probe(r.id)?.failure?.reason).toContain('gave no reason');
+    });
+});
+
+describe('a workspace folder that is not there', () => {
+    /**
+     * The failure that cost most to diagnose in this build, because it reported the wrong
+     * layer.
+     *
+     * A seeded workspace pointed at a path that existed in the smoke container and not on a CI
+     * runner. Genie handed the missing directory to prism-acp, which spawned, failed, and said
+     * `failed to spawn Codex (Error)`. That sentence sent me to the provider — I measured the
+     * wrong spawn, wrote a commit blaming a library that handles the case correctly, and put
+     * the wrong reason in a CI workflow. The cause was a missing folder.
+     *
+     * Genie knows the path before it spawns anything. Checking it is the difference between a
+     * row that names the fix and a row that names the wrong component.
+     *
+     * §6.2: diagnose "names a CAUSE and the repair that fits".
+     */
+    it('refuses to start, and names the FOLDER rather than the provider', () => {
+        const r = record();
+        const missing = join(dir, 'not-a-real-folder');
+
+        const result = host.start(r, missing);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain(missing);
+        // The provider is never blamed for a folder that is not there.
+        expect(result.ok === false && result.reason.toLowerCase()).not.toContain('spawn');
+    });
+
+    it('consumes no capacity and leaves no half-started row', () => {
+        // The same discipline as the synchronous-throw path: a session that never ran must not
+        // hold a slot, and must not read as running with no process behind it.
+        const r = record();
+
+        host.start(r, join(dir, 'not-a-real-folder'));
+
+        expect(host.count).toBe(0);
+        expect(host.probe(r.id)).toBeNull();
+        expect(host.refusals.get(r.id)).toContain('not-a-real-folder');
+    });
+
+    it('starts normally when the folder IS there', () => {
+        /**
+         * POSITIVE CONTROL. Without it, "refuses when the folder is missing" passes on a build
+         * that refuses always — which would stop every agent on the machine and report it as a
+         * missing directory.
+         */
+        const r = record();
+
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.count).toBe(1);
+    });
+
+    it('refuses a path that exists but is a FILE', () => {
+        // A repo entry pointing at `project.json` instead of its folder is an ordinary typo,
+        // and `existsSync` alone would wave it through to the same opaque spawn failure.
+        const r = record();
+        const file = join(dir, 'project.json');
+        writeFileSync(file, '{}');
+
+        const result = host.start(r, file);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain(file);
+    });
+});
+
+describe('the provider’s thread id — captured, guarded, and handed back', () => {
+    /**
+     * P1's done-when says the thread survives a restart. It did at the session layer, where a
+     * `resumeSessionId` passed in is passed through — and **nothing in the app ever stored
+     * one**, so restarting Genie began a fresh conversation every time while every test about
+     * resume passed. The session was asked to resume an id the app never kept.
+     *
+     * The id arrives from the provider, which is what makes capturing it the same job as
+     * guarding it: see `threadIdIsResumable`. It is written down once and then looks like
+     * configuration, which is exactly what makes it dangerous — it ends up in argv.
+     */
+    it('reports the id the provider gave, so it can be persisted', () => {
+        const r = record();
+        const seen: Array<{ id: string; threadId: string }> = [];
+        host = new SessionHost({
+            userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+            onThreadId: (id, threadId) => seen.push({ id, threadId }),
+        });
+
+        host.start(r, dir);
+        // Nothing yet: the provider has not said who it is.
+        expect(seen).toEqual([]);
+
+        reportedSessionId = '01a12564-30a8-7961-8aa9-6d145dd2e179';
+        events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'started' } });
+
+        expect(seen).toEqual([{ id: r.id, threadId: '01a12564-30a8-7961-8aa9-6d145dd2e179' }]);
+    });
+
+    it('reports it ONCE, not on every frame after it', () => {
+        // A provider emits hundreds of updates per turn. Reporting on each would rewrite
+        // `agents.json` hundreds of times per turn — a disk write per token.
+        const r = record();
+        const seen: string[] = [];
+        host = new SessionHost({
+            userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+            onThreadId: (_id, threadId) => seen.push(threadId),
+        });
+        host.start(r, dir);
+        reportedSessionId = 'sess-ABC.123';
+
+        for (let i = 0; i < 20; i += 1) {
+            events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: `f${i}` } });
+        }
+
+        expect(seen).toEqual(['sess-ABC.123']);
+    });
+
+    it('does NOT report an id it would not be willing to hand back', () => {
+        /**
+         * COUNTED, and at the EARLIEST point Genie controls. The value is untrusted when it
+         * arrives, not when it is read back — so guarding only on read would protect against a
+         * tampered file and not against the provider that chose the string.
+         */
+        const hostile = ['a&echo PWNED', 'a|b', 'a&&b', 'two words', 'a$(b)', 'a;b'];
+        const accepted: string[] = [];
+
+        for (const value of hostile) {
+            const r = record();
+            host = new SessionHost({
+                userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree,
+                onThreadId: (_id, threadId) => accepted.push(threadId),
+            });
+            host.start(r, dir);
+            reportedSessionId = value;
+            events.onUpdate?.({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'x' } });
+        }
+
+        expect(accepted).toEqual([]);
+        // And it is not thrown away in silence: a provider that cannot be resumed is a real
+        // degradation, and the reason names the value so it is diagnosable.
+        expect(host.unusableThreadIds.size).toBe(1);
+    });
+
+    it('refuses to RESUME a stored id that is not well formed, and names it', () => {
+        /**
+         * The other end of the same guard, for a file edited by something that is not Genie.
+         * §6.2: a graceful resume that cannot happen **refuses** rather than silently starting
+         * a new chat — a fresh conversation presented as a resumed one is how a day's context
+         * disappears without a message.
+         */
+        const r = { ...record(), threadId: 'a&echo PWNED' };
+
+        const result = host.start(r, dir);
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.ok === false && result.reason).toContain('a&echo PWNED');
+        expect(host.count).toBe(0);
+    });
+
+    it('resumes a well-formed one, which is the control that keeps the guard honest', () => {
+        // POSITIVE CONTROL. Without it, "refuses a malformed id" passes on a build that
+        // refuses every resume — which would quietly mean no agent ever resumes anything.
+        const r = { ...record(), threadId: '01a12564-30a8-7961-8aa9-6d145dd2e179' };
+
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.count).toBe(1);
     });
 });
 
@@ -233,17 +453,102 @@ describe('the ledger', () => {
     it('gives every row a UNIQUE id, prefixed by the agent it belongs to', () => {
         const r = record();
         host.start(r, dir);
+
+        /*
+         * Five DISTINCT rows, which is why this is not five message chunks.
+         *
+         * It was, and the fixture stopped producing five rows the moment consecutive chunks
+         * began coalescing into one message — correctly. The rule under test is unrelated to
+         * coalescing: every row the UI holds needs its own id, prefixed by its agent. So the
+         * fixture changed and the assertion did not.
+         */
         for (let i = 0; i < 5; i += 1) {
             events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${i}` } });
+            events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: `t${i}`, name: 'Bash', title: `step ${i}` });
         }
 
         const ids = host.rowsFor(r.id).map((row) => row.id);
-        expect(new Set(ids).size).toBe(5);
+        expect(ids).toHaveLength(10);
+        expect(new Set(ids).size).toBe(10);
         expect(ids.every((id) => id.startsWith(r.id))).toBe(true);
     });
 
     it('is EMPTY for an agent that has never run, which is not an error', () => {
         expect(host.rowsFor(record().id)).toEqual([]);
+    });
+});
+
+describe('a streamed reply is ONE row in the ledger the UI reads', () => {
+    /**
+     * THE HALF I MISSED, and the way I missed it is the lesson.
+     *
+     * The session coalesces chunks into one message and persists it once. I tested that, and I
+     * tested that it tells the host to REPLACE rather than append — **the flag**. I never
+     * tested that the host acts on it. It did not: `onEvent` pushed every emission, so three
+     * chunks became three rows whose texts were each a longer prefix of the last.
+     *
+     * The live resume check showed it: `zephyr-3704e zephyr-3704e9a6`. On screen that is the
+     * reply repeated with a growing prefix, which is worse than the fragments it replaced.
+     *
+     * Asserting the flag is asserting that a message was SENT. This asserts what a reader
+     * actually gets, which is a COUNT — and a count is the only form of this assertion that
+     * could have failed.
+     */
+    it('holds one row for a reply that arrived in three chunks', () => {
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'zephyr-' } });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '3704' } });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'e9a6' } });
+
+        const messages = host.rowsFor(r.id).filter((row) => row.event.kind === 'message');
+        expect(messages).toHaveLength(1);
+        expect(messages[0]?.event).toMatchObject({ speaker: 'agent', text: 'zephyr-3704e9a6' });
+    });
+
+    it('keeps the row’s identity while it grows, so the UI updates rather than re-adds', () => {
+        // A row whose id changed on every chunk would remount on every frame — losing a
+        // selection, a scroll position and the Inspector's subject mid-reply.
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } });
+        const firstId = host.rowsFor(r.id)[0]?.id;
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'b' } });
+
+        expect(host.rowsFor(r.id)[0]?.id).toBe(firstId);
+    });
+
+    it('keeps its ARRIVAL time, not the time of the last chunk', () => {
+        // The ledger's times are arrival times. A row that re-stamped itself per chunk would
+        // report a message as having happened when it FINISHED, which moves it in the timeline
+        // and drags Lanes with it.
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } });
+        const at = host.rowsFor(r.id)[0]?.at;
+        now += 5_000;
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'b' } });
+
+        expect(host.rowsFor(r.id)[0]?.at).toBe(at);
+    });
+
+    it('still appends when the row is a DIFFERENT thing', () => {
+        /**
+         * POSITIVE CONTROL. Without it, "one row for three chunks" passes on a host that
+         * replaces the last row every time — which would collapse an entire turn into a single
+         * row and lose every tool call in it.
+         */
+        const r = record();
+        host.start(r, dir);
+
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'looking' } });
+        events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Bash', title: 'npm test' });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'found it' } });
+
+        expect(host.rowsFor(r.id).map((row) => row.event.kind)).toEqual(['message', 'tool', 'message']);
     });
 });
 

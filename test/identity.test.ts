@@ -3,6 +3,7 @@ import {
     AGENT_RECORD_FIELDS,
     agentRecord,
     mintAgentId,
+    threadIdIsResumable,
     threadKeyFor,
     type AgentRecord,
 } from '../src/core/identity.js';
@@ -82,5 +83,79 @@ describe('the agent record', () => {
         // nothing. The UI renders these differently and must be able to tell them apart.
         expect(rec.threadId).toBeNull();
         expect(rec.lastUsedAt).toBeNull();
+    });
+});
+
+describe('a thread id is going to end up on a COMMAND LINE', () => {
+    /**
+     * `threadId` is persisted from the provider's own `cliSessionId` and handed back on
+     * reattach as prism-acp's `resumeSessionId`. On Windows prism-acp spawns with
+     * `shell: true` — it has to, because npm installs CLIs as `.cmd` shims and Node refuses to
+     * spawn one otherwise (the CVE-2024-27980 fix) — and **cmd.exe interprets `&`, `|` and
+     * `&&` inside ARGUMENTS, not only in the command**. The prism maintainer measured that:
+     * an argument of `a&echo PWNED` executes `PWNED`.
+     *
+     * So this value round-trips through a JSON file on disk and then becomes a command-line
+     * argument. Two ways something unwanted gets in:
+     *
+     *  - `agents.json` is editable by anything running as the user, and a value there is
+     *    trusted today purely because Genie wrote it;
+     *  - the id is **reported by the provider**, so a hostile or compromised provider server
+     *    chooses it. That one is not a local-only story.
+     *
+     * prism-acp owns the quoting and is fixing it. This guard is Genie's own half, and it
+     * stays after that lands: a value we pass to another process is ours to keep well-formed,
+     * and defence in depth is the only kind that survives somebody else's refactor.
+     *
+     * An ALLOWLIST, not a blocklist of metacharacters. Shell quoting rules differ per shell
+     * and per OS, and a blocklist is a bet that nobody will ever find a character you forgot.
+     */
+    it('accepts the shapes real providers actually report', () => {
+        // Measured, not imagined: codex reported the first on this machine, the stub the
+        // second. A guard that rejects a real session id breaks every resume.
+        expect(threadIdIsResumable('01a12564-30a8-7961-8aa9-6d145dd2e179')).toBe(true);
+        expect(threadIdIsResumable('stub_thread_0001')).toBe(true);
+        expect(threadIdIsResumable('sess-ABC.123:7')).toBe(true);
+    });
+
+    it('refuses every shell metacharacter, counted rather than spot-checked', () => {
+        /**
+         * COUNTED, because a boolean on one sample passes while another gets through. The
+         * only acceptable number of accepted hostile values is zero, and naming which ones
+         * got through is what makes a failure here actionable.
+         */
+        const hostile = [
+            'a&echo PWNED',
+            'a|echo PIPED',
+            'a&&echo CHAINED',
+            'a;echo SEMI',
+            'a$(echo SUB)',
+            'a`echo TICK`',
+            'a>out.txt',
+            'a<in.txt',
+            'a^b',
+            'a%PATH%',
+            'a!b!',
+            'two words',
+            'a"b',
+            "a'b",
+            'a\nb',
+            'a\rb',
+            'a\tb',
+            '',
+            '   ',
+            'a'.repeat(201),
+        ];
+
+        const accepted = hostile.filter((value) => threadIdIsResumable(value));
+        expect(accepted).toEqual([]);
+    });
+
+    it('a fresh agent has no thread id at all, which is not a malformed one', () => {
+        // POSITIVE CONTROL for the caller's side of this: `null` means never run, and must
+        // not be mistaken for a value that failed the guard. Collapsing the two would make
+        // every new agent look broken.
+        expect(agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' }).threadId)
+            .toBeNull();
     });
 });

@@ -147,11 +147,19 @@ jobs:
           export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
 
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
-          node scripts/smoke-cdp.mjs
-          node scripts/layout-sweep.mjs
+          # `timeout` on each script, and it is not a formality. This step HUNG for 15 minutes
+          # on five consecutive runs today, and a job that hits its time limit reports as
+          # `cancelled` — which reads as "somebody pushed again", skips every `if: failure()`
+          # step, and so hides the one log that would have said where it stopped. A hang that
+          # fails in five minutes with its output attached is a bug report; one that is
+          # cancelled at fifteen is a shrug.
+          timeout 300 node scripts/smoke-cdp.mjs
+          timeout 300 node scripts/layout-sweep.mjs
 
-      - name: electron's own output, on failure
-        if: failure()
+      - name: electron's own output
+        # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
+        # to GitHub, and that was exactly the case where this log mattered most.
+        if: always()
         run: tail -100 electron.log || true
 
       # The screenshots, for a human to look at. Writing one is not the same as somebody
@@ -244,19 +252,26 @@ jobs:
           # through a shell, so a extensionless shim fails with
           # "%1 is not a valid Win32 application" — which names neither the file nor the
           # reason. The sibling Genie repo has hit this exact class before.
-          # The approval round trip is OFF here, and the reason is a measured product finding
-          # rather than a harness limitation. Measured on the owner's Windows machine, with the
-          # real binary and exactly the call prism-acp makes:
+          # The approval round trip runs HERE TOO, and getting to that took a wrong turn
+          # worth recording, because the wrong version of this comment was briefly committed.
           #
-          #   spawn of an npm-installed "codex.cmd" app-server  ->  EINVAL, thrown synchronously
+          # A bare spawn of an npm-installed "codex.cmd" app-server throws EINVAL
+          # synchronously on Windows: npm installs CLIs as .cmd shims and Node refuses to
+          # spawn one without `shell: true` (the CVE-2024-27980 fix). I measured that, and
+          # concluded codex could not be started here at all.
           #
-          # npm installs CLIs on Windows as `.cmd` shims, and Node refuses to spawn one without
-          # `shell: true` (the CVE-2024-27980 fix). prism-acp spawns without it, so the stub —
-          # and a REAL npm-installed codex — cannot be launched here at all.
+          # It was the wrong call to measure. prism-acp passes
+          # `shell: process.platform === 'win32'` at BOTH of its spawn sites — verified in the
+          # installed 0.6.1 — so the library never makes the call I reproduced. Through the
+          # REAL driver, codex starts on Windows and reports a session id. Copying a
+          # library's binary and args faithfully while dropping its options object produces a
+          # repro that looks complete and is not.
           #
-          # Genie now REPORTS that instead of swallowing it, which is what this build can do
-          # about it; the spawn itself belongs to prism-acp and is reported upstream.
-          $env:SMOKE_APPROVAL = "0"
+          # The stub is reached through a .cmd WRAPPER rather than directly, because
+          # `shell: true` means cmd.exe runs the binary and cmd.exe cannot execute a .mjs.
+          # That wrapper is also the shape a user actually has: a real npm-installed codex
+          # IS a .cmd.
+          $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.cmd"
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log

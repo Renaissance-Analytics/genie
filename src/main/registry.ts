@@ -1,4 +1,4 @@
-import { agentRecord, mintAgentId, type AgentRecord, type AgentId } from '../core/identity.js';
+import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
@@ -209,6 +209,43 @@ export class Registry {
         await this.#store.writeAgents(this.#agents);
         this.#emit();
         return record;
+    }
+
+    /**
+     * Write down the conversation a provider reported, so a restart can resume it.
+     *
+     * Until this existed the registry could create an agent and never update it again, so a
+     * captured session id had nowhere to go: P1's *"the thread survives a restart"* held at the
+     * session layer, where a `resumeSessionId` passed in is passed through, and nowhere else.
+     * The app was asking the session to resume an id it had never kept, and every test about
+     * resume passed.
+     *
+     * ## It guards, even though the caller already did
+     *
+     * `SessionHost` checks the same thing at ingest, which is the earlier and more important
+     * place. This checks again because **this is the function that writes to disk**, and the
+     * value is provider-supplied: prism-acp's only check on it is `typeof === 'string'`, and on
+     * Windows it ends up in argv under `shell: true`, where cmd.exe interprets `&`, `|` and
+     * `&&` inside arguments. A second caller added later would otherwise inherit a hole from a
+     * guard it never knew about. Two checks, because the cost is a regex and the failure is
+     * command execution.
+     *
+     * An unknown agent is REFUSED rather than created: a stale callback arriving after a delete
+     * must not resurrect the agent as a record with a thread id and nothing else.
+     */
+    async recordThread(agentId: AgentId, threadId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (!threadIdIsResumable(threadId)) {
+            return { ok: false, reason: `Refusing to store a thread id Genie will not pass to a provider: "${threadId}"` };
+        }
+
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing) return { ok: false, reason: `No agent ${agentId} to record a thread for.` };
+        if (existing.threadId === threadId) return { ok: true }; // Already written; no disk churn.
+
+        this.#agents = this.#agents.map((a) => (a.id === agentId ? { ...a, threadId } : a));
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return { ok: true };
     }
 
     /** The OS agent's record. Always present after `load`. */

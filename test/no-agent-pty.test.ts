@@ -45,20 +45,32 @@ let spawned: { id: string; command: string }[] = [];
 /**
  * A pty port that RECORDS and never spawns.
  *
- * The real engine is `fancy-term-host` (in-kit; `node-pty` is its declared peer), and it lands
- * with P5. The port is narrow on purpose: it is the seam this rule is enforced at, and a test
- * that had to spawn a real pty to prove no pty was spawned would be absurd.
+ * The port is narrow on purpose: it is the seam this rule is enforced at, and a test that had
+ * to spawn a real pty to prove no pty was spawned would be absurd.
+ *
+ * **There is no engine behind it yet.** `fancy-term-host` is Fancy's, but it requires
+ * `node-pty` as a declared peer and `fancy-term` requires `@xterm/*` — third-party packages,
+ * which this project does not take. A peer-free terminal engine is Fancy's to build, and is
+ * asked for. The seam is here and ready for it; the rule it enforces holds either way.
  */
 const recordingPty: PtyPort = {
-    spawn: (options) => {
+    open: (options) => {
         const id = `pty_${spawned.length + 1}`;
-        spawned = [...spawned, { id, command: options.command }];
-        return id;
+        spawned = [...spawned, { id, command: options.command ?? '(default shell)' }];
+        return { id, pid: 4242, shell: options.command ?? '(default shell)', scrollback: '' };
     },
-    kill: (id) => { spawned = spawned.filter((p) => p.id !== id); },
+    write: () => true,
+    resize: () => true,
+    kill: (id) => {
+        spawned = spawned.filter((p) => p.id !== id);
+        return true;
+    },
+    scrollback: () => '',
+    onData: () => () => {},
+    onExit: () => () => {},
 };
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: () => {} };
+const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: () => ({ killed: 0, refused: false }) };
 
 /** A driver that does nothing. If an agent ever reached for a pty, it would not be through this. */
 const fakeDriverFor: DriverFor = () => {

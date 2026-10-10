@@ -14,3 +14,11 @@ release/
 # Throwaway diagnostics. They are written to answer one question and should not outlive it —
 # a repo full of half-remembered probes is worse than none, because somebody runs one.
 scripts/_*
+
+# Scratch for one-off measurements. A probe that proved something belongs in a test or in a
+# comment that cites it, never as a script nobody will run again.
+sandbox/
+
+# The smoke mirrors its result here so a long run cannot lose it to a caller timeout.
+# Regenerable, and the run that matters is the next one.
+smoke.txt
