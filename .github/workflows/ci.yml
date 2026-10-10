@@ -197,6 +197,5 @@ jobs:
           path: |
             release/*.exe
             release/*.AppImage
-            release/*.deb
             release/*.yml
           if-no-files-found: error

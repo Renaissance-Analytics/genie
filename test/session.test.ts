@@ -9,6 +9,7 @@ import {
     type DriverEvents,
     type SessionDriver,
     type SessionDriverFactory,
+    type PermissionRequestLike,
     type TurnOutcomeLike,
 } from '../src/core/session.js';
 
@@ -66,6 +67,15 @@ function fakeDriver() {
         // `stopReason` to `'end_turn'` and `raw` to `null`, so a test could not pass a crash.
         endTurn: (outcome: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: null }) =>
             events.onTurnEnd?.(outcome),
+        // Typed as the interface, not inferred from the default — inference narrows
+        // `toolCall` to `{ title: string }`, so a test could not pass the empty call that
+        // exercises the refusal path.
+        askPermission: (
+            request: PermissionRequestLike = {
+                toolCall: { title: 'php artisan migrate --force' },
+                options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+            },
+        ) => events.onRequestPermission?.(request),
     };
 }
 
@@ -362,5 +372,93 @@ describe('a driver that does not expose `running` — which CodexDriver does not
         expect(session.running).toBe(true);
         d.setRunning(false);
         expect(session.running).toBe(false);
+    });
+});
+
+describe('a parked approval', () => {
+    const ask = {
+        toolCall: { title: 'php artisan migrate --force' },
+        options: [
+            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+        ],
+    };
+
+    function openSession() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: d.factory,
+        });
+        session.start();
+        return { d, session };
+    }
+
+    it('is held until a human answers, and the DRIVER waits on that promise', async () => {
+        /**
+         * The whole mechanism. `onRequestPermission` returns a promise, and the provider is
+         * blocked on it — so resolving it is literally how the agent is unblocked. If this were
+         * resolved eagerly with a default, every tool call would be auto-approved and the
+         * approval UI would be decoration over an agent that never actually waited.
+         */
+        const { d, session } = openSession();
+
+        const pending = d.askPermission(ask);
+        expect(session.pendingApproval).toMatchObject({ question: 'php artisan migrate --force' });
+
+        let settled = false;
+        void pending?.then(() => { settled = true; });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(settled, 'the driver must still be waiting').toBe(false);
+
+        session.answerApproval('allow');
+        expect(await pending).toEqual({ outcome: 'selected', optionId: 'allow' });
+        expect(session.pendingApproval).toBeNull();
+    });
+
+    it('answers with the provider’s own option id, not a word of ours', async () => {
+        const { d, session } = openSession();
+        const pending = d.askPermission(ask);
+        session.answerApproval('deny');
+        expect(await pending).toEqual({ outcome: 'selected', optionId: 'deny' });
+    });
+
+    it('REFUSES an option id the request did not offer', async () => {
+        /**
+         * The renderer is not trusted to send back a valid id, and a provider receiving one it
+         * never offered is a protocol error at best. The approval stays parked, which is
+         * recoverable; "answered with something meaningless" is not.
+         */
+        const { d, session } = openSession();
+        const pending = d.askPermission(ask);
+
+        expect(session.answerApproval('rm -rf /')).toBe(false);
+        expect(session.pendingApproval).not.toBeNull();
+
+        // POSITIVE CONTROL: a real id still works, so the refusal is a reading.
+        expect(session.answerApproval('allow')).toBe(true);
+        expect(await pending).toEqual({ outcome: 'selected', optionId: 'allow' });
+    });
+
+    it('CANCELS the request when the session stops, rather than leaving the driver hanging', async () => {
+        // A promise nobody will ever resolve is a provider process waiting forever. `stop`
+        // means stop, and that has to include the things stop is waiting on.
+        const { d, session } = openSession();
+        const pending = d.askPermission(ask);
+
+        session.stop();
+        expect(await pending).toEqual({ outcome: 'cancelled' });
+        expect(session.pendingApproval).toBeNull();
+    });
+
+    it('does not park a request it cannot render, and cancels it immediately', async () => {
+        // A request with no readable options cannot be answered by anyone. Parking it would
+        // show a question with no buttons and block the agent on a human who has no way to
+        // reply; cancelling returns a decision the provider understands.
+        const { d, session } = openSession();
+        const pending = d.askPermission({ toolCall: {}, options: [] });
+
+        expect(await pending).toEqual({ outcome: 'cancelled' });
+        expect(session.pendingApproval).toBeNull();
     });
 });

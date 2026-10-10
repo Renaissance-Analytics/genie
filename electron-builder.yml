@@ -55,8 +55,13 @@ nsis:
 linux:
   target:
     - AppImage
-    - deb
   category: Development
+  # `deb` is deliberately absent. It requires a maintainer EMAIL in `package.json`, and the
+  # choices were to invent an address or to publish the owner's personal one inside every
+  # package — neither of which is mine to decide. AppImage needs no install and no address,
+  # which makes it the more useful artifact here anyway.
+  #
+  # Add `deb` back with a real maintainer address if somebody wants one.
 
 mac:
   target:

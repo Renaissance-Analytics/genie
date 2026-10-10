@@ -1,5 +1,6 @@
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { openAgentThread } from './thread-store.js';
+import { approvalFrom, type Approval } from './approval.js';
 import { toStreamEvent, type StreamEvent } from './stream-event.js';
 import type { AgentId } from './identity.js';
 import { systemProcessTree, type ProcessTree } from './process-tree.js';
@@ -53,8 +54,27 @@ export interface TurnOutcomeLike {
     readonly raw: string | null;
 }
 
+/** ACP's permission request, as the driver hands it over. Both fields are open records. */
+export interface PermissionRequestLike {
+    readonly toolCall: Record<string, unknown>;
+    readonly options: readonly Record<string, unknown>[];
+}
+
+export type PermissionOutcomeLike =
+    | { readonly outcome: 'selected'; readonly optionId: string }
+    | { readonly outcome: 'cancelled' };
+
 export interface DriverEvents {
     onUpdate?: (update: Record<string, unknown>) => void;
+    /**
+     * The provider is asking a human to decide, and **it is blocked on the promise this
+     * returns.** Resolving it is literally how the agent is unblocked.
+     *
+     * Which is why nothing here resolves it eagerly with a default: that would auto-approve
+     * every tool call and leave the approval UI as decoration over an agent that never
+     * actually waited.
+     */
+    onRequestPermission?: (request: PermissionRequestLike) => Promise<PermissionOutcomeLike>;
     /**
      * A TURN ended. **Not the same event as the process exiting.**
      *
@@ -132,6 +152,14 @@ export class AgentSession {
      * stop. Used when the driver does not expose `running` — see {@link SessionDriver.running}.
      */
     #alive = false;
+    /**
+     * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
+     *
+     * Held together because they are one fact: a parked approval that nobody can resolve is a
+     * provider process waiting forever, and a resolver with no question is a decision nobody
+     * made.
+     */
+    #approval: { approval: Approval; resolve: (outcome: PermissionOutcomeLike) => void } | null = null;
 
     constructor(options: AgentSessionOptions) {
         this.#options = options;
@@ -176,6 +204,30 @@ export class AgentSession {
         return this.#failure;
     }
 
+    /** The question waiting on a human, or `null`. This is what makes a row `waiting`. */
+    get pendingApproval(): Approval | null {
+        return this.#approval?.approval ?? null;
+    }
+
+    /**
+     * Answer the parked approval. Returns false if there was nothing to answer, or if the id
+     * was not one the request offered.
+     *
+     * **The id is checked against the request.** The renderer is not trusted to send back a
+     * valid one, and a provider receiving an option it never offered is a protocol error at
+     * best. A refused answer leaves the approval parked, which is recoverable; "answered with
+     * something meaningless" is not.
+     */
+    answerApproval(optionId: string): boolean {
+        const held = this.#approval;
+        if (!held) return false;
+        if (!held.approval.options.some((o) => o.id === optionId)) return false;
+
+        this.#approval = null;
+        held.resolve({ outcome: 'selected', optionId });
+        return true;
+    }
+
     start(): void {
         if (this.#driver) return; // Reattach, never a second copy of the same agent.
 
@@ -185,6 +237,24 @@ export class AgentSession {
             ...(resumeSessionId ? { resumeSessionId } : {}),
             events: {
                 onUpdate: (update) => void this.#ingest(update),
+                onRequestPermission: (request) =>
+                    new Promise<PermissionOutcomeLike>((resolve) => {
+                        const approval = approvalFrom(request);
+
+                        // A request with no readable options cannot be answered by anybody.
+                        // Parking it would show a question with no buttons and block the agent
+                        // on a human who has no way to reply; cancelling returns a decision the
+                        // provider understands.
+                        if (!approval) {
+                            resolve({ outcome: 'cancelled' });
+                            return;
+                        }
+
+                        // One at a time. A second request while one is parked would orphan the
+                        // first resolver — a provider waiting forever on a promise nobody holds.
+                        this.#approval?.resolve({ outcome: 'cancelled' });
+                        this.#approval = { approval, resolve };
+                    }),
                 onTurnEnd: (outcome) => {
                     this.#turns += 1;
 
@@ -250,6 +320,11 @@ export class AgentSession {
          * Only this session's own subtree is touched. NEVER a name sweep: this machine runs
          * a dozen agents at once, and a sweep would stop the room rather than one agent.
          */
+        // A promise nobody will ever resolve is a provider process waiting forever. `stop`
+        // means stop, and that has to include the things stop is waiting ON.
+        this.#approval?.resolve({ outcome: 'cancelled' });
+        this.#approval = null;
+
         const tree = this.#options.processTree ?? systemProcessTree;
         tree.killTree(this.#ownedPids);
 
