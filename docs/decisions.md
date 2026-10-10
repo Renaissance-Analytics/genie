@@ -162,7 +162,16 @@ answer:
 
 So these are not broken characters. They sit in the band Liberation does not cover and DejaVu
 does, which makes it a question about minimal images and kiosk installs rather than about the
-components. `⇄` is the one that matters most to Genie, because `ActivityLight direction="both"`
+components.
+
+**And the band has a name.** react-fancy'''s author read the table and proposed it was WGL4 —
+the repertoire Liberation targets — which would mean  is fixable with a
+different CHARACTER rather than an SVG icon. They asked for the candidate (U+2194 ) and,
+unprompted, for the falsifier beside it (U+21C6 , which should fail if the theory holds).
+
+Measured, with four extra boundary probes because confirming one candidate is not testing a
+theory: **seven predictions, seven correct.**  draws,  is tofu, U+2195/21A8/25CA/2660 all
+draw, U+2756 is tofu. The control failing as predicted is what makes it evidence. `⇄` is the one that matters most to Genie, because `ActivityLight direction="both"`
 emits it and the Dashboard uses that component.
 
 ### The first method was wrong, and its own control said so

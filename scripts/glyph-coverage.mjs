@@ -40,6 +40,27 @@ const SUBJECTS = [
     ['U+00B7', '·', 'separator, used throughout'],
     ['U+0394', 'Δ', 'think-token delta'],
     ['U+2193', '↓', 'the unseen pill'],
+
+    /*
+     * THE WGL4 THEORY, with its own control.
+     *
+     * react-fancy's author read the Liberation-only column and proposed that the band which
+     * failed is WGL4 — the repertoire Liberation targets. If that holds, `direction="both"`
+     * can be fixed with a DIFFERENT CHARACTER inside the covered set rather than an SVG icon,
+     * which costs one character instead of five.
+     *
+     * They explicitly asked for the falsifier alongside the candidate, which is why both are
+     * here: U+2194 is the proposal, U+21C6 is the near neighbour that should fail if the
+     * theory is right. The rest probe the boundary, because confirming one candidate is not
+     * testing a theory.
+     */
+    ['U+2194 cand', '↔', 'CANDIDATE for direction=both (WGL4: yes)'],
+    ['U+21C6 ctrl', '⇆', 'CONTROL — should be tofu if WGL4 holds'],
+    ['U+2195', '↕', 'WGL4 boundary: expected present'],
+    ['U+21A8', '↨', 'WGL4 boundary: expected present'],
+    ['U+25CA', '◊', 'WGL4 boundary: expected present'],
+    ['U+2660', '♠', 'WGL4 boundary: expected present'],
+    ['U+2756', '❖', 'Dingbats: expected tofu'],
 ];
 
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
