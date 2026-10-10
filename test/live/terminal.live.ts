@@ -54,15 +54,23 @@ async function main(): Promise<void> {
     console.log(`\ngenie2 live TERMINAL check — userData ${userData}\n  the token is ${token}\n`);
 
     /*
-     * An encryptor that REALLY transforms bytes, so the snapshot path under test is the one
-     * production takes (`0x01`, encrypted), not the plaintext fallback. A byte-reversal is not a
-     * cipher and does not pretend to be; it is a round-trip the store cannot mistake for
-     * plaintext, which is the property this check needs. Electron passes `safeStorage`.
+     * An encryptor that REALLY transforms bytes, and DIRECTIONALLY, so the snapshot path under
+     * test is the one production takes (`0x01`, encrypted) and a wrong-direction call cannot
+     * pass. The first version reversed the bytes — a transform, but an involution:
+     * `encrypt(encrypt(x)) === x`, so a read path that called `encrypt` would still round-trip
+     * and the check would not see it. Fancy measured that on their own double and found the
+     * same thing. So: XOR plus a marker, and `decrypt` THROWS without the marker. Not a cipher
+     * and not pretending to be; the property this check needs is that direction is observable.
+     * Electron passes `safeStorage`.
      */
+    const MARK = Buffer.from('GT1');
     const encryptor = {
         isAvailable: () => true,
-        encrypt: (b: Buffer) => Buffer.from(b).reverse(),
-        decrypt: (b: Buffer) => Buffer.from(b).reverse(),
+        encrypt: (b: Buffer) => Buffer.concat([MARK, Buffer.from(b.map((x) => x ^ 0x5a))]),
+        decrypt: (b: Buffer) => {
+            if (!b.subarray(0, MARK.length).equals(MARK)) throw new Error('decrypt called on bytes this encryptor did not write');
+            return Buffer.from(b.subarray(MARK.length).map((x) => x ^ 0x5a));
+        },
     };
     const host = new TerminalHost(realFancyTermPort(userData, encryptor));
     let output = '';
