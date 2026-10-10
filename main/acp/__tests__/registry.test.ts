@@ -112,8 +112,10 @@ describe('terminalIsLive', () => {
 });
 
 describe('writeRefusal', () => {
-    it('allows a write to a pty agent', () => {
-        expect(writeRefusal('pty')).toBeNull();
+    it('refuses EVERY agent write — there are no pty agents left to type into', () => {
+        // Was: `writeRefusal('pty')` is null, i.e. a keystroke write passes for a pty agent.
+        // `AgentEngine` has one member now, so that state cannot be constructed at all.
+        expect(writeRefusal('acp')).not.toBeNull();
     });
 
     it('REFUSES a keystroke write to an ACP session, and names what to do instead', () => {
@@ -202,7 +204,9 @@ describe('writeRefusal — raw writes, once there is a prompt path', () => {
         expect(writeRefusal('acp')).toMatch(/prompt/i);
     });
 
-    it('does not refuse a pty write', () => {
-        expect(writeRefusal('pty')).toBeNull();
+    it('has no engine it will NOT refuse', () => {
+        // The old pair asserted pty writes pass and ACP writes refuse. Agents do not run in
+        // terminals, so the refusal is unconditional and there is no second case.
+        expect(writeRefusal('acp')).toMatch(/prompt/i);
     });
 });

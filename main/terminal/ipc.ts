@@ -60,6 +60,7 @@ import {
     cwdHasAnyTranscript,
 } from '../agentinbox/session-capture';
 import type { AgentInboxAgentType } from '../agentinbox/types';
+import { engineFor } from '../agents/engine';
 import { withProviderStartupInstructions } from '../agents/startup';
 import { agentRelaunchPrompt } from '../agents/relaunch-prompt';
 import { launchBlockReason } from '../agents/availability';
@@ -926,8 +927,17 @@ export function createAgentTerminal(opts: {
         // capability first, and `ACP_PROVIDERS` lists only what can actually launch.
         // The pin, from this call or from the spec a revive is reattaching to. Read from the
         // spec too, or a restart would silently move a pinned agent back onto ACP.
-        const pinned = opts.agentMeta?.engineOverride
-            ?? (getTerminalSpec(id)?.meta?.engine_override as 'acp' | 'pty' | undefined);
+        /**
+         * A STORED `'pty'` PIN NO LONGER MEANS A TERMINAL.
+         *
+         * `meta.engine_override` is persisted, so specs already on disk can say `'pty'` — the
+         * owner's machine has 30 of them. That string must not resurrect the terminal path
+         * after it was removed, so it is narrowed to `'acp'` here and anything else is
+         * dropped, which leaves `engineFor` to decide on capability alone.
+         */
+        const storedPin = opts.agentMeta?.engineOverride
+            ?? (getTerminalSpec(id)?.meta?.engine_override as string | undefined);
+        const pinned = storedPin === 'acp' ? ('acp' as const) : undefined;
         // The instructions are passed so the engine decision can tell Genie's OWN addition to
         // the launch line from a user's custom command: `withStartupInstructions` folds them in
         // as a quoted positional argument, and ACP carries the same text as its first prompt.
@@ -1078,8 +1088,24 @@ export function createAgentTerminal(opts: {
                     { specId: id, agentId: typeof inboxId === 'string' ? inboxId : null },
                 );
             }
-        } else if (plan?.kind === 'pty') {
-            deliverAgentLaunch(id, plan.command);
+        } else if (plan === null) {
+            /**
+             * NOT RUNNABLE AS AN AGENT — and that must not become a terminal.
+             *
+             * This branch used to be `plan.kind === 'pty'` and called
+             * `deliverAgentLaunch(id, plan.command)`, typing the launch line into a shell.
+             * That is what put all 30 of the owner's claude agents in terminals: each has
+             * flags on its stored `agent_command`, so `launchPlan` declined the ACP branch
+             * and fell through to here.
+             *
+             * `launchPlan` can now only return an ACP plan or `null`, and `null` means the
+             * provider has no ACP mode. Say so where the user is looking instead of opening
+             * a shell that looks like it worked.
+             */
+            const provider = opts.agentMeta?.agent ?? '(unnamed provider)';
+            console.warn(
+                `[agent] ${provider} cannot run as an agent for ${id}: no ACP mode, and Genie does not run agents in terminals. Open a terminal panel to drive it by hand.`,
+            );
         }
     }
 
@@ -1477,6 +1503,26 @@ export function reviveRunningAgents(
 
 function maybeRelaunchAgent(id: string, existing: boolean): void {
     if (existing) return;
+
+    /**
+     * A RESTART IS THE SECOND DOOR INTO A TERMINAL, and it had no engine check at all.
+     *
+     * `launchPlan` decides the engine on a fresh launch; this function is how an agent comes
+     * BACK, and it delivered a pty launch line unconditionally. So with the pty removed from
+     * `launchPlan`, every restart still typed `claude … --resume <id>` into a shell —
+     * measured, via the genie#364 test, after the change had supposedly removed that path.
+     *
+     * Nothing below applies to an ACP agent, so this returns before any of it rather than
+     * just before the delivery: `withSavedLaunchCommand` REWRITES the owner's stored
+     * `agent_command` to re-add the channel flag, and no launch reads it any more, so doing
+     * that would be rewriting their configuration with dead data.
+     *
+     * An ACP agent's conversation is re-established through `session/load` with the
+     * `chat_session_id` already on the spec, by `createAgentTerminal`'s ACP branch.
+     */
+    const agentProvider = getTerminalSpec(id)?.meta?.agent;
+    if (typeof agentProvider === 'string' && engineFor({ provider: agentProvider }) !== null) return;
+
     const spec = withSavedLaunchCommand(getTerminalSpec(id));
     const decision = agentRelaunchDecision(
         spec,

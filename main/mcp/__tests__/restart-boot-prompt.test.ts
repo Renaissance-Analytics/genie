@@ -176,14 +176,38 @@ afterAll(() => {
     }
 });
 
-describe('genie#434 — a RESUMING restart is told to reconnect and confirm', () => {
-    it('types connectToGenie + thumbsUp alongside the resume, and did not before', async () => {
+/**
+ * genie#434's RELAUNCH LINE IS RETIRED FOR A MANAGED AGENT.
+ *
+ * These cases asserted that a resuming restart typed `--resume <id>` plus a
+ * `connectToGenie` + `thumbsUp` instruction into the pty. Two owner decisions removed the
+ * mechanism:
+ *
+ *  - *"agents do not run in terminals. PTY is not a fucking option."* — so there is no
+ *    launch line to carry anything (2026-10-09).
+ *  - *"make sure that agents no longer get the genie restart msg. That was only there so
+ *    agents coudl reconnect the TUI to the agent inbox, we don't need that anymore since the
+ *    acp agents are fully integrated into genie and it's services."*
+ *
+ * The second is why this is a RETIREMENT and not a regression to fix: the reconnect-and-
+ * confirm line existed so a TUI could rebind to AgentInbox, and an ACP session's transport
+ * is bound by Genie directly (`bindAcpMailTransport`).
+ *
+ * ## NOT asserted here, and deliberately not implied
+ *
+ * Whether a REVIVED ACP agent re-receives its PERSONA is a separate question from the
+ * restart line, and this file no longer covers it. A fresh ACP session takes
+ * `agent_instructions` as its first prompt; what a revive does is not pinned by anything
+ * here. If a restarted agent came back without its persona that would be a real loss and
+ * these tests would not catch it — said plainly rather than left for a green file to imply.
+ */
+describe('genie#434 — a RESUMING restart drives no shell at all', () => {
+    it('types nothing on restart, where it used to type resume + connectToGenie + thumbsUp', async () => {
         const { id, firstCommand } = await launchAgent();
 
-        // POSITIVE CONTROL. This agent was created with no instructions, so its
-        // FIRST launch carries none — which is what makes the assertion below a
-        // fact about the RESTART rather than about a prompt that rides every
-        // launch line regardless.
+        // POSITIVE CONTROL, kept and now doing more work: the FIRST launch types nothing
+        // either, so "nothing was typed" below is a fact about the engine rather than about
+        // this particular restart.
         expect(firstCommand).not.toContain('connectToGenie');
 
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
@@ -193,28 +217,29 @@ describe('genie#434 — a RESUMING restart is told to reconnect and confirm', ()
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
-        const relaunch = submitted(spawnedPtys.at(-1));
-        // The conversation is still resumed — the prompt is carried BY the
-        // resume, never instead of it.
-        expect(relaunch).toContain(`--resume ${sid}`);
-        expect(relaunch).toContain('connectToGenie');
-        expect(relaunch).toContain('thumbsUp');
+        // The restart still SUCCEEDS and still keeps the conversation — that part was never
+        // the pty's to own; it is `meta.chat_session_id`, replayed through `session/load`.
+        expect(getTerminalSpec(id)?.meta?.chat_session_id).toBe(sid);
+
+        // And it drove no shell to do it. Asserted as an empty string rather than three
+        // `not.toContain`s, so a differently-worded line cannot pass.
+        expect(submitted(spawnedPtys.at(-1))).toBe('');
     });
 
-    it('keeps the standing launch instructions AND adds the relaunch line', async () => {
-        // A spec written since #302 persists what the agent was launched with.
-        // Those are still true of the agent, so the relaunch carries them —
-        // it just no longer relies on them to say anything about the restart.
-        const { id } = await launchAgent('Adopt your specialized persona from /p/AGENT.md.');
+    it('does not rewrite the standing launch instructions on the way through', async () => {
+        // This asserted the relaunch line carried the persona INTO the pty. There is no
+        // relaunch line; what still matters is that the agent's stored instructions are left
+        // exactly as the owner wrote them rather than rebuilt around a restart prompt.
+        const persona = 'Adopt your specialized persona from /p/AGENT.md.';
+        const { id } = await launchAgent(persona);
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
         plantTranscript(wsDir, sid);
 
         await restartAgentTerminal(id);
         await afterLaunchSettles();
 
-        const relaunch = submitted(spawnedPtys.at(-1));
-        expect(relaunch).toContain('Adopt your specialized persona from /p/AGENT.md.');
-        expect(relaunch).toContain('connectToGenie');
+        expect(getTerminalSpec(id)?.meta?.agent_instructions).toBe(persona);
+        expect(submitted(spawnedPtys.at(-1))).toBe('');
     });
 });
 
@@ -247,17 +272,21 @@ describe('genie#434 — the workstation operator restarts warm, not blank', () =
         });
     }
 
-    it('relaunches with its role brief AND the reconnect-and-confirm line', async () => {
+    it('restarts warm without typing its role brief into a shell', async () => {
+        // Was: the relaunch line carried 'WORKSTATION OPERATOR' plus connectToGenie +
+        // thumbsUp into the pty. The operator is a managed claude agent, so it is an ACP
+        // session and nothing is typed. What still has to be true is that the restart
+        // SUCCEEDS and the brief is still on the spec — warm, not blank.
         seedOperator();
 
         const r = await restartAgentTerminal(GENIE_OS_TERMINAL_ID);
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
-        const relaunch = submitted(spawnedPtys.at(-1));
-        expect(relaunch).toContain('WORKSTATION OPERATOR');
-        expect(relaunch).toContain('connectToGenie');
-        expect(relaunch).toContain('thumbsUp');
+        expect(getTerminalSpec(GENIE_OS_TERMINAL_ID)?.meta?.agent_instructions).toContain(
+            'WORKSTATION OPERATOR',
+        );
+        expect(submitted(spawnedPtys.at(-1))).toBe('');
     });
 
     it('restarts into the SAME terminal id, so its thumbsUp can still be routed', async () => {

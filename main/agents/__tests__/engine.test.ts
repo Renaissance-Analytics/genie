@@ -51,21 +51,21 @@ describe('engineFor', () => {
 
     it('stays on the pty for a provider with no ACP mode', () => {
         // Not a refusal — aider has no structured mode and keeps working exactly as today.
-        expect(engineFor({ provider: 'aider' })).toBe('pty');
-        expect(engineFor({ provider: 'goose' })).toBe('pty');
+        expect(engineFor({ provider: 'aider' })).toBeNull();
+        expect(engineFor({ provider: 'goose' })).toBeNull();
     });
 
     it('stays on the pty when the provider is unknown', () => {
         // A null provider is already "unknown" fidelity to the session model. Starting a
         // structured session for something we cannot name would be a guess about which
         // binary to run.
-        expect(engineFor({ provider: null })).toBe('pty');
+        expect(engineFor({ provider: null })).toBeNull();
     });
 
-    it('lets a PER-AGENT choice hold one agent back on the pty', () => {
-        // Not a reintroduction of the global flag: one agent pinned to the pty for a reason
-        // is a per-agent fact. Holding BACK is the direction that matters now.
-        expect(engineFor({ provider: 'claude', agentOverride: 'pty' })).toBe('pty');
+    it('has no way to hold an agent back ONTO a terminal', () => {
+        // This asserted a 'pty' pin was honoured. Agents do not run in terminals, so the pin
+        // has no target; a capable provider resolves to ACP whatever the override says.
+        expect(engineFor({ provider: 'claude', agentOverride: 'acp' })).toBe('acp');
     });
 
     it('honours an explicit ACP override, which changes nothing for a capable provider', () => {
@@ -76,9 +76,9 @@ describe('engineFor', () => {
         // Capability before preference, in the old rule and this one. An override cannot
         // conjure a server that does not exist, and honouring it would spawn something that
         // is not an ACP server and then hang in the handshake.
-        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBe('pty');
+        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBeNull();
         // Previously this proved an override cannot CONJURE a capability. Codex now has one, so the
         // case needs a provider that genuinely lacks it or it proves nothing.
-        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBe('pty');
+        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBeNull();
     });
 });

@@ -192,9 +192,9 @@ async function bootedAgent(
     const specId = await startAgent();
     const inboxId = inboxIdOf(specId);
     const agentId = agentRowId();
-    markWorkspaceAgentTransportState(getDb(), agentId, 'claude-channel', { ok: true });
+    markWorkspaceAgentTransportState(getDb(), agentId, 'acp-session', { ok: true });
     markWorkspaceAgentReadyByTerminal(getDb(), specId);
-    harnessTransportRegistry.bind(inboxId, 'claude-channel', () => {}, async () => ({ state: 'active' }));
+    harnessTransportRegistry.bind(inboxId, 'acp-session', () => {}, async () => ({ state: 'active' }));
     // A booted agent HAS SPOKEN: write the transcript Claude writes when its
     // session begins. A restart is resolved against what is on disk, so without
     // this the agent looks like one that never started — and every diagnosis
@@ -430,7 +430,7 @@ describe('native progress gathering', () => {
     it('does not call a booted and connected agent healthy while its harness awaits input', async () => {
         const { inboxId, specId } = await bootedAgent();
         const observe = vi.fn(async () => ({ state: 'blocked' as const, reason: 'waitingOnUserInput' }));
-        harnessTransportRegistry.bind(inboxId, 'claude-channel', () => {}, observe);
+        harnessTransportRegistry.bind(inboxId, 'acp-session', () => {}, observe);
         const d = only((await diagnose({ id: specId })).diagnoses);
         expect(d.condition).toBe('wedged');
         expect(d.findings[0]?.ailment).toBe('harness-blocked');

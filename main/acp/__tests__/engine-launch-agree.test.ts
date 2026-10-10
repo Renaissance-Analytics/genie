@@ -34,7 +34,7 @@ describe('the two halves of the ACP decision', () => {
     it('positive control: a provider OUTSIDE the list is refused by both', () => {
         // Without this, "they agree" would pass against two functions that both said no to
         // everything.
-        expect(engineFor({ provider: 'aider' })).toBe('pty');
+        expect(engineFor({ provider: 'aider' })).toBeNull();
         expect(acpLaunch('aider', ctx)).toMatchObject({ ok: false, reason: 'no-acp-mode' });
     });
 });

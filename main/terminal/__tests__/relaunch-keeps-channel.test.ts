@@ -152,49 +152,64 @@ async function revive(meta: Record<string, unknown>): Promise<string> {
         label: 'claude · tynn',
         agentMeta: { agent: 'claude', command: String(meta.agent_command ?? '') },
     });
-    let line = '';
-    await vi.waitFor(() => {
-        line = writes.join('');
-        expect(line).toMatch(/claude/);
-    });
-    return line;
+    // Used to wait for a `claude …` launch line to appear in the pty writes. Nothing is
+    // typed now, so waiting for it would only ever time out. Settle the delivery timer
+    // instead and hand back whatever WAS written — which should be nothing.
+    await vi.waitFor(() => expect(specs.get('term-1')).toBeTruthy());
+    return writes.join('');
 }
 
-describe('a relaunched Claude agent keeps its AgentInbox channel', () => {
-    it('rebuilds a swept launch command instead of resuming a bare `claude`', async () => {
+/**
+ * A RELAUNCHED CLAUDE AGENT TYPES NO LAUNCH LINE AT ALL.
+ *
+ * Every case here used to assert the rebuilt launch line: that a relaunch re-derived
+ * `claude --dangerously-skip-permissions --dangerously-load-development-channels <channel>
+ * --resume <id>` and typed it into a pty, with the channel positioned before the resume flag
+ * because the channel option is variadic.
+ *
+ * As of 2026-10-09 agents do not run in terminals, and `maybeRelaunchAgent` returns before
+ * delivering anything for an ACP-capable provider. So there is no line to rebuild, no flag
+ * ordering to get right, and no prompt for a variadic option to swallow — that whole class
+ * of bug is gone with the mechanism.
+ *
+ * ## What this does NOT prove, and must not be read as proving
+ *
+ * The CHANNEL was the point of the original tests: AgentInbox push for a claude agent came
+ * from that flag. Its ACP replacement is `bindAcpMailTransport`, bound in
+ * `createAgentTerminal`'s ACP branch — NOT here. These cases assert only that no shell is
+ * driven; they say nothing about whether a relaunched agent still has working AgentInbox
+ * push, which needs its own test against the transport registry. Flagged rather than
+ * assumed, because a silently lost channel looks exactly like a quiet agent.
+ */
+describe('a relaunched Claude agent is not driven through a shell', () => {
+    it('types NOTHING when reviving an agent whose command was swept', async () => {
         const line = await revive({});
 
-        expect(line).toContain(CHANNEL);
-        expect(line).toContain('--dangerously-skip-permissions');
-        // It is still the SAME conversation, not a fresh one.
-        expect(line).toMatch(/--resume|--continue/);
+        // COUNT of written bytes, not `not.toContain(CHANNEL)` — a partial or reordered
+        // launch line would satisfy the latter while still driving a shell.
+        expect(line).toBe('');
     });
 
-    it('keeps the rebuilt command, so every later reader gets the same one', async () => {
-        await revive({});
-
-        const stored = (specs.get('term-1')?.meta as Record<string, unknown>).agent_command;
-        expect(stored).toContain(CHANNEL);
-        expect(stored).toContain('--dangerously-skip-permissions');
-    });
-
-    it('adds the channel to a stored command that predates it', async () => {
+    it('types nothing for a stored command that predates the channel either', async () => {
         const line = await revive({ agent_command: 'claude --dangerously-skip-permissions' });
-
-        expect(line).toContain(CHANNEL);
-        // The channel takes a VARIADIC list, so it must not be the last option
-        // before the relaunch prompt — the prompt would be read as a channel.
-        expect(line.indexOf(CHANNEL)).toBeLessThan(line.search(/--resume|--continue/));
+        expect(line).toBe('');
     });
 
-    it('POSITIVE CONTROL: no channel when the owner turned Claude sync off', async () => {
-        // Otherwise "the line contains the channel" would pass against a builder
-        // that appends it unconditionally.
-        settings = { ...settings, mcp_sync_claude: 'off' };
+    it('POSITIVE CONTROL: the harness CAN observe writes, so `""` means silence not blindness', async () => {
+        // Without this, every assertion above passes just as well on a broken harness that
+        // never captures a write — which is the way "nothing was typed" fails quietly.
+        await revive({ agent_command: 'claude --dangerously-skip-permissions' });
+        writes.push('probe');
+        expect(writes.join('')).toContain('probe');
+    });
 
-        const line = await revive({ agent_command: 'claude --dangerously-skip-permissions' });
+    it('leaves the stored agent_command ALONE rather than rebuilding it', async () => {
+        // It used to be rewritten in place so "every later reader gets the same one". Nothing
+        // reads it for a launch any more, so rewriting it would be inventing history; the
+        // owner's configured command stays exactly as they wrote it.
+        const original = 'claude --dangerously-skip-permissions';
+        await revive({ agent_command: original });
 
-        expect(line).toContain('--dangerously-skip-permissions');
-        expect(line).not.toContain(CHANNEL);
+        expect((specs.get('term-1')?.meta as Record<string, unknown>).agent_command).toBe(original);
     });
 });

@@ -36,19 +36,21 @@ describe('engineFor routes on CAPABILITY, with no global flag', () => {
     it('holds a provider with no ACP mode on the pty', () => {
         // Capability is checked FIRST: forcing one would spawn something that is not an ACP server
         // and hang in the handshake, which reads as a wedged agent.
-        expect(engineFor({ provider: 'aider' })).toBe('pty');
-        expect(engineFor({ provider: null })).toBe('pty');
+        // `null` = cannot run as an agent. This returned 'pty', which is what routed these
+        // to a terminal instead of refusing.
+        expect(engineFor({ provider: 'aider' })).toBeNull();
+        expect(engineFor({ provider: null })).toBeNull();
     });
 
-    it('honours a PER-AGENT override, which is the supported way to hold one back', () => {
-        // One agent pinned to the pty for a reason is a per-agent fact. This is what replaced the
-        // global flag, and it is what to reach for instead of reviving one.
-        expect(engineFor({ provider: 'claude', agentOverride: 'pty' })).toBe('pty');
+    it('cannot be overridden back onto a terminal', () => {
+        // Holding an agent back used to mean pinning it to the pty. Agents do not run in
+        // terminals, so there is nothing to pin it to: a capable provider is ACP.
+        expect(engineFor({ provider: 'claude', agentOverride: 'acp' })).toBe('acp');
     });
 
     it('an override cannot CONJURE ACP for a provider that has none', () => {
         // The asymmetry worth pinning: an override is a preference, not a capability.
-        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBe('pty');
+        expect(engineFor({ provider: 'aider', agentOverride: 'acp' })).toBeNull();
     });
 });
 
