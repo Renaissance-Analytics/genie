@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Icon } from '@particle-academy/react-fancy';
 import { approvalPlacement, budgetFor, planFor, statePill, tabsFor } from '../../core/agent-view.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
@@ -8,6 +9,8 @@ import type { AgentTab } from '../../core/route.js';
 import type { Lane, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
+import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
+import { agentViewAction, isTypingTarget } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 
 /**
@@ -70,12 +73,15 @@ export interface AgentViewProps {
     onSelect: (rowId: string | null) => void;
     /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
     onLanes?: ((lanes: readonly Lane[] | null) => void) | undefined;
+    /** The time range from the route; a drag on the timeline changes it. */
+    range?: TimeRange | null | undefined;
+    onRange?: ((range: TimeRange | null) => void) | undefined;
     now?: (() => number) | undefined;
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes,
+    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const pill = statePill(session, now ?? (() => Date.now()));
@@ -97,6 +103,27 @@ export function AgentView({
      */
     const approval = session?.pendingApproval ?? null;
     const placement = approvalPlacement(agent.id, chatSubject ?? null);
+
+    /*
+     * `E` — the next edit (§4.2). One `keydown` listener; every decision is made by the pure
+     * `keys.ts`, so the rule that an unmodified letter never acts while a human is typing is
+     * proven in a test rather than hoped for.
+     */
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            const target = e.target instanceof HTMLElement ? e.target : null;
+            const action = agentViewAction({
+                key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, typing: isTypingTarget(target),
+            });
+            if (action !== 'next-edit') return;
+            const next = nextEditAfter(rowsInRange(rows, range), selectedId);
+            if (!next) return;
+            e.preventDefault();
+            onSelect(next);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [rows, range, selectedId, onSelect]);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
@@ -181,11 +208,17 @@ export function AgentView({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
-                            <Lanes rows={rows} selected={lanes} onChange={(next) => onLanes?.(next)} />
+                            <Lanes
+                                rows={rows}
+                                selected={lanes}
+                                onChange={(next) => onLanes?.(next)}
+                                range={range}
+                                onRange={(next) => onRange?.(next)}
+                            />
 
                             <div className="min-h-0 flex-1">
                                 <Stream
-                                    rows={rows}
+                                    rows={rowsInRange(rows, range)}
                                     lanes={lanes}
                                     at={at}
                                     selectedId={selectedId}
