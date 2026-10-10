@@ -874,12 +874,46 @@ export function createAgentTerminal(opts: {
         // whereas omitting it falls back to the engine's 80×24.
         ...(isUsableGrid(opts) ? { cols: opts.cols, rows: opts.rows } : {}),
     };
+    /**
+     * AN AGENT GETS NO PTY. This is the line that made "agents do not run in terminals"
+     * untrue even after the pty ENGINE was removed.
+     *
+     * `terminalManager().create()` used to run here unconditionally — about seventy lines
+     * BEFORE `launchPlan` decides the engine below. So every agent got a real pty spawned
+     * for it and the engine decision only ever controlled whether a launch line was TYPED
+     * into that pty. The old comment on this function said the quiet part: *"Creating an
+     * agent terminal is ONE host-side operation: spawn the pty AND start the agent's CLI in
+     * it."* It is not one operation any more.
+     *
+     * The consequences were not cosmetic. An agent holding a pty is why agents appear in
+     * `manageTerminals list`, why they render as terminal panels, and why host-recovery
+     * revival reaches them at all — losing the pty host means they had a pty to lose, which
+     * is what resurrected eleven of the owner's agents on 2026-10-09.
+     *
+     * The spec ROW stays, and that is not a compromise: `terminal_specs` is Genie's
+     * panel/identity table, not a pty table. It is what mints the per-terminal MCP token,
+     * carries `meta.agent_id` as the durable AgentInbox identity, puts the agent in the
+     * roster, and counts against the workspace cap. `code`, `plugin` and `plugin-panel`
+     * specs have always lived there with no pty.
+     *
+     * Only a NON-agent spec spawns one — a shell someone opened, a build, a service, a
+     * background process. Those are the only things that should hold a pty.
+     */
+    const isAgentSpec =
+        typeof opts.agentMeta?.agent === 'string'
+        || typeof getTerminalSpec(id)?.meta?.agent === 'string';
+
     // Idempotent on the id: if a live pty already owns it, this reattaches
     // (existing:true, scrollback replayed) instead of spawning a duplicate.
-    if (!terminalManager().isLive(id)) {
+    if (!isAgentSpec && !terminalManager().isLive(id)) {
         logHostService(formatHostSpawnRequest({ id, provider: opts.agentMeta?.agent, label: opts.label }));
     }
-    const result = terminalManager().create(createOpts);
+    const result = isAgentSpec
+        // `existing` decides whether the caller relaunches or reattaches, and for an agent
+        // that question is about its SESSION, not a pty — `isTerminalLive` already answers
+        // `acpLive || ptyLive`, so this is the same question asked of the half that exists.
+        ? { existing: isTerminalLive(id), scrollback: '' }
+        : terminalManager().create(createOpts);
     if (!opts.restore) {
         const queued = queuedAgentRevivals.get(id);
         queuedAgentRevivals.delete(id);

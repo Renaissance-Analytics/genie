@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * NO AGENT HOLDS A PTY. NOT ONE, NOT EVER, NOT AN UNUSED ONE.
@@ -134,6 +134,13 @@ describe('an agent gets an identity row, never a pty', () => {
         spawned.length = 0;
         specs.clear();
         recordProviderAvailability('claude', true);
+    });
+
+    // Every test file shares one fork, so leaving the fake clock installed hands the NEXT
+    // file a dead clock that never fires (genie#76). Restored here, not at the end of each
+    // case, so an early assertion failure cannot skip it.
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('spawns ZERO ptys for a claude agent', () => {
