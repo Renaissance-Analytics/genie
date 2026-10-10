@@ -51,18 +51,31 @@ export function sessionsDir(userData: string): string {
 /**
  * Whether a path lies inside a directory — the check that keeps the rule honest.
  *
- * Case-insensitive on Windows, where `C:\Program Files\Genie` and `c:\program files\genie`
- * are the same directory and a case-sensitive comparison would cheerfully report that a
- * runtime path is safely outside the install.
- *
  * The separator is appended before comparing so that `…/Genie2` does not read as being inside
  * `…/Genie`. That sibling-prefix bug is the classic way a containment check passes while
- * being wrong.
+ * being wrong, and here it would report a new install's runtime as sitting inside the old one.
+ *
+ * ## `caseInsensitive` is a PARAMETER, and that is the fix for a real CI failure
+ *
+ * It used to read `process.platform === 'win32'` inline — correct in production and
+ * untestable in principle. The same Windows fixture that passed on the owner's machine failed
+ * on CI's ubuntu runner, because the behaviour was ambient rather than stated. Both modes are
+ * now asserted on every platform, which is the only way the Windows branch is ever exercised
+ * by the Linux runner that gates merges.
+ *
+ * The default still follows the host, because `C:\Program Files\Genie` and
+ * `c:/program files/genie` are one directory there, and a case-sensitive comparison would
+ * cheerfully report a runtime path as safely outside the install it is sitting in. On POSIX
+ * they are two directories and must stay two.
  */
-export function isInside(child: string, parent: string): boolean {
+export function isInside(
+    child: string,
+    parent: string,
+    caseInsensitive: boolean = process.platform === 'win32',
+): boolean {
     const norm = (p: string): string => {
         const slashed = p.replace(/\\/g, '/').replace(/\/+$/, '');
-        return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+        return caseInsensitive ? slashed.toLowerCase() : slashed;
     };
 
     const c = norm(child);
