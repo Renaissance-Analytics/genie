@@ -8,6 +8,8 @@ import { Icon } from '@particle-academy/react-fancy';
 import { resolveIcon } from '@particle-academy/react-fancy/icon';
 import { describe, expect, it } from 'vitest';
 import { ICON_NAMES, registerAppIcons } from '../src/renderer/icons.js';
+import { ledgerRow, type TimedEvent } from '../src/core/stream-view.js';
+import type { StreamEvent } from '../src/core/stream-event.js';
 
 /**
  * ICONS MUST ACTUALLY RESOLVE.
@@ -69,5 +71,47 @@ describe('every icon the app asks for', () => {
         expect(used.size).toBeGreaterThan(3);
 
         expect([...used].filter((name) => !ICON_NAMES.includes(name))).toEqual([]);
+    });
+});
+
+describe('the icons the ledger chooses at RUNTIME', () => {
+    it('are all registered — driven by the real function, not by reading the source', () => {
+        /**
+         * `StreamRow` passes `name={row.icon}`, so the source scan above cannot see a single
+         * one of these. An unregistered name renders an empty span with no warning, which means
+         * the entire Stream could ship with blank glyphs on a green suite — which is how the
+         * blank chrome icons got here in the first place.
+         *
+         * So this drives `ledgerRow` over every event kind AND every tool kind, collects the
+         * icons it actually emits, and insists each one resolves. A guard that does not care
+         * how the JSX is written.
+         */
+        registerAppIcons();
+
+        const tool = (toolKind: string | null): StreamEvent => ({
+            kind: 'tool', toolCallId: 't', name: 'X', title: 'x', status: 'completed',
+            toolKind: toolKind as never, rawInput: {},
+        });
+
+        const events: StreamEvent[] = [
+            { kind: 'message', speaker: 'you', peerName: null, text: 'x' },
+            { kind: 'think', text: 'x', tokens: null },
+            { kind: 'usage', used: 1, size: 2, cost: null },
+            { kind: 'plan', entries: [] },
+            { kind: 'divider', variant: 'compaction', before: null, after: null },
+            { kind: 'notice', level: 'warn', message: 'x' },
+            { kind: 'unknown', sessionUpdate: 'future_thing', raw: {} },
+            ...['read', 'edit', 'execute', 'search', 'fetch', 'think', 'other', null].map(tool),
+        ];
+
+        const rows: TimedEvent[] = events.map((event, i) => ({ id: `e${i}`, event, at: null }));
+        const icons = [...new Set(rows.map((r) => ledgerRow(r).icon))];
+
+        // POSITIVE CONTROL first: the sweep produced a real spread of icons, so an empty
+        // `missing` below means something. Fifteen events cannot yield one icon.
+        expect(icons.length).toBeGreaterThan(6);
+
+        expect(icons.filter((name) => !ICON_NAMES.includes(name))).toEqual([]);
+        expect(icons.filter((name) => resolveIcon(name) === null)).toEqual([]);
     });
 });

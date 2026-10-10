@@ -31,13 +31,25 @@ import { FEATURE_ICONS } from '../core/rail-view.js';
  */
 export const ICON_NAMES: readonly string[] = [
     // chrome
-    'search', 'inbox', 'layout-list', 'sparkles', 'folder',
+    'search', 'inbox', 'layout-list', 'sparkles', 'folder', 'x', 'square-terminal',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // dashboard rows
     'users', 'plus',
     // delivery kinds
     'git-commit-horizontal', 'file-code', 'arrow-right-left', 'message-square-reply',
+
+    /*
+     * The stream ledger's icons.
+     *
+     * These reach `Icon` as `name={row.icon}` rather than as a literal, so the source scan in
+     * `test/icons.test.ts` cannot see them — and an unregistered name renders an EMPTY SPAN
+     * with no warning. The test therefore drives the real `ledgerRow` over every event kind
+     * and every tool kind and asserts each icon it emits resolves, which is a guard that does
+     * not depend on how the JSX happens to be written.
+     */
+    'message-square', 'brain', 'wrench', 'pencil', 'gauge', 'list-checks', 'scissors',
+    'info', 'circle-help', 'file-text', 'globe',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */
