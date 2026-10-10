@@ -22,7 +22,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-IMAGE="genie2-smoke:5"
+IMAGE="genie2-smoke:6"
 
 # Built by tag and cached. The apt install is the slow part, and a verification that takes four
 # minutes every time stops being run — which is how "nobody opened the app" happens.

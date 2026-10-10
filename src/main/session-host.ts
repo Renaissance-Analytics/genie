@@ -2,7 +2,14 @@ import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
-import { AgentSession, type SessionDriverFactory } from '../core/session.js';
+import {
+    AgentSession,
+    type DriverEvents,
+    type PermissionOutcomeLike,
+    type PermissionRequestLike,
+    type SessionDriverFactory,
+    type TurnOutcomeLike,
+} from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { openDurableStore } from '../core/thread-store.js';
@@ -65,6 +72,48 @@ export function providerBinary(
     return trimmed ? trimmed : undefined;
 }
 
+/**
+ * The session's events, in the shape `prism-acp` drivers take.
+ *
+ * **One forwarder, used by every provider**, and that is the whole point of extracting it.
+ *
+ * `onRequestPermission` was missing from both inline versions of this. The approval feature was
+ * built and unit-tested at every layer — the narrowing, the session's promise handling, the
+ * host, the bridge, the UI, the one-place-only rule — and it was **unreachable in the running
+ * application**, because the line that hands the handler to the provider did not exist.
+ *
+ * Every test passed, because every test drove `AgentSession` directly with a fake driver that
+ * called `events.onRequestPermission` itself. Nothing exercised the real wiring. That is §0.4
+ * exactly: a finished feature behind a missing connection, with a green suite.
+ *
+ * Two drivers each spelling this out separately is how one of them ends up a handler short.
+ * Now there is one place to be wrong, and `test/session-host.test.ts` counts it.
+ */
+export function driverEvents(events: DriverEvents): {
+    onUpdate: (update: unknown) => void;
+    onRequestPermission: (request: PermissionRequestLike) => Promise<PermissionOutcomeLike>;
+    onTurnEnd: (outcome: TurnOutcomeLike) => void;
+    onProtocolError: (problem: string) => void;
+    onStderr: (line: string) => void;
+    onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+} {
+    return {
+        onUpdate: (update) => events.onUpdate?.(update as Record<string, unknown>),
+        /**
+         * A driver that asks and gets no answer waits forever, so the fallback is a CANCEL
+         * rather than a dropped promise. A session with no handler has decided not to take
+         * approvals, and telling the provider so is a decision it understands — leaving it
+         * pending is an agent frozen on a question nobody will ever see.
+         */
+        onRequestPermission: (request) =>
+            events.onRequestPermission?.(request) ?? Promise.resolve({ outcome: 'cancelled' as const }),
+        onTurnEnd: (outcome) => events.onTurnEnd?.(outcome),
+        onProtocolError: (problem) => events.onProtocolError?.(problem),
+        onStderr: (line) => events.onStderr?.(line),
+        onExit: (code, signal) => events.onExit?.(code, signal),
+    };
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const configured = providerBinary(record.provider);
@@ -72,26 +121,10 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId) => {
 
     switch (record.provider) {
         case 'claude':
-            return (options) =>
-                new ClaudeDriver({ cwd, ...resume, ...binary }, {
-                    onUpdate: (u) => options.events.onUpdate?.(u as Record<string, unknown>),
-                    onTurnEnd: (o) => options.events.onTurnEnd?.(o),
-                    // Both of these used to be dropped, which is how a provider that cannot
-                    // start became an agent that merely looked idle.
-                    onProtocolError: (problem) => options.events.onProtocolError?.(problem),
-                    onStderr: (line) => options.events.onStderr?.(line),
-                    onExit: (code, signal) => options.events.onExit?.(code, signal),
-                });
+            return (options) => new ClaudeDriver({ cwd, ...resume, ...binary }, driverEvents(options.events));
 
         case 'codex':
-            return (options) =>
-                new CodexDriver({ cwd, ...resume, ...binary }, {
-                    onUpdate: (u) => options.events.onUpdate?.(u as Record<string, unknown>),
-                    onTurnEnd: (o) => options.events.onTurnEnd?.(o),
-                    onProtocolError: (problem) => options.events.onProtocolError?.(problem),
-                    onStderr: (line) => options.events.onStderr?.(line),
-                    onExit: (code, signal) => options.events.onExit?.(code, signal),
-                });
+            return (options) => new CodexDriver({ cwd, ...resume, ...binary }, driverEvents(options.events));
 
         default:
             return null;

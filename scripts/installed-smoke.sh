@@ -18,7 +18,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-IMAGE="genie2-smoke:5"
+IMAGE="genie2-smoke:6"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "=== building the smoke image (once) ==="

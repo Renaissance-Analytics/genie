@@ -51,4 +51,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY smoke-fonts.conf /etc/fonts/local.conf
 RUN fc-cache -f >/dev/null
 
+# Prime Electron's download cache at BUILD time.
+#
+# Every container run was re-downloading the ~110MB Electron binary, which made each smoke
+# several minutes and made DEBUGGING one a slow loop — a cost of its own, because a check that
+# is expensive to run is a check people stop running.
+#
+# The cache lives outside the project, so the `npm ci` inside each run finds it and skips the
+# download. Pinned to the version `package.json` asks for: a cache primed with a different
+# version silently does nothing, which is worse than no cache because it looks like one. The
+# final `ls` fails the build if nothing landed, rather than shipping an image that quietly
+# re-downloads forever.
+ENV ELECTRON_CACHE=/opt/electron-cache
+RUN mkdir -p /tmp/prime /opt/electron-cache \
+    && cd /tmp/prime \
+    && npm init -y >/dev/null 2>&1 \
+    && npm install electron@44.7.0 --no-audit --no-fund >/dev/null 2>&1 \
+    && rm -rf /tmp/prime \
+    && ls -1 /opt/electron-cache | head -3
+
 WORKDIR /work

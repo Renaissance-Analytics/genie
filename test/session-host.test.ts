@@ -6,7 +6,7 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import { agentRowFor } from '../src/core/roster.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { SessionHost, providerBinary, type DriverFor } from '../src/main/session-host.js';
+import { SessionHost, driverEvents, providerBinary, type DriverFor } from '../src/main/session-host.js';
 
 /**
  * THE RUNNING AGENTS.
@@ -399,5 +399,62 @@ describe('which provider binary to run', () => {
 
         // And it is gone again, so the stub did not leak into the rest of the suite.
         expect(providerBinary('claude')).toBeUndefined();
+    });
+});
+
+describe('every driver event the session offers is FORWARDED', () => {
+    /**
+     * The bug this exists for: `onRequestPermission` was never passed to the driver.
+     *
+     * The approval feature was built, unit-tested at every layer — the narrowing, the session's
+     * promise handling, the host, the bridge, the UI, the one-place-only rule — and it was
+     * **unreachable in the running application**, because the one line that hands the handler
+     * to the provider did not exist.
+     *
+     * Every test passed because every test drove `AgentSession` directly with a fake driver
+     * that called `events.onRequestPermission` itself. Nothing exercised the real wiring.
+     *
+     * That is §0.4 exactly: a finished feature behind a missing connection, with a green suite.
+     * So this asserts the WIRING rather than the feature, and it counts rather than spot-checks
+     * — a forwarder that handles five of six events passes any test that only looks at one.
+     */
+    it('forwards all of them, counted against what the session provides', () => {
+        const seen: string[] = [];
+
+        // Every event `DriverEvents` declares. Written out, because the point is to notice when
+        // the interface grows and the forwarder does not.
+        const events = {
+            onUpdate: () => seen.push('onUpdate'),
+            onRequestPermission: async () => { seen.push('onRequestPermission'); return { outcome: 'cancelled' as const }; },
+            onTurnEnd: () => seen.push('onTurnEnd'),
+            onProtocolError: () => seen.push('onProtocolError'),
+            onStderr: () => seen.push('onStderr'),
+            onExit: () => seen.push('onExit'),
+        };
+
+        const forwarded = driverEvents(events);
+
+        // Fire each one through the forwarder and record what arrived.
+        forwarded.onUpdate?.({ sessionUpdate: 'x' } as never);
+        void forwarded.onRequestPermission?.({ toolCall: {}, options: [] } as never);
+        forwarded.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null } as never);
+        forwarded.onProtocolError?.('x');
+        forwarded.onStderr?.('x');
+        forwarded.onExit?.(0, null);
+
+        expect(seen.sort()).toEqual(
+            ['onExit', 'onProtocolError', 'onRequestPermission', 'onStderr', 'onTurnEnd', 'onUpdate'].sort(),
+        );
+    });
+
+    it('forwards nothing the session did not provide — no invented handlers', () => {
+        // POSITIVE CONTROL in the other direction: with an empty session, calling a forwarded
+        // handler must be a safe no-op rather than a crash, because `DriverEvents` members are
+        // all optional and a session may genuinely not want one.
+        const forwarded = driverEvents({});
+
+        expect(() => forwarded.onUpdate?.({ sessionUpdate: 'x' } as never)).not.toThrow();
+        expect(() => forwarded.onStderr?.('x')).not.toThrow();
+        expect(() => forwarded.onExit?.(0, null)).not.toThrow();
     });
 });
