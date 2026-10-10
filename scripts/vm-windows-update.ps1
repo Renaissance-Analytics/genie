@@ -36,7 +36,11 @@ function Kill-Tree($id) { & cmd /c "taskkill /PID $id /T /F >nul 2>&1" }
 function Installed-Version() {
     $exe = "$env:LOCALAPPDATA\Programs\Genie\Genie.exe"
     if (-not (Test-Path $exe)) { return $null }
-    return (Get-Item $exe).VersionInfo.ProductVersion
+    # electron-builder stamps the PE with a FOUR-part version ("0.0.0.0" for 0.0.0 — measured);
+    # package.json has three. Compare the three that carry meaning.
+    $v = (Get-Item $exe).VersionInfo.ProductVersion
+    if (-not $v) { return $null }
+    return (($v.Trim() -split '\.')[0..2] -join '.')
 }
 
 $installDir = "$env:LOCALAPPDATA\Programs\Genie"
