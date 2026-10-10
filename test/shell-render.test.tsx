@@ -4,6 +4,8 @@ import { Shell } from '../src/renderer/Shell.js';
 import { EMPTY_SNAPSHOT, type GenieSnapshot } from '../src/renderer/bridge.js';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import type { AgentDetail } from '../src/renderer/bridge.js';
+import { DOCK_WIDTH } from '../src/core/dock.js';
+import type { ChatThread } from '../src/renderer/components/ChatFlyout.js';
 
 /**
  * THE WHOLE SURFACE AT ONCE — chrome, rail and Dashboard in one render.
@@ -52,11 +54,16 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             agentDetail={null}
             agentResolved={false}
             selectedRowId={null}
+            chatThread={null}
+            pinned={null}
             onNavigate={() => {}}
             onOpenAgent={() => {}}
             onAddAgent={() => {}}
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
+            onSend={() => {}}
+            onTogglePin={() => {}}
+            onCloseChat={() => {}}
             {...over}
         />,
     );
@@ -135,11 +142,16 @@ describe('first paint, before the bridge has answered', () => {
                 agentDetail={null}
                 agentResolved={false}
                 selectedRowId={null}
+                chatThread={null}
+                pinned={null}
                 onNavigate={() => {}}
                 onOpenAgent={() => {}}
                 onAddAgent={() => {}}
                 onOpenPalette={() => {}}
                 onSelectRow={() => {}}
+                onSend={() => {}}
+                onTogglePin={() => {}}
+                onCloseChat={() => {}}
             />,
         );
 
@@ -240,5 +252,170 @@ describe('the agent route', () => {
 
         const without = render({ servable: ['dashboard'] });
         expect(without).not.toContain('data-nav="genie://agent/genie"');
+    });
+});
+
+const THREAD: ChatThread = {
+    agentId: 'kai', name: 'kai', fidelity: 'declared', unread: null, messages: [],
+};
+
+describe('the dock geometry \u2014 three shipped failures live here', () => {
+    it('reserves NOTHING for an unpinned flyout, and the panel overlays', () => {
+        /**
+         * **Unpinned means nothing underneath moves.** That is the entire difference between
+         * the two states and the reason a pin is worth having — a flyout that shoved the board
+         * sideways every time somebody glanced at a conversation would be unusable.
+         */
+        const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
+
+        expect(html).toContain('data-dock-reserve="0"');
+        expect(html).toContain('data-chat="overlay"');
+        expect(html).toMatch(/data-chat="overlay"[^>]*class="[^"]*absolute/);
+    });
+
+    it('reserves exactly DOCK_WIDTH when pinned, from the SAME token the panel is sized by', () => {
+        /**
+         * One number. **Two numbers is a panel overlapping the content by their difference** —
+         * which shipped twice, and the second time it was a three-pixel overlap nobody could
+         * name.
+         *
+         * Asserted as an identity against `DOCK_WIDTH` rather than against `380`, because what
+         * must hold is that the reserve and the panel cannot diverge. The literal 380 is pinned
+         * separately in `dock.test.ts`.
+         */
+        const html = render({
+            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
+        });
+
+        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
+        expect(html).toContain('data-chat="pinned"');
+        expect(html).toContain(`width:${DOCK_WIDTH}px`);
+        expect(html).toContain(`margin-right:${DOCK_WIDTH}px`);
+    });
+
+    it('puts the reserve on the CONTENT ROW, never the wrapper \u2014 the header keeps its width', () => {
+        /**
+         * The gutter starts **below** the view header. A reserve on the outer wrapper narrows
+         * the header too, and the design is explicit that the header keeps its width and
+         * position when a panel pins.
+         *
+         * Asserted structurally: the title bar appears BEFORE the reserved element in the
+         * markup, so it cannot be inside it.
+         */
+        const html = render({
+            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
+        });
+
+        const bar = html.indexOf('data-route');
+        const reserved = html.indexOf('data-dock-reserve');
+        expect(bar).toBeGreaterThan(-1);
+        expect(reserved).toBeGreaterThan(bar);
+        expect(html.slice(0, reserved)).toContain('data-route');
+    });
+
+    it('reserves for a pinned panel that is not the chat, without the chat claiming the pin', () => {
+        // The slot is taken, so the reserve stands; but the chat must not read as pinned. Two
+        // separate readings, and conflating them is how a panel ends up overlapping content
+        // that already made room for a different one.
+        const html = render({
+            route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: 'files',
+        });
+
+        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
+        expect(html).toContain('data-chat="overlay"');
+        expect(html).not.toContain('data-chat="pinned"');
+    });
+
+    it('gives a pinned dock NO close button, and an unpinned one a close button', () => {
+        // `Esc` does not close a pinned dock, and neither does a button it does not have. A pin
+        // is a statement that this panel stays; unpinning is one click and reversible.
+        const pinnedHtml = render({
+            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
+        });
+        expect(pinnedHtml).not.toContain('aria-label="Close chat"');
+        expect(pinnedHtml).toContain('data-chat-pin="on"');
+
+        // POSITIVE CONTROL: the unpinned one has it, so the absence above is a reading.
+        const overlay = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
+        expect(overlay).toContain('aria-label="Close chat"');
+        expect(overlay).toContain('data-chat-pin="off"');
+    });
+
+    it('shows no chat at all when the route names none', () => {
+        const html = render({ route: 'genie://dashboard?group=workspace' });
+        expect(html).not.toContain('data-chat=');
+        expect(html).toContain('data-dock-reserve="0"');
+    });
+});
+
+describe('the chat thread', () => {
+    it('renders NO greeting and no system line \u2014 an empty thread says nothing', () => {
+        /**
+         * Every fake greeting is a message the agent did not send, attributed to it, in the one
+         * place a person reads what it said.
+         */
+        const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
+
+        expect(html).not.toContain('data-chat-message');
+        expect(html).not.toMatch(/How can I help|Hello|Hi there/i);
+        // POSITIVE CONTROL: the panel IS rendered, so this is not an absent component.
+        expect(html).toContain('data-chat="overlay"');
+    });
+
+    it('marks an UNDELIVERED message rather than dropping it or pretending it sent', () => {
+        // Dropping it loses what somebody wrote; showing it as sent is worse — they would wait
+        // for an answer that cannot come.
+        const html = render({
+            route: 'genie://dashboard?chat=kai',
+            chatThread: { ...THREAD, messages: [{ id: 'm1', from: 'you', text: 'ping', delivered: false }] },
+            pinned: null,
+        });
+
+        expect(html).toContain('data-chat-undelivered="m1"');
+        expect(html).toContain('not delivered');
+    });
+
+    it('gives an OBSERVED agent a different SHAPE of chat, not a disabled one', () => {
+        /**
+         * It is a TUI the user opened via Take Over. Genie can put a message in its AgentInbox
+         * and cannot see what it says back, so the composer is labelled for the inbox and the
+         * head chip reads `observed - mail only`. **Replies are not shown**, because that TUI
+         * does not report them — an empty transcript there would read as an agent ignoring you.
+         */
+        const html = render({
+            route: 'genie://dashboard?chat=kora',
+            chatThread: { ...THREAD, agentId: 'kora', name: 'kora', fidelity: 'observed' },
+            pinned: null,
+        });
+
+        expect(html).toContain('data-chat-chip="mail-only"');
+        expect(html).toContain('send to kora');
+        expect(html).toContain('inbox');
+
+        // POSITIVE CONTROL: a declared agent gets neither the chip nor that placeholder.
+        const declared = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
+        expect(declared).not.toContain('data-chat-chip="mail-only"');
+        expect(declared).toContain('Message this agent');
+    });
+
+    it('shows NO unread badge when the count could not be read', () => {
+        // `null`, never `0`. A zero claims you are up to date, which is a different statement
+        // from "we could not read the count".
+        const unknown = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
+        expect(unknown).not.toContain('data-chat-unread');
+
+        // POSITIVE CONTROL: a real count renders.
+        const three = render({
+            route: 'genie://dashboard?chat=kai', chatThread: { ...THREAD, unread: 3 }, pinned: null,
+        });
+        expect(three).toContain('data-chat-unread="3"');
+
+        // And a measured zero renders nothing either: there is genuinely nothing to announce.
+        // Which is the one place in this codebase where `0` and `null` DO render alike, and it
+        // is deliberate — a badge is a call to action, not a readout.
+        const zero = render({
+            route: 'genie://dashboard?chat=kai', chatThread: { ...THREAD, unread: 0 }, pinned: null,
+        });
+        expect(zero).not.toContain('data-chat-unread');
     });
 });

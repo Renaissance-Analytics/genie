@@ -31,7 +31,7 @@ import { FEATURE_ICONS } from '../core/rail-view.js';
  */
 export const ICON_NAMES: readonly string[] = [
     // chrome
-    'search', 'inbox', 'layout-list', 'sparkles', 'folder', 'x', 'square-terminal',
+    'search', 'inbox', 'layout-list', 'sparkles', 'folder', 'x', 'square-terminal', 'pin',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // dashboard rows

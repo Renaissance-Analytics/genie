@@ -1,6 +1,8 @@
 import { parseRoute } from '../core/route.js';
+import { dockReserve, type DockPanel } from '../core/dock.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView } from './components/AgentView.js';
+import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
@@ -37,7 +39,14 @@ export interface ShellProps {
     /** Whether `agentDetail` has been looked up yet — `null` alone cannot say. */
     agentResolved: boolean;
     selectedRowId: string | null;
+    /** The chat thread the route names, when it names one. */
+    chatThread: ChatThread | null;
+    /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
+    pinned: DockPanel | null;
     onNavigate: (route: string) => void;
+    onSend: (agentId: string, text: string) => void;
+    onTogglePin: () => void;
+    onCloseChat: () => void;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onOpenPalette: () => void;
@@ -51,14 +60,37 @@ export function Shell({
     agentDetail,
     agentResolved,
     selectedRowId,
+    chatThread,
+    pinned,
     onNavigate,
     onOpenAgent,
     onAddAgent,
     onOpenPalette,
     onSelectRow,
+    onSend,
+    onTogglePin,
+    onCloseChat,
 }: ShellProps) {
     const parsed = parseRoute(route);
     const canServe = servable.includes(parsed.surface);
+
+    /**
+     * THE DOCK RESERVE, and the three places it must not be.
+     *
+     * It is a **`marginRight` on the content row** — the row that holds the rail and the
+     * surface, BELOW the title bar. From `dockReserve`, which reads the same `DOCK_WIDTH` the
+     * panel is sized by, so the two cannot diverge. See `core/dock.ts`:
+     *
+     *  - not `padding`, or the content sizes to the padded box and its borders run under the
+     *    panel;
+     *  - not on the outer wrapper, or the view header narrows too — the gutter starts BELOW
+     *    the header, which keeps its width and position;
+     *  - not on a `flex: 1` column — measured: that squeezed the left rail from 300px to
+     *    163px, because a flex child with a margin gives up basis rather than slack.
+     *
+     * An unpinned flyout reserves nothing: it overlays the right edge and nothing moves.
+     */
+    const reserve = dockReserve(pinned);
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -69,7 +101,7 @@ export function Shell({
                 onOpenPalette={onOpenPalette}
             />
 
-            <div className="flex min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-1" style={{ marginRight: reserve }} data-dock-reserve={reserve}>
                 <Sidebar
                     route={route}
                     deckCount={snapshot.deckCount}
@@ -137,6 +169,22 @@ export function Shell({
                         </div>
                     ) : null}
                 </main>
+
+                {/*
+                 * The flyout. Pinned, it sits in the row and the reserve above makes room for
+                 * it; unpinned, it is absolutely positioned over the right edge and the
+                 * reserve is zero. One component, two geometries, one width.
+                 */}
+                {chatThread || parsed.chat ? (
+                    <ChatFlyout
+                        thread={chatThread}
+                        pinned={pinned === 'chat'}
+                        contextTokens={200_000}
+                        onSend={(text) => onSend(chatThread?.agentId ?? '', text)}
+                        onTogglePin={onTogglePin}
+                        onClose={onCloseChat}
+                    />
+                ) : null}
             </div>
         </div>
     );

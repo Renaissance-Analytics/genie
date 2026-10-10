@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
+import type { DockPanel } from '../core/dock.js';
+import { pinPanel } from '../core/dock.js';
 import { EMPTY_SNAPSHOT, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -122,6 +125,34 @@ export function App({ bridge }: AppProps) {
     const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
     useEffect(() => { setSelectedRowId(null); }, [agentId]);
 
+    /**
+     * Which panel holds the single dock slot.
+     *
+     * View state, not route state, and deliberately: `?pin=right` in the route says a panel IS
+     * pinned, and this says WHICH — but at most one can be, so the route's `chat=<agent>` plus
+     * `pin=right` already describes a pinned chat completely. Keeping a second copy of "which
+     * panel" in the URL would let the two disagree.
+     */
+    const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
+
+    /**
+     * The chat subject comes from the ROUTE, so a link can open a conversation — and so a
+     * pinned chat's subject does not follow the view when you navigate elsewhere.
+     */
+    const chatSubject = parsed.chat;
+    const chatThread: ChatThread | null =
+        chatSubject === null
+            ? null
+            : {
+                  agentId: chatSubject,
+                  name: snapshot.agents.find((a) => a.id === chatSubject)?.name ?? chatSubject,
+                  fidelity: snapshot.agents.find((a) => a.id === chatSubject)?.fidelity ?? 'declared',
+                  // `null`, not `0`: nothing has read this thread's unread count yet, and a
+                  // zero would claim you are up to date. AgentInbox lands with P4.
+                  unread: null,
+                  messages: [],
+              };
+
     // A route this build cannot serve goes home rather than leaving a blank body under a
     // stale address — the one state a person cannot get out of without knowing a shortcut.
     // It happens in practice: a hash left over from a previous version survives an upgrade.
@@ -138,7 +169,24 @@ export function App({ bridge }: AppProps) {
             agentDetail={detail}
             agentResolved={resolved}
             selectedRowId={selectedRowId}
+            chatThread={chatThread}
+            pinned={pinned}
             onNavigate={navigate}
+            onSend={(id, text) => { if (id) resolvedBridge?.prompt(id, text); }}
+            onTogglePin={() => {
+                // The single slot's rule lives in `core/dock.ts`, including the file panel's
+                // refusal. No file panel exists until P5, so `false` is the honest argument
+                // today rather than a placeholder that would silently become wrong.
+                const outcome = pinPanel(pinned, 'chat', false);
+                if (outcome.refused === null) setPinned(outcome.pinned);
+            }}
+            onCloseChat={() => {
+                // `Esc` and the close button drop the chat from the ROUTE, which is the one
+                // place its subject lives. A pinned dock has no close button and Esc does not
+                // close it — that is enforced in the component, not here.
+                const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
+                navigate(next);
+            }}
             onOpenAgent={(id) => {
                 // Start or reattach, THEN navigate. Reattach is the main process's job and is
                 // idempotent, so arriving at an agent that is already running is not a second
