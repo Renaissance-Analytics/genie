@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UpdateHost, type UpdaterPort, type UpdateState } from '../src/main/updater.js';
+import { QUIT_DELAY_MS, UpdateHost, type UpdaterPort, type UpdateState } from '../src/main/updater.js';
 import { updaterChannel, type RunningProcess } from '../src/main/upgrade.js';
 
 /**
@@ -73,6 +73,7 @@ const OWN_PID = 4100;
 function host(fake: Fake, processes: RunningProcess[] = []) {
     const killed: number[] = [];
     const changes: UpdateState[] = [];
+    const deferred: { fn: () => void; ms: number }[] = [];
     const h = new UpdateHost({
         port: fake.port,
         installDir: INSTALL,
@@ -81,9 +82,10 @@ function host(fake: Fake, processes: RunningProcess[] = []) {
         kill: (pid) => { killed.push(pid); return true; },
         clock: () => 1_700_000_000_000,
         caseInsensitive: true,
+        defer: (fn, ms) => { deferred.push({ fn, ms }); },
     });
     h.onChange((s) => { changes.push(s); });
-    return { h, killed, changes };
+    return { h, killed, changes, deferred };
 }
 
 async function settle() {
@@ -217,13 +219,36 @@ describe('install — §7.2 teardown first', () => {
     });
 
     it('terminates exactly the processes under the install directory, then asks the library to install', async () => {
-        const { h, killed, fake } = await downloaded();
+        const { h, killed, fake, deferred } = await downloaded();
         const result = h.install();
         expect(result).not.toBeNull();
         expect(killed.sort()).toEqual([5001, 5002]);
         expect(result!.killed.map((p) => p.pid).sort()).toEqual([5001, 5002]);
-        expect(fake.installs).toBe(1);
         expect(h.state().phase).toBe('installing');
+        for (const d of deferred) d.fn();
+        expect(fake.installs).toBe(1);
+    });
+
+    it('lets the report LEAVE before the quit — quitAndInstall is deferred, never called synchronously', async () => {
+        /**
+         * Measured in the Windows VM, 2026-10-10 18:24, on the installed app: install() killed
+         * the orphans, logged the report, and called quitAndInstall in the same tick — so the
+         * IPC reply carrying the report never reached the page; the CDP driver's await never
+         * settled (Node exit 13) and the Deck never showed "installing". The caller is promised
+         * the report ("the report is returned to the caller, who shows it"); a quit in the
+         * same tick breaks that promise invisibly.
+         */
+        const { h, fake, deferred } = await downloaded();
+        const result = h.install();
+        expect(result!.report).toBe('2 processes were running from the install directory and had to be stopped:\n5001 ' + INSTALL + '\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty\\OpenConsole.exe\n5002 ' + INSTALL.toLowerCase() + '\\genie.exe');
+        expect(fake.installs).toBe(0);
+        expect(deferred.map((d) => d.ms)).toEqual([QUIT_DELAY_MS]);
+        expect(QUIT_DELAY_MS).toBeGreaterThanOrEqual(100);
+        deferred[0]!.fn();
+        expect(fake.installs).toBe(1);
+        // POSITIVE CONTROL: a second install() while installing does not queue a second quit.
+        expect(h.install()).toBeNull();
+        expect(deferred).toHaveLength(1);
     });
 
     it('reports what was killed, by pid and path, and says so when it was nothing', async () => {

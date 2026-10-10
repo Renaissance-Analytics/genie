@@ -72,7 +72,19 @@ export interface UpdateHostOptions {
     clock?: () => number;
     /** Windows paths compare case-insensitively; defaults to the platform's rule. */
     caseInsensitive?: boolean;
+    /** Runs `fn` after `ms`; `setTimeout` unless a test wants to hold the quit in its hand. */
+    defer?: (fn: () => void, ms: number) => void;
 }
+
+/**
+ * How long `install()` holds the quit after answering.
+ *
+ * Long enough for the IPC reply carrying the §7.2 report to reach the renderer and for the
+ * renderer to paint "installing" — measured: with the quit in the same tick, the reply never
+ * arrived and the page was gone before it could (Windows VM, 2026-10-10). Short enough that
+ * nobody sees a pause after pressing "restart to install".
+ */
+export const QUIT_DELAY_MS = 250;
 
 export interface InstallResult {
     killed: readonly RunningProcess[];
@@ -146,7 +158,8 @@ export class UpdateHost {
     /**
      * §7.2 then install. `null` when nothing is downloaded. Otherwise every process running
      * from the install directory is terminated FIRST, the report is returned to the caller
-     * (who shows it), and the library is told to quit and install.
+     * (who shows it), and the library is told to quit and install — `QUIT_DELAY_MS` later, so
+     * the answer leaves the process before the process leaves.
      */
     install(): InstallResult | null {
         if (this.current.phase !== 'downloaded') return null;
@@ -158,7 +171,7 @@ export class UpdateHost {
         );
         for (const p of orphans) this.options.kill(p.pid);
         this.set({ ...this.current, phase: 'installing' });
-        this.options.port.quitAndInstall();
+        (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
         return { killed: orphans, report: orphanReport(orphans) };
     }
 
