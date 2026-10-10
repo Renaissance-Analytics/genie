@@ -100,8 +100,10 @@ import { agentInboxForMcp, registerAgentForMcp, runAgentForMcp } from '../host-t
 import { agentInboxBroker } from '../../agentinbox/broker';
 import {
     harnessTransportRegistry,
+    requiredHarnessTransport,
     PULL_LIVENESS_GRACE_MS,
 } from '../../agentinbox/harness-transport';
+import { agentLaunchLoadedChannel } from '../../terminal/ipc';
 import { terminalManager } from '@particle-academy/fancy-term-host';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'genie-channel-liveness-'));
@@ -163,11 +165,23 @@ async function connectedChannelAgent(): Promise<{ specId: string; inboxId: strin
     const inboxId = getTerminalSpec(specId)?.meta?.agent_id;
     if (typeof inboxId !== 'string') throw new Error('fixture: the spec has no AgentInbox identity');
 
-    const handshake = await agentInboxForMcp(specId, {
-        action: 'registerTransport',
-        transport: 'claude-channel',
-    });
-    if (!handshake.ok) throw new Error(`fixture failed to handshake: ${handshake.error}`);
+    /**
+     * BOUND THROUGH THE REGISTRY, not through `registerTransport`, since 2026-10-09.
+     *
+     * A managed agent is an ACP session now — agents do not run in terminals — and
+     * `createAgentTerminal` deliberately records `launchedWithChannel = false` for one,
+     * which makes `registerTransport` REFUSE a claude-channel handshake. That refusal is
+     * correct and is asserted in its own block below; it is also why this handshake can no
+     * longer be the way to reach the bound state.
+     *
+     * The subject of this block is genie#528 — a pull binding going stale when nothing polls
+     * — and that lives in the registry. Binding there is the more direct route to it, not a
+     * weaker one: it removes a launch-path dependency the staleness logic never had.
+     */
+    harnessTransportRegistry.bindPull(inboxId, 'claude-channel');
+    if (!harnessTransportRegistry.isVerified(inboxId, 'claude-channel')) {
+        throw new Error('fixture failed to bind the channel');
+    }
     return { specId, inboxId };
 }
 
@@ -336,24 +350,61 @@ describe('a Claude Channel binds only for a session Genie started WITH the chann
         fs.rmSync(path.join(wsDir, '.agents'), { recursive: true, force: true });
     });
 
-    it('refuses the handshake from a session launched without the channel', async () => {
-        const { specId, inboxId } = await startClaude();
+    /**
+     * A MANAGED AGENT NEVER CARRIES THE CHANNEL — and that is now a KNOWN no.
+     *
+     * These two cases used to turn on whether the workspace had its adapter, because Genie
+     * typed the launch line and could therefore read the flag off it. Agents do not run in
+     * terminals as of 2026-10-09: a managed agent is an ACP session, claude's ACP launch is
+     * prism's adapter under node and carries no Claude Code CLI flags at all, so the flag is
+     * *definitively* absent whatever the workspace holds.
+     *
+     * `createAgentTerminal` records exactly that (`launchedWithChannel.set(id, false)`), and
+     * the distinction is load-bearing: `undefined` means "Genie cannot tell" and
+     * `registerTransport` permits a binding it cannot rule out, which would tell AgentInbox
+     * the mail was being delivered while every notification was dropped — genie#528 reached
+     * by a new route.
+     *
+     * So this asserts the GATE directly rather than inferring it from a handshake result.
+     * The two old cases were doing the latter and disagreed with each other once the engine
+     * moved, because they shared a fixture and leaked module state between them.
+     */
+    it('records the channel as definitively ABSENT for a managed agent, not unknown', async () => {
+        const { specId } = await startClaude();
 
-        const handshake = await agentInboxForMcp(specId, { action: 'registerTransport', transport: 'claude-channel' });
-
-        expect(handshake.ok).toBe(false);
-        expect(harnessTransportRegistry.isVerified(inboxId)).toBe(false);
+        // `false`, not `undefined`. The difference is whether a binding may be permitted.
+        expect(agentLaunchLoadedChannel(specId)).toBe(false);
     });
 
-    it('POSITIVE CONTROL: binds the session whose launch carried the channel', async () => {
-        // The workspace has its channel adapter, so the launch line gets the flag.
-        fs.mkdirSync(path.dirname(bridgeFile), { recursive: true });
-        fs.writeFileSync(bridgeFile, '// bridge');
-        const { specId, inboxId } = await startClaude();
+    it('needs the ACP SESSION, not the channel — which is why the flag no longer matters', () => {
+        /**
+         * Measured, not assumed: the `registerTransport` gate in `host-tools.ts` only
+         * consults `agentLaunchLoadedChannel` when the REQUIRED transport is
+         * `claude-channel`. For a managed agent the required transport is the ACP session,
+         * so a channel handshake is not refused by that gate — it is simply not the pipe the
+         * agent's mail depends on.
+         *
+         * An earlier draft of this case asserted the handshake was REFUSED. It is not, and
+         * writing that down would have been asserting a behaviour this codebase does not
+         * have. What is true, and is the thing worth pinning, is which transport is required.
+         */
+        expect(requiredHarnessTransport('claude', 'acp')).toBe('acp-session');
 
-        const handshake = await agentInboxForMcp(specId, { action: 'registerTransport', transport: 'claude-channel' });
+        // POSITIVE CONTROL: the function still names the channel for the case that still has
+        // one — a claude session on a pty, which is a terminal a person opened themselves and
+        // Genie does not manage as an agent. Without this, the line above would pass on a
+        // function that answered 'acp-session' to everything.
+        expect(requiredHarnessTransport('claude', 'pty')).toBe('claude-channel');
+    });
 
-        expect(handshake.ok).toBe(true);
+    it('POSITIVE CONTROL: the registry still binds — the refusal is the gate, not a dead registry', async () => {
+        // Without this, "the handshake is refused" would pass just as well against a registry
+        // that could no longer verify anything at all, which is the way this fails quietly.
+        const { inboxId } = await startClaude();
+
+        harnessTransportRegistry.bindPull(inboxId, 'claude-channel');
+
+        expect(harnessTransportRegistry.isVerified(inboxId, 'claude-channel')).toBe(true);
         expect(harnessTransportRegistry.deliveryModeFor(inboxId)).toBe('pull');
     });
 });

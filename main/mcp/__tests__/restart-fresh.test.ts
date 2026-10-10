@@ -254,8 +254,14 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
     });
 
     it('POSITIVE CONTROL: a resumable agent with a captured id still RESUMES', async () => {
-        // Without this, "restart works" passes against a build that only ever
-        // restarts fresh and has quietly stopped resuming anything.
+        // Without this, "restart works" passes against a build that only ever restarts fresh
+        // and has quietly stopped resuming anything. That guard is the point of this case and
+        // it is kept; only the EVIDENCE moved.
+        //
+        // It used to read `--resume <sid>` off the line typed into the pty. Agents do not run
+        // in terminals as of 2026-10-09, so the observable is the captured id SURVIVING the
+        // restart — which is what `session/load` resumes from, and what a fresh restart would
+        // replace with a new one while still reporting ok.
         const id = await launchResumableAgent();
         const sid = getTerminalSpec(id)?.meta?.chat_session_id as string;
         expect(sid).toBeTruthy();
@@ -265,8 +271,9 @@ describe('genie#443 — RESTART (fresh) reaches a terminal RESUME cannot', () =>
         expect(r.ok).toBe(true);
         await afterLaunchSettles();
 
-        const relaunch = submitted(spawnedPtys.at(-1));
-        expect(relaunch).toContain(`--resume ${sid}`);
+        expect(getTerminalSpec(id)?.meta?.chat_session_id).toBe(sid);
+        // And no shell was driven, which is the other half of the same fact.
+        expect(submitted(spawnedPtys.at(-1))).toBe('');
     });
 
     it('a FRESH restart of a resumable agent leaves the old conversation behind', async () => {
