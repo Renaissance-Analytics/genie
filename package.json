@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Genie 2 \u2014 an agent is a session, never a terminal.",
+  "description": "Genie 2 — an agent is a session, never a terminal.",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -14,11 +14,14 @@
     "verify": "npm run typecheck && npm test && npm run build",
     "verify:live": "tsx test/live/claude-session.live.ts",
     "verify:flow": "tsx test/live/agent-flow.live.ts",
-    "verify:resume": "tsx test/live/resume.live.ts"
+    "verify:resume": "tsx test/live/resume.live.ts",
+    "verify:terminal": "tsx test/live/terminal.live.ts"
   },
   "dependencies": {
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
+    "@particle-academy/fancy-term": "^0.6.1",
+    "@particle-academy/fancy-term-host": "^0.7.0",
     "@particle-academy/prism-acp": "^0.6.1",
     "@particle-academy/prism-harness": "^0.6.0",
     "@particle-academy/react-fancy": "^5.35.1",

@@ -1,0 +1,142 @@
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import {
+    configureInProcessBackend,
+    createSnapshotStore,
+    inProcessBackend,
+    parseCommandLine,
+    resolveDefaultShell,
+} from '@particle-academy/fancy-term-host';
+import type { PtyOpened, PtyPort, PtySpawnOptions } from './terminal-host.js';
+
+/**
+ * `fancy-term-host` behind Genie's `PtyPort`.
+ *
+ * The engine is Fancy's and does the real work — node-pty, bounded scrollback, snapshot and
+ * replay, retained ptys, the OSC-7 cwd hook. This file is the mapping onto the four verbs and
+ * two subscriptions `TerminalHost` asks for, and nothing more: the port is deliberately smaller
+ * than the engine's `PtyBackend`, so that Genie cannot drift into reimplementing what the
+ * package owns.
+ *
+ * ## The one rule holds here too
+ *
+ * Nothing in this file can name an agent. `PtySpawnOptions` is a cwd, an optional command and
+ * a size; `TerminalHost` adds a workspace. There is no path from an `AgentId` to this spawn,
+ * and `test/no-agent-pty.test.ts` counts that at the host.
+ *
+ * ## Dependency shape, decided by the owner 2026-10-10
+ *
+ * `node-pty` is `fancy-term-host`'s declared peer and `@xterm/*` are `fancy-term`'s. They are
+ * NOT declared in genie2's `package.json` — npm installs peers on its own — and the manifest
+ * stays Fancy and Prism only. Fancy bounded the xterm ranges (`<6`, `<0.11`) in `fancy-term@0.6.1`
+ * so a new major can no longer resolve silently; `fancy-term-host`'s `node-pty: ^1.0.0` was
+ * already bounded. The `/ipc` subpath exists for a process that must ship with no native
+ * dependency, which genie2 — one npm tree — does not have.
+ */
+
+/** The slice of `PtyBackend` this adapter uses. Injected so the mapping is testable without a pty. */
+export interface HostBackend {
+    create(opts: {
+        id: string;
+        cwd: string;
+        shell?: string;
+        args?: string[];
+        cols?: number;
+        rows?: number;
+    }): { id: string; pid: number; shell: string; existing: boolean; scrollback: string };
+    write(id: string, data: string): boolean;
+    resize(id: string, cols: number, rows: number): boolean;
+    kill(id: string): boolean;
+    getScrollback(id: string): string | undefined;
+    on(event: 'data', listener: (id: string, data: string) => void): unknown;
+    on(event: 'exit', listener: (id: string, payload: { exitCode: number; signal?: number }) => void): unknown;
+}
+
+export interface FancyTermPortOptions {
+    /** The user's login shell, when a terminal names no command. The engine resolves it. */
+    defaultShell: () => { command: string; args: string[] };
+}
+
+export function fancyTermPort(backend: HostBackend, options: FancyTermPortOptions): PtyPort {
+    /*
+     * One subscription on the engine, fanned out to however many listeners the host has.
+     *
+     * `PtyBackend.on` is an EventEmitter with no `off` in the port's contract, so subscribing
+     * per listener would leak one engine listener per closed window — the previous build's
+     * exact leak. Subscribe once, keep our own set, hand back real unsubscribes.
+     */
+    const dataListeners = new Set<(id: string, data: string) => void>();
+    const exitListeners = new Set<(id: string, exitCode: number) => void>();
+    backend.on('data', (id, data) => {
+        for (const l of dataListeners) l(id, data);
+    });
+    backend.on('exit', (id, payload) => {
+        // The engine reports `{ exitCode, signal? }`; the host wants the code. Flattening here
+        // keeps `TerminalHost` ignorant of the engine's payload shape.
+        for (const l of exitListeners) l(id, payload.exitCode);
+    });
+
+    return {
+        open(spawn: PtySpawnOptions): PtyOpened {
+            // The engine keys a pty on a caller-chosen id. Minted here, never by the renderer:
+            // a renderer-chosen id that collided would JOIN an existing pty (`existing: true`)
+            // rather than open a new one, silently.
+            const id = `term_${randomUUID()}`;
+            const { command, args } = spawn.command ? parseCommandLine(spawn.command) : options.defaultShell();
+
+            const created = backend.create({
+                id,
+                cwd: spawn.cwd,
+                shell: command,
+                args,
+                ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
+                ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
+            });
+            return { id: created.id, pid: created.pid, shell: created.shell, scrollback: created.scrollback };
+        },
+        write: (id, data) => backend.write(id, data),
+        resize: (id, cols, rows) => backend.resize(id, cols, rows),
+        kill: (id) => backend.kill(id),
+        scrollback: (id) => backend.getScrollback(id),
+        onData(listener) {
+            dataListeners.add(listener);
+            return () => dataListeners.delete(listener);
+        },
+        onExit(listener) {
+            exitListeners.add(listener);
+            return () => exitListeners.delete(listener);
+        },
+    };
+}
+
+/**
+ * The REAL engine, wired for this process.
+ *
+ * `fancy-term-host`'s in-process backend wants two ports: settings (which gate the cwd hook
+ * and detached terminals) and a snapshot store (scrollback persisted across restarts, §6.5).
+ * Snapshots are written in plaintext gzip here — the `Encryptor` reports unavailable — because
+ * Electron's `safeStorage` is a main-process-only API and this module must also load under a
+ * plain Node live check. Wiring `safeStorage` in is a follow-up recorded in the status doc,
+ * not something quietly skipped.
+ *
+ * Settings come from a tiny literal rather than a settings subsystem that does not exist yet:
+ * cwd tracking on, detached terminals off. A missing key makes the engine apply its default.
+ */
+export function realFancyTermPort(userData: string): PtyPort {
+    const settings = {
+        get: (key: string): string | undefined =>
+            ({ track_cwd: 'on', detached_terminals: 'off' } as Record<string, string>)[key],
+    };
+    configureInProcessBackend({
+        settings,
+        snapshots: createSnapshotStore({
+            baseDir: join(userData, 'terminal-snapshots'),
+            encryptor: {
+                isAvailable: () => false,
+                encrypt: (b) => b,
+                decrypt: (b) => b,
+            },
+        }),
+    });
+    return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+}
