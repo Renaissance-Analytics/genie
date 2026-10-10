@@ -3,13 +3,16 @@ import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
 import { hostname } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
+import { UpdateHost } from './updater.js';
+import { realElectronUpdaterPort } from './electron-updater-port.js';
+import { killProcess, listProcesses } from './process-list.js';
 
 /**
  * THE MAIN PROCESS.
@@ -51,6 +54,7 @@ let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
 let takeOvers: TakeOverHost | null = null;
 let host: SessionHost | null = null;
+let updates: UpdateHost | null = null;
 
 /**
  * A Take Over window: the OS frame (there is no Genie chrome to replace it), one terminal.
@@ -218,6 +222,33 @@ async function boot(): Promise<void> {
     });
     const takeOversNow = takeOvers;
     theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
+
+    /*
+     * UPDATES (§7). The host drives electron-updater; the renderer asks and shows. The install
+     * directory is wherever this executable lives — `%LOCALAPPDATA%\Programs\Genie` when
+     * installed, Electron's own dist in a dev run — and §7.2's teardown scans exactly that.
+     * Nothing checks on a timer: the first check is the user's, or the smoke's.
+     */
+    updates = new UpdateHost({
+        port: realElectronUpdaterPort(),
+        installDir: dirname(process.execPath),
+        ownPid: process.pid,
+        processes: listProcesses,
+        kill: killProcess,
+    });
+    updates.onChange((state) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
+        }
+    });
+    ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
+    ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
+    ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
+    ipcMain.handle('genie:updates-install', () => {
+        const result = updates?.install() ?? null;
+        if (result) console.log(`[updater] ${result.report}`);
+        return result ? { report: result.report } : null;
+    });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 

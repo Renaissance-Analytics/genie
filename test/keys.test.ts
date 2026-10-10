@@ -41,7 +41,7 @@ describe('the typing guard', () => {
 
 describe('what a key means in the Agent view', () => {
     const press = (key: string, over: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; typing: boolean }> = {}) =>
-        agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, typing: false, ...over });
+        agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: false, ...over });
 
     it('E is the next edit, in either case', () => {
         expect(press('e')).toBe('next-edit');

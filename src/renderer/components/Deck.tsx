@@ -1,5 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { deckBand, signalStrip, type DeckItem, type SignalState } from '../../core/deck.js';
+import { deckBand, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
 /**
@@ -32,9 +32,11 @@ export interface DeckProps {
     onAnswer: (item: DeckItem, optionId: string) => void;
     onOpenItem: (item: DeckItem) => void;
     onNavigate: (route: string) => void;
+    /** The update signal's door is an action (§7): download, then install. */
+    onSignalAction?: ((action: SignalAction) => void) | undefined;
 }
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction }: DeckProps) {
     const band = deckBand(items);
     const strip = signalStrip(signals);
 
@@ -66,7 +68,8 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             type="button"
                             data-signal={signal.kind}
                             data-nav={signal.route}
-                            onClick={() => onNavigate(signal.route)}
+                            data-action={signal.action}
+                            onClick={() => (signal.action ? onSignalAction?.(signal.action) : onNavigate(signal.route))}
                             className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
                         >
                             {signal.label}

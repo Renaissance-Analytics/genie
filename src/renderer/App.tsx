@@ -4,7 +4,7 @@ import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
-import { EMPTY_SNAPSHOT, NO_TERMINALS, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
@@ -225,6 +225,7 @@ export function App({ bridge }: AppProps) {
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={() => resolvedBridge?.addWorkspace()}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
+            updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {

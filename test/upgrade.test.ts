@@ -45,7 +45,7 @@ describe('the updater can see the channel it publishes to', () => {
 describe('orphans under the install directory', () => {
     const INSTALL = '/opt/programs/Genie';
 
-    const proc = (pid: number, exe: string) => ({ pid, executable: exe });
+    const proc = (pid: number, exe: string, parentPid: number | null = null) => ({ pid, executable: exe, parentPid });
 
     it('finds every process running from the install directory, not just one with a pidfile', () => {
         /**
@@ -83,6 +83,44 @@ describe('orphans under the install directory', () => {
         // POSITIVE CONTROL: the same process under a different pid IS found, so the exclusion
         // is about identity rather than about the path.
         expect(orphansUnder([proc(42, '/opt/programs/Genie/Genie.exe')], INSTALL, 7)).toHaveLength(1);
+    });
+
+    it('never includes our own CHILD processes — Electron\'s renderer, GPU and utility are Genie.exe too', () => {
+        /**
+         * Measured in the Windows VM, 2026-10-10 18:12: the installed app's §7.2 report named
+         * THREE Genie.exe processes "running from the install directory" that "had to be
+         * stopped" — its own renderer, GPU and network-service children. It killed them, the
+         * window went blank mid-install, and the driver lost its page. Our own pid was excluded;
+         * our own TREE was not. Children and grandchildren of the upgrading process are the
+         * upgrading process, and `quitAndInstall` ends them in order.
+         */
+        const own = 42;
+        const found = orphansUnder(
+            [
+                proc(own, '/opt/programs/Genie/Genie.exe', 1),
+                proc(43, '/opt/programs/Genie/Genie.exe', own), // renderer
+                proc(44, '/opt/programs/Genie/Genie.exe', own), // gpu
+                proc(45, '/opt/programs/Genie/Genie.exe', 43), // a grandchild (utility under the renderer)
+                // POSITIVE CONTROLS: a console host left by a PREVIOUS Genie (parent long gone,
+                // reparented to 1) and a Genie.exe whose parent is some other process ARE found.
+                proc(90, '/opt/programs/Genie/resources/OpenConsole.exe', 1),
+                proc(91, '/opt/programs/Genie/Genie.exe', 7),
+            ],
+            INSTALL,
+            own,
+        );
+        expect(found.map((p) => p.pid)).toEqual([90, 91]);
+    });
+
+    it('treats an UNKNOWN parent as outside our tree — a lister that cannot name parents hides nothing', () => {
+        // `parentPid: null` is "could not tell", and a process we cannot place is still a
+        // process holding our files; only a KNOWN descent from our pid earns the exclusion.
+        const found = orphansUnder(
+            [proc(42, '/opt/programs/Genie/Genie.exe', 1), proc(50, '/opt/programs/Genie/Genie.exe', null)],
+            INSTALL,
+            42,
+        );
+        expect(found.map((p) => p.pid)).toEqual([50]);
     });
 
     it('reports an empty list as empty rather than as nothing to say', () => {

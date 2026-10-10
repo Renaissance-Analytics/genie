@@ -95,13 +95,29 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
         });
 }
 
-export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent';
+export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
+
+/** The one kind of door that is an action rather than a place: the update's next step. */
+export type SignalAction = 'update-download' | 'update-install';
 
 export interface Signal {
     kind: SignalKind;
     label: string;
     /** **Every signal is also a door.** A route to the feature it is about. */
     route: string;
+    /**
+     * For the update signal only: what clicking it DOES. An update has no surface to go to —
+     * its door is the next step (download, then install), and a click with no action (while
+     * downloading, while installing) just goes to the Deck, which is where it already is.
+     */
+    action?: SignalAction;
+}
+
+/** What the strip needs to know about an update — `UpdateState`'s shape, the three fields it reads. */
+export interface UpdateSignalInput {
+    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+    version: string | null;
+    percent: number | null;
 }
 
 export interface SignalState {
@@ -111,6 +127,11 @@ export interface SignalState {
     /** GitHub permissions are blocking features. */
     githubBlocked: boolean;
     osAgentWorking: boolean;
+    /**
+     * The updater's state, overlaid by the renderer (it is not part of the estate snapshot).
+     * Absent or `null` means no updater — a dev run, a render test — and says nothing.
+     */
+    update?: UpdateSignalInput | null;
 }
 
 /**
@@ -150,6 +171,25 @@ export function signalStrip(state: SignalState): readonly Signal[] {
 
     if (state.osAgentWorking) {
         signals.push({ kind: 'os-agent', label: 'genie is working', route: 'genie://agent/genie' });
+    }
+
+    /*
+     * THE UPDATE (§7). Silent in idle / checking / none / error: there is nothing to act on,
+     * and "no update" is furniture. From `available` on, it is true, and the door is the next
+     * step rather than a place — the only signal shaped that way.
+     */
+    const u = state.update;
+    if (u && u.version) {
+        if (u.phase === 'available') {
+            signals.push({ kind: 'update', label: `Genie ${u.version} is available — download`, route: 'genie://deck', action: 'update-download' });
+        } else if (u.phase === 'downloading') {
+            const progress = u.percent === null ? '' : ` ${Math.round(u.percent)}%`;
+            signals.push({ kind: 'update', label: `Downloading Genie ${u.version}${progress}`, route: 'genie://deck' });
+        } else if (u.phase === 'downloaded') {
+            signals.push({ kind: 'update', label: `Genie ${u.version} is ready — restart to install`, route: 'genie://deck', action: 'update-install' });
+        } else if (u.phase === 'installing') {
+            signals.push({ kind: 'update', label: `Installing Genie ${u.version}…`, route: 'genie://deck' });
+        }
     }
 
     return signals;

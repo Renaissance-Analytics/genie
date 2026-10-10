@@ -11,7 +11,7 @@ import type { TimedEvent } from '../src/core/stream-view.js';
  * appear; the effects of each are pure helpers proven without a window.
  */
 
-const press = (key: string) => agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, typing: false });
+const press = (key: string) => agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: false });
 
 describe('the bindings', () => {
     it('maps exactly the keys §4.2 names, and nothing else — COUNTED over the alphabet', () => {
@@ -36,7 +36,7 @@ describe('the bindings', () => {
     it('every binding is dead while typing — COUNTED', () => {
         const keys = ['a', 'd', 'e', 'j', 'k', 't', 'Enter'];
         const alive = keys.filter((key) =>
-            agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, typing: true }) !== null);
+            agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: true }) !== null);
         expect(alive).toEqual([]);
     });
 
@@ -44,7 +44,42 @@ describe('the bindings', () => {
         // Esc in a composer is "stop typing", which is a request the rest of the map must not
         // swallow: the handler receives `escape` and, with a typing target, blurs rather than
         // navigates. The decision is still the handler's; the map only says the key counts.
-        expect(agentViewAction({ key: 'Escape', ctrlKey: false, metaKey: false, altKey: false, typing: true })).toBe('escape');
+        expect(agentViewAction({ key: 'Escape', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: true })).toBe('escape');
+    });
+});
+
+describe('⌘⇧T — Take Over (§4.2)', () => {
+    // A CHORD, not a letter: it carries a modifier on purpose, so the typing rule does not
+    // apply to it — the composer must not swallow the one shortcut that opens a window.
+    const chord = (key: string, over: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; typing: boolean }> = {}) =>
+        agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: false, ...over });
+
+    it('is Take Over with Meta (macOS) or Ctrl (elsewhere), in either case of the letter', () => {
+        expect(chord('T', { metaKey: true, shiftKey: true })).toBe('take-over');
+        expect(chord('t', { metaKey: true, shiftKey: true })).toBe('take-over');
+        expect(chord('T', { ctrlKey: true, shiftKey: true })).toBe('take-over');
+    });
+
+    it('still acts while typing — a chord is not an unmodified letter', () => {
+        expect(chord('T', { metaKey: true, shiftKey: true, typing: true })).toBe('take-over');
+    });
+
+    it('needs BOTH halves — ⌘T, ⇧T and ⌘⇧⌥T are not Take Over (the positive control for the chord)', () => {
+        // ⌘T alone belongs to the OS/browser (new tab) and answers null like every other
+        // modified letter; ⇧T alone is still the Thought-lane toggle; Alt on top is nothing.
+        expect(chord('T', { metaKey: true })).toBeNull();
+        expect(chord('T', { ctrlKey: true })).toBeNull();
+        expect(chord('T', { shiftKey: true })).toBe('toggle-thoughts');
+        expect(chord('T', { metaKey: true, shiftKey: true, altKey: true })).toBeNull();
+    });
+
+    it('binds exactly ONE letter under ⌘⇧ — COUNTED over the alphabet', () => {
+        const bound: Record<string, string> = {};
+        for (const k of 'abcdefghijklmnopqrstuvwxyz') {
+            const a = chord(k.toUpperCase(), { metaKey: true, shiftKey: true });
+            if (a) bound[k] = a;
+        }
+        expect(bound).toEqual({ t: 'take-over' });
     });
 });
 
