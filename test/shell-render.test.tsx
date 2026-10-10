@@ -41,7 +41,18 @@ const LIVE: GenieSnapshot = {
         { id: 'tynn', path: 'C:/_Projects/tynn.ai', agentsKnown: true },
         { id: 'fancy', path: 'C:/_Projects/fancy', agentsKnown: true },
     ],
-    deckCount: 1,
+    // One real item, because the rail's badge count is DERIVED from the band now rather than
+    // carried beside it. A fixture with an empty band and a badge of 1 could not exist, which
+    // is the point: two numbers for one fact is how a badge ends up saying 3 while the Deck
+    // shows 2, and the badge is the thing people trust enough not to check.
+    deckItems: [{
+        id: 'approval:kai', source: 'agent-question', agentId: 'kai', agentName: 'kai',
+        workspaceId: 'tynn', title: 'Allow php artisan migrate --force?', blocking: true,
+        priority: 'normal', at: 1_760_000_000_000,
+        answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] },
+        forwardedFrom: null,
+    }],
+    signals: { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
     workstation: { name: 'alphar', healthy: true },
 };
 
@@ -67,6 +78,7 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}
+            onAnswerDeckItem={() => {}}
             {...over}
         />,
     );
@@ -158,6 +170,7 @@ describe('first paint, before the bridge has answered', () => {
                 onCloseChat={() => {}}
                 answeringApproval={null}
                 onAnswerApproval={() => {}}
+                onAnswerDeckItem={() => {}}
             />,
         );
 
@@ -430,5 +443,45 @@ describe('the chat thread', () => {
             route: 'genie://dashboard?chat=kai', chatThread: { ...THREAD, unread: 0 }, pinned: null,
         });
         expect(zero).not.toContain('data-chat-unread');
+    });
+});
+
+describe('the Deck surface', () => {
+    it('renders at its route, with the band on it', () => {
+        const html = render({ route: 'genie://deck' });
+
+        expect(html).toContain('data-surface="deck"');
+        expect(html).toContain('data-deck-item="approval:kai"');
+        expect(html).toContain('data-approval-option="allow"');
+    });
+
+    it('offers the Deck row in the rail, because the surface can now be served', () => {
+        // The rail's rows are DERIVED from `servable`, so this is not a separate decision —
+        // it is the same one, read from the other end.
+        expect(render()).toContain('data-nav="genie://deck"');
+    });
+
+    it('badges the rail from the BAND, so the two cannot disagree', () => {
+        /**
+         * One number, one source. Two copies is how a badge ends up saying 3 while the Deck
+         * shows 2 — and the badge is the one people trust enough not to check.
+         */
+        expect(render()).toContain('data-deck-badge="1"');
+
+        const empty = render({ snapshot: { ...LIVE, deckItems: [] } });
+        expect(empty).not.toContain('data-deck-badge');
+
+        // POSITIVE CONTROL: the surface still renders; it is the BADGE that is absent.
+        expect(empty).toContain('data-nav="genie://deck"');
+    });
+
+    it('shows no badge while the queue is unread — which is not the same as empty', () => {
+        const unread = render({ snapshot: { ...LIVE, deckItems: null } });
+        expect(unread).not.toContain('data-deck-badge');
+    });
+
+    it('does not render the Dashboard underneath the Deck', () => {
+        const html = render({ route: 'genie://deck' });
+        expect(html).not.toContain('data-surface="dashboard"');
     });
 });

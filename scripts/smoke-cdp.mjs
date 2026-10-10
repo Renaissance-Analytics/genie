@@ -400,10 +400,41 @@ if (typeof agentRow === 'string') {
     check(backHome, '24. Back again returns to the Dashboard');
 }
 
+/*
+ * THE DECK IS REACHABLE.
+ *
+ * Not "the Deck renders" — that is a unit test. **Reachable**, by clicking the thing a person
+ * would click, which is the check §0.4 is about: a finished surface that nothing navigates to
+ * is a surface nobody has.
+ *
+ * Its band is empty here, because a parked approval needs a provider that sends permission
+ * requests and there is none in this container. That is stated rather than faked: the empty
+ * state is what an honest Deck shows when nothing needs you.
+ */
+const deckRow = await cdp.evaluate(`Boolean(document.querySelector('[data-nav="genie://deck"]'))`);
+check(deckRow === true, '25. the rail offers the Deck');
+
+if (deckRow) {
+    await cdp.evaluate(`document.querySelector('[data-nav="genie://deck"]').click(); true`);
+    const onDeck = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-surface="deck"]'))`,
+        'the Deck after clicking its rail row',
+    );
+    check(onDeck, '26. clicking it opens the Deck');
+
+    const empty = await cdp.evaluate(`document.querySelector('[data-deck]')?.getAttribute('data-deck') ?? null`);
+    check(empty === 'empty', '27. and it says nothing needs you, rather than showing a blank', String(empty));
+
+    // Back to the Dashboard, so the screenshot at the end is still of the board.
+    await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard again');
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
-check(parsed.length === 0, '25. the console is clean', parsed.join(' | ') || 'no errors');
+check(parsed.length === 0, '28. the console is clean', parsed.join(' | ') || 'no errors');
 
 // A screenshot, for a human to look at. Writing one is not the same as somebody having seen
 // it, and this script does not claim otherwise.
@@ -418,7 +449,7 @@ cdp.close();
 
 console.log('');
 if (failures.length > 0) {
-    console.log(`SMOKE FAILED — ${failures.length} of 25:\n  ${failures.join('\n  ')}`);
+    console.log(`SMOKE FAILED — ${failures.length} of 28:\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');

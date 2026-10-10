@@ -187,6 +187,12 @@ export function App({ bridge }: AppProps) {
                 setAnswering(optionId);
                 resolvedBridge?.answerApproval(agentId, optionId);
             }}
+            onAnswerDeckItem={(id, optionId) => {
+                // The Deck answers for an agent the route is NOT on, so the id comes from the
+                // item rather than from the URL.
+                setAnswering(optionId);
+                resolvedBridge?.answerApproval(id, optionId);
+            }}
             onTogglePin={() => {
                 // The single slot's rule lives in `core/dock.ts`, including the file panel's
                 // refusal. No file panel exists until P5, so `false` is the honest argument

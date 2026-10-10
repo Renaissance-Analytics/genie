@@ -1,5 +1,6 @@
 import { parseRoute } from '../core/route.js';
 import { dockReserve, type DockPanel } from '../core/dock.js';
+import { Deck } from './components/Deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView } from './components/AgentView.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
@@ -48,6 +49,8 @@ export interface ShellProps {
     /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
     answeringApproval: string | null;
     onAnswerApproval: (optionId: string) => void;
+    /** Answering from the DECK names its agent, because the route is not on that agent. */
+    onAnswerDeckItem: (agentId: string, optionId: string) => void;
     onTogglePin: () => void;
     onCloseChat: () => void;
     onOpenAgent: (agentId: string) => void;
@@ -78,6 +81,7 @@ export function Shell({
     onCloseChat,
     answeringApproval,
     onAnswerApproval,
+    onAnswerDeckItem,
 }: ShellProps) {
     const parsed = parseRoute(route);
     const canServe = servable.includes(parsed.surface);
@@ -124,7 +128,7 @@ export function Shell({
             <div className="relative flex min-h-0 flex-1" style={{ marginRight: reserve }} data-dock-reserve={reserve}>
                 <Sidebar
                     route={route}
-                    deckCount={snapshot.deckCount}
+                    deckCount={snapshot.deckItems?.length ?? null}
                     workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
@@ -144,6 +148,17 @@ export function Shell({
                             onOpenAgent={onOpenAgent}
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
+                        />
+                    ) : null}
+
+                    {canServe && parsed.surface === 'deck' ? (
+                        <Deck
+                            items={snapshot.deckItems ?? []}
+                            signals={snapshot.signals}
+                            answering={answeringApproval}
+                            onAnswer={(item, optionId) => { if (item.agentId) onAnswerDeckItem(item.agentId, optionId); }}
+                            onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
+                            onNavigate={onNavigate}
                         />
                     ) : null}
 

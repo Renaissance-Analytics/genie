@@ -1,4 +1,5 @@
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
+import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -38,8 +39,15 @@ export interface GenieSnapshot {
      * answered — a confident claim about a machine nobody had asked. An older test caught it.
      */
     workspaces: readonly RailWorkspace[] | null;
-    /** Things waiting on a human. `null` until the queue has actually been read. */
-    deckCount: number | null;
+    /**
+     * The attention band, or `null` until the queue has been read.
+     *
+     * The rail's badge count is DERIVED from this rather than carried beside it. Two numbers
+     * for one fact is how a badge ends up saying 3 while the Deck shows 2, and the badge is
+     * the thing people trust enough not to check.
+     */
+    deckItems: readonly DeckItem[] | null;
+    signals: SignalState;
     /** `null` until the workstation has been read — never a default `healthy: false`. */
     workstation: { name: string; healthy: boolean } | null;
 }
@@ -106,7 +114,7 @@ export interface GenieBridge {
  *
  * **Add a surface in the commit that makes it render, never before.**
  */
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck'];
 
 declare global {
     interface Window {
@@ -130,6 +138,7 @@ declare global {
 export const EMPTY_SNAPSHOT: GenieSnapshot = {
     agents: [],
     workspaces: null,
-    deckCount: null,
+    deckItems: null,
+    signals: { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
     workstation: null,
 };

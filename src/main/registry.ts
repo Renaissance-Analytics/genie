@@ -1,5 +1,6 @@
 import { agentRecord, mintAgentId, type AgentRecord, type AgentId } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
+import type { DeckItem } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
 
@@ -126,11 +127,56 @@ export class Registry {
             workspaces: this.#loaded
                 ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true }))
                 : null,
-            // `null` until the Deck exists to read it. Not `0` — that would be a badge-sized
-            // claim that nothing needs the user, made by a surface that has not been built.
-            deckCount: null,
+            /*
+             * The attention band.
+             *
+             * Today it has ONE source: agents parked on an approval. The other three the design
+             * names — user-list items, unread DMs, finished-with-handoff — need subsystems that
+             * do not exist yet, and nothing here invents them. `null` before the store is read,
+             * because an empty band is a claim that nothing needs you.
+             */
+            deckItems: this.#loaded ? this.#deckItems() : null,
+            /*
+             * Every signal false, and that is honest rather than lazy: Flows, AgentInbox and
+             * the GitHub integration are not built, so none of them has anything to report. The
+             * strip renders nothing, which is exactly what it should do when nothing is true.
+             */
+            signals: { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
         };
+    }
+
+    /**
+     * Agents parked on an approval, as Deck items.
+     *
+     * `blocking: true` without exception — a parked approval means the agent has STOPPED. That
+     * is the strongest claim the band can carry and it is literally true here.
+     */
+    #deckItems(): readonly DeckItem[] {
+        return this.#agents.flatMap((record): DeckItem[] => {
+            const live = this.#probe(record.id);
+            const approval = live?.pendingApproval;
+            if (!approval) return [];
+
+            return [{
+                id: `approval:${record.id}`,
+                source: 'agent-question',
+                agentId: record.id,
+                agentName: record.name,
+                workspaceId: record.workspaceId,
+                title: approval.question,
+                blocking: true,
+                // The protocol carries no priority for a permission request, so this is NOT a
+                // guess dressed as one: `normal` is the absence of a claim, and `blocking`
+                // already carries the urgency that matters.
+                priority: 'normal',
+                at: live?.startedAt ?? 0,
+                answer: { kind: 'inline', options: approval.options },
+                // Cross-host forwarding needs remote workstations, which are not built. `null`
+                // here means "raised locally", which is true of every approval today.
+                forwardedFrom: null,
+            }];
+        });
     }
 
     subscribe(listener: (snapshot: GenieSnapshot) => void): () => void {

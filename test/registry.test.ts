@@ -41,7 +41,7 @@ describe('before the store has been read', () => {
         expect(snapshot.agents).toEqual([]);
         // `null`, not `[]` — see the dedicated describe below for why the difference matters.
         expect(snapshot.workspaces).toBeNull();
-        expect(snapshot.deckCount).toBeNull();
+        expect(snapshot.deckItems).toBeNull();
         expect(snapshot.workstation).toBeNull();
     });
 
