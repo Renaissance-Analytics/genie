@@ -109,7 +109,7 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 ];
 
 /** Every surface a route can name. */
-export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace';
+export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover';
 
 /** The rail's fixed rows. */
 export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace';

@@ -61,6 +61,7 @@ export interface ShellProps {
     onAddWorkspace: () => void;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
     terminals?: GenieBridge['terminals'];
+    onTakeOver?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
 }
@@ -79,6 +80,7 @@ export function Shell({
     onAddAgent,
     onAddWorkspace,
     terminals = NO_TERMINALS,
+    onTakeOver,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -190,6 +192,7 @@ export function Shell({
                             }}
                             range={parsed.range}
                             onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
+                            onTakeOver={onTakeOver}
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
                         />

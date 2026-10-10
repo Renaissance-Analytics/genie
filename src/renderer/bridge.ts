@@ -105,6 +105,13 @@ export interface GenieBridge {
     addWorkspace(): void;
 
     /**
+     * TAKE OVER — open the agent's TUI in a terminal in a NEW window (§1). The main process
+     * opens the terminal in the agent's workspace and the window on it; Genie then only
+     * watches. The answer says whether it opened and which terminal, or why not.
+     */
+    takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+
+    /**
      * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
      *
      * Keyed by WORKSPACE, never by agent: there is no way to express "a terminal for this
@@ -136,7 +143,7 @@ export interface GenieBridge {
  *
  * **Add a surface in the commit that makes it render, never before.**
  */
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`

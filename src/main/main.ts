@@ -1,13 +1,14 @@
 import { BrowserWindow, app, dialog, ipcMain, safeStorage } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
+import { TakeOverHost } from './take-over-host.js';
 import { hostname } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
-import { SessionHost } from './session-host.js';
+import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 
 /**
@@ -48,7 +49,30 @@ if (!app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
+let takeOvers: TakeOverHost | null = null;
 let host: SessionHost | null = null;
+
+/**
+ * A Take Over window: the OS frame (there is no Genie chrome to replace it), one terminal.
+ * Loads the same renderer with the take-over route in its hash; `App` renders only the pane
+ * for that route. Closing it ends the take-over — the window IS the session.
+ */
+function openTakeOverWindow(route: string): void {
+    const terminalId = route.split('/').pop() ?? '';
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { w.focus(); return; }
+    }
+    const win = new BrowserWindow({
+        width: 1100,
+        height: 700,
+        backgroundColor: '#0a0a0c',
+        show: false,
+        webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    win.once('ready-to-show', () => win.show());
+    win.on('closed', () => takeOvers?.windowClosed(terminalId));
+    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+}
 
 function createWindow(): BrowserWindow {
     const win = new BrowserWindow({
@@ -182,6 +206,19 @@ async function boot(): Promise<void> {
         }
     });
 
+    /*
+     * TAKE OVER (§1). The host opens the TUI in a workspace terminal and asks for a window on
+     * it; the window is the session, so closing it closes the terminal. The registry reads
+     * the host's probe to draw the Observed row. Nothing here manages the TUI.
+     */
+    const terminalsForTakeOver = terminals;
+    takeOvers = new TakeOverHost({
+        terminals: terminalsForTakeOver,
+        openWindow: (route) => openTakeOverWindow(route),
+    });
+    const takeOversNow = takeOvers;
+    theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
+
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
     ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
@@ -238,6 +275,18 @@ async function boot(): Promise<void> {
      * looked up in the registry: an unknown workspace is refused, and there is no way to name
      * an agent through this surface.
      */
+    ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
+        if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
+        const record = registry?.find(raw as AgentId) ?? null;
+        if (!record) return { ok: false, reason: `No agent is registered as ${raw}.` };
+        const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId) ?? null;
+        if (!workspace) return { ok: false, reason: `${record.name}'s workspace is not registered.` };
+        // The TUI is the provider's own CLI, resolved the way a session resolves it. No MCP
+        // URL is set: genie2 has no MCP server yet, and a fake one would be worse than none.
+        const tui = providerBinary(record.provider) ?? record.provider;
+        return takeOvers.start(record, workspace.path, tui);
+    });
+
     ipcMain.handle('genie:terminal-open', (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
         if (!terminals || typeof rawWorkspaceId !== 'string') return null;
         const workspace = registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null;

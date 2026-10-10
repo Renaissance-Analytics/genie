@@ -621,6 +621,45 @@ if (!approvalEnabled) {
     }
 }
 
+/*
+ * 39–40. TAKE OVER opens a second window (§1).
+ *
+ * The Agent view's `Take over` button asks the main process to open the agent's TUI in a
+ * terminal in a NEW BrowserWindow. From outside, a new window is a new CDP page target whose
+ * URL ends in `#genie://takeover/<terminalId>` — so the check is a COUNT of such targets: zero
+ * before the click (the control), exactly one after.
+ *
+ * The TUI itself is not asserted. On CI and in the VM `claude` is not installed, so the shell
+ * reports it missing and the terminal ends; the window still opens and the terminal was still
+ * spawned in the agent's workspace, which is the path this build owns. Whether the TUI runs is
+ * the TUI's business and the owner's machine's.
+ */
+{
+    const takeoverTargets = async () => {
+        const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+        return list.filter((t) => t.type === 'page' && String(t.url).includes('#genie://takeover/'));
+    };
+    const before = (await takeoverTargets()).length;
+    check(before === 0, '39. CONTROL: no take-over window exists before the click', `${before} target(s)`);
+
+    await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
+    await cdp.evaluate(`document.querySelector('[data-agent]')?.click(); true`);
+    const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
+    if (onAgent) {
+        await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);
+        let after = 0;
+        for (let i = 0; i < 40; i += 1) {
+            after = (await takeoverTargets()).length;
+            if (after > 0) break;
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        check(after === 1, '40. "Take over" opens exactly ONE new window on a take-over route', `${after} target(s)`);
+    } else {
+        check(false, '40. "Take over" opens exactly ONE new window on a take-over route', 'the Agent view never showed the control');
+    }
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
@@ -639,7 +678,7 @@ cdp.close();
 
 console.log('');
 if (failures.length > 0) {
-    console.log(`SMOKE FAILED — ${failures.length} of 38:\n  ${failures.join('\n  ')}`);
+    console.log(`SMOKE FAILED — ${failures.length} of 40:\n  ${failures.join('\n  ')}`);
     process.exit(1);
 }
 console.log('SMOKE PASSED — the window opened, the Dashboard was the landing surface, and nothing threw.');
