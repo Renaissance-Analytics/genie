@@ -1,5 +1,5 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
-import { parseRoute } from '../core/route.js';
+import { formatRoute, parseRoute } from '../core/route.js';
 import { dockReserve, type DockPanel } from '../core/dock.js';
 import { Deck } from './components/Deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -188,6 +188,8 @@ export function Shell({
                                 const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
                                 onNavigate(value === null ? base : `${base}&lane=${value}`);
                             }}
+                            range={parsed.range}
+                            onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
                         />
