@@ -1,5 +1,13 @@
-import { Icon, Tooltip } from '@particle-academy/react-fancy';
-import { FEATURE_ICONS, paletteHint } from '../../core/rail-view.js';
+import {
+    Icon,
+    Tooltip,
+    browserPlatformHints,
+    detectPlatform,
+    modifierKeyLabel,
+    type FancyPlatform,
+} from '@particle-academy/react-fancy';
+import { useEffect, useState } from 'react';
+import { FEATURE_ICONS } from '../../core/rail-view.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -37,17 +45,40 @@ export interface TitleBarProps {
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
     /**
-     * The platform, for the palette's key hint. Injected rather than read from a global so a
-     * test can render both branches on one machine, and defaulted here so every caller does
-     * not have to thread it through.
+     * The platform, for the palette's key hint. Injected so a test can render both branches on
+     * one machine; resolved from the browser after mount when it is not.
      */
-    platform?: string | undefined;
+    platform?: FancyPlatform | undefined;
 }
 
 export function TitleBar({ route, workstation, onNavigate, onOpenPalette, platform }: TitleBarProps) {
-    const hint = paletteHint(
-        platform ?? (typeof navigator === 'undefined' ? '' : navigator.platform),
-    );
+    /**
+     * The modifier label, from the KIT rather than from our own copy.
+     *
+     * I had written `modifierLabel`/`paletteHint` here first. react-fancy 5.35.0 shipped
+     * `detectPlatform` / `modifierKeyLabel` with the same argument-taking shape and two
+     * refinements mine did not have, so ours is deleted — never hand-roll what Fancy provides:
+     *
+     *  - **`generic` is the fallback**, and that is load-bearing. Submit accepts
+     *    `metaKey || ctrlKey`, so `Ctrl` is a TRUE label on an Apple keyboard while `⌘` is
+     *    false everywhere else. An unresolved platform gets the label that is pressable on all
+     *    of them, not the prettier one.
+     *  - **`detectPlatform` refuses to let free text overturn an enumerated answer.** When
+     *    `userAgentData.platform` answers, it is final — because our OWN Electron user agent
+     *    contains `AppleWebKit` on Linux, and a substring sweep would call that Apple. Mine
+     *    read `navigator.platform` alone and would have been wrong there.
+     *
+     * Resolved AFTER mount, never during render: reading `navigator` while rendering turns a
+     * wrong label into a hydration mismatch, which is a worse bug wearing a fix's clothes.
+     * First paint says `Ctrl`; an Apple machine swaps on the next tick.
+     */
+    const [resolved, setResolved] = useState<FancyPlatform>('generic');
+    useEffect(() => {
+        if (platform === undefined) setResolved(detectPlatform(browserPlatformHints()));
+    }, [platform]);
+
+    const modifier = modifierKeyLabel(platform ?? resolved);
+    const hint = modifier === 'Ctrl' ? 'Ctrl K' : `${modifier}K`;
 
     return (
         <div className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5">

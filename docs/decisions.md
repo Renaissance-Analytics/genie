@@ -144,3 +144,30 @@ channel later and leave a flag that is true, inert and reassuring.
 **Not yet verified end to end.** The config is right and tested; whether an in-app update
 actually arrives cannot be known until a real release exists to check against, and this
 document will not pretend otherwise.
+
+## D9 — Glyph coverage, measured rather than assumed
+
+`react-fancy`'s author asked which of the kit's non-ASCII characters render as tofu on a lean
+Linux machine — a measurement they could not take from where they were. `scripts/glyph-coverage.mjs`
+takes it, in the smoke container, by rasterising each character to a canvas and comparing it
+pixel-for-pixel against a Private Use Area codepoint no font covers.
+
+**The result depends entirely on which fonts are installed**, which is the useful half of the
+answer:
+
+| fonts present | tofu |
+|---|---|
+| Liberation only | `⇄` U+21C4, `✓` U+2713, `✕` U+2715, `✦` U+2726, `⌘` U+2318 |
+| Liberation + DejaVu | none — every character drew |
+
+So these are not broken characters. They sit in the band Liberation does not cover and DejaVu
+does, which makes it a question about minimal images and kiosk installs rather than about the
+components. `⇄` is the one that matters most to Genie, because `ActivityLight direction="both"`
+emits it and the Dashboard uses that component.
+
+### The first method was wrong, and its own control said so
+
+Comparing advance WIDTHS cannot detect tofu in a monospace font, where every glyph is the same
+width by definition — tofu included. The control (an ASCII `A` must not match tofu) failed in
+the mono stack and the script refused to report, rather than announcing that every monospace
+character was missing. **A control that refuses to report is worth more than a result.**

@@ -132,29 +132,3 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     if (servable.includes('workspace')) rows.push('workspace');
     return rows;
 }
-
-/**
- * The modifier key label for this platform.
- *
- * **`⌘` on macOS, `Ctrl` everywhere else.** Not cosmetic: a Windows or Linux user does not
- * have a Command key, so `⌘K` tells them to press something that is not on their keyboard —
- * and the palette is already the accelerator rather than the main route, so a reader who
- * cannot act on the hint simply learns to ignore the hints.
- *
- * Found by LOOKING at a screenshot of the running app, where it rendered as a tofu box in a
- * font with no glyph for it. The wrongness was there on every platform; the missing glyph is
- * just what made it visible.
- *
- * Takes the platform rather than reading a global, so both branches are testable on one
- * machine — the same lesson `isInside` taught when a Windows-only path rule broke CI.
- */
-export function modifierLabel(platform: string): string {
-    return /mac|darwin|iphone|ipad/i.test(platform) ? '⌘' : 'Ctrl';
-}
-
-/** The palette's hint, e.g. `⌘K` or `Ctrl K`. */
-export function paletteHint(platform: string): string {
-    const modifier = modifierLabel(platform);
-    // A space after `Ctrl` and none after `⌘`: `CtrlK` reads as one word, `⌘ K` is loose.
-    return modifier === 'Ctrl' ? 'Ctrl K' : '⌘K';
-}

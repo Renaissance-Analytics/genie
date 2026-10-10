@@ -134,18 +134,37 @@ describe('the title bar', () => {
     });
 
 describe('the palette hint', () => {
-    it('says Ctrl on Windows and ⌘ on a Mac', () => {
+    it('says Ctrl on a generic platform and ⌘ on an Apple one', () => {
         /**
          * Found by looking at a screenshot of the running app, where `⌘` was a tofu box in
          * a font with no glyph for it. The missing glyph made it visible; the wrongness was
          * there on every non-Apple platform, where that key does not exist.
+         *
+         * The resolution now comes from the kit (`detectPlatform` / `modifierKeyLabel`), which
+         * takes the platform as an argument for exactly the reason argued here: both branches
+         * have to be renderable on one machine, or the Windows one is never exercised by the
+         * Linux runner that gates merges.
          */
-        expect(bar({ platform: 'Win32' })).toContain('Ctrl K');
-        expect(bar({ platform: 'Win32' })).not.toContain('⌘');
+        expect(bar({ platform: 'generic' })).toContain('Ctrl K');
+        expect(bar({ platform: 'generic' })).not.toContain('⌘');
 
-        // POSITIVE CONTROL: the Mac branch still renders the symbol, so the absence above is
+        // POSITIVE CONTROL: the Apple branch still renders the symbol, so the absence above is
         // a reading rather than a component that simply stopped printing it.
-        expect(bar({ platform: 'MacIntel' })).toContain('⌘K');
+        expect(bar({ platform: 'apple' })).toContain('⌘K');
+    });
+
+    it('falls back to the PRESSABLE label when the platform is unresolved', () => {
+        /**
+         * `generic` is the fallback and that is load-bearing, not a default. Submit accepts
+         * `metaKey || ctrlKey`, so `Ctrl` is a TRUE label on an Apple keyboard while `⌘` is
+         * false everywhere else. An unresolved platform gets the label that is pressable on all
+         * of them, not the prettier one.
+         *
+         * Server-rendered here, where there is no `navigator` at all — which is the unresolved
+         * case, and the first paint every user sees.
+         */
+        expect(bar()).toContain('Ctrl K');
+        expect(bar()).not.toContain('⌘');
     });
 });
 
