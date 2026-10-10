@@ -10,3 +10,7 @@ dist/
 smoke-*.png
 installed-smoke-*.png
 release/
+
+# Throwaway diagnostics. They are written to answer one question and should not outlive it —
+# a repo full of half-remembered probes is worse than none, because somebody runs one.
+scripts/_*
