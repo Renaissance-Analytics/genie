@@ -1,0 +1,46 @@
+name: CI
+
+# genie2's OWN pipeline. It shares nothing with the previous Genie repository — not a
+# workflow, not a script, not a cache key. The rebuild exists because the old code's core
+# abstraction was wrong, and a CI that reached back into it would be the first way that
+# abstraction came back.
+#
+# No Docker. These suites need no service containers, which also keeps them clear of the
+# Docker Hub unauthenticated pull quota that made the old repo's `hosting` job unrunnable
+# (Renaissance-Analytics/genie#864).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: typecheck + unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` and not `npm install`: the lockfile is the contract. prism-acp is ESM-only
+      # and prism-harness pins the durability layer we build on, so a silent resolution drift
+      # is a behaviour change, not a version bump.
+      - run: npm ci
+
+      # Typecheck is a first-class gate, not a lint. The no-pty rule is enforced IN THE TYPE
+      # SYSTEM — `AgentEngine` has one member — so a green tsc is part of how that rule holds.
+      - run: npm run typecheck
+
+      - run: npm test
