@@ -53,7 +53,18 @@ async function main(): Promise<void> {
     const token = `genie-${randomUUID().slice(0, 8)}`;
     console.log(`\ngenie2 live TERMINAL check — userData ${userData}\n  the token is ${token}\n`);
 
-    const host = new TerminalHost(realFancyTermPort(userData));
+    /*
+     * An encryptor that REALLY transforms bytes, so the snapshot path under test is the one
+     * production takes (`0x01`, encrypted), not the plaintext fallback. A byte-reversal is not a
+     * cipher and does not pretend to be; it is a round-trip the store cannot mistake for
+     * plaintext, which is the property this check needs. Electron passes `safeStorage`.
+     */
+    const encryptor = {
+        isAvailable: () => true,
+        encrypt: (b: Buffer) => Buffer.from(b).reverse(),
+        decrypt: (b: Buffer) => Buffer.from(b).reverse(),
+    };
+    const host = new TerminalHost(realFancyTermPort(userData, encryptor));
     let output = '';
     const exits: Array<{ id: string; code: number }> = [];
     host.onData((_id, data) => { output += data; });

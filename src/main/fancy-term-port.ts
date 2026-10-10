@@ -109,34 +109,46 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
     };
 }
 
+/** At-rest cipher for terminal snapshots — `fancy-term-host`'s own port, re-exported by shape. */
+export interface SnapshotEncryptor {
+    isAvailable(): boolean;
+    encrypt(bytes: Buffer): Buffer;
+    decrypt(bytes: Buffer): Buffer;
+}
+
 /**
  * The REAL engine, wired for this process.
  *
  * `fancy-term-host`'s in-process backend wants two ports: settings (which gate the cwd hook
  * and detached terminals) and a snapshot store (scrollback persisted across restarts, §6.5).
- * Snapshots are written in plaintext gzip here — the `Encryptor` reports unavailable — because
- * Electron's `safeStorage` is a main-process-only API and this module must also load under a
- * plain Node live check. Wiring `safeStorage` in is a follow-up recorded in the status doc,
- * not something quietly skipped.
+ *
+ * ## The encryptor is the CALLER'S, on purpose
+ *
+ * The engine has a designed fallback: when the OS cannot encrypt, snapshots are written as
+ * plaintext gzip with a `0x00` marker, because a resume that does not work is worse than a
+ * scrollback on disk in the clear. The first version of this function hit that fallback by
+ * passing an encryptor that always reported unavailable — not because the OS could not
+ * encrypt, but because this module also loads under plain Node for the live check. A
+ * development condition wearing the fallback's clothes, in a buffer where people paste tokens.
+ * Fancy pointed it out, and the sharper half: the live check was then exercising the
+ * PLAINTEXT branch, so the encrypted branch — the only one production takes — was the branch
+ * nothing tested.
+ *
+ * So: Electron passes a `safeStorage`-backed encryptor; the live check passes one that really
+ * transforms bytes; nothing here decides to write in the clear. The one in `fancy-term-host`
+ * can still fall back on a machine that genuinely cannot encrypt, which is its call to make.
  *
  * Settings come from a tiny literal rather than a settings subsystem that does not exist yet:
  * cwd tracking on, detached terminals off. A missing key makes the engine apply its default.
  */
-export function realFancyTermPort(userData: string): PtyPort {
+export function realFancyTermPort(userData: string, encryptor: SnapshotEncryptor): PtyPort {
     const settings = {
         get: (key: string): string | undefined =>
             ({ track_cwd: 'on', detached_terminals: 'off' } as Record<string, string>)[key],
     };
     configureInProcessBackend({
         settings,
-        snapshots: createSnapshotStore({
-            baseDir: join(userData, 'terminal-snapshots'),
-            encryptor: {
-                isAvailable: () => false,
-                encrypt: (b) => b,
-                decrypt: (b) => b,
-            },
-        }),
+        snapshots: createSnapshotStore({ baseDir: join(userData, 'terminal-snapshots'), encryptor }),
     });
     return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
 }
