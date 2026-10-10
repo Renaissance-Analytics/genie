@@ -479,6 +479,30 @@ class AutoUpdater extends EventEmitter {
         autoUpdater.autoDownload = false;
         autoUpdater.autoInstallOnAppQuit = false;
 
+        /**
+         * WITHOUT THIS, "CHECK FOR UPDATES" FINDS NOTHING. EVER.
+         *
+         * Every Genie release is a PRERELEASE — `finalize-release` publishes with
+         * `--prerelease=true` — and `allowPrerelease` defaults to FALSE, so electron-updater
+         * skipped every one of them. The owner installed beta.2 and beta.3 by hand and asked
+         * each time why the app offered nothing; this is why.
+         *
+         * Measured in the installed `electron-updater/out/providers/GitHubProvider.js` rather
+         * than taken from a doc, because the obvious suspect was the wrong one:
+         *
+         *  - `releaseType: draft` in `electron-builder.yml` is a PUBLISH option. The string
+         *    appears nowhere in GitHubProvider, so it does not gate the runtime check at all.
+         *  - What the provider actually reads is `this.updater.allowPrerelease`, at line 51
+         *    (Atom feed selection) and 132 (channel file).
+         *
+         * And the channel concern turns out to be self-healing: with this true the provider
+         * derives a channel from the tag's prerelease tag (`beta`) and tries `beta.yml`,
+         * which we do not publish — then its `catch` falls back to
+         * `getDefaultChannelName()` → `latest.yml`, which we do. That fallback is itself
+         * gated on `allowPrerelease`, so it only exists because this line is here.
+         */
+        autoUpdater.allowPrerelease = true;
+
         autoUpdater.logger = {
             info: (...args: unknown[]) => this.appendLog('info: ' + args.join(' ')),
             warn: (...args: unknown[]) => this.appendLog('warn: ' + args.join(' ')),
