@@ -147,11 +147,19 @@ jobs:
           export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
 
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
-          node scripts/smoke-cdp.mjs
-          node scripts/layout-sweep.mjs
+          # `timeout` on each script, and it is not a formality. This step HUNG for 15 minutes
+          # on five consecutive runs today, and a job that hits its time limit reports as
+          # `cancelled` — which reads as "somebody pushed again", skips every `if: failure()`
+          # step, and so hides the one log that would have said where it stopped. A hang that
+          # fails in five minutes with its output attached is a bug report; one that is
+          # cancelled at fifteen is a shrug.
+          timeout 300 node scripts/smoke-cdp.mjs
+          timeout 300 node scripts/layout-sweep.mjs
 
-      - name: electron's own output, on failure
-        if: failure()
+      - name: electron's own output
+        # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
+        # to GitHub, and that was exactly the case where this log mattered most.
+        if: always()
         run: tail -100 electron.log || true
 
       # The screenshots, for a human to look at. Writing one is not the same as somebody
