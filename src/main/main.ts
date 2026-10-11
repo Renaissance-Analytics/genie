@@ -432,6 +432,7 @@ async function boot(): Promise<void> {
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
+    composed.onFrontDoorChange(pushFeatures);
     const featurePorts: FeaturePorts = {
         toolchain: {
             probe: () => probeToolsLive(latestFor),

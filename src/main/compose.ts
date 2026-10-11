@@ -1,17 +1,20 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
-import { frontDoorCaddyfile } from '../core/front-door-caddy.js';
+import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
+import { hostsFileBlock } from '../core/gen-router.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
+import { realHostsIo, runElevated as runElevatedViaOs, type Step } from './elevate.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
+import { syncHostsFile, type HostsIo, type HostsSyncResult } from './hosts-file.js';
 import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runtimeDir } from './paths.js';
@@ -46,7 +49,16 @@ export interface ComposeInput {
     readonly now?: () => number;
     /** Runs `docker <args>`; execFile in production. A missing Docker answers a non-zero exit, never a throw. */
     readonly docker?: DockerRunner;
+    /** The OS hosts file; the real one by default. */
+    readonly hostsIo?: HostsIo;
+    /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
+    readonly runElevated?: (step: Step) => Promise<void>;
 }
+
+/** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
+export type FrontDoorStatus =
+    | { running: true; caddyfile: string; hostsPath: string; hosts: HostsSyncResult | null; trusted: boolean }
+    | { running: false; reason: string };
 
 export interface ComposedServices {
     readonly inbox: InboxStore;
@@ -64,7 +76,13 @@ export interface ComposedServices {
     readonly approvals: ApprovalQueue;
     readonly frontDoorPort: number;
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
-    readonly externalFrontDoor: { running: true; caddyfile: string } | { running: false; reason: string };
+    readonly externalFrontDoor: FrontDoorStatus;
+    /** Fires when the front door state changes (a hosts sync landed, the root got trusted). */
+    onFrontDoorChange(listener: () => void): () => void;
+    /** Sync the hosts block now — the person's "try again" after a declined prompt. */
+    syncHosts(): Promise<HostsSyncResult>;
+    /** `caddy trust` through the OS prompt, once; remembered by a marker. */
+    trustCertificate(): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
     /** The Deck's items from the stores, now. */
@@ -86,17 +104,58 @@ export interface ComposedServices {
  * and never by spawning a second Caddy. Without a bundled binary nothing starts, and the reason is
  * recorded for the Hosting surface — the in-app browser does not need this path.
  */
-function startExternalFrontDoor(caddyBin: string | null, caddyDir: string, sites: SiteManager, supervisor: ProcessSupervisor): ComposedServices['externalFrontDoor'] {
+interface FrontDoorController {
+    status(): FrontDoorStatus;
+    onChange(listener: () => void): () => void;
+    syncHosts(): Promise<HostsSyncResult>;
+    trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
+const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
+
+function startExternalFrontDoor(input: {
+    caddyBin: string | null;
+    caddyDir: string;
+    sites: SiteManager;
+    supervisor: ProcessSupervisor;
+    hostsIo: HostsIo;
+    hostsPath: string;
+    runElevated: (step: Step) => Promise<void>;
+}): FrontDoorController {
+    const listeners = new Set<() => void>();
+    const onChange = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
+    const notify = () => { for (const l of listeners) l(); };
+    const { caddyBin, caddyDir, sites, supervisor } = input;
     if (caddyBin === null) {
-        return { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' };
+        return {
+            status: () => ({ running: false, reason: NO_CADDY }),
+            onChange,
+            syncHosts: async () => { throw new Error(NO_CADDY); },
+            trust: async () => ({ ok: false, reason: NO_CADDY }),
+        };
     }
     const caddyfile = join(caddyDir, 'Caddyfile');
+    const marker = join(caddyDir, 'trusted');
+    let hosts: HostsSyncResult | null = null;
+    let trusted = existsSync(marker);
     const render = () => {
         mkdirSync(caddyDir, { recursive: true });
         writeFileSync(caddyfile, frontDoorCaddyfile(sites.routes()), 'utf8');
     };
+    // The hosts block follows the routes; the OS prompt appears only when a plain write is refused
+    // AND the block actually changed. A declined prompt is a recorded fact with the block to paste.
+    const syncHosts = async (): Promise<HostsSyncResult> => {
+        const routes = sites.routes();
+        try {
+            hosts = await syncHostsFile(routes, input.hostsIo);
+        } catch (error) {
+            hosts = { changed: false, elevated: false, error: error instanceof Error ? error.message : String(error), manualBlock: hostsFileBlock(routes) };
+        }
+        notify();
+        return hosts;
+    };
     render();
-    sites.onChange(render);
+    sites.onChange(() => { render(); void syncHosts(); });
     supervisor.onChange(render);
     supervisor.start({
         id: 'genie-front-door',
@@ -107,7 +166,25 @@ function startExternalFrontDoor(caddyBin: string | null, caddyDir: string, sites
         env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
         restart: 'always',
     });
-    return { running: true, caddyfile };
+    void syncHosts();
+    return {
+        status: () => ({ running: true, caddyfile, hostsPath: input.hostsPath, hosts, trusted }),
+        onChange,
+        syncHosts,
+        trust: async () => {
+            if (trusted) return { ok: true };
+            const plan = trustPlan(caddyBin, caddyDir);
+            try {
+                await input.runElevated({ command: plan.command, args: plan.args, env: plan.env });
+            } catch (error) {
+                return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+            }
+            writeFileSync(marker, new Date().toISOString(), 'utf8');
+            trusted = true;
+            notify();
+            return { ok: true };
+        },
+    };
 }
 
 export async function composeServices(input: ComposeInput): Promise<ComposedServices> {
@@ -154,7 +231,16 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const approvals = new ApprovalQueue({ now });
-    const externalFrontDoor = startExternalFrontDoor(input.caddyBin, join(runtimeDir(input.userData), 'caddy'), sites, supervisor);
+    const elevationRun = (plan: { command: string; args: readonly string[] }) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 });
+    const frontDoorCtl = startExternalFrontDoor({
+        caddyBin: input.caddyBin,
+        caddyDir: join(runtimeDir(input.userData), 'caddy'),
+        sites,
+        supervisor,
+        hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData), run: elevationRun }),
+        hostsPath: hostsFilePath(process.platform),
+        runElevated: input.runElevated ?? ((step) => runElevatedViaOs(process.platform, step, elevationRun)),
+    });
     const agents = new Map<string, { name: string; workspaceId: string }>();
     const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
@@ -172,7 +258,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         frontDoor,
         approvals,
         frontDoorPort,
-        externalFrontDoor,
+        get externalFrontDoor() { return frontDoorCtl.status(); },
+        onFrontDoorChange: frontDoorCtl.onChange,
+        syncHosts: frontDoorCtl.syncHosts,
+        trustCertificate: frontDoorCtl.trust,
         routes,
         deckItems: () => [
             ...approvals.deckItems(),
