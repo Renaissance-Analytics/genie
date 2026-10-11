@@ -579,6 +579,14 @@ async function boot(): Promise<void> {
             ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
             : []);
 
+    // JOIN a running terminal (§6.5 multi-attach): scrollback so far; null for another workspace's id or a gone one.
+    ipcMain.handle('genie:terminal-attach', (_event, workspaceId: unknown, id: unknown) => {
+        if ((typeof workspaceId !== 'string' && workspaceId !== null) || typeof id !== 'string') return null;
+        const joined = terminals?.attach(id) ?? null;
+        // The host's own windows may join any terminal (null); a named workspace must match.
+        if (!joined || (workspaceId !== null && joined.workspaceId !== workspaceId)) return null;
+        return { id: joined.id, pid: joined.pid, shell: joined.shell, scrollback: joined.scrollback };
+    });
     ipcMain.handle('genie:terminal-previous', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? snapshots?.take(workspaceId) ?? null : null));
 
     // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
@@ -745,6 +753,7 @@ async function boot(): Promise<void> {
                 resize: (id, cols, rows) => terminals!.resize(id, cols, rows),
                 close: (id) => terminals!.close(id),
                 list: () => terminals!.list(),
+                attach: (id) => terminals!.attach(id),
                 onData: (cb) => terminals!.onData(cb),
                 onExit: (cb) => terminals!.onExit(cb),
             },

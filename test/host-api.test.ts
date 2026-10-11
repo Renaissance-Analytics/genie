@@ -39,6 +39,7 @@ function fakes() {
             resize: (id, c, r) => { calls.push(`term-resize:${id}:${c}x${r}`); return true; },
             close: (id) => { calls.push(`term-close:${id}`); return true; },
             list: () => [{ id: 'term_1', pid: 7, shell: 'sh', workspaceId: 'tynn' }, { id: 'term_2', pid: 8, shell: 'sh', workspaceId: 'fancy' }] as never,
+            attach: (id) => (id === 'term_1' ? { id: 'term_1', pid: 7, shell: 'sh', workspaceId: 'tynn', scrollback: 'replay' } : null),
             onData: (cb) => { listeners.data.add(cb); return () => listeners.data.delete(cb); },
             onExit: (cb) => { listeners.exit.add(cb); return () => listeners.exit.delete(cb); },
         },
@@ -132,6 +133,10 @@ describe('invoke', () => {
         expect(await api.invoke('terminals.resize', ['term_1', 100, 30])).toBe(true);
         expect(await api.invoke('terminals.close', ['term_1'])).toBe(true);
         expect(await api.invoke('terminals.list', ['tynn'])).toEqual([{ id: 'term_1', pid: 7, shell: 'sh' }]);
+        // JOIN (§6.5): the scrollback so far; another workspace's id, or an unknown one, is null — never another terminal.
+        expect(await api.invoke('terminals.attach', ['tynn', 'term_1'])).toEqual({ id: 'term_1', pid: 7, shell: 'sh', scrollback: 'replay' });
+        expect(await api.invoke('terminals.attach', ['fancy', 'term_1'])).toBeNull();
+        expect(await api.invoke('terminals.attach', ['tynn', 'term_9'])).toBeNull();
     });
 
     it('features and updates pass through; without an updater the update methods answer the local bridge’s nulls', async () => {

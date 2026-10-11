@@ -120,6 +120,8 @@ const bridge: GenieBridge = {
             ipcRenderer.invoke('genie:terminal-list', workspaceId) as Promise<
                 readonly { id: string; pid: number; shell: string }[]
             >,
+        attach: (workspaceId, id) =>
+            ipcRenderer.invoke('genie:terminal-attach', workspaceId, id) as Promise<{ id: string; pid: number; shell: string; scrollback: string } | null>,
         previousSession: (workspaceId) => ipcRenderer.invoke('genie:terminal-previous', workspaceId) as Promise<string | null>,
         onData: (listener) => {
             const handler = (_e: unknown, payload: { id: string; data: string }) => listener(payload.id, payload.data);

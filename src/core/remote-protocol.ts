@@ -45,6 +45,7 @@ export const REMOTE_METHODS = [
     'terminals.write',
     'terminals.resize',
     'terminals.close',
+    'terminals.attach',
     'terminals.list',
     'features.snapshot',
     'features.act',
@@ -69,6 +70,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     snapshot: 'read',
     agentDetail: 'read',
     'terminals.list': 'read',
+    'terminals.attach': 'read',
     'features.snapshot': 'read',
     'updates.state': 'read',
     openAgent: 'write',
@@ -122,7 +124,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
 export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'prompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }

@@ -34,6 +34,16 @@ export function TakeOverWindow({ terminalId, terminals }: TakeOverWindowProps) {
         return () => { live = false; };
     }, []);
 
+    // A reopened window JOINS the TUI (§6.5): the scrollback so far seeds the pane; the live bytes follow. The
+    // window is the host's own, so it may join whichever workspace the terminal is in (null).
+    useEffect(() => {
+        let live = true;
+        void terminals.attach(null, terminalId).then((joined) => {
+            if (live && joined) setOutput((o) => (o.length === 0 ? joined.scrollback : o));
+        });
+        return () => { live = false; };
+    }, [terminals, terminalId]);
+
     // Output for every terminal arrives on one channel; keep only this window's.
     useEffect(() => {
         const offData = terminals.onData((id, data) => { if (id === terminalId) setOutput((o) => o + data); });

@@ -178,6 +178,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             resize: (id, cols, rows) => fire('terminals.resize', id, cols, rows),
             close: (id) => fire('terminals.close', id),
             list: (workspaceId) => read('terminals.list', workspaceId),
+            // A remote connection names the workspace it is scoped to; a null here cannot join anything, by design.
+            attach: (workspaceId, id) => read('terminals.attach', workspaceId ?? '', id),
             onData: (listener) => on('terminal-data', (p) => { const e = p as { id: string; data: string }; listener(e.id, e.data); }),
             onExit: (listener) => on('terminal-exit', (p) => { const e = p as { id: string; exitCode: number }; listener(e.id, e.exitCode); }),
         },
