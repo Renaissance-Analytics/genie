@@ -158,6 +158,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: NO_FILES,
         terminals: {
+            // Another machine's previous session is not this window's to seed.
+            previousSession: async () => null,
             open: (workspaceId, options) => read('terminals.open', workspaceId, options),
             write: (id, data) => fire('terminals.write', id, data),
             resize: (id, cols, rows) => fire('terminals.resize', id, cols, rows),

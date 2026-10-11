@@ -24,6 +24,7 @@ function fakeTerminals() {
         resize: (id) => { calls.push(`resize:${id}`); },
         close: (id) => { calls.push(`close:${id}`); },
         list: async () => { calls.push('list'); return []; },
+        previousSession: async () => null,
         onData: () => () => {},
         onExit: () => () => {},
     };
