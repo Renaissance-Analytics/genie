@@ -1,4 +1,4 @@
-# vm-windows-update.ps1 — THE UPDATER, PROVEN: runs INSIDE genie-test-windows over SSH (PowerShell 5.1).
+﻿# vm-windows-update.ps1 — THE UPDATER, PROVEN: runs INSIDE genie-test-windows over SSH (PowerShell 5.1).
 #
 #   scripts/vm-run.sh genie-test-windows repos/genie2 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vm-windows-update.ps1'
 #
