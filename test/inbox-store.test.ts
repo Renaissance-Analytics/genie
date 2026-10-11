@@ -66,6 +66,18 @@ describe('send and receive', () => {
     });
 });
 
+describe('unread — a view that commits nothing', () => {
+    it('lists the unread mail without marking it read; a committing receive then empties it', async () => {
+        await store.send({ from: a, to: b, text: 'one' });
+        await store.send({ from: a, to: b, text: 'two' });
+        expect(store.unread(b).map((m) => m.text)).toEqual(['one', 'two']);
+        expect(store.unread(b).map((m) => m.text)).toEqual(['one', 'two']);
+        expect(store.receipts(a).every((r) => r.readAt === null)).toBe(true);
+        await store.receive({ participant: b });
+        expect(store.unread(b)).toEqual([]);
+    });
+});
+
 describe('read receipts — your receive is the ONLY thing that marks mail read', () => {
     it('a receive with acknowledge:false leaves mail unread and the cursor where it was', async () => {
         await store.send({ from: a, to: b, text: 'peek' });

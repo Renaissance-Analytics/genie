@@ -144,6 +144,13 @@ describe('the two lists', () => {
         expect(store.lists.show({ list: 'user', workspaceId: 'fancy', agentId: agent })).toEqual([]);
     });
 
+    it('allUserItems lists every workspace’s user list with its workspace, for the Deck', async () => {
+        await store.lists.add({ list: 'user', workspaceId: 'tynn', agentId: agent, text: 'rotate the token' });
+        await store.lists.add({ list: 'user', workspaceId: 'fancy', agentId: other, text: 'approve the share' });
+        await store.lists.add({ list: 'agent', workspaceId: 'tynn', agentId: agent, text: 'not a user item' });
+        expect(store.allUserItems().map((x) => [x.workspaceId, x.item.text])).toEqual([['tynn', 'rotate the token'], ['fancy', 'approve the share']]);
+    });
+
     it('refuses when full, with the limit, and refuses a question', async () => {
         for (let i = 0; i < 5; i++) await store.lists.add({ list: 'user', workspaceId: 'tynn', agentId: agent, text: `u${i}` });
         const full = await store.lists.add({ list: 'user', workspaceId: 'tynn', agentId: agent, text: 'u5' });
