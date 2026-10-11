@@ -7,6 +7,7 @@ import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view
 import { AgentView } from './components/AgentView.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
+import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace } from './components/Workspace.js';
@@ -183,6 +184,21 @@ export function Shell({
                      * state a person cannot recover from without knowing a shortcut, and it is
                      * indistinguishable from a load that failed.
                      */}
+                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 ? (
+                        <Onboarding
+                            state={{
+                                workspaces: snapshot.workspaces.length,
+                                agents: snapshot.agents.length,
+                                // Providers come from the toolchain scan when one has run; until then NOT a line.
+                                providers: features.toolchain ? features.toolchain.tools.filter((t) => (t.tool === 'claude-code' || t.tool === 'codex') && t.installed !== null).map((t) => t.tool) : null,
+                                githubConnected: null,
+                                tynnSignedIn: null,
+                            }}
+                            onAddWorkspace={onAddWorkspace}
+                            onAddAgent={() => { const w = snapshot.workspaces?.[0]; if (w) onAddAgent(w.id); }}
+                            onNavigate={onNavigate}
+                        />
+                    ) : null}
                     {canServe && parsed.surface === 'dashboard' ? (
                         <Dashboard
                             rows={snapshot.agents}

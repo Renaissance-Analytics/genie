@@ -485,3 +485,16 @@ describe('the Deck surface', () => {
         expect(html).not.toContain('data-surface="dashboard"');
     });
 });
+
+describe('onboarding in the shell', () => {
+    it('a MEASURED empty estate (workspaces []) shows the two steps on the Dashboard; a populated one shows nothing of it', () => {
+        const empty = render({ snapshot: { ...LIVE, agents: [], workspaces: [], deckItems: [] } });
+        expect(empty).toContain('data-onboarding');
+        expect(empty).toMatch(/data-step="pick-folder"[^>]*data-active="true"/);
+        expect(render()).not.toContain('data-onboarding');
+    });
+
+    it('before the bridge has answered (workspaces null) there is NO onboarding — a skeleton is not an invitation', () => {
+        expect(render({ snapshot: EMPTY_SNAPSHOT })).not.toContain('data-onboarding');
+    });
+});
