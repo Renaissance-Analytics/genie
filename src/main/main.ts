@@ -463,7 +463,7 @@ async function boot(): Promise<void> {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);
         if (action.kind === 'toolchain.check' || action.kind === 'toolchain.update') featureState = { ...featureState, toolStatuses: data.toolchain?.tools ?? null, toolchainCheckedAt: data.toolchain?.checkedAt ?? null };
-        if (action.kind === 'knowledge.search') featureState = { ...featureState, knowledgeQuery: action.query };
+        featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
         if (action.kind === 'browser.navigate' && browserPane && data.browser.url) {
             const shown = await browserPane.show(data.browser.url);

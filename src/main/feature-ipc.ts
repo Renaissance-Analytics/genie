@@ -4,8 +4,8 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { resolveDeckAnswer } from '../core/deck-resolve.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowFormDefaults, serviceFormDefaults, siteFormDefaults, validateFlowForm, validateServiceForm, validateSiteForm } from '../core/forms.js';
-import type { FlowAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
+import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, siteFormDefaults, validateFlowForm, validateKnowledgeForm, validateServiceForm, validateSiteForm } from '../core/forms.js';
+import type { FlowAdding, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
@@ -41,13 +41,15 @@ export interface FeatureState {
     siteAdding?: SiteAdding | null;
     flowAdding?: FlowAdding | null;
     serviceAdding?: ServiceAdding | null;
+    knowledgeAdding?: KnowledgeAdding | null;
+    knowledgeLastAdd?: KnowledgeAdded | null;
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
     const hits = state.knowledgeQuery ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits : null;
     const peers = services.agentAddresses().map((a) => ({ address: a.address, name: a.name, reachable: true }));
     return {
-        knowledge: { hits, query: state.knowledgeQuery },
+        knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
         hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered.
@@ -253,6 +255,26 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                     // Session-layer and renderer concerns: main.ts routes these to the session host and the window.
                     throw new Error(`${command.kind} is handled by the session host, not the feature IPC`);
             }
+            break;
+        }
+        case 'knowledge.openAdd':
+            next.knowledgeAdding = { defaults: knowledgeFormDefaults(action.workspaceId ? { workspaceId: action.workspaceId } : {}), problems: [] };
+            break;
+        case 'knowledge.cancelForm':
+            next.knowledgeAdding = null;
+            break;
+        case 'knowledge.create': {
+            const problems = validateKnowledgeForm(action.form);
+            if (problems.length > 0) {
+                next.knowledgeAdding = { defaults: action.form, problems };
+                break;
+            }
+            const added = services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
+            next.knowledgeAdding = null;
+            // Show what was done: the search lands on the new title, and every link that did not
+            // resolve is named with why — an ambiguous link resolves to nothing rather than guessing.
+            next.knowledgeLastAdd = { id: added.id, title: action.form.title.trim(), unresolved: added.unresolved.map((u) => ({ ref: u.ref, reason: u.reason })) };
+            next.knowledgeQuery = action.form.title.trim();
             break;
         }
         case 'knowledge.add': {

@@ -6,7 +6,7 @@ import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js
 import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
-import { AddFlowForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -77,8 +77,8 @@ function Empty({ children }: { children: React.ReactNode }) {
     return <p className="p-5 text-sm text-[var(--fg-3)]">{children}</p>;
 }
 
-export function KnowledgeSurface({ data, onAction }: SurfaceProps) {
-    const { hits, query } = data.knowledge;
+export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfaceProps) {
+    const { hits, query, adding, lastAdd } = data.knowledge;
     return (
         <div data-surface="knowledge" className="flex h-full min-h-0 flex-col">
             <Header title="Knowledge Graph">
@@ -88,7 +88,28 @@ export function KnowledgeSurface({ data, onAction }: SurfaceProps) {
                 >
                     <Input name="q" type="search" defaultValue={query} placeholder="Search memories" leading={<Icon name="search" size="xs" />} />
                 </form>
+                <button type="button" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'knowledge.openAdd' })}>
+                    Add a memory
+                </button>
             </Header>
+            {adding ? (
+                <AddKnowledgeForm defaults={adding.defaults} problems={adding.problems} workspaces={workspaces} onSubmit={(form) => onAction({ kind: 'knowledge.create', form })} onCancel={() => onAction({ kind: 'knowledge.cancelForm' })} />
+            ) : null}
+            {lastAdd ? (
+                <div data-knowledge-added className="border-b border-[var(--border-1)] px-5 py-2 text-sm">
+                    <span>Added “{lastAdd.title}”.</span>
+                    {lastAdd.unresolved.length > 0 ? (
+                        <ul className="mt-1 list-disc pl-5 text-[var(--fg-3)]">
+                            <li className="list-none pl-0 -ml-5">These links did not resolve, so no edge was made:</li>
+                            {lastAdd.unresolved.map((u) => (
+                                <li key={u.ref}>
+                                    <span className="font-mono">[[{u.ref}]]</span> — {u.reason === 'ambiguous' ? 'more than one memory has that name; Genie does not guess' : 'no memory has that name yet'}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : null}
+                </div>
+            ) : null}
             {hits === null ? (
                 <Skeletons />
             ) : hits.length === 0 ? (

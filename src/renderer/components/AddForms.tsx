@@ -1,5 +1,5 @@
 import { Input } from '@particle-academy/react-fancy';
-import type { FlowForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
+import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { SERVICE_CATALOG } from '../../core/services.js';
 
 /**
@@ -215,6 +215,69 @@ export function AddServiceForm({ defaults, problems, consent, onSubmit, onCancel
             ) : null}
             <div className="flex gap-2">
                 <button type="submit" value="add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add engine</button>
+                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
+            </div>
+        </form>
+    );
+}
+
+export interface AddKnowledgeFormProps {
+    readonly defaults: KnowledgeForm;
+    readonly problems: readonly Problem[];
+    /** Where a memory can file besides this machine. */
+    readonly workspaces: readonly { id: string }[];
+    readonly onSubmit: (form: KnowledgeForm) => void;
+    readonly onCancel: () => void;
+}
+
+const KNOWLEDGE_CLASSES: ReadonlyArray<{ value: KnowledgeForm['class']; label: string }> = [
+    { value: 'knowledge', label: 'knowledge — a fact about the world or the code' },
+    { value: 'procedural', label: 'procedural — how to do something here' },
+    { value: 'episodic', label: 'episodic — what happened, when' },
+    { value: 'profile', label: 'profile — about a person or an agent' },
+];
+
+const scopeTag = (s: KnowledgeForm['scope']): string => (s.kind === 'system' ? 'system' : `workspace:${s.id}`);
+const scopeOf = (tag: string): KnowledgeForm['scope'] => (tag.startsWith('workspace:') ? { kind: 'workspace', id: tag.slice('workspace:'.length) } : { kind: 'system' });
+
+/** "Add a memory". `[[wikilinks]]` in the body become edges; the surface reports the ones that did not resolve. */
+export function AddKnowledgeForm({ defaults, problems, workspaces, onSubmit, onCancel }: AddKnowledgeFormProps) {
+    return (
+        <form
+            data-form="add-memory"
+            className="flex flex-col gap-4 p-5"
+            onSubmit={(e) => {
+                e.preventDefault();
+                const data = new FormData(e.currentTarget);
+                onSubmit({
+                    title: String(data.get('title') ?? ''),
+                    body: String(data.get('body') ?? ''),
+                    class: (String(data.get('class') ?? 'knowledge') as KnowledgeForm['class']),
+                    scope: scopeOf(String(data.get('scope') ?? 'system')),
+                });
+            }}
+        >
+            <p className="text-sm text-[var(--fg-3)]">A memory agents and you can find later. Link other memories with [[their title]].</p>
+            <Row label="Title">
+                <Input name="title" defaultValue={defaults.title} placeholder="Caddy replace breaks h2 websockets" />
+                <ProblemLine field="title" problems={problems} />
+            </Row>
+            <Row label="Body">
+                <textarea name="body" defaultValue={defaults.body} rows={6} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 font-mono text-sm" />
+            </Row>
+            <Row label="Class">
+                <select name="class" defaultValue={defaults.class} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                    {KNOWLEDGE_CLASSES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+            </Row>
+            <Row label="Where it files">
+                <select name="scope" defaultValue={scopeTag(defaults.scope)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                    <option value="system">This machine — every workspace’s agents can find it</option>
+                    {workspaces.map((w) => <option key={w.id} value={`workspace:${w.id}`}>{w.id} — this workspace only</option>)}
+                </select>
+            </Row>
+            <div className="flex gap-2">
+                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add memory</button>
                 <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
             </div>
         </form>
