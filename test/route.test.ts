@@ -89,3 +89,40 @@ describe('routes are the application’s state, so they parse exactly', () => {
         expect(shapes.map(formatRoute).filter((r) => r.includes('?'))).toHaveLength(2);
     });
 });
+
+describe('the feature surfaces — every v1 feature has a place in the URL', () => {
+    it('parses and round-trips knowledge, flows, hosting, toolchain, inbox, settings (with a group) and browser (with a url)', () => {
+        const cases: Array<[string, Record<string, unknown>]> = [
+            ['genie://knowledge', { surface: 'knowledge' }],
+            ['genie://flows', { surface: 'flows' }],
+            ['genie://hosting', { surface: 'hosting' }],
+            ['genie://toolchain', { surface: 'toolchain' }],
+            ['genie://inbox', { surface: 'inbox' }],
+            ['genie://settings', { surface: 'settings', group: null }],
+            ['genie://settings?group=agents', { surface: 'settings', group: 'agents' }],
+            ['genie://browser', { surface: 'browser', url: null }],
+            ['genie://browser?url=http%3A%2F%2Ftynn.gen%2F', { surface: 'browser', url: 'http://tynn.gen/' }],
+        ];
+        for (const [text, want] of cases) {
+            const route = parseRoute(text);
+            expect(route, text).toMatchObject(want);
+            expect(formatRoute(route), text).toBe(text);
+        }
+    });
+
+    it('a settings group the registry does not have is dropped to null, not kept as a mystery tab', () => {
+        expect(parseRoute('genie://settings?group=nope')).toMatchObject({ surface: 'settings', group: null });
+    });
+
+    it('a feature surface carries the chat flyout and its pin like any other', () => {
+        const route = parseRoute('genie://flows?chat=atlas&pin=right');
+        expect(route).toMatchObject({ surface: 'flows', chat: 'atlas', pin: 'right' });
+        expect(formatRoute(route)).toBe('genie://flows?chat=atlas&pin=right');
+    });
+
+    it('the settings sub-routes the lines and signals point at resolve to the settings surface with that group', () => {
+        expect(parseRoute('genie://settings/github')).toMatchObject({ surface: 'settings', group: 'workstation' });
+        expect(parseRoute('genie://settings/tynn')).toMatchObject({ surface: 'settings', group: 'general' });
+        expect(parseRoute('genie://settings/agents')).toMatchObject({ surface: 'settings', group: 'agents' });
+    });
+});
