@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
 import type { DeckItem } from '../core/deck.js';
@@ -8,6 +9,8 @@ import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
+import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
+import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { realHostsIo, runElevated as runElevatedViaOs, type Step } from './elevate.js';
@@ -19,6 +22,8 @@ import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runtimeDir } from './paths.js';
 import { ProcessSupervisor } from './process-supervisor.js';
+import { DeviceStore } from './remote-devices.js';
+import { RemoteHost, type HostApi } from './remote-host.js';
 import { ServiceDriver, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
 import { SettingsStore } from './settings-store.js';
@@ -53,6 +58,12 @@ export interface ComposeInput {
     readonly hostsIo?: HostsIo;
     /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
     readonly runElevated?: (step: Step) => Promise<void>;
+    /** This machine's name as remote devices see it; the OS hostname by default. */
+    readonly hostName?: string;
+    /** Where remote connections come from (fancy-ws on a socket); none by default — nothing listens. */
+    readonly remoteTransport?: ServerTransport;
+    /** What a remote connection may perform here; main.ts wires the real one. Refuses everything by default. */
+    readonly remoteApi?: HostApi;
 }
 
 /** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
@@ -74,6 +85,8 @@ export interface ComposedServices {
     readonly frontDoor: GenRouterServer;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: ApprovalQueue;
+    /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
+    readonly remote: RemoteHost;
     readonly frontDoorPort: number;
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
     readonly externalFrontDoor: FrontDoorStatus;
@@ -231,6 +244,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const approvals = new ApprovalQueue({ now });
+
+    const hostName = input.hostName ?? hostname();
+    const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    const remote = new RemoteHost({
+        api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
+        hostName,
+        baton: new Baton(),
+        pins: new PairingPins({ now, random: Math.random }),
+        shares: new ShareLinks({ host: hostName, now, random: () => randomBytes(18).toString('base64url') }),
+        devices: remoteDevices,
+        transport: input.remoteTransport ?? { onConnection: () => () => {} },
+        now,
+    });
     const elevationRun = (plan: { command: string; args: readonly string[] }) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 });
     const frontDoorCtl = startExternalFrontDoor({
         caddyBin: input.caddyBin,
@@ -257,6 +283,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         engines,
         frontDoor,
         approvals,
+        remote,
         frontDoorPort,
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,
@@ -292,6 +319,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();
+                await remoteDevices.flushed();
                 knowledge.close();
             })();
             return down;

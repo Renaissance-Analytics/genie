@@ -11,7 +11,7 @@ import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace } from './components/Workspace.js';
-import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface } from './components/FeatureSurfaces.js';
+import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
@@ -93,7 +93,13 @@ export interface ShellProps {
     onTakeOver?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
+    /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
+    remote?: ShellRemote | undefined;
+    /** The client side of remote: this window driving another machine (Settings → Workstation). */
+    remoteConnect?: RemoteConnectProps | undefined;
 }
+
+export type ShellRemote = { host: string; driver: string | null; driving: boolean; locked: boolean } | null;
 
 export function Shell({
     route,
@@ -122,6 +128,8 @@ export function Shell({
     answeringApproval,
     onAnswerApproval,
     onAnswerDeckItem,
+    remote,
+    remoteConnect,
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
@@ -164,6 +172,7 @@ export function Shell({
             <TitleBar
                 route={route}
                 workstation={snapshot.workstation}
+                remote={remote}
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
             />
@@ -214,7 +223,7 @@ export function Shell({
                     {canServe && parsed.surface === 'hosting' ? <HostingSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
                     {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
-                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} /> : null}
+                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} /> : null}
                     {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
 
                     {canServe && parsed.surface === 'deck' ? (

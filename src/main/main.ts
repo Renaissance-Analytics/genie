@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
+import { buildHostApi } from './host-api.js';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
@@ -20,6 +21,7 @@ import { runUpdate } from './toolchain-prober.js';
 import { HOST_TOOLS } from '../core/toolchain.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
+import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
@@ -192,6 +194,8 @@ function packageManagerHere(): 'winget' | 'brew' | 'apt' | 'dnf' | null {
     return null;
 }
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
+/** Who else wants the feature snapshot on change: the remote host's event stream. */
+const featureListeners = new Set<(data: FeatureData) => void>();
 
 async function boot(): Promise<void> {
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
@@ -433,11 +437,62 @@ async function boot(): Promise<void> {
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,
+        hostName: hostname(),
+        /*
+         * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
+         * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
+         * any remote call arrives. The SOCKET is not wired yet — fancy-ws awaits its first npm publish
+         * — so nothing listens and Settings → Workstation says devices cannot connect yet.
+         */
+        remoteApi: buildHostApi({
+            snapshot: () => registry!.snapshot(),
+            subscribeSnapshot: (cb) => registry!.subscribe(cb),
+            find: (id) => registry?.find(id as AgentId) ?? null,
+            detailFor: (id) => detailFor(id as AgentId),
+            cwdFor,
+            host: {
+                start: (record, cwd) => host!.start(record, cwd),
+                stop: (id) => host!.stop(id),
+                prompt: (id, text) => host!.prompt(id, text),
+                answerApproval: (id, optionId) => host!.answerApproval(id, optionId),
+                subscribe: (cb) => host!.subscribe(cb),
+            },
+            registerAgent: async (workspaceId) => {
+                const record = await registry!.register({ workspaceId, provider: 'claude', name: `agent-${Date.now().toString(36)}` });
+                return { id: record.id };
+            },
+            attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
+            terminals: {
+                open: (options) => terminals!.open(options),
+                write: (id, data) => terminals!.write(id, data),
+                resize: (id, cols, rows) => terminals!.resize(id, cols, rows),
+                close: (id) => terminals!.close(id),
+                list: () => terminals!.list(),
+                onData: (cb) => terminals!.onData(cb),
+                onExit: (cb) => terminals!.onExit(cb),
+            },
+            serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
+            features: {
+                snapshot: () => featureSnapshot(services!, featureState),
+                act: (action) => handleFeatureAction(services!, action, featureState, featurePorts),
+                onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
+            },
+            updates: updates
+                ? {
+                      state: () => updates!.state(),
+                      check: () => updates!.check(),
+                      download: () => updates!.download(),
+                      install: () => { const r = updates!.install(); return r ? { report: r.report } : null; },
+                      onChange: (cb) => updates!.onChange(cb),
+                  }
+                : null,
+        }),
     });
     services = composed;
     const pushFeatures = () => {
         void featureSnapshot(composed, featureState).then((data) => {
             if (window && !window.isDestroyed()) window.webContents.send(FEATURE_CHANNELS.changed, data);
+            for (const l of featureListeners) l(data);
         });
     };
     composed.flows.onChange(pushFeatures);

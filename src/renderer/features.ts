@@ -8,6 +8,8 @@ import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
 import type { FrontDoorStatus } from '../main/compose.js';
+import type { ShareLink } from '../core/remote.js';
+import type { Device } from '../main/remote-devices.js';
 
 export type { FrontDoorStatus };
 import type { ProcessStatus } from '../main/process-supervisor.js';
@@ -63,6 +65,18 @@ export interface KnowledgeAdded {
     readonly unresolved: readonly { ref: string; reason: 'ambiguous' | 'missing' }[];
 }
 
+/** Remote access (§6.8) as the host sees it. `servedLink` is in the answer to a mint ONLY — never in a pushed snapshot. */
+export interface RemoteSection {
+    readonly host: string;
+    readonly url: string | null;
+    readonly locked: boolean;
+    readonly pin: { code: string; expiresAt: number } | null;
+    readonly devices: readonly Device[];
+    readonly shares: readonly ShareLink[];
+    readonly connections: readonly { id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }[];
+    readonly servedLink: { id: string; url: string } | null;
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
@@ -72,6 +86,7 @@ export interface FeatureData {
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     readonly browser: { url: string | null; routes: readonly GenRoute[] };
+    readonly remote: RemoteSection | null;
 }
 
 /** First paint: nothing has been asked yet. */
@@ -84,6 +99,7 @@ export const EMPTY_FEATURES: FeatureData = {
     inbox: null,
     settings: { values: null },
     browser: { url: null, routes: [] },
+    remote: null,
 };
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
@@ -131,4 +147,11 @@ export type FeatureAction =
     | { kind: 'inbox.markRead'; messageId: string }
     | { kind: 'settings.set'; key: string; value: boolean | string }
     | { kind: 'settings.reset'; key: string }
-    | { kind: 'browser.navigate'; url: string };
+    | { kind: 'browser.navigate'; url: string }
+    | { kind: 'remote.issuePin' }
+    | { kind: 'remote.revokeDevice'; deviceId: string }
+    | { kind: 'remote.lock' }
+    | { kind: 'remote.unlock' }
+    /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
+    | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
+    | { kind: 'remote.revokeShare'; shareId: string };
