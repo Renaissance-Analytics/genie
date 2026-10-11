@@ -46,6 +46,28 @@ function Installed-Version() {
 $installDir = "$env:LOCALAPPDATA\Programs\Genie"
 $exe = Join-Path $installDir 'Genie.exe'
 $uninst = Join-Path $installDir 'Uninstall Genie.exe'
+# A CLEAN machine first. NSIS reuses the registered InstallLocation when the appId matches (that
+# is how a real upgrade stays in Programs\Genie) — so a stale install anywhere, left by an
+# earlier failed run, silently becomes the target. Measured 2026-10-10: a leftover
+# Programs\genie2 swallowed two runs. Uninstall every registered Genie, then sweep the dirs.
+function Uninstall-AnyGenie() {
+    foreach ($p in (Genie-Processes "$env:LOCALAPPDATA\Programs")) { & cmd /c "taskkill /PID $($p.Id) /T /F >nul 2>&1" }
+    $keys = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue)
+    foreach ($k in $keys) {
+        $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+        if (-not $p.DisplayName -or -not ($p.DisplayName -eq 'Genie' -or $p.DisplayName -like 'Genie *')) { continue }
+        # A stale entry can have an EMPTY InstallLocation (measured: Join-Path refuses it and the
+        # whole run died in the pre-clean). No location → no uninstaller to run → drop the key.
+        $loc = [string]$p.InstallLocation
+        $u = if ($loc) { Join-Path $loc 'Uninstall Genie.exe' } else { $null }
+        Write-Output ("pre-clean: uninstalling " + $p.DisplayName + " " + $p.DisplayVersion + " at '" + $loc + "'")
+        if ($u -and (Test-Path $u)) { Start-Process $u -ArgumentList '/S' -Wait; Start-Sleep 2 } else { Remove-Item $k.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($d in @("$env:LOCALAPPDATA\Programs\Genie", "$env:LOCALAPPDATA\Programs\genie2", "$env:LOCALAPPDATA\Programs\genie")) {
+        if (Test-Path $d) { Write-Output "pre-clean: removing leftover $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+function Genie-Processes($dir) { return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" }) }
 $current = (Get-Content package.json | ConvertFrom-Json).version
 $feed = $null
 try {
@@ -55,8 +77,21 @@ try {
     Run 'npx electron-builder --publish never' 'package-current.log'
     $setup = @(Get-ChildItem "release\Genie-$current-setup.exe")[0]
     if (-not $setup) { throw "no release\Genie-$current-setup.exe" }
-    if (Test-Path $uninst) { Start-Process $uninst -ArgumentList '/S' -Wait; Start-Sleep 2 }
-    Start-Process $setup.FullName -ArgumentList '/S' -Wait
+    Uninstall-AnyGenie
+    # One-click NSIS (as every installed Genie was built): the first silent run of it in this
+    # script left no Genie.exe and no detail. So: the installer's exit code, a bounded wait for
+    # the executable, and what IS under Programs if it never appears.
+    $inst = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+    Write-Output ("installer exit code: " + $inst.ExitCode)
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $exe)) { Start-Sleep 2 }
+    if (-not (Test-Path $exe)) {
+        Write-Output "--- $env:LOCALAPPDATA\Programs ---"; Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | ForEach-Object { "  " + $_.Name }
+        Write-Output "--- uninstall registry entries named Genie ---"
+        Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { $p = Get-ItemProperty $_.PSPath; if ($p.DisplayName -like 'Genie*') { "  " + $_.PSChildName + " " + $p.DisplayVersion + " " + $p.InstallLocation } }
+        Write-Output "--- installer processes still running ---"; Get-Process | Where-Object { $_.Name -like '*Genie*setup*' -or $_.Name -like 'Un_A' } | ForEach-Object { "  " + $_.Id + " " + $_.Name }
+        throw "no $exe after the silent install (exit code $($inst.ExitCode))"
+    }
     Write-Output ("installed: " + (Installed-Version))
     if ((Installed-Version) -ne $current) { throw "installed version is $(Installed-Version), expected $current" }
 
@@ -119,6 +154,14 @@ try {
     }
     Write-Output ("Genie processes after the update: " + $relaunched.Count)
     if ($relaunched.Count -eq 0) { throw 'the updated app did not relaunch' }
+
+    # §7.4: the driver started the seeded codex agent (the stub app-server) BEFORE asking for the
+    # install. Its process must be gone now (the quit ended the session) and must not be back
+    # after the relaunch (restore_agents_on_launch defaults OFF; nothing revives on its own).
+    Start-Sleep 10
+    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' })
+    Write-Output ("§7.4 stub agent processes after quit + relaunch: " + $stubs.Count)
+    if ($stubs.Count -ne 0) { $stubs | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "§7.4: $($stubs.Count) agent process(es) survived the upgrade or were revived" }
     Write-Output "--- the updated app's install dir ---"
     Get-ChildItem $installDir -File | ForEach-Object { "  " + $_.Name + " " + $_.Length }
     $report = Select-String -Path installed-out.log -Pattern '\[updater\]' -ErrorAction SilentlyContinue | ForEach-Object Line

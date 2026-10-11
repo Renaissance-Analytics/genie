@@ -52,6 +52,28 @@ function Installed-Genies() {
     })
 }
 function Genie-Processes($dir) { return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" }) }
+# A CLEAN machine first. NSIS reuses the registered InstallLocation when the appId matches (that
+# is how the real upgrade stays in Programs\Genie), so a stale install anywhere — left by an
+# earlier failed run — would silently become v1's target and then Genie 2's. Measured
+# 2026-10-10: a leftover Programs\genie2 swallowed two runs. Uninstall every registered Genie,
+# then sweep the directories, before the real v1 goes on.
+function Uninstall-AnyGenie() {
+    foreach ($p in (Genie-Processes "$env:LOCALAPPDATA\Programs")) { Kill-Tree $p.Id }
+    foreach ($g in @(Installed-Genies)) {
+        # A stale entry can have an EMPTY InstallLocation (measured: Join-Path refuses it and the
+        # whole run died in the pre-clean). No location → no uninstaller to run → drop the key.
+        $loc = [string]$g.Location
+        $u = if ($loc) { Join-Path $loc 'Uninstall Genie.exe' } else { $null }
+        Write-Output ("pre-clean: uninstalling " + $g.Name + " " + $g.Version + " at '" + $loc + "'")
+        if ($u -and (Test-Path $u)) { Start-Process $u -ArgumentList '/S' -Wait; Start-Sleep 2 }
+        else { Remove-Item ("HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\" + $g.Key) -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($d in @("$env:LOCALAPPDATA\Programs\Genie", "$env:LOCALAPPDATA\Programs\genie2", "$env:LOCALAPPDATA\Programs\genie")) {
+        if (Test-Path $d) { Write-Output "pre-clean: removing leftover $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    $left = @(Installed-Genies)
+    if ($left.Count -ne 0) { throw "pre-clean left $($left.Count) Genie entries in the uninstall registry" }
+}
 
 $installDir = "$env:LOCALAPPDATA\Programs\Genie"
 $exe = Join-Path $installDir 'Genie.exe'
@@ -61,7 +83,7 @@ if (-not (Test-Path $v1Setup)) { throw "no $v1Setup — ship v1-installers\ with
 $feed = $null
 try {
     Step "install the REAL v1 $From"
-    if (Test-Path $uninst) { Start-Process $uninst -ArgumentList '/S' -Wait; Start-Sleep 2 }
+    Uninstall-AnyGenie
     Start-Process $v1Setup -ArgumentList '/S' -Wait
     Start-Sleep 2
     # A one-click install may auto-launch the app; it must not be running when we point its feed.

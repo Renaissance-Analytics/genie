@@ -226,3 +226,25 @@ describe('the release lands where the installed Genies look', () => {
         expect(yaml()).not.toMatch(/allowToChangeInstallationDirectory/);
     });
 });
+
+describe('the installer lands in the directory every installed Genie already uses', () => {
+    /**
+     * Measured in the Windows VM, 2026-10-10 20:20: the first one-click build installed into
+     * `%LOCALAPPDATA%\Programs\genie2` while every v1 lives in `Programs\Genie`; the uninstall
+     * entry was reused (same appId) but the files went elsewhere. electron-builder's rule
+     * (app-builder-lib `targetUtil.getWindowsInstallationDirName`): an assisted or per-machine
+     * installer may use the PRODUCT name; a one-click per-user installer uses the sanitized
+     * PACKAGE name. v1's package name is `genie` (Windows paths are case-insensitive, so
+     * `Programs\genie` IS `Programs\Genie`). Genie 2 must therefore be named `genie` too — the
+     * directory, the Electron app name and the uninstall entry all say the same thing.
+     */
+    it('is named genie — the package name electron-builder turns into the one-click install directory', () => {
+        const { name } = JSON.parse(readFileSync('package.json', 'utf8')) as { name: string };
+        expect(name).toBe('genie');
+    });
+
+    it('states the rule next to the name, so nobody renames it back for tidiness', () => {
+        const yaml = readFileSync('electron-builder.yml', 'utf8');
+        expect(yaml).toMatch(/getWindowsInstallationDirName/);
+    });
+});
