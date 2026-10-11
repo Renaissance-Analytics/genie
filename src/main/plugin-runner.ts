@@ -57,7 +57,8 @@ export function runPluginTool(input: RunPluginToolInput): Promise<RunResult> {
         let done = false;
         const stderr: string[] = [];
         const finish = (r: RunResult) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
-        const timer = setTimeout(() => { child.kill(); finish({ ok: false, reason: `${label} did not answer within ${input.timeoutMs} ms and was stopped` }); }, input.timeoutMs);
+        // Settle BEFORE killing: a child whose exit lands synchronously (the test's fake; a real one may too) would otherwise be reported as a crash, not a timeout.
+        const timer = setTimeout(() => { finish({ ok: false, reason: `${label} did not answer within ${input.timeoutMs} ms and was stopped` }); child.kill(); }, input.timeoutMs);
 
         child.onStderr((line) => { stderr.push(line); if (stderr.length > 20) stderr.shift(); });
         child.onExit((code) => {
