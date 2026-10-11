@@ -9,6 +9,7 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync, rmSync }
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
+import { retry } from '../src/core/retry.js';
 import { CADDY_VERSION, caddyDownload } from '../src/main/caddy-runtime.js';
 
 const platform = process.platform as 'win32' | 'darwin' | 'linux';
@@ -24,7 +25,16 @@ if (existsSync(outBin)) {
 }
 
 console.log(`fetching ${d.url}`);
-const bytes = Buffer.from(await (await fetch(d.url)).arrayBuffer());
+// A network reset in CI failed a packaging job once (PR #52: `fetch failed … read ECONNRESET`).
+// Four attempts, 2s/4s/8s apart, each retry said in the log; the last error surfaces unchanged.
+const bytes = await retry(
+    async () => {
+        const res = await fetch(d.url);
+        if (!res.ok) throw new Error(`GET ${d.url} → HTTP ${res.status}`);
+        return Buffer.from(await res.arrayBuffer());
+    },
+    { attempts: 4, delayMs: 2000, onRetry: (error, attempt) => console.warn(`fetch attempt ${attempt} failed (${error instanceof Error ? error.message : String(error)}); retrying`) },
+);
 const sum = createHash('sha512').update(bytes).digest('hex');
 if (sum !== d.sha512) {
     console.error(`sha512 mismatch for ${d.url}\n  expected ${d.sha512}\n  got      ${sum}`);
