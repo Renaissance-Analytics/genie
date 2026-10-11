@@ -66,6 +66,17 @@ function Uninstall-AnyGenie() {
     foreach ($d in @("$env:LOCALAPPDATA\Programs\Genie", "$env:LOCALAPPDATA\Programs\genie2", "$env:LOCALAPPDATA\Programs\genie")) {
         if (Test-Path $d) { Write-Output "pre-clean: removing leftover $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
+    # electron-builder's NSIS remembers the install directory in a SECOND key, HKCU\Software\<appId
+    # GUID>\InstallLocation, and every later installer with the same appId goes where it says
+    # (measured 2026-10-10: Uninstall entry and directories gone, the next install still landed
+    # in Programs\genie2 because this key said so).
+    foreach ($k in @(Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^[0-9a-fA-F-]{36}$' })) {
+        $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+        if ($p.InstallLocation -and ($p.InstallLocation -like '*\Programs\genie*' -or $p.InstallLocation -like '*\Programs\Genie*')) {
+            Write-Output ("pre-clean: removing install-memory key HKCU\Software\" + $k.PSChildName + " (" + $p.InstallLocation + ")")
+            Remove-Item $k.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 function Genie-Processes($dir) { return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" }) }
 $current = (Get-Content package.json | ConvertFrom-Json).version
@@ -137,8 +148,10 @@ try {
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     if ($drive -ne 0) {
-        Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 60 -ErrorAction SilentlyContinue
-        Write-Output "--- installed stdout ---"; Get-Content installed-out.log -Tail 40 -ErrorAction SilentlyContinue
+        # 200 lines, not 60: the first fancy-pty failure's engine words (if any) were above a
+        # 60-line tail that showed only the updater's download notice (Fancy asked for this).
+        Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 200 -ErrorAction SilentlyContinue
+        Write-Output "--- installed stdout ---"; Get-Content installed-out.log -Tail 80 -ErrorAction SilentlyContinue
         Write-Output "--- feed ---"; Get-Content feed.log -Tail 20 -ErrorAction SilentlyContinue
         if (-not $app.HasExited) { Kill-Tree $app.Id }
         throw "update-cdp.mjs exited $drive"

@@ -92,6 +92,14 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
                 ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
             });
+            // An engine that could not start the process answers a non-positive pid rather than
+            // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be
+            // executed from inside app.asar). That is NOT an open terminal, and handing it back
+            // as one puts a pane on screen with nothing behind it and no error anywhere (§5).
+            if (!(created.pid > 0)) {
+                backend.kill(created.id);
+                throw new Error(`the terminal engine could not spawn ${created.shell || command} (pid ${created.pid}) in ${spawn.cwd}`);
+            }
             return { id: created.id, pid: created.pid, shell: created.shell, scrollback: created.scrollback };
         },
         write: (id, data) => backend.write(id, data),

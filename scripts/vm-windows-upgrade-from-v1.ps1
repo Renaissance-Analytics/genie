@@ -71,6 +71,17 @@ function Uninstall-AnyGenie() {
     foreach ($d in @("$env:LOCALAPPDATA\Programs\Genie", "$env:LOCALAPPDATA\Programs\genie2", "$env:LOCALAPPDATA\Programs\genie")) {
         if (Test-Path $d) { Write-Output "pre-clean: removing leftover $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
+    # electron-builder's NSIS remembers the install directory in a SECOND key, HKCU\Software\<appId
+    # GUID>\InstallLocation, and every later installer with the same appId — v1's included — goes
+    # where it says. Measured 2026-10-10 21:5x: with the Uninstall entry and the directories gone,
+    # the real 2.0.0-beta.4 installer still landed in Programs\genie2 because this key said so.
+    foreach ($k in @(Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^[0-9a-fA-F-]{36}$' })) {
+        $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+        if ($p.InstallLocation -and ($p.InstallLocation -like '*\Programs\genie*' -or $p.InstallLocation -like '*\Programs\Genie*')) {
+            Write-Output ("pre-clean: removing install-memory key HKCU\Software\" + $k.PSChildName + " (" + $p.InstallLocation + ")")
+            Remove-Item $k.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
     $left = @(Installed-Genies)
     if ($left.Count -ne 0) { throw "pre-clean left $($left.Count) Genie entries in the uninstall registry" }
 }
@@ -90,10 +101,19 @@ try {
     foreach ($p in (Genie-Processes $installDir)) { Kill-Tree $p.Id }
     Start-Sleep 1
     $before = @(Installed-Genies)
-    Write-Output ("uninstall registry before: " + (($before | ForEach-Object { "$($_.Key)=$($_.Version)" }) -join ', '))
+    Write-Output ("uninstall registry before: " + (($before | ForEach-Object { "$($_.Key)=$($_.Version) at '$($_.Location)'" }) -join ', '))
     if ($before.Count -ne 1) { throw "expected exactly ONE Genie in the uninstall registry, found $($before.Count)" }
     if ($before[0].Version -ne $From) { throw "installed v1 reports $($before[0].Version), expected $From" }
-    if (-not (Test-Path $exe)) { throw "no $exe after installing v1" }
+    # A one-click installer can return before its files are all on disk (measured on the rc run:
+    # the registry entry was there, Genie.exe was not yet). Wait, bounded; then say what IS there.
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $exe)) { Start-Sleep 2 }
+    if (-not (Test-Path $exe)) {
+        Write-Output "--- $env:LOCALAPPDATA\Programs ---"; Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | ForEach-Object { "  " + $_.Name }
+        $loc = [string]$before[0].Location
+        if ($loc -and (Test-Path $loc)) { Write-Output "--- $loc ---"; Get-ChildItem $loc -File -ErrorAction SilentlyContinue | Select-Object -First 8 | ForEach-Object { "  " + $_.Name } }
+        throw "no $exe after installing v1 (registry says '$loc')"
+    }
     $v1Exe = (Get-Item $exe).Length
     Write-Output "v1 Genie.exe: $v1Exe bytes"
     Write-Output "v1 app-update.yml as shipped:"; Get-Content (Join-Path $installDir 'resources\app-update.yml')

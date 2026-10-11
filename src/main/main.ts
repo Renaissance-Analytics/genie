@@ -328,7 +328,15 @@ async function boot(): Promise<void> {
         const cols = typeof options.cols === 'number' && options.cols > 0 ? Math.floor(options.cols) : undefined;
         const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
         const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-        return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows });
+        try {
+            return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows });
+        } catch (error: unknown) {
+            // The engine's own words, on the main process's stderr, where a VM run's
+            // installed-err.log catches them. The first fancy-pty failure on the installed app
+            // (2026-10-10) reached nobody: the port handed back pid -1 and nothing was logged.
+            console.error(`[terminal] open failed in ${workspace.path}: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+        }
     });
     ipcMain.handle('genie:terminal-write', (_event, id: unknown, data: unknown) =>
         typeof id === 'string' && typeof data === 'string' ? (terminals?.write(id, data) ?? false) : false);
