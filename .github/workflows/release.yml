@@ -88,4 +88,4 @@ jobs:
       - name: set the body
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
-        run: gh release edit "" --repo Renaissance-Analytics/genie --notes-file "docs/releases/.md"
+        run: gh release edit "${{ github.ref_name }}" --repo Renaissance-Analytics/genie --notes-file "docs/releases/${{ github.ref_name }}.md"
