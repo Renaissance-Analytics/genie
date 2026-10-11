@@ -62,6 +62,9 @@ jobs:
       # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
       # marks it a prerelease (`releaseType: prerelease`). The macOS artifact is UNSIGNED — a
       # stated limitation, not a surprise at install time.
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
