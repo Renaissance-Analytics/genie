@@ -58,6 +58,8 @@ export type Route =
     | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
     | ({ surface: 'takeover'; terminalId: string } & Common)
+    /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
+    | ({ surface: 'files'; workspaceId: string } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
     | ({ surface: 'settings'; group: SettingsGroup | null } & Common)
@@ -122,6 +124,11 @@ export function parseRoute(input: string): Route {
             // No modifiers: a TUI window has no chat flyout to open and no pin to keep.
             return { surface: 'takeover', terminalId: tail, chat: null, pin: null };
         }
+        case 'files': {
+            // The popped-out panel (§4.3): no id is not a window; no modifiers either.
+            if (!tail) return dashboard('workspace', common);
+            return { surface: 'files', workspaceId: tail, chat: null, pin: null };
+        }
         case 'workspace': {
             if (!tail) return dashboard('workspace', common);
             return {
@@ -174,6 +181,8 @@ export function formatRoute(route: Route): string {
             break;
         case 'takeover':
             break;
+        case 'files':
+            break;
         case 'deck':
             break;
     }
@@ -185,6 +194,7 @@ export function formatRoute(route: Route): string {
         route.surface === 'agent' ? `agent/${route.agentId}`
         : route.surface === 'workspace' ? `workspace/${route.workspaceId}`
         : route.surface === 'takeover' ? `takeover/${route.terminalId}`
+        : route.surface === 'files' ? `files/${route.workspaceId}`
         : route.surface;
 
     // No trailing `?` when there is nothing to say. Small, but it is the difference between

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TreeNode } from '../../core/files-panel.js';
+import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
 
@@ -8,12 +9,17 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from 
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose }: {
+export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
     onPin: () => void;
     onClose: () => void;
+    popped?: boolean | undefined;
+    onPopOut?: (() => void) | undefined;
+    /** An agent is writing a file you have dirty (§4.3): ask it to pause; lifted when the buffer is clean again. */
+    onPause?: ((agent: string, path: string) => void) | undefined;
+    onResume?: ((agent: string, path: string) => void) | undefined;
 }) {
     const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
     const [state, setState] = useState<FilesPanelState | null>(null);
@@ -22,6 +28,18 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose }
     // The buffer you are typing into (§4.3): dirty while it differs from what was opened; never auto-reloaded.
     const [buffer, setBuffer] = useState<{ path: string; text: string } | null>(null);
     const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string } | null>(null);
+    // Agents asked to pause (§4.3): one ask per (agent, file) while your buffer is dirty; lifted when it is clean.
+    const [paused, setPaused] = useState<readonly Pause[]>([]);
+    const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
+    useEffect(() => {
+        const dirty = dirtyPath ? [dirtyPath] : [];
+        const adds = pauseRequests(state?.activity ?? [], dirty, paused);
+        const lifted = resumed(paused, dirty);
+        if (adds.length === 0 && lifted.length === 0) return;
+        for (const p of adds) onPause?.(p.agent, p.path);
+        for (const p of lifted) onResume?.(p.agent, p.path);
+        setPaused([...paused.filter((p) => !lifted.includes(p)), ...adds]);
+    }, [state, dirtyPath, paused, onPause, onResume]);
 
     const refresh = useCallback(() => {
         void files.tree(workspace.id).then((t) => setTree(t));
@@ -80,5 +98,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose }
               onMerge: () => { if (conflict) setBuffer({ path: open.path, text: `<<<<<<< mine\n${buffer?.text ?? ''}=======\n${conflict.onDisk}>>>>>>> theirs\n` }); setConflict(null); },
           }
         : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} />;
 }

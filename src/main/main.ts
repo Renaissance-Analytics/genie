@@ -2,6 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, safeStorage } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { FilesWindows } from './files-windows.js';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,6 +90,7 @@ let terminals: TerminalHost | null = null;
 let filesHost: FilesHost | null = null;
 let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
+let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
 let updates: UpdateHost | null = null;
 let drainTimer: ReturnType<typeof setInterval> | null = null;
@@ -115,6 +117,35 @@ function openTakeOverWindow(route: string): void {
     win.once('ready-to-show', () => win.show());
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+}
+
+/** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
+function openFilesWindow(route: string): void {
+    const workspaceId = route.split('/').pop() ?? '';
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { w.focus(); return; }
+    }
+    const win = new BrowserWindow({
+        width: 960,
+        height: 720,
+        backgroundColor: '#0a0a0c',
+        show: false,
+        webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    win.once('ready-to-show', () => win.show());
+    win.on('closed', () => filesWindows?.windowClosed(workspaceId));
+    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+}
+
+function closeWindowAt(route: string): void {
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) w.close();
+    }
+}
+
+/** Pushed to EVERY window — a popped-out panel is a window too. */
+function broadcast(channel: string, ...args: unknown[]): void {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, ...args);
 }
 
 function createWindow(): BrowserWindow {
@@ -285,7 +316,10 @@ async function boot(): Promise<void> {
                 row.event.kind === 'tool' ? [{ agentId: record.id, agentName: record.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput }] : []);
         },
     });
-    filesHost.onChange((workspaceId) => { if (window && !window.isDestroyed()) window.webContents.send('genie:files-changed', workspaceId); });
+    filesHost.onChange((workspaceId) => broadcast('genie:files-changed', workspaceId));
+    // The popped-out panels (§4.3): tracked here, pushed as the whole list.
+    filesWindows = new FilesWindows({ openWindow: openFilesWindow, closeWindow: closeWindowAt });
+    filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));
     // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
     terminals.onData((id, data) => {
         for (const w of BrowserWindow.getAllWindows()) {
@@ -553,6 +587,9 @@ async function boot(): Promise<void> {
         typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
+    ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
+    ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
+    ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
     ipcMain.handle('genie:files-write', (_event, workspaceId: unknown, path: unknown, text: unknown, expectedSha: unknown) =>
         (typeof workspaceId === 'string' && typeof path === 'string' && typeof text === 'string' ? filesHost?.write(workspaceId, path, text, typeof expectedSha === 'string' ? expectedSha : null) ?? { ok: false, reason: 'no files host' } : { ok: false, reason: 'bad arguments' }));
 

@@ -148,6 +148,16 @@ const bridge: GenieBridge = {
             ipcRenderer.on('genie:files-changed', handler);
             return () => { ipcRenderer.removeListener('genie:files-changed', handler); };
         },
+        windows: {
+            popOut: (workspaceId) => ipcRenderer.invoke('genie:files-popout', workspaceId) as Promise<void>,
+            bringBack: (workspaceId) => ipcRenderer.invoke('genie:files-bringback', workspaceId) as Promise<void>,
+            list: () => ipcRenderer.invoke('genie:files-windows') as Promise<readonly string[]>,
+            onChange: (listener) => {
+                const handler = (_e: unknown, popped: readonly string[]) => listener(popped);
+                ipcRenderer.on('genie:files-windows-changed', handler);
+                return () => { ipcRenderer.removeListener('genie:files-windows-changed', handler); };
+            },
+        },
     },
     features: {
         snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,

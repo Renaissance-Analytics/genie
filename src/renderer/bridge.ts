@@ -227,6 +227,13 @@ export interface GenieBridge {
         onChange(listener: (workspaceId: string) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
+        /** The popped-out panels (§4.3): host-only windows, so a remote bridge has none of this. */
+        windows?: {
+            popOut(workspaceId: string): Promise<void>;
+            bringBack(workspaceId: string): Promise<void>;
+            list(): Promise<readonly string[]>;
+            onChange(listener: (popped: readonly string[]) => void): () => void;
+        };
     };
 
     /**
@@ -291,7 +298,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     pickFiles: async () => [],
 };
 
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`

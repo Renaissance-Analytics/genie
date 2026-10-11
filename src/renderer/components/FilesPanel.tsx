@@ -1,6 +1,7 @@
 import { TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { FileViewer } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
+import type { Pause } from '../../core/files-popout.js';
 
 /**
  * THE WORKSPACE FILE PANEL (§4.3). ONE per workspace. A 220px tree, tabs, the viewer; a footer naming
@@ -44,6 +45,12 @@ export interface FilesPanelProps {
     readonly onPin: () => void;
     readonly onClose: () => void;
     readonly edit?: FilesEdit | undefined;
+    /** Pop the panel into its own window (§4.3); absent on a bridge that cannot open host windows. */
+    readonly onPopOut?: (() => void) | undefined;
+    /** In its own window: no pin, no pop-out — one control docks it back (`onClose`). */
+    readonly popped?: boolean | undefined;
+    /** Agents ASKED to pause on a file you have dirty (§4.3) — named in the footer, marked on the tab. */
+    readonly paused?: readonly Pause[] | undefined;
 }
 
 type Tone = 'writing' | 'changed' | 'unreported';
@@ -81,7 +88,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [] }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -91,10 +98,17 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 <span className="rounded-md bg-[var(--bg-2)] px-1.5 py-0.5 text-xs font-medium">{workspace.name ?? workspace.id}</span>
                 <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
                 <span className="ml-auto" />
-                <button type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
-                    {pinned ? 'Pinned' : 'Pin'}
-                </button>
-                <button type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</button>
+                {popped ? (
+                    <button type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</button>
+                ) : (
+                    <>
+                        <button type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
+                            {pinned ? 'Pinned' : 'Pin'}
+                        </button>
+                        {onPopOut ? <button type="button" data-action="pop-out-files" className={button} title="Pop the panel into its own window" onClick={onPopOut}>Pop out</button> : null}
+                        <button type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</button>
+                    </>
+                )}
             </header>
             <div className="flex min-h-0 flex-1">
                 <aside className="w-[220px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
@@ -112,7 +126,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             const active = open?.path === t;
                             const mark = marks.get(t);
                             return (
-                                <div key={t} data-file-tab={t} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
+                                <div key={t} data-file-tab={t} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
                                     <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
                                     <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
                                 </div>
@@ -148,12 +162,19 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     </div>
                 </div>
             </div>
-            {state && (state.activity.length > 0 || touched.size > 0) ? (
+            {state && (state.activity.length > 0 || touched.size > 0 || paused.length > 0) ? (
                 <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--border-1)] px-3 py-1.5 text-xs text-[var(--fg-2)]">
                     {state.activity.map((a) => (
                         <span key={`${a.agent}:${a.path}`} className="inline-flex items-center gap-1">
                             <span className={a.verb === 'writing' ? 'text-[var(--accent)]' : 'text-[var(--fg-4)]'}>●</span>
                             <span>{`${a.agent} ${a.verb} ${a.path}`}</span>
+                        </span>
+                    ))}
+                    {/* ASKED, not stopped: Genie cannot halt a provider's tool call; it told the agent and says so (§4.3). */}
+                    {paused.map((p) => (
+                        <span key={`pause:${p.agent}:${p.path}`} data-paused={p.path} className="inline-flex items-center gap-1 text-amber-500">
+                            <span>⏸</span>
+                            <span>{`${p.agent} asked to pause on ${p.path} — you have unsaved edits there`}</span>
                         </span>
                     ))}
                     {touched.size > 0 ? <span className="ml-auto">{touched.size} changed in this workspace</span> : null}
