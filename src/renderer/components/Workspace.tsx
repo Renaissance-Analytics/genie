@@ -8,6 +8,7 @@ import {
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
+import { terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -52,10 +53,17 @@ export interface WorkspaceProps {
     workspace: { id: string; name?: string; path: string };
     terminals: GenieBridge['terminals'];
     ops?: WorkspaceOpsProps | undefined;
+    /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
+    initialState?: WorkspaceState | undefined;
 }
 
-export function Workspace({ workspace, terminals, ops }: WorkspaceProps) {
-    const [state, setState] = useState<WorkspaceState>(emptyWorkspace);
+/** `1.2 kB`, `340 B` — how much output a suspended terminal held back. */
+function formatHeld(bytes: number): string {
+    return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
+}
+
+export function Workspace({ workspace, terminals, ops, initialState }: WorkspaceProps) {
+    const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
      * evaluation, so a static import of `fancy-term` anywhere Node can reach — the SSR render
@@ -187,6 +195,29 @@ export function Workspace({ workspace, terminals, ops }: WorkspaceProps) {
                                     <span className="font-mono text-[11px] text-[var(--fg-4)]">exit {t.exited}</span>
                                 )}
                             </button>
+                            {/* HIDE keeps the shell running (§6.5); CLOSE ends it. Two controls, two words. */}
+                            <button
+                                type="button"
+                                aria-label={t.suspended ? 'Resume output' : 'Suspend output'}
+                                title={t.suspended ? `Resume — ${formatHeld(t.droppedWhileSuspended ?? 0)} held while suspended` : 'Suspend — keep the shell running, hold its output back'}
+                                {...(t.suspended ? { 'data-terminal-suspended': t.id } : {})}
+                                data-terminal-suspend={t.id}
+                                onClick={() => setState((s) => terminalSuspended(s, t.id, !t.suspended))}
+                                className="rounded px-1 text-[var(--fg-4)] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]"
+                            >
+                                <Icon name={t.suspended ? 'play' : 'pause'} className="h-3 w-3" />
+                                {t.suspended ? <span className="ml-1 font-mono text-[10px]">{formatHeld(t.droppedWhileSuspended ?? 0)} held</span> : null}
+                            </button>
+                            <button
+                                type="button"
+                                aria-label="Hide terminal (keeps running)"
+                                title="Hide — the shell keeps running; show it again from the hidden chip"
+                                data-terminal-hide={t.id}
+                                onClick={() => setState((s) => terminalHidden(s, t.id))}
+                                className="rounded px-1 text-[var(--fg-4)] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]"
+                            >
+                                <Icon name="eye-off" className="h-3 w-3" />
+                            </button>
                             <button
                                 type="button"
                                 aria-label="Close terminal"
@@ -199,6 +230,17 @@ export function Workspace({ workspace, terminals, ops }: WorkspaceProps) {
                         </div>
                     );
                 })}
+                {(state.hidden ?? []).length > 0 ? (
+                    <div data-terminal-hidden-list className="flex items-center gap-1 border-r border-[var(--border-1)] px-2 text-[12px] text-[var(--fg-3)]">
+                        <Icon name="eye-off" className="h-3 w-3" />
+                        <span>{(state.hidden ?? []).length} hidden</span>
+                        {(state.hidden ?? []).map((h) => (
+                            <button key={h.id} type="button" data-terminal-show={h.id} title={`Show ${h.shell.split(/[\\/]/).pop()} (pid ${h.pid})`} onClick={() => setState((s) => terminalShown(s, h.id))} className="rounded px-1 font-mono text-[11px] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]">
+                                {h.shell.split(/[\\/]/).pop()}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
                 <button
                     type="button"
                     data-terminal-add=""

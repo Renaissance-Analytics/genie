@@ -73,6 +73,8 @@ export interface PtyPort {
     onData(listener: (id: string, data: string) => void): () => void;
     /** Subscribe to a pty ending on its own. Returns an unsubscribe. */
     onExit(listener: (id: string, exitCode: number) => void): () => void;
+    /** Subscribe to the shell's working directory, as the engine learns it (OSC-7). Optional: an engine without it tracks nothing. */
+    onCwd?(listener: (id: string, cwd: string) => void): () => void;
 }
 
 export interface TerminalOptions {
@@ -96,6 +98,10 @@ export interface Terminal {
     workspaceId: string;
     pid: number;
     shell: string;
+    /** The shell's working directory as last reported (OSC-7), or absent when never reported. */
+    cwd?: string;
+    /** When the cwd was last reported — the newest wins for `lastCwd`. */
+    cwdAt?: number;
 }
 
 export class TerminalHost {
@@ -103,12 +109,18 @@ export class TerminalHost {
     #terminals: Terminal[] = [];
     readonly #dataListeners = new Set<(id: string, data: string) => void>();
     readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
+    #cwdClock = 0;
 
     constructor(pty: PtyPort) {
         this.#pty = pty;
 
         this.#pty.onData((id, data) => {
             for (const listener of this.#dataListeners) listener(id, data);
+        });
+
+        this.#pty.onCwd?.((id, cwd) => {
+            // A report for a terminal this host does not know is ignored, not a throw.
+            this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, cwd, cwdAt: ++this.#cwdClock } : t));
         });
 
         this.#pty.onExit((id, exitCode) => {
@@ -133,6 +145,13 @@ export class TerminalHost {
 
     list(): readonly Terminal[] {
         return this.#terminals;
+    }
+
+    /** The workspace's most recently reported shell directory (§6.5 cwd resume), or `null` — never a guess. */
+    lastCwd(workspaceId: string): string | null {
+        const reported = this.#terminals.filter((t) => t.workspaceId === workspaceId && t.cwd !== undefined);
+        if (reported.length === 0) return null;
+        return reported.reduce((a, b) => ((a.cwdAt ?? 0) >= (b.cwdAt ?? 0) ? a : b)).cwd ?? null;
     }
 
     open(options: TerminalOptions): PtyOpened {

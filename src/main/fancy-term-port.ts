@@ -153,11 +153,25 @@ export interface SnapshotEncryptor {
  * Settings come from a tiny literal rather than a settings subsystem that does not exist yet:
  * cwd tracking on, detached terminals off. A missing key makes the engine apply its default.
  */
-export function realFancyTermPort(userData: string, encryptor: SnapshotEncryptor): PtyPort {
-    const settings = {
-        get: (key: string): string | undefined =>
-            ({ track_cwd: 'on', detached_terminals: 'off' } as Record<string, string>)[key],
+/**
+ * The engine's settings port over GENIE'S settings (§6.5). fancy-term-host speaks 'on' / 'off' for
+ * the two keys it gates on (the OSC-7 cwd hook, detached terminals); read LIVE so a change in the
+ * Settings surface reaches the engine on its next look. A key Genie has no value for is left to the
+ * engine's own default. This replaces a literal that made the two settings change nothing.
+ */
+export function engineSettingsFrom(values: () => Readonly<Record<string, boolean | string>>): { get(key: string): string | undefined } {
+    const ENGINE_KEYS = new Set(['track_cwd', 'detached_terminals']);
+    return {
+        get: (key) => {
+            if (!ENGINE_KEYS.has(key)) return undefined;
+            const v = values()[key];
+            return typeof v === 'boolean' ? (v ? 'on' : 'off') : typeof v === 'string' ? v : undefined;
+        },
     };
+}
+
+export function realFancyTermPort(userData: string, encryptor: SnapshotEncryptor, settingsValues: () => Readonly<Record<string, boolean | string>> = () => ({ track_cwd: true, detached_terminals: false })): PtyPort {
+    const settings = engineSettingsFrom(settingsValues);
     configureInProcessBackend({
         settings,
         snapshots: createSnapshotStore({ baseDir: join(userData, 'terminal-snapshots'), encryptor }),
