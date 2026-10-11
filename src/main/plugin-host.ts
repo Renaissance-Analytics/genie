@@ -10,6 +10,8 @@ import { bridgeAccess, installDecision, parseManifest, verifyPluginSignature, ty
  * capabilities; an unknown, refused, invalid or disabled plugin has no guard, so it can do nothing.
  */
 
+import type { PluginTool } from '../core/plugins.js';
+
 export type PluginState = 'enabled' | 'disabled' | 'refused' | 'invalid';
 
 export interface PluginEntry {
@@ -30,11 +32,13 @@ interface Loaded extends PluginEntry {
 
 export class PluginHost {
     readonly #entries: Loaded[];
+    readonly #dir: string;
     readonly #stateFile: string;
     #disabled: Set<string>;
 
-    private constructor(entries: Loaded[], stateFile: string, disabled: Set<string>) {
+    private constructor(entries: Loaded[], dir: string, stateFile: string, disabled: Set<string>) {
         this.#entries = entries;
+        this.#dir = dir;
         this.#stateFile = stateFile;
         this.#disabled = disabled;
     }
@@ -79,7 +83,14 @@ export class PluginHost {
         // Installable first, then refused, then invalid — the person reads what works before what does not.
         const rank: Record<PluginState, number> = { enabled: 0, disabled: 0, refused: 1, invalid: 2 };
         entries.sort((a, b) => rank[a.state] - rank[b.state]);
-        return new PluginHost(entries, stateFile, disabled);
+        return new PluginHost(entries, input.dir, stateFile, disabled);
+    }
+
+    /** The MCP tools of ENABLED plugins (§6.7), each with its folder and manifest — what the MCP surface offers agents. */
+    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool }[] {
+        return this.#entries.flatMap((e) =>
+            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool })) : [],
+        );
     }
 
     list(): readonly PluginEntry[] {

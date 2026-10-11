@@ -47,6 +47,7 @@ import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { tynnClient } from './tynn-client.js';
+import { gitClone, gitInit } from './git-ports.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -615,11 +616,9 @@ async function boot(): Promise<void> {
             readJson: async (p) => { try { return JSON.parse(await readFileText(p, 'utf8')) as unknown; } catch { return null; } },
             writeJson: (p, value) => writeFileText(p, `${JSON.stringify(value, null, 2)}\n`, 'utf8'),
             mkdir: (p) => mkdir(p, { recursive: true }).then(() => {}),
-            gitInit: (p) => new Promise<void>((resolve, reject) => { execFileCb('git', ['init'], { cwd: p }, (error) => (error ? reject(error) : resolve())); }),
-            // The clone's own stderr is the reason a person reads; a bare exit code is not.
-            gitClone: (url, into) => new Promise<void>((resolve, reject) => {
-                execFileCb('git', ['clone', '--', url, into], { windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
-            }),
+            gitInit,
+            // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
+            gitClone,
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
