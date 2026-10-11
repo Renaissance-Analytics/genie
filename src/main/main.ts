@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
+import { restartWithHandoff } from './restart-with-handoff.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
@@ -349,6 +350,16 @@ async function boot(): Promise<void> {
      * looked up in the registry: an unknown workspace is refused, and there is no way to name
      * an agent through this surface.
      */
+    ipcMain.handle('genie:restart-with-handoff', (_event, raw: unknown, finishedId: unknown) => {
+        const record = agentFromRenderer(raw);
+        if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
+        // Stop → start → the handoff as the first prompt → seen. The order and the refusals live in
+        // restart-with-handoff.ts; this is the thin call.
+        const r = restartWithHandoff(host, services.attention, record, cwdFor(record), finishedId);
+        registry?.touch();
+        return r;
+    });
+
     ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
         if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
         const record = registry?.find(raw as AgentId) ?? null;

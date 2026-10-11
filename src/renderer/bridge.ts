@@ -118,6 +118,12 @@ export interface GenieBridge {
      * a provider receiving an option it never offered is a protocol error at best.
      */
     answerApproval(agentId: string, optionId: string): void;
+    /**
+     * "Restart with this" on a finish (§4.5): stop, start, and send the agent its own handoff note
+     * as the first prompt; the finish is marked seen only when the prompt was taken. A refusal
+     * names its reason and leaves the item on the Deck.
+     */
+    restartWithHandoff(agentId: string, finishedId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     addAgent(workspaceId: string): void;
     /**
      * Open the folder picker and register what the user chose.

@@ -6,7 +6,7 @@ import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
-import { deckAnswerChannel } from '../core/deck-resolve.js';
+import { deckAnswerRoute } from '../core/deck-resolve.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
@@ -221,17 +221,30 @@ export function App({ bridge }: AppProps) {
             onAnswerDeckItem={(item, optionId) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.
-                const channel = deckAnswerChannel(item);
-                if (channel.kind === 'refused') { console.error('[genie] deck answer refused:', channel.reason); return; }
-                if (channel.kind === 'feature') {
-                    void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId }).then(setFeatures).catch((error: unknown) => {
-                        console.error('[genie] deck answer refused:', (error as Error).message);
-                    });
-                    return;
+                const route = deckAnswerRoute(item, optionId);
+                switch (route.kind) {
+                    case 'refused':
+                        console.error('[genie] deck answer refused:', route.reason);
+                        return;
+                    case 'feature':
+                        void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId }).then(setFeatures).catch((error: unknown) => {
+                            console.error('[genie] deck answer refused:', (error as Error).message);
+                        });
+                        return;
+                    case 'navigate':
+                        // Open: the window goes there itself; the finish stays on the Deck until marked read.
+                        navigate(route.route);
+                        return;
+                    case 'restart-with-handoff':
+                        void resolvedBridge?.restartWithHandoff(route.agentId, route.finishedId).then((r) => {
+                            if (!r.ok) console.error('[genie] restart with handoff refused:', r.reason);
+                        });
+                        return;
+                    case 'provider':
+                        setAnswering(optionId);
+                        resolvedBridge?.answerApproval(route.agentId, optionId);
+                        return;
                 }
-                const id = channel.agentId;
-                setAnswering(optionId);
-                resolvedBridge?.answerApproval(id, optionId);
             }}
             onTogglePin={() => {
                 // The single slot's rule lives in `core/dock.ts`, including the file panel's
