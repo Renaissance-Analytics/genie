@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Badge, Icon, Input, Skeleton, Tabs } from '@particle-academy/react-fancy';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
@@ -21,7 +22,11 @@ export type AddingForm =
     | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[] }
     | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] };
 
+const NO_BOUNDS = () => {};
+
 interface SurfaceProps {
+    /** The browser surface reports its box here so main can place the view. */
+    readonly onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
     /** The workspaces a form can add into. The route names none, so the surface offers them. */
     readonly workspaces?: readonly { id: string; path: string }[] | undefined;
     readonly adding?: AddingForm | undefined;
@@ -334,7 +339,23 @@ export function SettingsSurface({ data, onAction, group }: SurfaceProps & { grou
     );
 }
 
-export function BrowserSurface({ data, onAction }: SurfaceProps) {
+/** The box the main-process WebContentsView sits over. Reports its rect on mount and resize; a zero rect on unmount. */
+function BrowserBox({ url, onBounds }: { url: string | null; onBounds: (b: { x: number; y: number; width: number; height: number }) => void }) {
+    const ref = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const report = () => { const r = el.getBoundingClientRect(); onBounds({ x: r.x, y: r.y, width: r.width, height: r.height }); };
+        report();
+        const ro = new ResizeObserver(report);
+        ro.observe(el);
+        window.addEventListener('resize', report);
+        return () => { ro.disconnect(); window.removeEventListener('resize', report); onBounds({ x: 0, y: 0, width: 0, height: 0 }); };
+    }, [onBounds]);
+    return <div ref={ref} data-browser-view data-browser-url={url ?? undefined} data-route-encoded={browserRoute.format({ ...(url ? { url } : {}) })} className="min-h-0 flex-1" />;
+}
+
+export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps) {
     const { url, routes } = data.browser;
     const nav = url ? classifyNavigation(url, routes) : null;
     return (
@@ -351,7 +372,7 @@ export function BrowserSurface({ data, onAction }: SurfaceProps) {
                 {nav?.kind === 'refused' ? <Badge variant="soft" size="sm" color="red">{nav.reason}</Badge> : null}
             </div>
             {/* The page itself is a WebContentsView owned by the main process, positioned over this box. */}
-            <div data-browser-view data-browser-url={url ?? undefined} data-route-encoded={browserRoute.format({ ...(url ? { url } : {}) })} className="min-h-0 flex-1" />
+            <BrowserBox url={url} onBounds={onBrowserBounds ?? NO_BOUNDS} />
         </div>
     );
 }

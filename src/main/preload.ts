@@ -113,6 +113,7 @@ const bridge: GenieBridge = {
             return () => { ipcRenderer.removeListener(FEATURE_CHANNELS.changed, handler); };
         },
         act: (action) => ipcRenderer.invoke(FEATURE_CHANNELS.act, action) as Promise<FeatureData>,
+        setBrowserBounds: (bounds) => ipcRenderer.invoke(FEATURE_CHANNELS.browserBounds, bounds) as Promise<void>,
     },
 
     updates: {

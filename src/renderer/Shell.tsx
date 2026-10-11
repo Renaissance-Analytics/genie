@@ -67,6 +67,8 @@ export interface ShellProps {
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
     onFeature?: ((action: FeatureAction) => void) | undefined;
+    /** The browser surface's box, for main to place the view over. */
+    onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
     /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
     pinned: DockPanel | null;
     onNavigate: (route: string) => void;
@@ -98,6 +100,7 @@ export function Shell({
     servable,
     features = EMPTY_FEATURES,
     onFeature = () => {},
+    onBrowserBounds,
     agentDetail,
     agentResolved,
     selectedRowId,
@@ -196,7 +199,7 @@ export function Shell({
                     {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
                     {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
                     {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} /> : null}
-                    {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
 
                     {canServe && parsed.surface === 'deck' ? (
                         <Deck

@@ -11,7 +11,7 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
 
 describe('channels', () => {
     it('are three, named once, and both halves import the constant rather than retyping the strings', () => {
-        expect(FEATURE_CHANNELS).toEqual({ snapshot: 'genie:features-snapshot', act: 'genie:features-act', changed: 'genie:features-changed' });
+        expect(FEATURE_CHANNELS).toEqual({ snapshot: 'genie:features-snapshot', act: 'genie:features-act', changed: 'genie:features-changed', browserBounds: 'genie:features-browser-bounds' });
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         for (const src of [preload, main]) {
@@ -28,5 +28,14 @@ describe('the bridge’s default', () => {
         await expect(NO_FEATURES.act({ kind: 'knowledge.search', query: 'x' })).rejects.toThrow(/no main process/);
         const off = NO_FEATURES.subscribe(() => {});
         expect(typeof off).toBe('function');
+    });
+});
+
+describe('the browser box', () => {
+    it('is a fourth channel, named once, and NO_FEATURES accepts bounds silently (there is no view to place)', async () => {
+        expect(FEATURE_CHANNELS.browserBounds).toBe('genie:features-browser-bounds');
+        const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
+        expect(preload).toContain('FEATURE_CHANNELS.browserBounds');
+        await expect(NO_FEATURES.setBrowserBounds({ x: 0, y: 0, width: 1, height: 1 })).resolves.toBeUndefined();
     });
 });

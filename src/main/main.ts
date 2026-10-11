@@ -18,6 +18,8 @@ import { runUpdate } from './toolchain-prober.js';
 import { HOST_TOOLS } from '../core/toolchain.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
+import { BrowserPane } from './browser-pane.js';
+import { electronBrowserView } from './electron-browser-view.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
@@ -162,6 +164,7 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: ComposedServices | null = null;
+let browserPane: BrowserPane | null = null;
 
 /** Where "latest" comes from, per tool. An unreachable or unreadable source yields null — the honest `unknown`. */
 async function latestFor(tool: string): Promise<{ version: string; source: string } | null> {
@@ -432,6 +435,13 @@ async function boot(): Promise<void> {
             now: Date.now,
         },
     };
+    ipcMain.handle(FEATURE_CHANNELS.browserBounds, (_event, raw: unknown) => {
+        const b = raw as { x: number; y: number; width: number; height: number };
+        if (!browserPane || typeof b?.width !== 'number') return;
+        // A zero-sized box means the surface is not on screen: hide rather than paint over another surface.
+        if (b.width === 0 || b.height === 0) browserPane.hide();
+        else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
+    });
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState));
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
@@ -439,6 +449,10 @@ async function boot(): Promise<void> {
         if (action.kind === 'toolchain.check' || action.kind === 'toolchain.update') featureState = { ...featureState, toolStatuses: data.toolchain?.tools ?? null, toolchainCheckedAt: data.toolchain?.checkedAt ?? null };
         if (action.kind === 'knowledge.search') featureState = { ...featureState, knowledgeQuery: action.query };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
+        if (action.kind === 'browser.navigate' && browserPane && data.browser.url) {
+            const shown = await browserPane.show(data.browser.url);
+            if (!shown.ok) console.error('[genie] browser:', shown.reason);
+        }
         featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null };
         return data;
     });
@@ -456,6 +470,7 @@ async function boot(): Promise<void> {
     });
 
     window = createWindow();
+    browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
 }
 
 app.on('second-instance', () => {
