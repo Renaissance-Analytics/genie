@@ -9,6 +9,7 @@ import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
+import type { AnnotatedRow, GithubAppStatus, SyncResult } from '../core/integrations.js';
 import type { Device } from '../main/remote-devices.js';
 
 export type { FrontDoorStatus };
@@ -77,6 +78,14 @@ export interface RemoteSection {
     readonly servedLink: { id: string; url: string } | null;
 }
 
+/** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
+export interface IntegrationsSection {
+    readonly tynnSignedIn: boolean;
+    readonly github: GithubAppStatus;
+    readonly gated: readonly AnnotatedRow[];
+    readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
@@ -87,6 +96,7 @@ export interface FeatureData {
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     readonly browser: { url: string | null; routes: readonly GenRoute[] };
     readonly remote: RemoteSection | null;
+    readonly integrations: IntegrationsSection | null;
 }
 
 /** First paint: nothing has been asked yet. */
@@ -100,6 +110,7 @@ export const EMPTY_FEATURES: FeatureData = {
     settings: { values: null },
     browser: { url: null, routes: [] },
     remote: null,
+    integrations: null,
 };
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
@@ -154,4 +165,9 @@ export type FeatureAction =
     | { kind: 'remote.unlock' }
     /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
     | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
-    | { kind: 'remote.revokeShare'; shareId: string };
+    | { kind: 'remote.revokeShare'; shareId: string }
+    /** Sign in to Tynn with a token; an empty token signs out. */
+    | { kind: 'integrations.tynnToken'; token: string }
+    /** The person confirms a GitHub App step they did in the browser; install needs authorize first. */
+    | { kind: 'integrations.githubConfirm'; step: 'authorize' | 'install' }
+    | { kind: 'integrations.syncConfig'; workspaceId: string; workspacePath: string };

@@ -635,6 +635,8 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
+    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
     const featurePorts: FeaturePorts = {
         toolchain: {
             probe: () => probeToolsLive(latestFor),
@@ -654,7 +656,7 @@ async function boot(): Promise<void> {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);
         if (action.kind === 'toolchain.check' || action.kind === 'toolchain.update') featureState = { ...featureState, toolStatuses: data.toolchain?.tools ?? null, toolchainCheckedAt: data.toolchain?.checkedAt ?? null };
-        featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd };
+        featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
         if (action.kind === 'browser.navigate' && browserPane && data.browser.url) {
             const shown = await browserPane.show(data.browser.url);

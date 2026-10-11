@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { classifyNavigation } from '../core/browser-policy.js';
+import type { SyncResult } from '../core/integrations.js';
 import { resolveDeckAnswer } from '../core/deck-resolve.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
@@ -45,6 +46,7 @@ export interface FeatureState {
     knowledgeLastAdd?: KnowledgeAdded | null;
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
     servedLink?: { id: string; url: string } | null;
+    lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
@@ -60,6 +62,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         inbox: { unread: services.inbox.unread(HUMAN), peers },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes() },
+        integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
         remote: {
             host: services.remote.hostName,
             url: services.remote.url(),
@@ -336,6 +339,18 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.servedLink = { id: m.link.id, url: m.url };
             break;
         }
+        case 'integrations.tynnToken':
+            await services.settings.set('tynn_token', action.token.trim());
+            break;
+        case 'integrations.githubConfirm': {
+            const values = services.settings.snapshot();
+            if (action.step === 'install' && values.github_authorized !== true) throw new Error('authorize first: the GitHub App must be authorized for your account before it can be installed on repositories');
+            await services.settings.set(action.step === 'authorize' ? 'github_authorized' : 'github_installed', true);
+            break;
+        }
+        case 'integrations.syncConfig':
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath) };
+            break;
         case 'remote.revokeShare':
             if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
             break;
