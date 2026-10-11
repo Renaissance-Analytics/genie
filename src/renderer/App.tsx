@@ -424,6 +424,7 @@ export function App({ bridge }: AppProps) {
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={previewAdd}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
+            files={resolvedBridge?.files}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onSelectRow={setSelectedRowId}

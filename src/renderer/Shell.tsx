@@ -14,7 +14,7 @@ import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
 import { AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
-import { NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
 
 /**
@@ -89,6 +89,8 @@ export interface ShellProps {
     onAddWorkspace: () => void;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
     terminals?: GenieBridge['terminals'];
+    /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
+    files?: GenieBridge['files'] | undefined;
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
@@ -127,6 +129,7 @@ export function Shell({
     onAddAgent,
     onAddWorkspace,
     terminals = NO_TERMINALS,
+    files = NO_FILES,
     updates = NO_UPDATES,
     onTakeOver,
     onOpenPalette,
@@ -294,6 +297,9 @@ export function Shell({
                             key={parsed.workspaceId}
                             workspace={workspaceFor(parsed.workspaceId)!}
                             terminals={terminals}
+                            files={files}
+                            panel={parsed.panel}
+                            onTogglePanel={() => onNavigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`)}
                             ops={workspaceOps}
                         />
                     ) : null}

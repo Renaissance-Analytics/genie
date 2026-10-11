@@ -1,5 +1,5 @@
 import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
-import type { AgentDetail, GenieBridge, GenieSnapshot, UpdateState } from './bridge.js';
+import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
 
 /**
@@ -155,6 +155,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
         },
+        // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
+        files: NO_FILES,
         terminals: {
             open: (workspaceId, options) => read('terminals.open', workspaceId, options),
             write: (id, data) => fire('terminals.write', id, data),

@@ -24,14 +24,16 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
     let agents: AgentRecord[] = [rec('agent_a', 'tynn', 'atlas'), rec('agent_b', 'tynn', 'bolt'), rec('agent_c', 'fancy', 'cass')];
     let now = 1_000;
     const finished: Array<{ id: string; agentId: string; handoff: string | null; at: string; seen: boolean; agentName: string | null }> = [];
+    // The host joins paths with the OS's separator (backslashes on Windows); this in-memory fs keys by the posix form.
+    const key = (p: string) => p.replace(/\\/g, '/');
     const ports: WorkspaceOpsPorts = {
         fs: {
-            exists: async (p) => p in entries,
-            entries: async (p) => entries[p] ?? [],
-            readJson: async (p) => files[p] ?? null,
-            writeJson: async (p, v) => { calls.push(`writeJson:${p}`); files[p] = v; },
-            mkdir: async (p) => { calls.push(`mkdir:${p}`); },
-            gitInit: async (p) => { calls.push(`gitInit:${p}`); },
+            exists: async (p) => key(p) in entries,
+            entries: async (p) => entries[key(p)] ?? [],
+            readJson: async (p) => files[key(p)] ?? null,
+            writeJson: async (p, v) => { calls.push(`writeJson:${key(p)}`); files[key(p)] = v; },
+            mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); },
+            gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
         },
         registry: {
             workspace: (id) => workspaces.get(id) ?? null,

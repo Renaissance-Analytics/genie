@@ -6,6 +6,8 @@ import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { TreeNode } from '../core/files-panel.js';
+import type { FilesState, OpenResult } from '../main/files-host.js';
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -188,6 +190,19 @@ export interface GenieBridge {
     };
 
     /**
+     * THE FILE PANEL (§4.3) — one per workspace. Reads are confined to the workspace root in main;
+     * refusals come back in words. `onChange` is a push from the host's watcher, never a poll.
+     */
+    files: {
+        /** The workspace tree without .git or node_modules; `null` for an unknown workspace. */
+        tree(workspaceId: string): Promise<readonly TreeNode[] | null>;
+        open(workspaceId: string, path: string): Promise<OpenResult>;
+        state(workspaceId: string): Promise<FilesState | null>;
+        watch(workspaceId: string): Promise<void>;
+        onChange(listener: (workspaceId: string) => void): () => void;
+    };
+
+    /**
      * UPDATES — §7. The main process owns the state machine (`UpdateHost`); the renderer only
      * asks and shows. Nothing downloads without `download()`, nothing installs without
      * `install()`, and both answer honestly when refused: `false` / `null`, never a silent
@@ -245,6 +260,14 @@ export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'work
  * exists. Every call is a no-op and every list is empty, which is the honest answer: nothing
  * is opened, nothing is written, nothing is claimed. Never a fake terminal.
  */
+export const NO_FILES: GenieBridge['files'] = {
+    tree: () => Promise.resolve(null),
+    open: (_w, path) => Promise.resolve({ ok: false as const, path, error: 'no files host is attached' }),
+    state: () => Promise.resolve(null),
+    watch: () => Promise.resolve(),
+    onChange: () => () => {},
+};
+
 export const NO_TERMINALS: GenieBridge['terminals'] = {
     open: () => Promise.reject(new Error('no terminal engine is attached')),
     write: () => {},

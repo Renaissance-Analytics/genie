@@ -36,6 +36,8 @@ import { UpdateHost } from './updater.js';
 import { genieHome } from './paths.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
+import { FilesHost } from './files-host.js';
+import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -78,6 +80,7 @@ if (!app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
+let filesHost: FilesHost | null = null;
 let takeOvers: TakeOverHost | null = null;
 let host: SessionHost | null = null;
 let updates: UpdateHost | null = null;
@@ -257,6 +260,18 @@ async function boot(): Promise<void> {
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
     }, () => services?.settings.snapshot() ?? {});
     terminals = new TerminalHost(ptyPort);
+    // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
+    filesHost = new FilesHost({
+        workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
+        agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
+        eventsOf: (agentId) => {
+            const record = registry?.find(agentId as AgentId);
+            if (!record || !host) return [];
+            return host.rowsFor(record.id).flatMap((row): FileEvent[] =>
+                row.event.kind === 'tool' ? [{ agentId: record.id, agentName: record.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput }] : []);
+        },
+    });
+    filesHost.onChange((workspaceId) => { if (window && !window.isDestroyed()) window.webContents.send('genie:files-changed', workspaceId); });
     // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
     terminals.onData((id, data) => {
         for (const w of BrowserWindow.getAllWindows()) {
@@ -487,6 +502,13 @@ async function boot(): Promise<void> {
         typeof rawWorkspaceId === 'string'
             ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
             : []);
+
+    // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
+    ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
+    ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
+        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
+    ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
+    ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
 
     /*
      * WORKSPACE OPERATIONS (§6.1). The plans live in core/workspace-model.ts, the sequencing in
@@ -727,6 +749,7 @@ app.on('before-quit', (event) => {
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
     void remoteSocketNow?.stop();
+    void filesHost?.close();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();

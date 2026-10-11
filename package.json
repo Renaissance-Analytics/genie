@@ -19,6 +19,7 @@
     "verify:leak": "tsx test/live/terminal-leak.live.ts"
   },
   "dependencies": {
+    "@particle-academy/fancy-code": "0.11.0",
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
     "@particle-academy/fancy-flow": "^0.81.0",

@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attentionTools, type AttentionToolsDeps } from '../src/main/mcp-tools-attention.js';
 import { FeedbackStore } from '../src/main/feedback-store.js';
@@ -43,9 +43,10 @@ const call = async (name: string, args: Record<string, unknown>) => {
 
 describe('openFileForUser', () => {
     it('opens a path inside the caller’s workspace (relative or absolute), with an optional line', async () => {
-        expect(await call('openFileForUser', { terminalId: 'term_a', path: 'docs/plan.md', line: 12 })).toMatchObject({ ok: true, path: '/w/tynn/docs/plan.md', isError: false });
-        expect(await call('openFileForUser', { terminalId: 'term_a', path: '/w/tynn/src/a.ts' })).toMatchObject({ ok: true, path: '/w/tynn/src/a.ts' });
-        expect(opened).toEqual([{ path: '/w/tynn/docs/plan.md', line: 12 }, { path: '/w/tynn/src/a.ts', line: null }]);
+        // The confined path is the OS's own absolute form (a drive letter and backslashes on Windows), so compare with resolve().
+        expect(await call('openFileForUser', { terminalId: 'term_a', path: 'docs/plan.md', line: 12 })).toMatchObject({ ok: true, path: resolve('/w/tynn', 'docs/plan.md'), isError: false });
+        expect(await call('openFileForUser', { terminalId: 'term_a', path: '/w/tynn/src/a.ts' })).toMatchObject({ ok: true, path: resolve('/w/tynn/src/a.ts') });
+        expect(opened).toEqual([{ path: resolve('/w/tynn', 'docs/plan.md'), line: 12 }, { path: resolve('/w/tynn/src/a.ts'), line: null }]);
     });
 
     it('refuses a path outside the workspace by name and opens nothing; refuses an unknown terminal', async () => {
