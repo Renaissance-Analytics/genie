@@ -664,6 +664,12 @@ function DesktopApp({ bridge }: AppProps) {
             onCancelAddGit={() => setAddFromGit(false)}
             onPreviewFromGit={(url) => { void resolvedBridge?.workspaces.previewAddFromGit(url).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setAddFromGit(false); setAddPreview(p); } }); }}
             onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            // From Tynn (§6.1): the host picks the parent and asks Tynn; the plan replaces whatever add was in progress.
+            onAddWorkspaceFromTynn={() => {
+                setAddFromGit(false);
+                void resolvedBridge?.workspaces.previewAddFromTynn().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
+            }}
+            onConfirmAddTynn={(parent) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
             filesWorkspaceId={filesWorkspaceId}

@@ -13,11 +13,13 @@ export interface OnboardingProps {
     readonly onAddWorkspace: () => void;
     /** The other source (§6.1): clone a git URL into a folder you pick, plan first. */
     readonly onAddWorkspaceFromGit?: (() => void) | undefined;
+    /** The third source (§6.1): offered only while signed in to Tynn — a door onto "sign in first" is a gate. */
+    readonly onAddWorkspaceFromTynn?: (() => void) | undefined;
     readonly onAddAgent: () => void;
     readonly onNavigate: (route: string) => void;
 }
 
-export function Onboarding({ state, onAddWorkspace, onAddWorkspaceFromGit, onAddAgent, onNavigate }: OnboardingProps) {
+export function Onboarding({ state, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onAddAgent, onNavigate }: OnboardingProps) {
     const plan = onboardingPlan(state);
     if (plan.done) return null;
     const folderDone = state.workspaces > 0;
@@ -39,6 +41,9 @@ export function Onboarding({ state, onAddWorkspace, onAddWorkspaceFromGit, onAdd
                                 {s.button}
                             </button>
                         )}
+                        {s.id === 'pick-folder' && !s.done && onAddWorkspaceFromTynn && state.tynnSignedIn === true ? (
+                            <button type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From Tynn</button>
+                        ) : null}
                         {s.id === 'pick-folder' && !s.done && onAddWorkspaceFromGit ? (
                             <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From a git URL</button>
                         ) : null}

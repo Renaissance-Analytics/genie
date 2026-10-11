@@ -2,6 +2,7 @@ import { basename, join } from 'node:path';
 import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
+import { parseTynnProject, tynnAddPlan, type TynnAddPlan } from '../core/tynn.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -42,6 +43,8 @@ export interface WorkspaceOpsPorts {
     supervisor: { list(): readonly { id: string; workspaceId: string }[]; stop(id: string): boolean };
     now(): number;
     sleep(ms: number): Promise<void>;
+    /** Tynn (§6.1 add from Tynn): the configured host and one call for the project the token belongs to; absent on a host without the client. */
+    tynn?: { readonly host: string; project(): Promise<unknown> } | undefined;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -73,7 +76,7 @@ function freshManifest(path: string, kind: FolderKind): Record<string, unknown> 
     };
 }
 
-export async function addWorkspace(ports: WorkspaceOpsPorts, path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | Refusal> {
+export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overlay?: Record<string, unknown>): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | Refusal> {
     const preview = await previewAddWorkspace(ports, path);
     if (!preview.ok) return preview;
     const manifestPath = join(path, 'project.json');
@@ -94,7 +97,8 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string): Prom
         await ports.fs.mkdir(join(path, '.ai'));
         await ports.fs.mkdir(join(path, 'sandbox'));
         await ports.fs.mkdir(join(path, '.trash'));
-        await ports.fs.writeJson(manifestPath, freshManifest(path, preview.kind));
+        // The source may say more than the folder does (§6.1 from Tynn: the project name, its vision, the `tynn` link).
+        await ports.fs.writeJson(manifestPath, { ...freshManifest(path, preview.kind), ...(overlay ?? {}) });
         if (preview.kind === 'empty') await ports.fs.gitInit(path);
     }
 
@@ -170,6 +174,31 @@ export async function addWorkspaceFromGit(ports: WorkspaceOpsPorts, url: string,
         return { ok: false, reason: `git clone failed: ${error instanceof Error ? error.message : String(error)}` };
     }
     return addWorkspace(ports, plan.path);
+}
+
+const NOT_A_PROJECT = 'that token is not a Tynn PROJECT token — Tynn answered with something that is not a project (a project token is minted on the project’s Settings → API page)';
+
+/** The plan for a Tynn source (§6.1), written nowhere: Tynn is asked for the project the token belongs to; the folder derives from its slug. */
+export async function previewAddFromTynn(ports: WorkspaceOpsPorts, parent: string): Promise<TynnAddPlan> {
+    if (!ports.tynn) return { ok: false, reason: 'this Genie has no Tynn client' };
+    let raw: unknown;
+    try {
+        raw = await ports.tynn.project();
+    } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+    const project = parseTynnProject(raw);
+    if (!project) return { ok: false, reason: NOT_A_PROJECT };
+    const path = `${parent.replace(/[\\/]+$/, '')}/${project.slug}`;
+    return tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(path), host: ports.tynn.host });
+}
+
+/** Confirm: create the folder, then the ordinary add of an EMPTY folder with the manifest the plan showed. */
+export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: string): Promise<Awaited<ReturnType<typeof addWorkspace>>> {
+    const plan = await previewAddFromTynn(ports, parent);
+    if (!plan.ok) return plan;
+    await ports.fs.mkdir(plan.path);
+    return addWorkspace(ports, plan.path, plan.manifest);
 }
 
 export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {

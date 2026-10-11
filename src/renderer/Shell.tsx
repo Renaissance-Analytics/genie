@@ -126,6 +126,9 @@ export interface ShellProps {
     onAddWorkspaceFromGit?: (() => void) | undefined;
     onPreviewFromGit?: ((url: string) => void) | undefined;
     onConfirmAddGit?: ((url: string, parent: string) => void) | undefined;
+    /** From Tynn (§6.1): the preview is asked for on the host; confirm creates the envelope under the parent it showed. */
+    onAddWorkspaceFromTynn?: (() => void) | undefined;
+    onConfirmAddTynn?: ((parent: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
     onConfirmAdd?: ((path: string) => void) | undefined;
     onCancelAdd?: (() => void) | undefined;
@@ -178,6 +181,8 @@ export function Shell({
     onAddWorkspaceFromGit,
     onPreviewFromGit,
     onConfirmAddGit,
+    onAddWorkspaceFromTynn,
+    onConfirmAddTynn,
     onCancelAddGit,
     onConfirmAdd,
     onCancelAdd,
@@ -265,15 +270,17 @@ export function Shell({
                                 // Providers come from the toolchain scan when one has run; until then NOT a line.
                                 providers: features.toolchain ? features.toolchain.tools.filter((t) => (t.tool === 'claude-code' || t.tool === 'codex') && t.installed !== null).map((t) => t.tool) : null,
                                 githubConnected: null,
-                                tynnSignedIn: null,
+                                // Signed in to Tynn when the integrations section says so; `null` until it has been read.
+                                tynnSignedIn: features.integrations?.tynnSignedIn ?? null,
                             }}
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
+                            onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
                             onAddAgent={() => { const w = snapshot.workspaces?.[0]; if (w) onAddAgent(w.id); }}
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p) => onConfirmAddTynn?.(p)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
                     {canServe && parsed.surface === 'dashboard' ? (
                         <Dashboard
@@ -283,6 +290,7 @@ export function Shell({
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
+                            onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
                         />
                     ) : null}
 
