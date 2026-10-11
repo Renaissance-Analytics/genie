@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AgentDetail, GenieBridge, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from '../renderer/bridge.js';
+import type { FeatureData } from '../renderer/features.js';
 
 /**
  * THE PRELOAD — the entire surface the renderer is given.
@@ -104,6 +105,16 @@ const bridge: GenieBridge = {
      * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose
      * answers are the host's own (a refusal is `false` / `null`, crossed as-is).
      */
+    features: {
+        snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,
+        subscribe: (onChange) => {
+            const handler = (_e: unknown, data: FeatureData) => onChange(data);
+            ipcRenderer.on(FEATURE_CHANNELS.changed, handler);
+            return () => { ipcRenderer.removeListener(FEATURE_CHANNELS.changed, handler); };
+        },
+        act: (action) => ipcRenderer.invoke(FEATURE_CHANNELS.act, action) as Promise<FeatureData>,
+    },
+
     updates: {
         state: () => ipcRenderer.invoke('genie:updates-state') as Promise<UpdateState>,
         subscribe: (onChange) => {

@@ -1,6 +1,7 @@
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
+import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
 
@@ -71,7 +72,25 @@ export interface AgentDetail {
     refusal: string | null;
 }
 
+/** The three feature channels, named ONCE. Preload and main import this; neither retypes a string. */
+export const FEATURE_CHANNELS = {
+    snapshot: 'genie:features-snapshot',
+    act: 'genie:features-act',
+    changed: 'genie:features-changed',
+} as const;
+
 export interface GenieBridge {
+    /**
+     * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, inbox, settings, browser.
+     * One snapshot, pushed on change; one `act` that applies a person's action in main and
+     * answers with the next snapshot, or rejects with the refusal's reason.
+     */
+    features: {
+        snapshot(): Promise<FeatureData>;
+        subscribe(onChange: (data: FeatureData) => void): () => void;
+        act(action: FeatureAction): Promise<FeatureData>;
+    };
+
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */
     snapshot(): Promise<GenieSnapshot>;
     /** Called whenever the main process's view of the world changes. Returns an unsubscribe. */
@@ -176,6 +195,13 @@ export const NO_UPDATES: GenieBridge['updates'] = {
  *
  * **Add a surface in the commit that makes it render, never before.**
  */
+/** No main process (tests, the live check): first-paint data, and actions refused out loud. */
+export const NO_FEATURES: GenieBridge['features'] = {
+    snapshot: async () => EMPTY_FEATURES,
+    subscribe: () => () => {},
+    act: async () => { throw new Error('no main process to act on'); },
+};
+
 export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
 
 /**
