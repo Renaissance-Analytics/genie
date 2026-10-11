@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog, ipcMain, safeStorage } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
@@ -48,6 +48,10 @@ import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { tynnClient } from './tynn-client.js';
 import { gitClone, gitInit } from './git-ports.js';
+import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
+import { allGenieTools } from './mcp-registrations.js';
+import { launchSubprocess, runPluginTool } from './plugin-runner.js';
+import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -226,6 +230,11 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: ComposedServices | null = null;
+// Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
+let mcp: GenieMcpServer | null = null;
+let mcpVerified: Verification | null = null;
+/** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
+const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 
 /** Where "latest" comes from, per tool. An unreachable or unreadable source yields null — the honest `unknown`. */
@@ -343,6 +352,8 @@ async function boot(): Promise<void> {
     takeOvers = new TakeOverHost({
         terminals: terminalsForTakeOver,
         openWindow: (route) => openTakeOverWindow(route),
+        // The Take Over contract (§1, §6.9): the loopback MCP endpoint, read at open time so a late-starting server still reaches the TUI.
+        mcp: () => { const e = mcp?.endpoint(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
     const takeOversNow = takeOvers;
     theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
@@ -559,7 +570,9 @@ async function boot(): Promise<void> {
             // cwd RESUME (§6.5): a new terminal opens where the workspace's last shell was, when tracking is on.
             const trackCwd = (services?.settings.snapshot() ?? {}).track_cwd !== false;
             const cwd = (trackCwd ? terminals.lastCwd(workspace.id) : null) ?? workspace.path;
-            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(serviceEnv).length > 0 ? { env: serviceEnv } : {}) });
+            // GENIE_MCP_URL / GENIE_MCP_TOKEN in EVERY terminal (§6.9); the pty port adds GENIE_TERMINAL_ID itself.
+            const env = { ...serviceEnv, ...mcpEnv() };
+            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
             // installed-err.log catches them. The first fancy-pty failure on the installed app
@@ -741,6 +754,8 @@ async function boot(): Promise<void> {
         frontDoorPort: 0,
         hostName: hostname(),
         remoteTransport: remoteSocket.transport,
+        mcpEndpoint: () => mcp?.endpoint() ?? null,
+        mcpVerification: () => mcpVerified,
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
@@ -831,6 +846,80 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
+    {
+        const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? null;
+        const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
+        const values = () => composed.settings.snapshot();
+        const registrations = allGenieTools({
+            genie: {
+                inbox: composed.inbox,
+                attention: composed.attention,
+                roster,
+                resolveCaller,
+                workspaceSetting: (workspaceId) => inboxSettingFrom(composed.settings.snapshotFor(workspaceId)),
+                userActive: () => powerMonitor.getSystemIdleTime() < 120,
+                glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
+                thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
+                dnd: () => ({ on: values().do_not_disturb === true, reply: String(values().dnd_reply ?? '') }),
+            },
+            more: {
+                knowledge: composed.knowledge,
+                terminals: {
+                    list: () => terminals!.list(),
+                    open: (options) => terminals!.open(options),
+                    write: (id, data) => terminals!.write(id, data),
+                    scrollback: (id) => terminals!.scrollback(id),
+                    // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
+                    scrollbackCap: 1_000_000,
+                },
+                approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
+                resolveCaller,
+            },
+            attention: {
+                resolveCaller,
+                openFile: async (absolutePath) => { const failed = await shell.openPath(absolutePath); return failed ? { ok: false, reason: failed } : { ok: true }; },
+                feedback: composed.feedback,
+            },
+            sidecar: {
+                resolveCaller,
+                roster,
+                register: (input) => registry!.register(input),
+                start: (record, cwd) => host!.start(record, cwd),
+                running: (agentId) => host!.probe(agentId as AgentId)?.running === true,
+                addressOf: (record) => addressOf(record, 'full'),
+            },
+            plugins: {
+                plugins: { tools: () => composed.plugins.tools(), guard: (id) => composed.plugins.guard(id) },
+                run: (input) => runPluginTool({
+                    pluginDir: input.dir,
+                    tool: input.tool,
+                    args: input.args,
+                    caller: { agentName: input.caller.agentName, workspaceId: input.caller.workspaceId, workspacePath: input.caller.workspacePath },
+                    guard: input.guard,
+                    // The genie API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
+                    api: async (method, params) => {
+                        if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
+                        throw new Error(`${method} is not offered to plugins`);
+                    },
+                    launch: launchSubprocess,
+                    timeoutMs: 30_000,
+                    label: `${input.manifest.id}.${input.tool.name}`,
+                }),
+                approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
+                resolveCaller,
+            },
+        });
+        mcp = genieMcpServer({ registrations });
+        try {
+            await mcp.start();
+            mcpVerified = await mcp.verify();
+        } catch (error) {
+            mcpVerified = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+            console.error('[mcp] the loopback server did not start:', mcpVerified.reason);
+        }
+        pushFeatures();
+    }
     // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
     void registry.takeRunningAtQuit().then((ids) => {

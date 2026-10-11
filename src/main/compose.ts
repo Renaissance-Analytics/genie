@@ -13,6 +13,7 @@ import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { configSyncTargets } from './config-sync-targets.js';
 import { PluginHost } from './plugin-host.js';
+import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
@@ -72,6 +73,8 @@ export interface ComposeInput {
     readonly remoteApi?: HostApi;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
+    /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
+    readonly mcpVerification?: () => Verification | null;
 }
 
 /** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
@@ -102,7 +105,7 @@ export interface ComposedServices {
     /** §6.4: the reminders due now for registered agents with unread mail that are idle. Decides; never sends. */
     inboxReminders(input: { now: number; idle: (agentId: string) => boolean }): Array<{ agentId: string; text: string }>;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
-    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[] };
+    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null } };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
     syncConfig(workspacePath: string): Promise<SyncResult[]>;
     /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
@@ -348,6 +351,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 tynnSignedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0,
                 github: githubAppStatus({ authorized: values.github_authorized === true, installedRepos: values.github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }),
                 gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0 }),
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null },
             };
         },
         get plugins() { return plugins; },

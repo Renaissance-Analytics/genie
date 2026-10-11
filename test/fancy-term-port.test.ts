@@ -209,6 +209,7 @@ describe('environment for a supervised process', () => {
         port.open({ cwd: '/repo', command: 'php artisan queue:work', env: { APP_ENV: 'local' } });
         port.open({ cwd: '/repo' });
         expect(f.created[0]).toMatchObject({ env: { APP_ENV: 'local' } });
-        expect('env' in f.created[1]!).toBe(false);
+        // Every terminal carries GENIE_TERMINAL_ID (§6.9); a plain shell gets THAT and nothing else — the engine merges it over the user's environment.
+        expect(f.created[1]!.env).toEqual({ GENIE_TERMINAL_ID: (f.created[1] as { id: string }).id });
     });
 });
