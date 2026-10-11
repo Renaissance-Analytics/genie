@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import {
     FILE_SIZE_CAP,
     activityFrom,
@@ -34,7 +35,12 @@ export interface FilesHostPorts {
     readonly sizeCap?: number;
 }
 
-export type OpenResult = { ok: true; path: string; text: string } | { ok: false; path: string; error: string };
+export type OpenResult = { ok: true; path: string; text: string; sha: string } | { ok: false; path: string; error: string };
+
+/** A write that landed answers the new sha; a refused one carries the conflict (what is on disk NOW) so nothing is discarded. */
+export type WriteResult = { ok: true; sha: string } | { ok: false; reason: string; conflict?: { path: string; onDisk: string; sha: string } };
+
+const shaOf = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 export interface FilesState {
     readonly files: readonly FileAttribution[];
@@ -51,6 +57,8 @@ export class FilesHost {
     readonly #cap: number;
     readonly #watchers = new Map<string, FSWatcher>();
     readonly #changedOnDisk = new Map<string, Set<string>>();
+    /** Files YOU wrote through the panel, per workspace — yours in Changed, never `?`. */
+    readonly #mine = new Map<string, Set<string>>();
     readonly #listeners = new Set<(workspaceId: string) => void>();
 
     constructor(ports: FilesHostPorts) {
@@ -85,10 +93,36 @@ export class FilesHost {
             const info = await stat(full);
             const refusal = openRefusal(info.size, this.#cap);
             if (refusal) return { ok: false, path: rel, error: refusal };
-            return { ok: true, path: rel, text: await readFile(full, 'utf8') };
+            const text = await readFile(full, 'utf8');
+            return { ok: true, path: rel, text, sha: shaOf(text) };
         } catch (error) {
             return { ok: false, path: rel, error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /** Write only against what was read (§4.3): a changed file is a CONFLICT answered with the disk's text, never an overwrite. */
+    async write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return { ok: false, reason: 'no such workspace' };
+        const rel = confine(ws.path, path);
+        if (rel === null || rel === '') return { ok: false, reason: 'that path is outside the workspace; Genie writes nothing there' };
+        const full = join(ws.path, ...rel.split('/'));
+        let onDisk: string | null = null;
+        try { onDisk = await readFile(full, 'utf8'); } catch { onDisk = null; }
+        if (onDisk !== null && expectedSha !== null && shaOf(onDisk) !== expectedSha) {
+            return { ok: false, reason: `${rel} changed on disk since you opened it; nothing was discarded — keep yours, take theirs, or merge`, conflict: { path: rel, onDisk, sha: shaOf(onDisk) } };
+        }
+        if (onDisk !== null && expectedSha === null) {
+            return { ok: false, reason: `${rel} already exists; open it first so the write is against what is there`, conflict: { path: rel, onDisk, sha: shaOf(onDisk) } };
+        }
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, text, 'utf8');
+        const mine = this.#mine.get(workspaceId) ?? new Set<string>();
+        mine.add(rel);
+        this.#mine.set(workspaceId, mine);
+        // Your own write is not an unreported change.
+        this.#changedOnDisk.get(workspaceId)?.delete(rel);
+        return { ok: true, sha: shaOf(text) };
     }
 
     async state(workspaceId: string): Promise<FilesState | null> {
@@ -96,12 +130,13 @@ export class FilesHost {
         if (!ws) return null;
         const events = this.#ports.agentsOf(workspaceId).flatMap((a) => this.#ports.eventsOf(a.id));
         const attribution = attributionFrom(events, ws.path);
-        const unreported = unreportedChanges(attribution, [...(this.#changedOnDisk.get(workspaceId) ?? [])], ws.path);
+        const mine = [...(this.#mine.get(workspaceId) ?? [])];
+        const unreported = unreportedChanges(attribution, [...(this.#changedOnDisk.get(workspaceId) ?? [])].filter((p) => !mine.includes(p)), ws.path);
         return {
             files: [...attribution.values()],
             activity: activityFrom(events, ws.path),
             unreported,
-            changed: changedGroups(attribution, { mine: [], unreported }),
+            changed: changedGroups(attribution, { mine, unreported }),
         };
     }
 

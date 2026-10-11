@@ -142,6 +142,7 @@ const bridge: GenieBridge = {
         open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
         state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
         watch: (workspaceId) => ipcRenderer.invoke('genie:files-watch', workspaceId) as Promise<void>,
+        write: (workspaceId, path, text, expectedSha) => ipcRenderer.invoke('genie:files-write', workspaceId, path, text, expectedSha) as Promise<never>,
         onChange: (listener) => {
             const handler = (_e: unknown, workspaceId: string) => listener(workspaceId);
             ipcRenderer.on('genie:files-changed', handler);

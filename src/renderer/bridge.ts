@@ -7,7 +7,7 @@ import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features
 import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { TreeNode } from '../core/files-panel.js';
-import type { FilesState, OpenResult } from '../main/files-host.js';
+import type { FilesState, OpenResult, WriteResult } from '../main/files-host.js';
 import type { DrainRoster } from '../core/upgrade-drain.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 
@@ -225,6 +225,8 @@ export interface GenieBridge {
         state(workspaceId: string): Promise<FilesState | null>;
         watch(workspaceId: string): Promise<void>;
         onChange(listener: (workspaceId: string) => void): () => void;
+        /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
+        write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
     };
 
     /**
@@ -297,6 +299,7 @@ export const NO_FILES: GenieBridge['files'] = {
     state: () => Promise.resolve(null),
     watch: () => Promise.resolve(),
     onChange: () => () => {},
+    write: async () => ({ ok: false as const, reason: 'no files host is attached' }),
 };
 
 export const NO_TERMINALS: GenieBridge['terminals'] = {

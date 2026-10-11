@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,7 +52,8 @@ describe('FilesHost', () => {
     });
 
     it('opens a file by confined path; outside the root, over the cap, or unreadable is refused IN WORDS', async () => {
-        expect(await host.open('tynn', 'src/main/ipc.ts')).toEqual({ ok: true, path: 'src/main/ipc.ts', text: 'export const a = 1;\n' });
+        // `open` reports the text's sha too (§4.3 editing): a later write lands only against the sha it was read at.
+        expect(await host.open('tynn', 'src/main/ipc.ts')).toEqual({ ok: true, path: 'src/main/ipc.ts', text: 'export const a = 1;\n', sha: createHash('sha256').update('export const a = 1;\n').digest('hex') });
         expect(await host.open('tynn', '../outside.txt')).toEqual({ ok: false, path: '../outside.txt', error: 'that path is outside the workspace; Genie opens nothing there' });
         expect(await host.open('tynn', 'missing.ts')).toMatchObject({ ok: false, path: 'missing.ts' });
         expect((await host.open('tynn', 'missing.ts') as { error: string }).error).toMatch(/ENOENT|no such file/);
