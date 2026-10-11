@@ -82,6 +82,9 @@ export interface WorkspaceProps {
     files?: GenieBridge['files'] | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
+    /** The file panel is in the dock (§4.4): do not draw it inline too. */
+    filesPinned?: boolean | undefined;
+    onPinFiles?: (() => void) | undefined;
     /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
     initialState?: WorkspaceState | undefined;
 }
@@ -91,7 +94,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -308,9 +311,9 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </form>
                 </section>
             ) : null}
-            {panel === 'files' && files ? (
+            {panel === 'files' && files && !filesPinned ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => { /* the dock slot (§4.4) is wired with the chat's pin in a later row */ }} onClose={() => onTogglePanel?.()} />
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} />
                 </div>
             ) : null}
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}

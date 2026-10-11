@@ -4,6 +4,7 @@ import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
+import { globalAction, isTypingTarget } from '../core/keys.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -342,6 +343,26 @@ export function App({ bridge }: AppProps) {
      * panel" in the URL would let the two disagree.
      */
     const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
+    // Which workspace's file panel holds the dock when files are pinned (§4.3). One panel per workspace.
+    const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
+    const toggleFilesPin = (id: string) => {
+        // Pinning another workspace's panel while one is pinned moves the slot to it; the same one unpins.
+        const outcome = pinPanel(pinned === 'files' && filesWorkspaceId !== id ? null : pinned, 'files', false);
+        if (outcome.refused !== null) return;
+        setPinned(outcome.pinned);
+        setFilesWorkspaceId(outcome.pinned === 'files' ? id : null);
+    };
+    // ⌘B / Ctrl+B toggles the file panel of the workspace on screen (§4.3). A chord, so it works while typing.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (globalAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) }) !== 'toggle-files') return;
+            if (parsed.surface !== 'workspace') return;
+            e.preventDefault();
+            navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [parsed]);
 
     /**
      * The option id currently in flight, so the buttons refuse a second press.
@@ -476,6 +497,8 @@ export function App({ bridge }: AppProps) {
             onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
+            filesWorkspaceId={filesWorkspaceId}
+            onToggleFilesPin={toggleFilesPin}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}

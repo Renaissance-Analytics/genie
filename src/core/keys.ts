@@ -47,6 +47,14 @@ export interface KeyPress {
     typing: boolean;
 }
 
+/** Keys that work on EVERY surface. ⌘B / Ctrl+B toggles the workspace file panel (§4.3) — a chord, so it works while typing. */
+export type GlobalAction = 'toggle-files';
+
+export function globalAction(press: KeyPress): GlobalAction | null {
+    if ((press.key === 'b' || press.key === 'B') && (press.metaKey || press.ctrlKey) && !press.altKey && !press.shiftKey) return 'toggle-files';
+    return null;
+}
+
 export type AgentViewAction =
     | 'next-edit'
     | 'next-row'

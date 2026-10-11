@@ -1,6 +1,6 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute } from '../core/route.js';
-import { dockReserve, type DockPanel } from '../core/dock.js';
+import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
 import { Deck } from './components/Deck.js';
 import type { DeckItem } from '../core/deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -11,6 +11,7 @@ import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
+import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
@@ -93,6 +94,10 @@ export interface ShellProps {
     terminals?: GenieBridge['terminals'];
     /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
     files?: GenieBridge['files'] | undefined;
+    /** The workspace whose file panel holds the dock when `pinned === 'files'` (§4.3). */
+    filesWorkspaceId?: string | null | undefined;
+    /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
+    onToggleFilesPin?: ((workspaceId: string) => void) | undefined;
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
@@ -139,6 +144,8 @@ export function Shell({
     onAddWorkspace,
     terminals = NO_TERMINALS,
     files = NO_FILES,
+    filesWorkspaceId,
+    onToggleFilesPin,
     updates = NO_UPDATES,
     onTakeOver,
     onOpenPalette,
@@ -328,6 +335,8 @@ export function Shell({
                             files={files}
                             panel={parsed.panel}
                             onTogglePanel={() => onNavigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`)}
+                            filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
+                            onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
                             ops={workspaceOps}
                         />
                     ) : null}
@@ -381,6 +390,16 @@ export function Shell({
                  * it; unpinned, it is absolutely positioned over the right edge and the
                  * reserve is zero. One component, two geometries, one width.
                  */}
+                {/*
+                 * THE FILE PANEL IN THE DOCK (§4.3/§4.4): pinned, the one panel of that workspace sits in the
+                 * slot on every surface; the reserve above makes room. One panel per workspace — the Workspace
+                 * surface does not draw it inline while it is here.
+                 */}
+                {pinned === 'files' && filesWorkspaceId && workspaceFor(filesWorkspaceId) ? (
+                    <aside data-dock="files" className="shrink-0 border-l border-[var(--border-1)]" style={{ width: DOCK_WIDTH }}>
+                        <FilesPanelContainer workspace={workspaceFor(filesWorkspaceId)!} files={files} pinned onPin={() => onToggleFilesPin?.(filesWorkspaceId)} onClose={() => onToggleFilesPin?.(filesWorkspaceId)} />
+                    </aside>
+                ) : null}
                 {chatThread || parsed.chat ? (
                     <ChatFlyout
                         thread={chatThread}
