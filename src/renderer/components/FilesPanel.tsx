@@ -18,7 +18,18 @@ export interface FilesPanelState {
     readonly changed: readonly ChangedGroup[] | null;
 }
 
-export type OpenFile = { ok: true; path: string; text: string } | { ok: false; path: string; error: string };
+export type OpenFile = { ok: true; path: string; text: string; sha: string } | { ok: false; path: string; error: string };
+
+/** Editing (§4.3): the buffer's state and the choices when a save is refused. Absent = read-only viewer. */
+export interface FilesEdit {
+    readonly dirty: boolean;
+    readonly conflict: { path: string; onDisk: string; sha: string } | null;
+    readonly onChange: (text: string) => void;
+    readonly onSave: () => void;
+    readonly onKeepMine: () => void;
+    readonly onTakeTheirs: () => void;
+    readonly onMerge: () => void;
+}
 
 export interface FilesPanelProps {
     readonly workspace: { id: string; name?: string | undefined; path: string };
@@ -32,6 +43,7 @@ export interface FilesPanelProps {
     readonly onCloseTab: (path: string) => void;
     readonly onPin: () => void;
     readonly onClose: () => void;
+    readonly edit?: FilesEdit | undefined;
 }
 
 type Tone = 'writing' | 'changed' | 'unreported';
@@ -69,7 +81,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -100,18 +112,33 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             const active = open?.path === t;
                             const mark = marks.get(t);
                             return (
-                                <div key={t} data-file-tab={t} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
+                                <div key={t} data-file-tab={t} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
                                     <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
                                     <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
                                 </div>
                             );
                         })}
+                        {edit && open?.ok && edit.dirty && !edit.conflict ? (
+                            <button type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button>
+                        ) : null}
                     </div>
+                    {edit?.conflict ? (
+                        <div data-conflict={edit.conflict.path} className="m-3 rounded-lg border border-[var(--warning)] p-3 text-sm">
+                            <p className="font-medium">{edit.conflict.path} changed on disk while you were editing it.</p>
+                            <p className="mt-1 text-[var(--fg-3)]">Nothing is discarded: your buffer is still here, and the disk's version is below the choices.</p>
+                            <div className="mt-2 flex gap-2">
+                                <button type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">keep mine</button>
+                                <button type="button" data-action="take-theirs" onClick={edit.onTakeTheirs} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">take theirs</button>
+                                <button type="button" data-action="merge" onClick={edit.onMerge} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">merge ▾</button>
+                            </div>
+                            <pre className="mt-2 max-h-40 overflow-auto rounded bg-[var(--bg-1)] p-2 font-mono text-[11px]">{edit.conflict.onDisk}</pre>
+                        </div>
+                    ) : null}
                     <div className="min-h-0 flex-1 overflow-auto">
                         {tree === null ? null : open === null ? (
                             <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
                         ) : open.ok ? (
-                            <FileViewer filename={open.path} value={open.text} readOnly theme="auto" />
+                            <FileViewer filename={open.path} value={open.text} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} theme="auto" />
                         ) : (
                             <div data-tab-error className="m-4 rounded-lg border border-[var(--danger)] p-3 text-sm">
                                 <p className="font-mono text-xs text-[var(--fg-4)]">{open.path}</p>

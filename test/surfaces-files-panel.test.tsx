@@ -26,7 +26,7 @@ const base: FilesPanelProps = {
         changed: [{ who: 'kora', files: ['src/ipc.ts'] }, { who: '?', files: ['mystery.ts'] }],
     },
     tabs: ['src/ipc.ts'],
-    open: { ok: true, path: 'src/ipc.ts', text: 'export const a = 1;\n' },
+    open: { ok: true, path: 'src/ipc.ts', text: 'export const a = 1;\n', sha: 'sha_ipc_1' },
     pinned: false,
     onSelect: () => {},
     onCloseTab: () => {},
