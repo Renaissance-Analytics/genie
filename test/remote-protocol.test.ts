@@ -42,7 +42,8 @@ describe('the capability table', () => {
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
         // 34 since `updates.cancel` (§7.5): a drain can be abandoned from a remote window too.
         // 46 since `inbox.sendFile` (§6.8): a phone's upload rides the socket as bytes.
-        expect(REMOTE_METHODS.length).toBe(46);
+        // 47 since `terminals.attach` (§6.5): a second surface JOINS a running terminal instead of opening one.
+        expect(REMOTE_METHODS.length).toBe(47);
         expect(capabilityOf('inbox.sendFile')).toBe('write');
         expect(capabilityOf('workspaces.previewAdd')).toBe('host-only');
         expect(capabilityOf('workspaces.hibernate')).toBe('write');

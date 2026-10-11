@@ -208,6 +208,12 @@ export interface GenieBridge {
         close(id: string): void;
         /** Open terminals in one workspace — so a window that reloads can re-attach (§6.5). */
         list(workspaceId: string): Promise<readonly { id: string; pid: number; shell: string }[]>;
+        /**
+         * JOIN a running terminal (§6.5 multi-attach): its scrollback so far; the live bytes follow on `onData`. Null when it is
+         * gone or not this workspace's. `null` for the workspace means "whichever it is in" — the host's OWN windows may; a remote
+         * connection always names the workspace, because that is what its scope is checked against.
+         */
+        attach(workspaceId: string | null, id: string): Promise<{ id: string; pid: number; shell: string; scrollback: string } | null>;
         /** The previous session's scrollback for this workspace, ONCE (§6.5); `null` when there is none. */
         previousSession(workspaceId: string): Promise<string | null>;
         onData(listener: (id: string, data: string) => void): () => void;
@@ -320,6 +326,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
     resize: () => {},
     close: () => {},
     list: () => Promise.resolve([]),
+    attach: () => Promise.resolve(null),
     previousSession: () => Promise.resolve(null),
     onData: () => () => {},
     onExit: () => () => {},

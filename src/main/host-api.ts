@@ -35,6 +35,7 @@ export interface HostApiDeps {
         resize(id: string, cols: number, rows: number): boolean;
         close(id: string): boolean;
         list(): readonly { id: string; pid: number; shell: string; workspaceId: string }[];
+        attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null;
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
@@ -188,6 +189,14 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.terminals.resize(str(args[0]), Math.floor(Number(args[1])), Math.floor(Number(args[2])));
             case 'terminals.close':
                 return deps.terminals.close(str(args[0]));
+            case 'terminals.attach': {
+                // Scoped like list: a connection scoped to one workspace cannot join another's terminal.
+                const workspaceId = str(args[0]);
+                const joined = deps.terminals.attach(str(args[1]));
+                if (!joined || joined.workspaceId !== workspaceId) return null;
+                const { id, pid, shell, scrollback } = joined;
+                return { id, pid, shell, scrollback };
+            }
             case 'terminals.list': {
                 const workspaceId = str(args[0]);
                 return deps.terminals.list().filter((t) => t.workspaceId === workspaceId).map(({ id, pid, shell }) => ({ id, pid, shell }));

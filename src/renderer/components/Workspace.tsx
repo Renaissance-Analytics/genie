@@ -16,6 +16,7 @@ import { SETTINGS } from '../../core/settings.js';
 import { LAYOUT_MODES, gridTemplate, layoutModeFrom, visiblePanes } from '../../core/panel-layout.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
+import { reattachAll } from '../reattach.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -137,15 +138,11 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     // build rather than losing it (§6.5). Their scrollback comes with the open.
     useEffect(() => {
         let live = true;
-        void terminals.list(workspace.id).then((open) => {
+        // JOIN, never open: the old loop spawned one new shell per listed terminal on every reload (§6.5).
+        void reattachAll(terminals, workspace.id).then((joined) => {
             if (!live) return;
-            for (const t of open) {
-                void terminals
-                    .open(workspace.id, { ...lastSize.current })
-                    .then((opened) => {
-                        if (!live) return;
-                        setState((s) => terminalOpened(s, { ...t, workspaceId: workspace.id, exited: null }, opened.scrollback));
-                    });
+            for (const t of joined) {
+                setState((s) => terminalOpened(s, { id: t.id, pid: t.pid, shell: t.shell, workspaceId: workspace.id, exited: null }, t.scrollback));
             }
         });
         return () => { live = false; };

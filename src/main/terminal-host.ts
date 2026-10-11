@@ -192,6 +192,13 @@ export class TerminalHost {
         return this.#pty.scrollback(id);
     }
 
+    /** JOIN a running terminal (§6.5 multi-attach): what it has shown so far, and whose it is. Null for an id this host does not have. */
+    attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null {
+        const t = this.#terminals.find((x) => x.id === id);
+        if (!t) return null;
+        return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? '' };
+    }
+
     close(id: string): boolean {
         if (!this.#has(id)) return false;
 
