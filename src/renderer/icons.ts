@@ -49,6 +49,7 @@ export const ICON_NAMES: readonly string[] = [
      * not depend on how the JSX happens to be written.
      */
     'message-square', 'brain', 'wrench', 'pencil', 'gauge', 'list-checks', 'scissors',
+    'rotate-ccw', 'ellipsis',
     'info', 'circle-help', 'file-text', 'globe', 'check',
 ];
 

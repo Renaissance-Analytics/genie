@@ -1,4 +1,6 @@
+import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
+import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
@@ -61,7 +63,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; dailyBudgetUsd?: number | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -139,6 +141,29 @@ export interface GenieBridge {
      * watches. The answer says whether it opened and which terminal, or why not.
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+
+    /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
+    workspaces: {
+        /** The folder picker on the host, then the classification and plan. Writes nothing. */
+        previewAdd(): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
+        hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
+        wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Forgets the workspace and its agents. The folder on disk is never touched. */
+        remove(workspaceId: string): Promise<{ ok: true; agentsForgotten: number; path: string; folderUntouched: true } | { ok: false; reason: string }>;
+    };
+
+    /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
+    agents: {
+        /** Graceful resumes the same thread and REFUSES when it cannot; fresh discards it on purpose. */
+        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | { ok: false; reason: string }>;
+        /** What a delete WOULD do — shown before the person confirms. Touches nothing. */
+        previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
+        setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+    };
 
     /**
      * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**

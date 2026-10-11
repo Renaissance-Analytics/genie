@@ -1,4 +1,5 @@
 import type { Server } from 'node:http';
+import type { attachWebSocketServer as FancyAttach, WebSocketConnection, WebSocketServer } from '@particle-academy/fancy-ws';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -9,28 +10,16 @@ import type { ServerConnection, ServerTransport } from '../core/remote-protocol.
  * is JSON text); `onPathMismatch: 'ignore'` leaves other upgrades (the front door's passthrough) alone.
  */
 
-/** The slice of fancy-ws's socket this needs. */
-export interface FancyWsSocket {
-    readonly readyState: number;
-    readonly remoteAddress: string;
-    send(data: string | Uint8Array): boolean;
-    close(code?: number, reason?: string): void;
-    on(event: 'message', listener: (data: string | Buffer, isBinary: boolean) => void): unknown;
-    on(event: 'close', listener: (code: number, reason: string) => void): unknown;
-    on(event: 'error', listener: (error: Error) => void): unknown;
-}
-
-export interface FancyWsServer {
-    on(event: 'connection', listener: (socket: FancyWsSocket, request: unknown, verified: unknown) => void): unknown;
-}
-
-export type AttachWebSocketServer = (server: Server, options: { path?: string; onPathMismatch?: 'ignore' | 'reject'; maxPayload?: number }) => FancyWsServer;
+/** fancy-ws's own types — the module is typed against the package, never a hand copy of its shape. */
+export type FancyWsSocket = WebSocketConnection;
+export type FancyWsServer = WebSocketServer;
+export type AttachWebSocketServer = typeof FancyAttach;
 
 export function fancyWsTransport(input: { attach: AttachWebSocketServer; server: Server; path: string; address: () => string | null }): ServerTransport {
-    const ws = input.attach(input.server, { path: input.path, onPathMismatch: 'ignore' });
+    const ws = input.attach(input.server as Parameters<AttachWebSocketServer>[0], { path: input.path, onPathMismatch: 'ignore' });
     const listeners = new Set<(connection: ServerConnection) => void>();
 
-    ws.on('connection', (socket) => {
+    ws.on('connection', (socket: FancyWsSocket) => {
         const messages = new Set<(text: string) => void>();
         const closes = new Set<() => void>();
         let closed = false;
@@ -46,7 +35,7 @@ export function fancyWsTransport(input: { attach: AttachWebSocketServer; server:
         socket.on('close', closeOnce);
         socket.on('error', () => { /* a close follows; the error itself carries nothing Genie acts on */ });
         const connection: ServerConnection = {
-            remoteAddress: socket.remoteAddress,
+            remoteAddress: socket.remoteAddress ?? 'unknown',
             send: (text) => { if (!closed) socket.send(text); },
             onMessage: (l) => { messages.add(l); return () => { messages.delete(l); }; },
             onClose: (l) => { closes.add(l); return () => { closes.delete(l); }; },

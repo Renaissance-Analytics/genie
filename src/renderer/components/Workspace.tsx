@@ -33,13 +33,28 @@ import type { TerminalPaneProps } from './TerminalPane.js';
  * State lives in `workspace-view.ts` and is pure; this file owns the wiring and nothing else.
  */
 
+/** Workspace operations (§6.1) as the surface sees them; absent = none offered (a remote guest, a test). */
+export interface WorkspaceOpsProps {
+    readonly asleep: boolean;
+    readonly agentCount: number;
+    /** The remove is CONFIRMED on a card first. */
+    readonly removePreview: boolean;
+    readonly lastOutcome: string | null;
+    readonly onHibernate: () => void;
+    readonly onWake: () => void;
+    readonly onPreviewRemove: () => void;
+    readonly onConfirmRemove: () => void;
+    readonly onCancelRemove: () => void;
+}
+
 export interface WorkspaceProps {
     /** The registry's workspace row. `name` is optional there, so the id stands in — never an invented label. */
     workspace: { id: string; name?: string; path: string };
     terminals: GenieBridge['terminals'];
+    ops?: WorkspaceOpsProps | undefined;
 }
 
-export function Workspace({ workspace, terminals }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(emptyWorkspace);
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -116,7 +131,35 @@ export function Workspace({ workspace, terminals }: WorkspaceProps) {
             <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+                {ops ? (
+                    <div className="ml-auto flex items-center gap-1">
+                        {ops.asleep ? (
+                            <button type="button" data-action="wake" onClick={ops.onWake} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
+                        ) : (
+                            <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
+                        )}
+                        <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
+                    </div>
+                ) : null}
             </header>
+            {ops?.asleep ? (
+                <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
+                    {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
+                </p>
+            ) : null}
+            {ops?.lastOutcome ? <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p> : null}
+            {ops?.removePreview ? (
+                <div data-remove-confirm className="shrink-0 border-b border-[var(--warning)] bg-[var(--bg-1)] px-5 py-3 text-xs">
+                    <p className="font-semibold">Remove {workspace.name ?? workspace.id} from Genie?</p>
+                    <p className="mt-1 text-[var(--fg-2)]">
+                        Genie forgets this workspace and its {ops.agentCount} agents. The folder <span className="font-mono">{workspace.path}</span> is not touched — every file stays where it is.
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                        <button type="button" data-action="confirm-remove" onClick={ops.onConfirmRemove} className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">Remove from Genie</button>
+                        <button type="button" onClick={ops.onCancelRemove} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
+                    </div>
+                </div>
+            ) : null}
 
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
             <div data-terminal-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">

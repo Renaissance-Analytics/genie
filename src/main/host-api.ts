@@ -1,4 +1,6 @@
+import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentRecord } from '../core/identity.js';
+import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import type { RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
@@ -37,6 +39,20 @@ export interface HostApiDeps {
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
     serviceEnvFor(workspaceId: string): Record<string, string>;
+    workspaceOps: {
+        confirmAdd(path: string): Promise<unknown>;
+        hibernate(workspaceId: string): Promise<unknown>;
+        wake(workspaceId: string): Promise<unknown>;
+        remove(workspaceId: string): Promise<unknown>;
+    };
+    agentOps: {
+        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
+        previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
+        setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+    };
     features: {
         snapshot(): Promise<FeatureData>;
         act(action: FeatureAction): Promise<FeatureData>;
@@ -89,6 +105,28 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!r) return { ok: false, reason: 'unknown agent' };
                 return restartWithHandoff(deps.host, deps.attention, r, deps.cwdFor(r), str(args[1]));
             }
+            case 'agents.restart':
+                return deps.agentOps.restart(str(args[0]), args[1] === 'fresh' ? 'fresh' : 'graceful');
+            case 'agents.previewDelete':
+                return deps.agentOps.previewDelete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+            case 'agents.delete':
+                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+            case 'agents.switchDriver':
+                return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
+            case 'agents.setBudget':
+                return deps.agentOps.setBudget(str(args[0]), args[1] === null ? null : Number(args[1]));
+            case 'agents.diagnose':
+                return deps.agentOps.diagnose(str(args[0]));
+            case 'workspaces.previewAdd':
+                throw new Error('workspaces.previewAdd opens a folder picker on the host; do it there');
+            case 'workspaces.confirmAdd':
+                return deps.workspaceOps.confirmAdd(str(args[0]));
+            case 'workspaces.hibernate':
+                return deps.workspaceOps.hibernate(str(args[0]));
+            case 'workspaces.wake':
+                return deps.workspaceOps.wake(str(args[0]));
+            case 'workspaces.remove':
+                return deps.workspaceOps.remove(str(args[0]));
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':

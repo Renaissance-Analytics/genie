@@ -4,13 +4,14 @@ import { dockReserve, type DockPanel } from '../core/dock.js';
 import { Deck } from './components/Deck.js';
 import type { DeckItem } from '../core/deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
-import { AgentView } from './components/AgentView.js';
+import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
-import { Workspace } from './components/Workspace.js';
+import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
+import { AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
@@ -97,6 +98,14 @@ export interface ShellProps {
     remote?: ShellRemote | undefined;
     /** The client side of remote: this window driving another machine (Settings → Workstation). */
     remoteConnect?: RemoteConnectProps | undefined;
+    /** Agent operations (§6.2) for the Agent view; absent when this window cannot operate agents. */
+    agentOps?: AgentOpsProps | undefined;
+    /** Workspace operations (§6.1) for the Workspace surface; absent when this window cannot operate workspaces. */
+    workspaceOps?: WorkspaceOpsProps | undefined;
+    /** A folder picked and classified, awaiting confirmation — shown over the Dashboard / onboarding. */
+    addPreview?: AddPreviewView | null | undefined;
+    onConfirmAdd?: ((path: string) => void) | undefined;
+    onCancelAdd?: (() => void) | undefined;
 }
 
 export type ShellRemote = { host: string; driver: string | null; driving: boolean; locked: boolean } | null;
@@ -130,6 +139,11 @@ export function Shell({
     onAnswerDeckItem,
     remote,
     remoteConnect,
+    agentOps,
+    workspaceOps,
+    addPreview,
+    onConfirmAdd,
+    onCancelAdd,
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
@@ -208,6 +222,7 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onCancel={() => onCancelAdd?.()} /> : null}
                     {canServe && parsed.surface === 'dashboard' ? (
                         <Dashboard
                             rows={snapshot.agents}
@@ -265,6 +280,7 @@ export function Shell({
                             onTakeOver={onTakeOver}
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
+                            ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                         />
                     ) : null}
 
@@ -278,6 +294,7 @@ export function Shell({
                             key={parsed.workspaceId}
                             workspace={workspaceFor(parsed.workspaceId)!}
                             terminals={terminals}
+                            ops={workspaceOps}
                         />
                     ) : null}
                     {canServe && parsed.surface === 'workspace' && snapshot.workspaces !== null && !workspaceFor(parsed.workspaceId) ? (

@@ -32,6 +32,8 @@ export interface RailWorkspace {
      * "no agents yet read" and "no agents" are the same `0`.
      */
     agentsKnown: boolean;
+    /** Hibernated: the rail says so and nothing starts here. */
+    asleep?: boolean;
 }
 
 export interface RailItem {

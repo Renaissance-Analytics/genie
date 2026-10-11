@@ -81,6 +81,12 @@ export interface AgentRecord {
     readonly mode: 'automated' | 'manual';
     /** Who may discover and message this agent. */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
+    /**
+     * A daily dollar limit (§6.2) that parks the NEXT turn and asks — never kills one in flight.
+     * OPTIONAL and not in AGENT_RECORD_FIELDS, so records written before it exist still load.
+     * No provider reports a cost over ACP today, so it is shown as unenforceable until one does.
+     */
+    readonly dailyBudgetUsd?: number | null;
 }
 
 /**

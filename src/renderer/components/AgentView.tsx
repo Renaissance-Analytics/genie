@@ -1,5 +1,8 @@
 import { useEffect } from 'react';
-import { Icon } from '@particle-academy/react-fancy';
+import { Dropdown, Icon } from '@particle-academy/react-fancy';
+import { agentOpsMenu } from '../../core/agent-ops-menu.js';
+import type { DeletePlan } from '../../core/agent-ops.js';
+import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, budgetFor, planFor, statePill, tabsFor } from '../../core/agent-view.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
@@ -54,6 +57,31 @@ const PILL_TONE = {
     muted: 'text-[var(--fg-3)]',
 } as const;
 
+/**
+ * AGENT OPERATIONS (§6.2) as the view sees them. Absent for an Observed agent and for a window that
+ * cannot operate agents — no dead controls. A delete is previewed (the plan) before it is confirmed.
+ */
+export interface AgentOpsProps {
+    readonly deletePreview: DeletePlan | null;
+    readonly diagnosis: Diagnosis | null;
+    /** The last operation's refusal or result, shown where it was caused. */
+    readonly lastOutcome: string | null;
+    readonly budgetUsd: number | null;
+    readonly onRestart: (kind: 'graceful' | 'fresh') => void;
+    readonly onSwitchDriver: (to: string) => void;
+    readonly onDiagnose: () => void;
+    readonly onPreviewDelete: (outcome: 'unmount' | 'delete') => void;
+    readonly onConfirmDelete: (outcome: 'unmount' | 'delete', alsoRemoveFrom: string[]) => void;
+    readonly onCancelDelete: () => void;
+    readonly onSetBudget: (dailyLimitUsd: number | null) => void;
+}
+
+const REPAIR_LABEL = (r: Repair): string =>
+    r.action === 'install-provider' ? 'install the provider'
+    : r.action === 'sign-in' ? 'sign in to the provider'
+    : r.action === 'restart-graceful' ? 'restart gracefully'
+    : `restart fresh — ${r.reason}`;
+
 export interface AgentViewProps {
     agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string };
     session: LiveSession | null;
@@ -79,15 +107,28 @@ export interface AgentViewProps {
     onRange?: ((range: TimeRange | null) => void) | undefined;
     /** Take Over (§1): open this agent's TUI in a new window. */
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** Agent operations (§6.2); absent = none offered. */
+    ops?: AgentOpsProps | undefined;
     now?: (() => number) | undefined;
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver,
+    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const pill = statePill(session, now ?? (() => Date.now()));
+    const menu = ops ? agentOpsMenu(agent) : [];
+    const act = (id: string) => {
+        if (!ops) return;
+        if (id === 'restart-graceful') ops.onRestart('graceful');
+        else if (id === 'restart-fresh') ops.onRestart('fresh');
+        else if (id.startsWith('switch:')) ops.onSwitchDriver(id.slice('switch:'.length));
+        else if (id === 'diagnose') ops.onDiagnose();
+        else if (id === 'delete-unmount') ops.onPreviewDelete('unmount');
+        else if (id === 'delete-delete') ops.onPreviewDelete('delete');
+    };
+    const budgetLimit = ops?.budgetUsd ?? null;
     const plan = planFor(session);
     const budget = budgetFor(session, cost, turns);
 
@@ -250,8 +291,89 @@ export function AgentView({
                         <Icon name="square-terminal" size="xs" />
                         Take over
                     </button>
+                    {ops && menu.length > 0 ? (
+                        <>
+                            <button
+                                type="button"
+                                data-action="restart-graceful"
+                                title="Restart gracefully — same conversation; refuses if it cannot resume"
+                                onClick={() => ops.onRestart('graceful')}
+                                className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
+                            >
+                                <Icon name="rotate-ccw" size="xs" />
+                                Restart
+                            </button>
+                            <Dropdown placement="bottom-end">
+                                <Dropdown.Trigger>
+                                    <button type="button" data-action="agent-more" aria-label="More operations" className="flex items-center rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                                        <Icon name="ellipsis" size="xs" />
+                                    </button>
+                                </Dropdown.Trigger>
+                                <Dropdown.Items>
+                                    {menu.map((item) => (
+                                        <Dropdown.Item key={item.id} {...(item.danger ? { danger: true } : {})} onClick={() => act(item.id)}>
+                                            <span className="flex flex-col"><span>{item.label}</span><span className="text-[11px] text-[var(--fg-4)]">{item.hint}</span></span>
+                                        </Dropdown.Item>
+                                    ))}
+                                </Dropdown.Items>
+                            </Dropdown>
+                        </>
+                    ) : null}
                 </div>
             </div>
+
+            {ops?.lastOutcome ? (
+                <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p>
+            ) : null}
+            {ops?.diagnosis ? (
+                <p data-diagnosis={ops.diagnosis.state} data-diagnosis-fault={ops.diagnosis.fault ? '' : undefined} className={`shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs ${ops.diagnosis.fault ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>
+                    <span className="font-semibold">{ops.diagnosis.state}</span>
+                    {ops.diagnosis.cause ? <span> — {ops.diagnosis.cause}</span> : null}
+                    {ops.diagnosis.repair ? <span> · repair: {REPAIR_LABEL(ops.diagnosis.repair)}</span> : null}
+                </p>
+            ) : null}
+            {ops?.deletePreview ? (
+                <form
+                    data-delete-confirm={ops.deletePreview.outcome}
+                    className="shrink-0 border-b border-[var(--warning)] bg-[var(--bg-1)] px-5 py-3 text-xs"
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        const data = new FormData(e.currentTarget);
+                        const also = ops.deletePreview!.external.filter((x) => x.action === 'kept' && data.get(`also-${x.system}`) === 'on').map((x) => x.system);
+                        ops.onConfirmDelete(ops.deletePreview!.outcome, also);
+                    }}
+                >
+                    <p className="font-semibold">{ops.deletePreview.outcome === 'delete' ? `Delete ${agent.name} — this removes files` : `Unmount ${agent.name} from Genie`}</p>
+                    <div className="mt-2 grid grid-cols-2 gap-4">
+                        <div>
+                            <p className="text-[11px] uppercase tracking-wide text-[var(--fg-4)]">Goes</p>
+                            <ul className="list-disc pl-4">{ops.deletePreview.removes.map((r) => <li key={r}>{r}</li>)}</ul>
+                        </div>
+                        <div>
+                            <p className="text-[11px] uppercase tracking-wide text-[var(--fg-4)]">Stays</p>
+                            <ul className="list-disc pl-4">{ops.deletePreview.keeps.map((k) => <li key={k}>{k}</li>)}</ul>
+                        </div>
+                    </div>
+                    {ops.deletePreview.external.length > 0 ? (
+                        <div className="mt-2 flex flex-col gap-1">
+                            {ops.deletePreview.external.map((x) =>
+                                x.action === 'kept' ? (
+                                    <label key={x.system} className="flex items-center gap-2">
+                                        <input type="checkbox" name={`also-${x.system}`} />
+                                        <span>also remove from {x.system} <span className="font-mono text-[var(--fg-4)]">({x.optIn})</span></span>
+                                    </label>
+                                ) : (
+                                    <span key={x.system}>removed from {x.system}</span>
+                                ),
+                            )}
+                        </div>
+                    ) : null}
+                    <div className="mt-3 flex gap-2">
+                        <button type="submit" data-action="confirm-delete" className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">{ops.deletePreview.outcome === 'delete' ? 'Delete' : 'Unmount'} {agent.name}</button>
+                        <button type="button" onClick={ops.onCancelDelete} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
+                    </div>
+                </form>
+            ) : null}
 
             {/* Tabs. The set itself is the signal — a missing tab says what Genie cannot see. */}
             <div role="tablist" className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
@@ -332,7 +454,7 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
-                {plan || budget ? (
+                {plan || budget || budgetLimit !== null ? (
                 <aside data-rail-column className="flex w-[260px] shrink-0 flex-col gap-4 border-l border-[var(--border-1)] p-4 text-xs">
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
@@ -351,14 +473,22 @@ export function AgentView({
                         </section>
                     ) : null}
 
-                    {budget ? (
+                    {budget || budgetLimit !== null ? (
                         <section data-rail="budget">
                             <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
                                 Budget
                             </h2>
+                            {budgetLimit !== null ? (
+                                <p data-budget-limit={budgetLimit} className="mb-1.5 text-[11px] text-[var(--warning)]">
+                                    limit ${budgetLimit}/day — unenforceable: this provider reports no cost, so nothing will park
+                                </p>
+                            ) : null}
+                            {budget ? (
                             <p className="font-mono text-[11px] text-[var(--fg-3)]">
                                 ctx {Math.round(budget.used / 1000)}k/{Math.round(budget.size / 1000)}k
                             </p>
+                            ) : null}
+                            {budget ? (
                             <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
                                 <span
                                     data-budget-bar={budget.pct}
@@ -366,18 +496,19 @@ export function AgentView({
                                     style={{ width: `${budget.pct}%` }}
                                 />
                             </span>
+                            ) : null}
                             {/*
                              * No Cost row at all when the provider reports none — codex reports
                              * none. Not a `$0.00`, which claims the work was free, and not a
                              * dash, which reads as zero.
                              */}
-                            {budget.cost !== null ? (
+                            {budget && budget.cost !== null ? (
                                 <p data-rail-cost className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">
                                     ${budget.cost.toFixed(2)} · {budget.turns} turns
                                 </p>
-                            ) : (
+                            ) : budget ? (
                                 <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>
-                            )}
+                            ) : null}
                         </section>
                     ) : null}
                 </aside>

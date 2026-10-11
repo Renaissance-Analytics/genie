@@ -8,7 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
+import { readFile, rm } from 'node:fs/promises';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { buildHostApi } from './host-api.js';
+import { addWorkspace as addWorkspaceOp, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
@@ -144,6 +149,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             // which Genie does not register, and `remote` to another workstation.
             fidelity: 'declared',
             cwd: cwdFor(record),
+            dailyBudgetUsd: record.dailyBudgetUsd ?? null,
         },
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),
@@ -312,6 +318,9 @@ async function boot(): Promise<void> {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'unknown agent' };
 
+        // An asleep workspace starts nothing (§6.1) — refused by name, never silently.
+        const asleep = startRefusal(workspaceOps, record);
+        if (asleep) return { ok: false, reason: asleep };
         // Start or REATTACH. Starting one that is already running returns the same session
         // rather than a second — two provider processes answering as one agent is how a user
         // ends up with something they cannot stop.
@@ -354,6 +363,68 @@ async function boot(): Promise<void> {
      * looked up in the registry: an unknown workspace is refused, and there is no way to name
      * an agent through this surface.
      */
+    /*
+     * AGENT OPERATIONS (§6.2). The plans live in core/agent-ops.ts, the sequencing in
+     * agent-ops-host.ts; these ports are the real registry, session host and filesystem.
+     * `signedIn` answers true: Genie has no provider sign-in probe yet, and a false "not signed
+     * in" would send people to a login they already have. `linkedSystems` is empty until the
+     * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
+     */
+    const agentOps: AgentOpsPorts = {
+        registry: {
+            find: (id) => registry?.find(id as AgentId) ?? null,
+            forget: (id) => registry!.forget(id),
+            clearThread: (id) => registry!.clearThread(id),
+            setProvider: (id, provider) => registry!.setProvider(id, provider),
+            setBudget: (id, usd) => registry!.setBudget(id, usd),
+        },
+        host: {
+            start: (record, cwd) => host!.start(record, cwd),
+            stop: (id) => host!.stop(id),
+            probe: (id) => host!.probe(id),
+        },
+        cwdFor,
+        workspacePathFor: (record) => registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path ?? null,
+        readManifest: async (record) => {
+            const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
+            if (!workspace) return null;
+            try {
+                return await readFile(join(workspace, record.instructions ?? join('.agents', record.name, 'AGENT.md')), 'utf8');
+            } catch {
+                return null;
+            }
+        },
+        removeDir: (path) => rm(path, { recursive: true, force: true }),
+        removeHandoff: async (record) => {
+            const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
+            if (workspace) await rm(join(workspace, '.ai', 'handoff', `${record.name}.md`), { force: true });
+        },
+        linkedSystems: () => [],
+        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
+        signedIn: () => true,
+    };
+    ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
+        if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
+        return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());
+    });
+    ipcMain.handle('genie:agent-preview-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
+        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+        return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
+    });
+    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
+        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []).finally(() => registry?.touch());
+    });
+    ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
+        if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
+        return switchDriver(agentOps, raw, to).finally(() => registry?.touch());
+    });
+    ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
+        if (typeof raw !== 'string' || (usd !== null && !(typeof usd === 'number' && usd >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
+        return setBudget(agentOps, raw, usd as number | null).finally(() => registry?.touch());
+    });
+    ipcMain.handle('genie:agent-diagnose', (_event, raw: unknown) => (typeof raw === 'string' ? diagnose(agentOps, raw) : { ok: false, reason: 'diagnose names an agent' }));
+
     ipcMain.handle('genie:restart-with-handoff', (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
@@ -408,6 +479,52 @@ async function boot(): Promise<void> {
         typeof rawWorkspaceId === 'string'
             ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
             : []);
+
+    /*
+     * WORKSPACE OPERATIONS (§6.1). The plans live in core/workspace-model.ts, the sequencing in
+     * workspace-ops-host.ts; these ports are the real registry, session host, terminal host,
+     * supervisor and filesystem. Add is preview-then-confirm: the picker and the classification
+     * write nothing; `confirmAdd` does the writes the plan showed.
+     */
+    const workspaceOps: WorkspaceOpsPorts = {
+        fs: {
+            exists: async (p) => { try { return (await statPath(p)).isDirectory(); } catch { return false; } },
+            entries: (p) => readdir(p),
+            readJson: async (p) => { try { return JSON.parse(await readFileText(p, 'utf8')) as unknown; } catch { return null; } },
+            writeJson: (p, value) => writeFileText(p, `${JSON.stringify(value, null, 2)}\n`, 'utf8'),
+            mkdir: (p) => mkdir(p, { recursive: true }).then(() => {}),
+            gitInit: (p) => new Promise<void>((resolve, reject) => { execFileCb('git', ['init'], { cwd: p }, (error) => (error ? reject(error) : resolve())); }),
+        },
+        registry: {
+            workspace: (id) => registry?.workspace(id) ?? null,
+            addWorkspace: (w) => registry!.addWorkspace(w),
+            agentsOf: (id) => registry?.agentsOf(id) ?? [],
+            setAsleep: (id, asleep) => registry!.setAsleep(id, asleep),
+            forgetWorkspace: (id) => registry!.forgetWorkspace(id),
+        },
+        host: {
+            probe: (id) => host?.probe(id) ?? null,
+            prompt: (id, text) => host?.prompt(id, text) ?? false,
+            stop: (id) => host?.stop(id) ?? false,
+        },
+        attention: { finished: () => services?.attention.finished() ?? [] },
+        terminals: { list: () => terminals?.list() ?? [], close: (id) => terminals?.close(id) ?? false },
+        supervisor: { list: () => services?.supervisor.list() ?? [], stop: (id) => services?.supervisor.stop(id) ?? false },
+        now: Date.now,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    };
+    ipcMain.handle('genie:workspace-preview-add', async () => {
+        if (!window) return { ok: false, reason: 'no window to pick a folder from' };
+        const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return { ok: false, reason: 'no folder picked' };
+        return previewAddWorkspace(workspaceOps, path);
+    });
+    ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
+    ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
+        typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
+    ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
+    ipcMain.handle('genie:workspace-remove', (_event, raw: unknown) => (typeof raw === 'string' ? removeWorkspace(workspaceOps, raw) : { ok: false, reason: 'remove names a workspace' }));
 
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };
@@ -472,6 +589,20 @@ async function boot(): Promise<void> {
                 onExit: (cb) => terminals!.onExit(cb),
             },
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
+            workspaceOps: {
+                confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
+                hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
+                wake: (id) => wakeWorkspace(workspaceOps, id),
+                remove: (id) => removeWorkspace(workspaceOps, id),
+            },
+            agentOps: {
+                restart: (id, kind) => restartAgent(agentOps, id, kind),
+                previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
+                delete: (id, outcome, also) => deleteAgent(agentOps, id, outcome, also),
+                switchDriver: (id, to) => switchDriver(agentOps, id, to),
+                setBudget: (id, usd) => setBudget(agentOps, id, usd),
+                diagnose: (id) => diagnose(agentOps, id),
+            },
             features: {
                 snapshot: () => featureSnapshot(services!, featureState),
                 act: (action) => handleFeatureAction(services!, action, featureState, featurePorts),
