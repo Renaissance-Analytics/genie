@@ -154,6 +154,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                         type="button"
                         data-nav={route_}
                         data-workspace={w.id}
+                        // A governed workspace (§6.1) sits indented under its ops project and says whose it is.
+                        {...(w.governedBy ? { 'data-governed-by': w.governedBy, style: { paddingLeft: '1.5rem' } } : {})}
                         data-active={active ? 'true' : 'false'}
                         // `alert` is tri-state and the attribute is OMITTED when it is unknown.
                         // Rendering `data-alert="false"` for an unread workspace would assert

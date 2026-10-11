@@ -34,6 +34,9 @@ export interface RailWorkspace {
     agentsKnown: boolean;
     /** Hibernated: the rail says so and nothing starts here. */
     asleep?: boolean;
+    /** Ops projects (§6.1): the workspaces this one governs, and the one that governs this one. */
+    governs?: readonly string[];
+    governedBy?: string | null;
 }
 
 export interface RailItem {
@@ -43,6 +46,8 @@ export interface RailItem {
     count: number | null;
     /** `null` = not read yet. `false` = read, and nothing in here wants you. */
     alert: boolean | null;
+    /** Present only on a governed workspace: the ops project it sits under. */
+    governedBy?: string;
 }
 
 /**
@@ -55,12 +60,37 @@ export interface RailItem {
  * offline is not work waiting on a human, and a dot that fires for it teaches the reader to
  * stop trusting the dot. That signal belongs on the Deck's strip, where it comes with a door.
  */
+/** Governed workspaces follow their governor, in the given order; everyone else keeps their place. */
+export function nestGoverned<T extends { id: string }>(items: readonly T[], governorOf: (id: string) => string | null): T[] {
+    const ids = new Set(items.map((i) => i.id));
+    const out: T[] = [];
+    for (const item of items) {
+        const governor = governorOf(item.id);
+        if (governor !== null && ids.has(governor)) continue;
+        out.push(item);
+        for (const child of items) if (governorOf(child.id) === item.id) out.push(child);
+    }
+    return out;
+}
+
+function governorMap(workspaces: readonly RailWorkspace[]): (id: string) => string | null {
+    const map = new Map<string, string>();
+    for (const w of workspaces) {
+        if (w.governedBy) map.set(w.id, w.governedBy);
+        for (const child of w.governs ?? []) map.set(child, w.id);
+    }
+    return (id) => map.get(id) ?? null;
+}
+
 export function railWorkspaces(
     workspaces: readonly RailWorkspace[],
     rows: readonly AgentRow[],
 ): readonly RailItem[] {
-    return workspaces.map((w) => {
-        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null };
+    const governorOf = governorMap(workspaces);
+    return nestGoverned(workspaces, governorOf).map((w) => {
+        const governor = governorOf(w.id);
+        const governed = governor !== null ? { governedBy: governor } : {};
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...governed };
 
         const mine = rows.filter((r) => r.workspaceId === w.id);
         return {
@@ -68,6 +98,7 @@ export function railWorkspaces(
             path: w.path,
             count: mine.length,
             alert: mine.some((r) => r.state === 'waiting' || r.state === 'broken'),
+            ...governed,
         };
     });
 }

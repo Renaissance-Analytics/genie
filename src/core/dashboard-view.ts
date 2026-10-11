@@ -231,13 +231,25 @@ export interface WorkspaceGroup {
     summary: string;
     /** True when the workspace has no agents, which offers "Add agent" rather than a blank. */
     empty: boolean;
+    /** Present only when an ops project governs this workspace (§6.1). */
+    governedBy?: string;
 }
 
 export function groupByWorkspace(
     rows: readonly AgentRow[],
     workspaceIds: readonly string[],
+    governedBy: Readonly<Record<string, string>> = {},
 ): readonly WorkspaceGroup[] {
-    return workspaceIds.map((workspaceId) => {
+    // Governed workspaces follow their governor (§6.1), in the given order.
+    const ids = new Set(workspaceIds);
+    const ordered: string[] = [];
+    for (const id of workspaceIds) {
+        const governor = governedBy[id];
+        if (governor !== undefined && ids.has(governor)) continue;
+        ordered.push(id);
+        for (const child of workspaceIds) if (governedBy[child] === id) ordered.push(child);
+    }
+    return ordered.map((workspaceId) => {
         const mine = rows
             .filter((r) => r.workspaceId === workspaceId)
             .slice()
@@ -249,7 +261,7 @@ export function groupByWorkspace(
         if (count('waiting') > 0) parts.push(`${count('waiting')} waiting`);
         if (count('broken') > 0) parts.push(`${count('broken')} broken`);
 
-        return { workspaceId, rows: mine, summary: parts.join(' · '), empty: mine.length === 0 };
+        return { workspaceId, rows: mine, summary: parts.join(' · '), empty: mine.length === 0, ...(governedBy[workspaceId] ? { governedBy: governedBy[workspaceId]! } : {}) };
     });
 }
 

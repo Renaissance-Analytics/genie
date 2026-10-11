@@ -164,7 +164,8 @@ export class Registry {
             // `null` until the store has been read. Not `[]`: "we have not looked" and "there
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true, asleep: w.asleep === true }))
+                // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}) }))
                 : null,
             /*
              * The attention band.
@@ -292,9 +293,24 @@ export class Registry {
         return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
     }
 
-    workspace(id: string): { id: string; path: string; asleep: boolean } | null {
+    workspace(id: string): { id: string; path: string; asleep: boolean; governs: string[] } | null {
         const w = this.#workspaces.find((x) => x.id === id);
-        return w ? { id: w.id, path: w.path, asleep: w.asleep === true } : null;
+        return w ? { id: w.id, path: w.path, asleep: w.asleep === true, governs: [...(w.governs ?? [])] } : null;
+    }
+
+    /** OPS PROJECTS (§6.1): which workspaces `opsId` governs — known ids only, never itself. */
+    async setGoverns(opsId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }> {
+        if (!this.#workspaces.some((w) => w.id === opsId)) return { ok: false, reason: `no workspace "${opsId}"` };
+        const governs = [...new Set(childIds)].filter((id) => id !== opsId && this.#workspaces.some((w) => w.id === id));
+        this.#workspaces = this.#workspaces.map((w) => (w.id === opsId ? { ...w, governs } : w));
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true, governs };
+    }
+
+    /** The workspace that governs `childId`, or `null`. */
+    governorOf(childId: string): string | null {
+        return this.#workspaces.find((w) => (w.governs ?? []).includes(childId))?.id ?? null;
     }
 
     agentsOf(workspaceId: string): readonly AgentRecord[] {
@@ -314,7 +330,8 @@ export class Registry {
     async forgetWorkspace(workspaceId: string): Promise<{ agentsForgotten: number } | null> {
         if (!this.#workspaces.some((w) => w.id === workspaceId)) return null;
         const agentsForgotten = this.#agents.filter((a) => a.workspaceId === workspaceId).length;
-        this.#workspaces = this.#workspaces.filter((w) => w.id !== workspaceId);
+        // A removed workspace leaves every governor's list.
+        this.#workspaces = this.#workspaces.filter((w) => w.id !== workspaceId).map((w) => (w.governs?.includes(workspaceId) ? { ...w, governs: w.governs.filter((id) => id !== workspaceId) } : w));
         this.#agents = this.#agents.filter((a) => a.workspaceId !== workspaceId);
         await this.#store.writeWorkspaces(this.#workspaces);
         await this.#store.writeAgents(this.#agents);

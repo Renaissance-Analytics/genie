@@ -46,5 +46,7 @@ describe('TerminalSnapshots', () => {
         const again = await TerminalSnapshots.open(dir);
         expect(again.take('tynn')).toBeNull();
         expect(again.take('moic')).toBe('new\r\n');
+        // `take` persists the removal in the background; wait for it before the directory goes (Windows caught the race).
+        await again.flushed();
     });
 });

@@ -152,6 +152,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
             resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),
+            setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),
