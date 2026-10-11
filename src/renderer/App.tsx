@@ -4,7 +4,8 @@ import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
-import { EMPTY_SNAPSHOT, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
@@ -44,6 +45,18 @@ function useRoute(): [string, (route: string) => void] {
     // Assigning the hash pushes a history entry, which is what makes Back work. Deliberately
     // not `replace`: a navigation a person made is a place they can come back from.
     return [route, (next: string) => { window.location.hash = next; }];
+}
+
+function useFeatures(bridge: GenieBridge | undefined): [FeatureData, (data: FeatureData) => void] {
+    const [data, setData] = useState<FeatureData>(EMPTY_FEATURES);
+    useEffect(() => {
+        const features = bridge?.features ?? NO_FEATURES;
+        let live = true;
+        void features.snapshot().then((d) => { if (live) setData(d); });
+        const off = features.subscribe((d) => { if (live) setData(d); });
+        return () => { live = false; off(); };
+    }, [bridge]);
+    return [data, setData];
 }
 
 function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
@@ -114,6 +127,7 @@ export function App({ bridge }: AppProps) {
     const [route, navigate] = useRoute();
     const resolvedBridge = bridge ?? (typeof window === 'undefined' ? undefined : window.genie);
     const snapshot = useSnapshot(resolvedBridge);
+    const [features, setFeatures] = useFeatures(resolvedBridge);
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
@@ -187,6 +201,14 @@ export function App({ bridge }: AppProps) {
             chatThread={chatThread}
             pinned={pinned}
             onNavigate={navigate}
+            features={features}
+            onFeature={(action) => {
+                void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
+                    // A refusal is a fact the surface shows; it is never swallowed. Until the surfaces
+                    // carry an error line, the console is where it lands.
+                    console.error('[genie] feature action refused:', (error as Error).message);
+                });
+            }}
             onSend={(id, text) => { if (id) resolvedBridge?.prompt(id, text); }}
             answeringApproval={answering}
             onAnswerApproval={(optionId) => {

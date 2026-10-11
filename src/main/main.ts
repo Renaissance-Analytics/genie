@@ -10,6 +10,11 @@ import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
+import { composeServices, type ComposedServices } from './compose.js';
+import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
+import { readV1Settings } from './v1-settings.js';
+import { FEATURE_CHANNELS } from '../renderer/bridge.js';
+import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
 import { genieHome } from './paths.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
@@ -151,6 +156,9 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
     return id ? registry?.find(id) ?? null : null;
 }
 
+let services: ComposedServices | null = null;
+let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
+
 async function boot(): Promise<void> {
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
@@ -193,13 +201,13 @@ async function boot(): Promise<void> {
      * Electron's safeStorage; on a machine that genuinely cannot encrypt the engine takes its
      * own documented plaintext fallback, which is its call and not decided here.
      */
-    terminals = new TerminalHost(
-        realFancyTermPort(genieHome(), {
-            isAvailable: () => safeStorage.isEncryptionAvailable(),
-            encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
-            decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
-        }),
-    );
+    // ONE pty engine, shared by the terminal host and the composition root's supervisor.
+    const ptyPort = realFancyTermPort(genieHome(), {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
+        decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
+    });
+    terminals = new TerminalHost(ptyPort);
     // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
     terminals.onData((id, data) => {
         for (const w of BrowserWindow.getAllWindows()) {
@@ -367,6 +375,36 @@ async function boot(): Promise<void> {
         return { ok: true };
     });
 
+    /*
+     * THE FEATURE SERVICES — every store, the Flow scheduler, the supervisor, the site manager and
+     * the .gen front door, composed once (compose.ts). The v1 settings carry-over runs here on first
+     * run, from v1's own database under the same ~/.genie.
+     */
+    const composed = await composeServices({
+        userData: genieHome(),
+        pty: ptyPort,
+        v1Settings: () => readV1Settings(join(genieHome(), 'genie.db')),
+        caddyBin: null,
+        frontDoorPort: 0,
+    });
+    services = composed;
+    const pushFeatures = () => {
+        void featureSnapshot(composed, featureState).then((data) => {
+            if (window && !window.isDestroyed()) window.webContents.send(FEATURE_CHANNELS.changed, data);
+        });
+    };
+    composed.flows.onChange(pushFeatures);
+    composed.settings.onChange(pushFeatures);
+    composed.supervisor.onChange(pushFeatures);
+    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState));
+    ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
+        const action = raw as FeatureAction;
+        const data = await handleFeatureAction(composed, action, featureState);
+        if (action.kind === 'knowledge.search') featureState = { ...featureState, knowledgeQuery: action.query };
+        if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
+        return data;
+    });
+
     // PUSH, both ways. The registry says when the estate changed; the host says when one
     // agent did. Nothing here is on a timer.
     registry.subscribe((snapshot) => {
@@ -399,6 +437,8 @@ app.on('second-instance', () => {
  */
 app.on('before-quit', () => {
     host?.stopAll();
+    // Every supervised process, the front door, an in-flight flow run, the knowledge database.
+    void services?.shutdown();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();
