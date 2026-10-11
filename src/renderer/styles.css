@@ -8,18 +8,47 @@
 
 @import "./tokens.css";
 
+/* The design contract's faces, shipped with the app (src/renderer/fonts/README.md). Variable weight. */
+@font-face {
+    font-family: Geist;
+    src: url("./fonts/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: Geist;
+    src: url("./fonts/Geist-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+
 /*
- * FONTS — a known gap, stated rather than hidden.
+ * FONTS — the design contract's faces, shipped with the app.
  *
  * The design contract is Geist and Geist Mono. The token file as published fetches them from
  * Google Fonts with an `@import url(...)`, which was stripped on the way in: a desktop app
  * must not render in a fallback face because the machine is offline, and a renderer reaching
  * out to a third-party CDN on boot is a dependency nobody declared.
  *
- * Until the woff2 files are vendored under `src/renderer/fonts/`, these fall back to the
- * system UI face and the app is legible but NOT typographically correct. That is a visual
- * fidelity gap against the board, and it is written here so the next person reads it as a
- * missing asset rather than as a styling bug.
+ * The woff2 files are vendored under `src/renderer/fonts/` (variable weight, upright and
+ * italic, OFL 1.1) and declared by the @font-face rules above; the system faces that follow in
+ * each stack are the offline-safe fallback if a file ever fails to load.
  */
 /*
  * Declared in `@theme`, with LITERAL stacks, and that is the fix for a real bug.
