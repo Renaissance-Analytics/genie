@@ -1,6 +1,9 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { classifyNavigation } from '../core/browser-policy.js';
+import { resolveDeckAnswer } from '../core/deck-resolve.js';
+import { shouldCheckUpdates } from './toolchain-prober.js';
+import type { RepairOutcome } from '../core/toolchain.js';
 import { flowFormDefaults, siteFormDefaults, validateFlowForm, validateSiteForm } from '../core/forms.js';
 import type { FlowAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
@@ -20,6 +23,15 @@ import type { FeatureAction, FeatureData } from '../renderer/features.js';
  * `null` until a search is asked for, and the toolchain stays `null` until a scan has run — both
  * are "not asked yet", drawn as skeletons, never as empties.
  */
+
+/** What main wires in that the tests inject: the toolchain prober/updater with its clock. */
+export interface FeaturePorts {
+    readonly toolchain?: {
+        probe(): Promise<ToolStatus[]>;
+        update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
+        now(): number;
+    };
+}
 
 export interface FeatureState {
     toolStatuses: readonly ToolStatus[] | null;
@@ -68,7 +80,7 @@ async function repoFacts(repoPath: string): Promise<{ files: string[]; packageSc
 }
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason. */
-export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }): Promise<FeatureData> {
+export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
     const next: FeatureState = { ...state };
     switch (action.kind) {
         case 'knowledge.search':
@@ -143,11 +155,62 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.stopProcess':
             if (!services.supervisor.stop(action.processId)) throw new Error(`no process ${action.processId}`);
             break;
-        case 'toolchain.check':
-        case 'toolchain.update':
-            // The scan and the update run through the toolchain prober with the real runner; the host
-            // wires them in main.ts and feeds `toolStatuses` back through the state.
+        case 'toolchain.check': {
+            const tc = ports.toolchain;
+            if (!tc) throw new Error('no toolchain runner is wired into this Genie; the scan cannot run');
+            if (shouldCheckUpdates(state.toolchainCheckedAt ?? null, tc.now(), action.force === true)) {
+                next.toolStatuses = await tc.probe();
+                next.toolchainCheckedAt = tc.now();
+            }
             break;
+        }
+        case 'toolchain.update': {
+            const tc = ports.toolchain;
+            if (!tc) throw new Error('no toolchain runner is wired into this Genie; the update cannot run');
+            const outcome = await tc.update(action.tool);
+            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
+            next.toolStatuses = await tc.probe();
+            next.toolchainCheckedAt = tc.now();
+            break;
+        }
+        case 'deck.answer': {
+            const command = resolveDeckAnswer(action.item, action.optionId);
+            switch (command.kind) {
+                case 'refused':
+                    throw new Error(command.reason);
+                case 'answer-question':
+                    await services.attention.answer(command.questionId, { selections: command.selections, note: command.note });
+                    break;
+                case 'resolve-approval':
+                    if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
+                    break;
+                case 'list-done':
+                    if (!(await services.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId }))) throw new Error(`no list item ${command.itemId}`);
+                    break;
+                case 'mark-read': {
+                    const unread = services.inbox.unread(HUMAN);
+                    const target = unread.find((m) => m.id === command.messageId);
+                    if (!target) throw new Error(`no unread message ${command.messageId}`);
+                    await services.inbox.receive({ participant: HUMAN, limit: unread.filter((m) => m.seq < target.seq).length + 1 });
+                    break;
+                }
+                case 'mark-seen':
+                    services.attention.markSeen(command.finishedId);
+                    break;
+                case 'answer-provider-approval':
+                case 'restart-with-handoff':
+                case 'navigate':
+                    // Session-layer and renderer concerns: main.ts routes these to the session host and the window.
+                    throw new Error(`${command.kind} is handled by the session host, not the feature IPC`);
+            }
+            break;
+        }
+        case 'knowledge.add': {
+            const r = services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
+            void r;
+            break;
+        }
         case 'inbox.send': {
             const target = services.resolveAddress(action.to);
             if (target.kind === 'none') throw new Error(`nobody at ${action.to}`);

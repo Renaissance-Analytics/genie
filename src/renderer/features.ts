@@ -1,6 +1,8 @@
 import type { FlowForm, Problem, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ToolStatus } from '../core/toolchain.js';
+import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
+import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
@@ -67,8 +69,12 @@ export type FeatureAction =
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }
     | { kind: 'hosting.stopProcess'; processId: string }
-    | { kind: 'toolchain.check' }
+    | { kind: 'toolchain.check'; force?: boolean }
     | { kind: 'toolchain.update'; tool: string }
+    /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
+    | { kind: 'deck.answer'; item: DeckItem; optionId: string }
+    /** The person adds a memory. */
+    | { kind: 'knowledge.add'; title: string; body: string; class?: MemoryClass; scope: Scope; tags?: string[] }
     | { kind: 'inbox.send'; to: string; text: string }
     | { kind: 'inbox.markRead'; messageId: string }
     | { kind: 'settings.set'; key: string; value: boolean | string }

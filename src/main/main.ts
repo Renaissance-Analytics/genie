@@ -13,6 +13,11 @@ import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
 import { readV1Settings } from './v1-settings.js';
+import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
+import { runUpdate } from './toolchain-prober.js';
+import { HOST_TOOLS } from '../core/toolchain.js';
+import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
+import type { FeaturePorts } from './feature-ipc.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
@@ -157,6 +162,30 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: ComposedServices | null = null;
+
+/** Where "latest" comes from, per tool. An unreachable or unreadable source yields null — the honest `unknown`. */
+async function latestFor(tool: string): Promise<{ version: string; source: string } | null> {
+    try {
+        if (tool === 'node') return latestFromNodeIndex(await (await fetch('https://nodejs.org/dist/index.json')).json());
+        if (tool === 'php') return phpLatestFromReleases(await (await fetch('https://www.php.net/releases/index.php?json')).json());
+        if (tool === 'claude-code') return latestFromNpmOutdated((await execFileRunner('npm', ['outdated', '-g', '--json'])).stdout, '@anthropic-ai/claude-code');
+        if (tool === 'codex') return latestFromNpmOutdated((await execFileRunner('npm', ['outdated', '-g', '--json'])).stdout, '@openai/codex');
+        const def = HOST_TOOLS.find((t) => t.name === tool);
+        const pm = packageManagerHere();
+        if (!def || !pm) return null;
+        if (pm === 'winget' && def.packages.winget) return latestFromWingetUpgrade((await execFileRunner('winget', ['upgrade', '--id', def.packages.winget])).stdout, def.packages.winget);
+        if (pm === 'brew' && def.packages.brew) return latestFromBrewOutdated((await execFileRunner('brew', ['outdated', '--json'])).stdout, def.packages.brew);
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function packageManagerHere(): 'winget' | 'brew' | 'apt' | 'dnf' | null {
+    if (process.platform === 'win32') return 'winget';
+    if (process.platform === 'darwin') return 'brew';
+    return null;
+}
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
 
 async function boot(): Promise<void> {
@@ -396,10 +425,18 @@ async function boot(): Promise<void> {
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
+    const featurePorts: FeaturePorts = {
+        toolchain: {
+            probe: () => probeToolsLive(latestFor),
+            update: (tool) => runUpdate(tool, { platform: process.platform as 'win32' | 'darwin' | 'linux', packageManager: packageManagerHere() }, execFileRunner, null),
+            now: Date.now,
+        },
+    };
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState));
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
-        const data = await handleFeatureAction(composed, action, featureState);
+        const data = await handleFeatureAction(composed, action, featureState, featurePorts);
+        if (action.kind === 'toolchain.check' || action.kind === 'toolchain.update') featureState = { ...featureState, toolStatuses: data.toolchain?.tools ?? null, toolchainCheckedAt: data.toolchain?.checkedAt ?? null };
         if (action.kind === 'knowledge.search') featureState = { ...featureState, knowledgeQuery: action.query };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
         featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null };
