@@ -140,6 +140,21 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         addAgent: (workspaceId) => fire('addAgent', workspaceId),
         addWorkspace: () => fire('addWorkspace'),
         takeOver: (agentId) => answer<{ ok: true; terminalId: string }>('takeOver', agentId),
+        workspaces: {
+            previewAdd: () => answer('workspaces.previewAdd'),
+            confirmAdd: (path) => answer('workspaces.confirmAdd', path),
+            hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),
+            wake: (workspaceId) => answer('workspaces.wake', workspaceId),
+            remove: (workspaceId) => answer('workspaces.remove', workspaceId),
+        },
+        agents: {
+            restart: (agentId, kind) => answer('agents.restart', agentId, kind),
+            previewDelete: (agentId, outcome, also) => answer('agents.previewDelete', agentId, outcome, [...also]),
+            delete: (agentId, outcome, also) => answer('agents.delete', agentId, outcome, [...also]),
+            switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
+            setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
+            diagnose: (agentId) => answer('agents.diagnose', agentId),
+        },
         terminals: {
             open: (workspaceId, options) => read('terminals.open', workspaceId, options),
             write: (id, data) => fire('terminals.write', id, data),

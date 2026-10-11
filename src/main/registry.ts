@@ -1,4 +1,5 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
+import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
 import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem } from '../core/deck.js';
@@ -137,7 +138,7 @@ export class Registry {
             // `null` until the store has been read. Not `[]`: "we have not looked" and "there
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true }))
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true, asleep: w.asleep === true }))
                 : null,
             /*
              * The attention band.
@@ -263,6 +264,78 @@ export class Registry {
     /** The OS agent's record. Always present after `load`. */
     osAgent(): AgentRecord | null {
         return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
+    }
+
+    workspace(id: string): { id: string; path: string; asleep: boolean } | null {
+        const w = this.#workspaces.find((x) => x.id === id);
+        return w ? { id: w.id, path: w.path, asleep: w.asleep === true } : null;
+    }
+
+    agentsOf(workspaceId: string): readonly AgentRecord[] {
+        return this.#agents.filter((a) => a.workspaceId === workspaceId);
+    }
+
+    /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
+    async setAsleep(workspaceId: string, asleep: boolean): Promise<boolean> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return false;
+        this.#workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep } : w));
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return true;
+    }
+
+    /** Remove from Genie (§6.1): the workspace and its agent records go; the folder is not this class's to touch. */
+    async forgetWorkspace(workspaceId: string): Promise<{ agentsForgotten: number } | null> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return null;
+        const agentsForgotten = this.#agents.filter((a) => a.workspaceId === workspaceId).length;
+        this.#workspaces = this.#workspaces.filter((w) => w.id !== workspaceId);
+        this.#agents = this.#agents.filter((a) => a.workspaceId !== workspaceId);
+        await this.#store.writeWorkspaces(this.#workspaces);
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return { agentsForgotten };
+    }
+
+    /** Unmount or delete (§6.2): the record goes; the persona folder is the caller's decision. */
+    async forget(agentId: AgentId): Promise<boolean> {
+        if (!this.#agents.some((a) => a.id === agentId)) return false;
+        this.#agents = this.#agents.filter((a) => a.id !== agentId);
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return true;
+    }
+
+    /** A FRESH restart: the conversation is dropped on purpose, before the next start. */
+    async clearThread(agentId: AgentId): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing) return null;
+        const cleared: AgentRecord = { ...existing, threadId: null };
+        this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return cleared;
+    }
+
+    /** Switch driver: identity, inbox, history and prompt stay; only the provider changes. */
+    async setProvider(agentId: AgentId, provider: string): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+        if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
+        const record: AgentRecord = { ...existing, provider };
+        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return { ok: true, record };
+    }
+
+    async setBudget(agentId: AgentId, dailyBudgetUsd: number | null): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing) return null;
+        const record: AgentRecord = { ...existing, dailyBudgetUsd };
+        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return record;
     }
 
     find(id: AgentId): AgentRecord | null {

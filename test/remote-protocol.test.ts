@@ -40,7 +40,12 @@ describe('the capability table', () => {
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
-        expect(REMOTE_METHODS.length).toBe(22);
+        expect(REMOTE_METHODS.length).toBe(33);
+        expect(capabilityOf('workspaces.previewAdd')).toBe('host-only');
+        expect(capabilityOf('workspaces.hibernate')).toBe('write');
+        expect(capabilityOf('agents.restart')).toBe('write');
+        expect(capabilityOf('agents.diagnose')).toBe('read');
+        expect(capabilityOf('agents.previewDelete')).toBe('read');
     });
 });
 

@@ -30,6 +30,8 @@ import { runtimeDir } from './paths.js';
 export interface WorkspaceRecord {
     id: string;
     path: string;
+    /** Hibernated (§6.1): nothing may start here; stays asleep through restarts and upgrades. */
+    asleep?: boolean;
 }
 
 export async function readJson<T>(file: string, fallback: T): Promise<T> {

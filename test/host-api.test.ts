@@ -43,6 +43,20 @@ function fakes() {
             onExit: (cb) => { listeners.exit.add(cb); return () => listeners.exit.delete(cb); },
         },
         serviceEnvFor: (ws) => (ws === 'tynn' ? { DB_PORT: '54301' } : {}),
+        workspaceOps: {
+            confirmAdd: async (path) => { calls.push(`ws-add:${path}`); return { ok: true }; },
+            hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
+            wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
+            remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
+        },
+        agentOps: {
+            restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },
+            previewDelete: async () => ({ ok: true, plan: { outcome: 'unmount', removes: [], keeps: [], external: [] } }),
+            delete: async (id, outcome) => { calls.push(`agent-delete:${id}:${outcome}`); return { ok: true, plan: { outcome, removes: [], keeps: [], external: [] } }; },
+            switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, carries: [], from: 'claude', to }; },
+            setBudget: async (id, usd) => { calls.push(`agent-budget:${id}:${usd}`); return { ok: true, decision: { kind: 'proceed', remainingUsd: null } }; },
+            diagnose: async () => ({ ok: true, diagnosis: { state: 'healthy', fault: false, cause: null, repair: null } }),
+        },
         features: {
             snapshot: async () => ({ knowledge: { hits: null } }) as never,
             act: async (action) => { calls.push(`act:${action.kind}`); return { knowledge: { hits: [] } } as never; },
@@ -76,6 +90,17 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'register:tynn', 'stop:agent_a', 'start:agent_a:/w/tynn', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
+    });
+
+    it('agent operations pass through with their arguments narrowed', async () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        expect(await api.invoke('agents.restart', ['agent_a', 'fresh'])).toEqual({ ok: true, kind: 'fresh' });
+        expect(await api.invoke('agents.delete', ['agent_a', 'delete', ['tynn']])).toMatchObject({ ok: true, plan: { outcome: 'delete' } });
+        expect(await api.invoke('agents.switchDriver', ['agent_a', 'codex'])).toMatchObject({ ok: true, to: 'codex' });
+        expect(await api.invoke('agents.setBudget', ['agent_a', null])).toMatchObject({ ok: true });
+        expect(await api.invoke('agents.diagnose', ['agent_a'])).toMatchObject({ ok: true, diagnosis: { state: 'healthy' } });
+        expect(f.calls).toEqual(['agent-restart:agent_a:fresh', 'agent-delete:agent_a:delete', 'agent-switch:agent_a:codex', 'agent-budget:agent_a:null']);
     });
 
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {

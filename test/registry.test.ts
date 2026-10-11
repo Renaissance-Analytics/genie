@@ -50,7 +50,7 @@ describe('before the store has been read', () => {
         await registry.addWorkspace({ id: 'tynn', path: 'C:/_Projects/tynn.ai' });
 
         expect(registry.snapshot().workspaces).toEqual([
-            { id: 'tynn', path: 'C:/_Projects/tynn.ai', agentsKnown: true },
+            { id: 'tynn', path: 'C:/_Projects/tynn.ai', agentsKnown: true, asleep: false },
         ]);
         // POSITIVE CONTROL: a fresh registry over the SAME store reports it unknown until it
         // loads, so `agentsKnown` is a reading rather than a constant `true`.

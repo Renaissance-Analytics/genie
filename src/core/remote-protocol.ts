@@ -17,6 +17,17 @@ export const REMOTE_METHODS = [
     'addAgent',
     'answerApproval',
     'restartWithHandoff',
+    'agents.restart',
+    'agents.previewDelete',
+    'agents.delete',
+    'agents.switchDriver',
+    'agents.setBudget',
+    'agents.diagnose',
+    'workspaces.previewAdd',
+    'workspaces.confirmAdd',
+    'workspaces.hibernate',
+    'workspaces.wake',
+    'workspaces.remove',
     'addWorkspace',
     'takeOver',
     'terminals.open',
@@ -52,6 +63,17 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     addAgent: 'write',
     answerApproval: 'write',
     restartWithHandoff: 'write',
+    'agents.restart': 'write',
+    'agents.previewDelete': 'read',
+    'agents.delete': 'write',
+    'agents.switchDriver': 'write',
+    'agents.setBudget': 'write',
+    'agents.diagnose': 'read',
+    'workspaces.previewAdd': 'host-only',
+    'workspaces.confirmAdd': 'write',
+    'workspaces.hibernate': 'write',
+    'workspaces.wake': 'write',
+    'workspaces.remove': 'write',
     'terminals.open': 'write',
     'terminals.write': 'write',
     'terminals.resize': 'write',
@@ -70,9 +92,9 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'prompt', 'answerApproval', 'restartWithHandoff', 'takeOver'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'prompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.list'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }

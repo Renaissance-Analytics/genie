@@ -56,12 +56,15 @@ export function planAdd(kind: FolderKind, path: string): PlanStep[] {
     }
 }
 
-const SCHEMA_BASE = 'https://schemas.civicognita.org/agi/project/';
+/** Civicognita/shared-schemas publishes the envelope schema by git tag; this Genie writes this revision. */
+export const SCHEMA_REVISION = '0.2.0';
+const SCHEMA_BASE = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v';
+const SCHEMA_TAIL = '/schemas/workspace/project.schema.json';
 
 function revisionOf(manifest: Record<string, unknown>): string | null {
     const s = manifest.$schema;
     if (typeof s !== 'string' || !s.startsWith(SCHEMA_BASE)) return null;
-    const m = /(\d+\.\d+\.\d+)\.json$/.exec(s);
+    const m = /^v?(\d+\.\d+\.\d+)\/schemas\/workspace\/project\.schema\.json$/.exec(s.slice(SCHEMA_BASE.length));
     return m ? m[1]! : null;
 }
 
@@ -88,7 +91,7 @@ export function stampSchema(manifest: Record<string, unknown>, revision: string)
     }
     return {
         ok: true,
-        manifest: { ...manifest, $schema: `${SCHEMA_BASE}${revision}.json` },
+        manifest: { ...manifest, $schema: `${SCHEMA_BASE}${revision}${SCHEMA_TAIL}` },
         backup: `project.json.pre-schema-${revision}.bak`,
         from,
     };

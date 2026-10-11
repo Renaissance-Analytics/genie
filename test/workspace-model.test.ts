@@ -47,15 +47,17 @@ describe('the add-workspace plan — shown BEFORE anything is written', () => {
 });
 
 describe('schema stamping — with a backup, and a refusal to overwrite a newer revision', () => {
-    const current = { $schema: 'https://schemas.civicognita.org/agi/project/1.2.0.json', name: 'tynn' };
+    // The REAL published base (Civicognita/shared-schemas on GitHub), the one the envelope's project.json declares.
+    // The earlier form pointed at a host that publishes nothing and would have overwritten a real $schema.
+    const current = { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.2.0/schemas/workspace/project.schema.json', name: 'tynn' };
 
     it('stamps an older or unstamped manifest to the pinned revision and names the backup it will write', () => {
-        expect(stampSchema({ name: 'tynn' }, '1.2.0')).toEqual({ ok: true, manifest: { $schema: 'https://schemas.civicognita.org/agi/project/1.2.0.json', name: 'tynn' }, backup: 'project.json.pre-schema-1.2.0.bak', from: null });
-        expect(stampSchema({ ...current, $schema: 'https://schemas.civicognita.org/agi/project/1.1.0.json' }, '1.2.0')).toMatchObject({ ok: true, from: '1.1.0' });
+        expect(stampSchema({ name: 'tynn' }, '1.2.0')).toEqual({ ok: true, manifest: { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.2.0/schemas/workspace/project.schema.json', name: 'tynn' }, backup: 'project.json.pre-schema-1.2.0.bak', from: null });
+        expect(stampSchema({ ...current, $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.1.0/schemas/workspace/project.schema.json' }, '1.2.0')).toMatchObject({ ok: true, from: '1.1.0' });
     });
 
     it('REFUSES to overwrite a newer revision, and leaves a same-revision manifest untouched', () => {
-        expect(stampSchema({ ...current, $schema: 'https://schemas.civicognita.org/agi/project/1.3.0.json' }, '1.2.0')).toEqual({ ok: false, reason: 'project.json declares schema 1.3.0, newer than the 1.2.0 this Genie writes; not touching it' });
+        expect(stampSchema({ ...current, $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v1.3.0/schemas/workspace/project.schema.json' }, '1.2.0')).toEqual({ ok: false, reason: 'project.json declares schema 1.3.0, newer than the 1.2.0 this Genie writes; not touching it' });
         expect(stampSchema(current, '1.2.0')).toEqual({ ok: true, manifest: current, backup: null, from: '1.2.0' });
     });
 });

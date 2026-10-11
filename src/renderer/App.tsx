@@ -11,6 +11,11 @@ import { connectRemote, type RemoteClient, type RemoteState } from './remote-bri
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
 import type { ChatThread } from './components/ChatFlyout.js';
+import type { AgentOpsProps } from './components/AgentView.js';
+import type { WorkspaceOpsProps } from './components/Workspace.js';
+import type { AddPreviewView } from './components/AddWorkspacePreview.js';
+import type { DeletePlan } from '../core/agent-ops.js';
+import type { Diagnosis } from '../core/workspace-model.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -193,6 +198,66 @@ export function App({ bridge }: AppProps) {
     useEffect(() => { setSelectedRowId(null); }, [agentId]);
 
     /**
+     * AGENT OPERATIONS (§6.2) — view state for the Agent view's controls: a delete previewed and
+     * awaiting confirmation, the last diagnosis, the last outcome (a refusal most of all). Reset on
+     * the way to another agent so one agent's plan can never be confirmed on the next.
+     */
+    /**
+     * WORKSPACE OPERATIONS (§6.1): adding is preview-then-confirm — the picker and the plan write
+     * nothing; the person confirms the plan they were shown. The Workspace surface's hibernate /
+     * wake / remove carry their own confirm and outcome, reset when the route changes workspace.
+     */
+    const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
+    const workspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
+    const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
+    useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
+    const previewAdd = () => {
+        void resolvedBridge?.workspaces.previewAdd().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
+    };
+    const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
+    const workspaceOps: WorkspaceOpsProps | undefined = resolvedBridge && workspaceId && workspaceRow
+        ? {
+              asleep: workspaceRow.asleep === true,
+              agentCount: snapshot.agents.filter((a) => a.workspaceId === workspaceId).length,
+              removePreview: wsView.removePreview,
+              lastOutcome: wsView.lastOutcome,
+              onHibernate: () => { void resolvedBridge.workspaces.hibernate(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? `hibernated; handoffs landed from ${r.handoffs.landed.length === 0 ? 'nobody' : r.handoffs.landed.join(', ')}; ${r.handoffs.missing.length === 0 ? 'none missing' : `missing from ${r.handoffs.missing.join(', ')}`}` : r.reason }))); },
+              onWake: () => { void resolvedBridge.workspaces.wake(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? 'awake' : r.reason }))); },
+              onPreviewRemove: () => setWsView((v) => ({ ...v, removePreview: true })),
+              onCancelRemove: () => setWsView((v) => ({ ...v, removePreview: false })),
+              onConfirmRemove: () => {
+                  void resolvedBridge.workspaces.remove(workspaceId).then((r) => {
+                      if (r.ok) navigate(DEFAULT_ROUTE);
+                      else setWsView((v) => ({ ...v, removePreview: false, lastOutcome: r.reason }));
+                  });
+              },
+          }
+        : undefined;
+
+    const [opsView, setOpsView] = useState<{ deletePreview: DeletePlan | null; diagnosis: Diagnosis | null; lastOutcome: string | null }>({ deletePreview: null, diagnosis: null, lastOutcome: null });
+    useEffect(() => { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); }, [agentId]);
+    const agentOps: AgentOpsProps | undefined = resolvedBridge && agentId
+        ? {
+              deletePreview: opsView.deletePreview,
+              diagnosis: opsView.diagnosis,
+              lastOutcome: opsView.lastOutcome,
+              budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
+              onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
+              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.noop ? `already running on ${r.to}` : `switched ${r.from} → ${r.to}; carried ${r.carries.join(', ')}. Start it when ready.`) : r.reason }))); },
+              onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
+              onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },
+              onConfirmDelete: (outcome, also) => {
+                  void resolvedBridge.agents.delete(agentId, outcome, also).then((r) => {
+                      if (r.ok) { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); navigate(DEFAULT_ROUTE); }
+                      else setOpsView((v) => ({ ...v, lastOutcome: r.reason }));
+                  });
+              },
+              onCancelDelete: () => setOpsView((v) => ({ ...v, deletePreview: null })),
+              onSetBudget: (usd) => { void resolvedBridge.agents.setBudget(agentId, usd).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.decision.kind === 'unenforceable' ? r.decision.reason : usd === null ? 'budget cleared' : `budget set to ${usd}/day`) : r.reason }))); },
+          }
+        : undefined;
+
+    /**
      * Which panel holds the single dock slot.
      *
      * View state, not route state, and deliberately: `?pin=right` in the route says a panel IS
@@ -249,6 +314,11 @@ export function App({ bridge }: AppProps) {
             servable={SERVABLE}
             remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
             remoteConnect={{ state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect }}
+            agentOps={agentOps}
+            workspaceOps={workspaceOps}
+            addPreview={addPreview}
+            onConfirmAdd={(path) => { void resolvedBridge?.workspaces.confirmAdd(path).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            onCancelAdd={() => setAddPreview(null)}
             agentDetail={detail}
             agentResolved={resolved}
             selectedRowId={selectedRowId}
@@ -322,7 +392,7 @@ export function App({ bridge }: AppProps) {
                 navigate(`genie://agent/${id}?tab=stream`);
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
-            onAddWorkspace={() => resolvedBridge?.addWorkspace()}
+            onAddWorkspace={previewAdd}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
