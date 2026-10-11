@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
+import { FilesWindow } from './components/FilesWindow.js';
+import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
 import { globalAction, isTypingTarget } from '../core/keys.js';
-import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
@@ -482,6 +484,22 @@ function DesktopApp({ bridge }: AppProps) {
     const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
     // Which workspace's file panel holds the dock when files are pinned (§4.3). One panel per workspace.
     const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
+    // The panels in their own windows (§4.3): the host's list, pushed; a remote bridge has none.
+    const [filesPopped, setFilesPopped] = useState<readonly string[]>([]);
+    const filesWindows = resolvedBridge?.files.windows;
+    useEffect(() => {
+        if (!filesWindows) { setFilesPopped([]); return; }
+        let live = true;
+        void filesWindows.list().then((l) => { if (live) setFilesPopped(l); });
+        const off = filesWindows.onChange((l) => { if (live) setFilesPopped(l); });
+        return () => { live = false; off(); };
+    }, [filesWindows]);
+    // An agent writing a file you have dirty is ASKED to pause, over its inbox (§4.3); lifted the same way.
+    const tellAgent = (agent: string, text: string) => {
+        void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: agent, text }).then(setFeatures).catch((error: unknown) => {
+            console.error('[genie] pause notice not delivered:', (error as Error).message);
+        });
+    };
     const toggleFilesPin = (id: string) => {
         // Pinning another workspace's panel while one is pinned moves the slot to it; the same one unpins.
         const outcome = pinPanel(pinned === 'files' && filesWorkspaceId !== id ? null : pinned, 'files', false);
@@ -539,6 +557,20 @@ function DesktopApp({ bridge }: AppProps) {
     // TUI is the window (§1).
     if (parsed.surface === 'takeover') {
         return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} />;
+    }
+    // THE FILE PANEL IN ITS OWN WINDOW (§4.3): the panel and nothing else; closing the window docks it back.
+    if (parsed.surface === 'files') {
+        const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId) ?? null;
+        return (
+            <FilesWindow
+                workspace={ws}
+                loading={snapshot.workspaces === null}
+                files={resolvedBridge?.files ?? NO_FILES}
+                onBringBack={() => window.close()}
+                onPause={(agent, path) => tellAgent(agent, pauseMessage(path))}
+                onResume={(agent, path) => tellAgent(agent, resumeMessage(path))}
+            />
+        );
     }
 
     return (
@@ -636,6 +668,11 @@ function DesktopApp({ bridge }: AppProps) {
             files={resolvedBridge?.files}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
+            filesPopped={filesPopped}
+            onPopOutFiles={filesWindows ? (id) => { void filesWindows.popOut(id); } : undefined}
+            onBringBackFiles={(id) => { void filesWindows?.bringBack(id); }}
+            onPauseAgent={(agent, path) => tellAgent(agent, pauseMessage(path))}
+            onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}

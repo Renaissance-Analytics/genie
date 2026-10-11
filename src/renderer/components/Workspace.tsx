@@ -85,6 +85,12 @@ export interface WorkspaceProps {
     /** The file panel is in the dock (§4.4): do not draw it inline too. */
     filesPinned?: boolean | undefined;
     onPinFiles?: (() => void) | undefined;
+    /** The panel is in its own window (§4.3): not inline either — a bar brings it back. */
+    filesPopped?: boolean | undefined;
+    onPopOutFiles?: (() => void) | undefined;
+    onBringBackFiles?: (() => void) | undefined;
+    onPauseAgent?: ((agent: string, path: string) => void) | undefined;
+    onResumeAgent?: ((agent: string, path: string) => void) | undefined;
     /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
     initialState?: WorkspaceState | undefined;
 }
@@ -94,7 +100,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -311,9 +317,15 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </form>
                 </section>
             ) : null}
-            {panel === 'files' && files && !filesPinned ? (
+            {panel === 'files' && files && !filesPinned && filesPopped ? (
+                <div data-files-popped={workspace.id} className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-3 py-2 text-xs text-[var(--fg-3)]">
+                    <span>The file panel is in its own window.</span>
+                    <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Bring it back</button>
+                </div>
+            ) : null}
+            {panel === 'files' && files && !filesPinned && !filesPopped ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} />
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} />
                 </div>
             ) : null}
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}

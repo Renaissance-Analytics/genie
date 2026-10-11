@@ -142,7 +142,7 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 ];
 
 /** Every surface a route can name. */
-export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox' | 'settings' | 'browser';
+export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
 export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace';

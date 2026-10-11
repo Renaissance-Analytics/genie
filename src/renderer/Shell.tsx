@@ -1,6 +1,7 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute } from '../core/route.js';
 import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
+import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
 import type { DeckItem } from '../core/deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -98,6 +99,13 @@ export interface ShellProps {
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
     onToggleFilesPin?: ((workspaceId: string) => void) | undefined;
+    /** Workspaces whose file panel is in its own window (§4.3): the dock holds a bar, not the panel. */
+    filesPopped?: readonly string[] | undefined;
+    onPopOutFiles?: ((workspaceId: string) => void) | undefined;
+    onBringBackFiles?: ((workspaceId: string) => void) | undefined;
+    /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
+    onPauseAgent?: ((agent: string, path: string) => void) | undefined;
+    onResumeAgent?: ((agent: string, path: string) => void) | undefined;
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
@@ -146,6 +154,11 @@ export function Shell({
     files = NO_FILES,
     filesWorkspaceId,
     onToggleFilesPin,
+    filesPopped = [],
+    onPopOutFiles,
+    onBringBackFiles,
+    onPauseAgent,
+    onResumeAgent,
     updates = NO_UPDATES,
     onTakeOver,
     onOpenPalette,
@@ -201,7 +214,10 @@ export function Shell({
      *
      * An unpinned flyout reserves nothing: it overlays the right edge and nothing moves.
      */
-    const reserve = dockReserve(pinned);
+    // The file panel popped out releases the reserve (§4.3); the slot stays its workspace's, the lamp stays on.
+    const filesSlot = filesDock({ pinned, filesWorkspaceId: filesWorkspaceId ?? null, popped: filesPopped });
+    // A pinned slot reserves whatever panel holds it; only a POPPED-OUT file panel gives the width back.
+    const reserve = filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(pinned);
 
     /**
      * The approval the FLYOUT may answer — only when this chat is the composer for the agent
@@ -337,6 +353,11 @@ export function Shell({
                             onTogglePanel={() => onNavigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`)}
                             filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
                             onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
+                            filesPopped={filesPopped.includes(parsed.workspaceId)}
+                            onPopOutFiles={onPopOutFiles ? () => onPopOutFiles(parsed.workspaceId) : undefined}
+                            onBringBackFiles={() => onBringBackFiles?.(parsed.workspaceId)}
+                            onPauseAgent={onPauseAgent}
+                            onResumeAgent={onResumeAgent}
                             ops={workspaceOps}
                         />
                     ) : null}
@@ -395,9 +416,33 @@ export function Shell({
                  * slot on every surface; the reserve above makes room. One panel per workspace — the Workspace
                  * surface does not draw it inline while it is here.
                  */}
-                {pinned === 'files' && filesWorkspaceId && workspaceFor(filesWorkspaceId) ? (
+                {filesSlot.kind === 'docked' && workspaceFor(filesSlot.workspaceId!) ? (
                     <aside data-dock="files" className="shrink-0 border-l border-[var(--border-1)]" style={{ width: DOCK_WIDTH }}>
-                        <FilesPanelContainer workspace={workspaceFor(filesWorkspaceId)!} files={files} pinned onPin={() => onToggleFilesPin?.(filesWorkspaceId)} onClose={() => onToggleFilesPin?.(filesWorkspaceId)} />
+                        <FilesPanelContainer
+                            workspace={workspaceFor(filesSlot.workspaceId!)!}
+                            files={files}
+                            pinned
+                            onPin={() => onToggleFilesPin?.(filesSlot.workspaceId!)}
+                            onClose={() => onToggleFilesPin?.(filesSlot.workspaceId!)}
+                            onPopOut={onPopOutFiles ? () => onPopOutFiles(filesSlot.workspaceId!) : undefined}
+                            onPause={onPauseAgent}
+                            onResume={onResumeAgent}
+                        />
+                    </aside>
+                ) : null}
+                {/* Popped out (§4.3): the reserve is released and the dock column is a bar that brings the panel back. */}
+                {filesSlot.kind === 'popped' ? (
+                    <aside data-files-popped={filesSlot.workspaceId} className="flex w-7 shrink-0 items-start justify-center border-l border-[var(--border-1)] pt-2">
+                        <button
+                            type="button"
+                            data-action="bring-back-files"
+                            title={`The ${filesSlot.workspaceId} file panel is in its own window — bring it back`}
+                            onClick={() => onBringBackFiles?.(filesSlot.workspaceId!)}
+                            className="rounded-md border border-[var(--border-1)] px-1 py-1 text-[10px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]"
+                            style={{ writingMode: 'vertical-rl' }}
+                        >
+                            files · bring back
+                        </button>
                     </aside>
                 ) : null}
                 {chatThread || parsed.chat ? (
