@@ -12,6 +12,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 const plugins: NonNullable<FeatureData['plugins']> = {
     dir: '/home/u/.genie/plugins',
     developerMode: false,
+    panels: [],
     entries: [
         { id: 'com.example.presentation', folder: 'presentation', name: 'Presentation', version: '1.0.0', state: 'enabled', label: 'signed by example-2026', reason: null },
         { id: 'com.example.sheets', folder: 'sheets', name: 'Sheets', version: '0.3.0', state: 'disabled', label: 'signed by example-2026', reason: null },

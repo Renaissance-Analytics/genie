@@ -17,6 +17,10 @@ export interface PluginTool {
     readonly gated: boolean;
 }
 
+// The vetted list and the panel shape live in a module with no Node imports, because the renderer draws them.
+import { VETTED_FANCY_EXPORTS, type PluginPanel, type VettedFancyExport } from './plugin-panels.js';
+export { VETTED_FANCY_EXPORTS, type PluginPanel, type VettedFancyExport };
+
 export interface PluginCapabilities {
     readonly fs?: { scope: 'workspace'; extensions: readonly string[] };
     readonly network: { hosts: readonly string[] };
@@ -31,11 +35,13 @@ export interface PluginManifest {
     readonly engines?: { genie: string };
     readonly mcpTools: readonly PluginTool[];
     readonly capabilities: PluginCapabilities;
+    readonly panels: readonly PluginPanel[];
 }
 
 export type ParseResult = { ok: true; manifest: PluginManifest } | { ok: false; reason: string };
 
-const TOP_KEYS = new Set(['id', 'name', 'version', 'publisher', 'engines', 'mcpTools', 'editors', 'capabilities', 'dependencies']);
+const TOP_KEYS = new Set(['id', 'name', 'version', 'publisher', 'engines', 'mcpTools', 'editors', 'panels', 'capabilities', 'dependencies']);
+const PANEL_KEYS = new Set(['id', 'title', 'fancyComponent', 'props']);
 const CAP_KEYS = new Set(['fs', 'network', 'genieApi']);
 const TOOL_KEYS = new Set(['name', 'description', 'inputSchema', 'run', 'process', 'gated']);
 const REVERSE_DNS = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
@@ -93,6 +99,21 @@ export function parseManifest(raw: unknown): ParseResult {
         capabilities = { ...(fs ? { fs } : {}), network: { hosts }, genieApi };
     }
 
+    const panels: PluginPanel[] = [];
+    if (raw.panels !== undefined) {
+        if (!Array.isArray(raw.panels)) return refuse('panels must be an array');
+        for (const p of raw.panels) {
+            if (!isRecord(p)) return refuse('each panels entry must be an object');
+            for (const key of Object.keys(p)) if (!PANEL_KEYS.has(key)) return refuse(`unknown key "${key}" in panels — a panel is an id, a title, a vetted fancyComponent and props; a plugin ships no UI code`);
+            if (typeof p.id !== 'string' || p.id.length === 0) return refuse('each panel needs an id');
+            if (typeof p.title !== 'string' || p.title.length === 0) return refuse(`panel "${p.id}" needs a title`);
+            const exportName = isRecord(p.fancyComponent) ? p.fancyComponent.export : undefined;
+            if (typeof exportName !== 'string' || !(VETTED_FANCY_EXPORTS as readonly string[]).includes(exportName)) return refuse(`panel "${p.id}": "${String(exportName)}" is not a vetted Fancy component (one of ${VETTED_FANCY_EXPORTS.join(', ')})`);
+            if (p.props !== undefined && !isRecord(p.props)) return refuse(`panel "${p.id}": props must be an object`);
+            panels.push({ id: p.id, title: p.title, fancyComponent: { export: exportName as VettedFancyExport }, props: (p.props as Record<string, unknown> | undefined) ?? {} });
+        }
+    }
+
     return {
         ok: true,
         manifest: {
@@ -103,6 +124,7 @@ export function parseManifest(raw: unknown): ParseResult {
             ...(isRecord(raw.engines) ? { engines: { genie: String(raw.engines.genie) } } : {}),
             mcpTools: tools,
             capabilities,
+            panels,
         },
     };
 }

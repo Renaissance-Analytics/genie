@@ -8,7 +8,7 @@ import {
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
-import { codeClosed, codeOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
 import type { RepoEntry } from '../../core/repo-registry.js';
@@ -17,6 +17,7 @@ import { LAYOUT_MODES, dragSplit, gridTemplate, layoutModeFrom, serializeSplits,
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachAll } from '../reattach.js';
+import { PluginPane, type PluginPanelView } from './PluginPane.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -81,6 +82,8 @@ export interface WorkspaceProps {
     ops?: WorkspaceOpsProps | undefined;
     /** The file panel (§4.3), mounted for `?panel=files`; absent = no files host in this window. */
     files?: GenieBridge['files'] | undefined;
+    /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
+    pluginPanels?: readonly PluginPanelView[] | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
     /** The file panel is in the dock (§4.4): do not draw it inline too. */
@@ -101,7 +104,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [] }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -442,6 +445,20 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                         </div>
                     );
                 })}
+                {/* PLUGIN PANES (§4.6): a plugin's panel, after the code panes in the strip. */}
+                {(state.plugins ?? []).map((p) => {
+                    const isActive = p.id === state.active;
+                    const panel = pluginPanels.find((x) => x.pluginId === p.pluginId && x.id === p.panelId);
+                    return (
+                        <div key={p.id} data-plugin-tab={p.id} data-active={isActive ? 'true' : 'false'} className={`flex items-center gap-2 border-r border-[var(--border-1)] px-3 text-[12px] ${isActive ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}>
+                            <button type="button" onClick={() => setState((s) => activate(s, p.id))} className="flex items-center gap-2">
+                                <Icon name="layout-grid" className="h-3.5 w-3.5" />
+                                <span>{panel?.title ?? p.panelId}</span>
+                            </button>
+                            <button type="button" aria-label={`close ${panel?.title ?? p.panelId}`} data-plugin-close={p.id} onClick={() => setState((s) => pluginClosed(s, p.id))} className="rounded px-1 text-[var(--fg-4)] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]">×</button>
+                        </div>
+                    );
+                })}
                 <button
                     type="button"
                     data-terminal-add=""
@@ -457,6 +474,21 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                         code
                     </button>
                 ) : null}
+                {pluginPanels.length > 0 ? (
+                    <details data-action="add-plugin-pane" className="relative">
+                        <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"><Icon name="plus" className="h-3.5 w-3.5" />plugin</summary>
+                        <ul className="absolute right-0 top-full z-20 min-w-48 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-1 shadow-lg">
+                            {pluginPanels.map((p) => (
+                                <li key={`${p.pluginId}/${p.id}`}>
+                                    <button type="button" data-plugin-panel={`${p.pluginId}/${p.id}`} onClick={() => setState((s) => pluginOpened(s, p.pluginId, p.id))} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] hover:bg-[var(--bg-2)]">
+                                        <span>{p.title}</span>
+                                        <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{p.pluginName}</span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    </details>
+                ) : null}
             </div>
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
@@ -471,6 +503,17 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                 : <div key={i} data-split-handle={i} role="separator" aria-orientation="horizontal" onPointerDown={startDrag(i, 'rows')} className="absolute inset-x-0 z-10 h-1.5 -translate-y-1/2 cursor-row-resize hover:bg-[var(--accent)]/40" style={{ top: `${at}%` }} />;
                         }) : null}
                         {shown.map((id) => {
+                            const plugin = (state.plugins ?? []).find((p) => p.id === id);
+                            if (plugin) {
+                                const panel = pluginPanels.find((x) => x.pluginId === plugin.pluginId && x.id === plugin.panelId);
+                                return (
+                                    <div key={id} data-pane-slot={id} data-pane-kind="plugin" {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>
+                                        {panel ? <PluginPane panel={panel} /> : (
+                                            <p data-plugin-pane-missing={`${plugin.pluginId}/${plugin.panelId}`} className="p-3 text-[13px] text-[var(--fg-3)]">The plugin {plugin.pluginId} is not enabled any more (or no longer offers this panel); close this pane.</p>
+                                        )}
+                                    </div>
+                                );
+                            }
                             const code = (state.codes ?? []).find((c) => c.id === id);
                             if (code) {
                                 return (

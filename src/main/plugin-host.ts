@@ -93,6 +93,13 @@ export class PluginHost {
         );
     }
 
+    /** The panels ENABLED plugins contribute (§6.7), each with its plugin's id and name — what the Workspace surface offers as `+plugin`. */
+    panels(): readonly { pluginId: string; pluginName: string; id: string; title: string; fancyComponent: { export: string }; props: Readonly<Record<string, unknown>> }[] {
+        return this.#entries.flatMap((e) =>
+            e.state === 'enabled' && e.manifest ? e.manifest.panels.map((p) => ({ pluginId: e.id, pluginName: e.name, id: p.id, title: p.title, fancyComponent: { export: p.fancyComponent.export }, props: p.props })) : [],
+        );
+    }
+
     list(): readonly PluginEntry[] {
         return this.#entries.map(({ manifest: _m, ...entry }) => entry);
     }

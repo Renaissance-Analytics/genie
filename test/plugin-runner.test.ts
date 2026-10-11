@@ -20,6 +20,7 @@ const manifest: PluginManifest = {
     publisher: { name: 'Acme', keyId: 'acme-1' },
     mcpTools: [{ name: 'lint', description: 'Lint a file', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess', gated: false }],
     capabilities: { network: { hosts: [] }, genieApi: ['knowledge.search'] },
+    panels: [],
 };
 const tool = manifest.mcpTools[0]!;
 const guard = (request: Parameters<typeof bridgeAccess>[1]) => bridgeAccess(manifest, request);

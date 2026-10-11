@@ -18,6 +18,7 @@ const manifest = (id: string, gated = false): PluginManifest => ({
     publisher: { name: 'Acme', keyId: 'acme-1' },
     mcpTools: [{ name: 'lint', description: 'Lint a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } } }, run: 'tools/lint.js', process: 'subprocess', gated }],
     capabilities: { network: { hosts: [] }, genieApi: ['knowledge.search'] },
+    panels: [],
 });
 
 const atlas: Caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'tynn', workspacePath: '/w/tynn' };
