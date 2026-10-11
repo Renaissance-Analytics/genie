@@ -57,6 +57,30 @@ export function planAdd(kind: FolderKind, path: string): PlanStep[] {
 }
 
 /** Civicognita/shared-schemas publishes the envelope schema by git tag; this Genie writes this revision. */
+/** The folder a clone lands in, from an https or ssh git URL; `null` for anything Genie would not clone. */
+export function repoFolderName(url: string): string | null {
+    const text = url.trim();
+    const https = /^https?:\/\/[^/\s]+\/(?:[^/\s]+\/)*([^/\s]+?)(?:\.git)?\/?$/.exec(text);
+    const scp = /^[\w.-]+@[\w.-]+:(?:[^/\s]+\/)*([^/\s]+?)(?:\.git)?\/?$/.exec(text);
+    const ssh = /^ssh:\/\/[^/\s]+\/(?:[^/\s]+\/)*([^/\s]+?)(?:\.git)?\/?$/.exec(text);
+    const name = (https ?? scp ?? ssh)?.[1] ?? null;
+    return name && name.length > 0 && name !== '.' && name !== '..' ? name : null;
+}
+
+export type GitAddPlan =
+    | { ok: true; source: 'git'; url: string; path: string; kind: 'simple-repo'; steps: PlanStep[] }
+    | { ok: false; reason: string };
+
+/** The plan for adding from a git URL (§6.1): the clone FIRST (a write), then the simple-repo plan — shown before anything happens. */
+export function gitAddPlan(input: { url: string; parent: string; folderExists: boolean }): GitAddPlan {
+    const url = input.url.trim();
+    const name = repoFolderName(url);
+    if (name === null) return { ok: false, reason: `"${url}" is not a git URL Genie can clone (https://…/name.git or git@host:owner/name.git)` };
+    const path = `${input.parent.replace(/[\\/]+$/, '')}/${name}`;
+    if (input.folderExists) return { ok: false, reason: `${path} already exists; add that folder instead of cloning over it` };
+    return { ok: true, source: 'git', url, path, kind: 'simple-repo', steps: [{ action: `git clone ${url} into ${path}`, path, writes: true }, ...planAdd('simple-repo', path)] };
+}
+
 export const SCHEMA_REVISION = '0.2.0';
 const SCHEMA_BASE = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v';
 const SCHEMA_TAIL = '/schemas/workspace/project.schema.json';

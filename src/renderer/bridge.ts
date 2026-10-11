@@ -155,6 +155,9 @@ export interface GenieBridge {
         /** The folder picker on the host, then the classification and plan. Writes nothing. */
         previewAdd(): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
+        /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
+        previewAddFromGit(url: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Forgets the workspace and its agents. The folder on disk is never touched. */

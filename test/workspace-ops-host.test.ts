@@ -34,6 +34,7 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
             writeJson: async (p, v) => { calls.push(`writeJson:${key(p)}`); files[key(p)] = v; },
             mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); },
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
+            gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
         },
         registry: {
             workspace: (id) => workspaces.get(id) ?? null,

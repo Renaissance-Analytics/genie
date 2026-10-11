@@ -41,6 +41,7 @@ export interface HostApiDeps {
     serviceEnvFor(workspaceId: string): Record<string, string>;
     workspaceOps: {
         confirmAdd(path: string): Promise<unknown>;
+        confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
         wake(workspaceId: string): Promise<unknown>;
         remove(workspaceId: string): Promise<unknown>;
@@ -134,6 +135,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':
                 throw new Error('workspaces.previewAdd opens a folder picker on the host; do it there');
+            case 'workspaces.previewAddFromGit':
+                throw new Error('workspaces.previewAddFromGit opens a folder picker on the host; do it there');
+            case 'workspaces.confirmAddFromGit':
+                return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
             case 'workspaces.confirmAdd':
                 return deps.workspaceOps.confirmAdd(str(args[0]));
             case 'workspaces.hibernate':

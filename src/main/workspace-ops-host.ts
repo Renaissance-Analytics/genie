@@ -1,7 +1,7 @@
 import { basename, join } from 'node:path';
 import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
-import { classifyFolder, hibernate, planAdd, stampSchema, SCHEMA_REVISION, type FolderKind, type PlanStep } from '../core/workspace-model.js';
+import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -22,6 +22,8 @@ export interface WorkspaceOpsPorts {
         writeJson(path: string, value: unknown): Promise<void>;
         mkdir(path: string): Promise<void>;
         gitInit(path: string): Promise<void>;
+        /** `git clone <url> <into>`; rejects with git's own words. */
+        gitClone(url: string, into: string): Promise<void>;
     };
     registry: {
         workspace(id: string): { id: string; path: string; asleep: boolean } | null;
@@ -151,6 +153,25 @@ export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: strin
 }
 
 /** Why an agent may not start right now, or `null`. The one rule: an asleep workspace starts nothing. */
+/** The plan for a git source (§6.1), written nowhere: the folder derives from the URL under the parent the person picked. */
+export async function previewAddFromGit(ports: WorkspaceOpsPorts, url: string, parent: string): Promise<GitAddPlan> {
+    const name = repoFolderName(url);
+    const path = name ? `${parent.replace(/[\\/]+$/, '')}/${name}` : null;
+    return gitAddPlan({ url, parent, folderExists: path !== null && (await ports.fs.exists(path)) });
+}
+
+/** Confirm: the clone through the port, then the ordinary add. A failing clone registers nothing and says why in git's words. */
+export async function addWorkspaceFromGit(ports: WorkspaceOpsPorts, url: string, parent: string): Promise<Awaited<ReturnType<typeof addWorkspace>>> {
+    const plan = await previewAddFromGit(ports, url, parent);
+    if (!plan.ok) return plan;
+    try {
+        await ports.fs.gitClone(plan.url, plan.path);
+    } catch (error) {
+        return { ok: false, reason: `git clone failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    return addWorkspace(ports, plan.path);
+}
+
 export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
     const workspace = ports.registry.workspace(record.workspaceId);
     if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;

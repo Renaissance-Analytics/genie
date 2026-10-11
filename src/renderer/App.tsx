@@ -239,6 +239,8 @@ export function App({ bridge }: AppProps) {
      * wake / remove carry their own confirm and outcome, reset when the route changes workspace.
      */
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
+    // Add from a git URL (§6.1): the form, then the host picks the parent and the plan replaces the form.
+    const [addFromGit, setAddFromGit] = useState(false);
     const workspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
@@ -467,6 +469,11 @@ export function App({ bridge }: AppProps) {
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={previewAdd}
+            addFromGit={addFromGit}
+            onAddWorkspaceFromGit={() => { setAddPreview(null); setAddFromGit(true); }}
+            onCancelAddGit={() => setAddFromGit(false)}
+            onPreviewFromGit={(url) => { void resolvedBridge?.workspaces.previewAddFromGit(url).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setAddFromGit(false); setAddPreview(p); } }); }}
+            onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
