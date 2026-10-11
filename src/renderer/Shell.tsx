@@ -366,6 +366,7 @@ export function Shell({
                             onBringBackFiles={() => onBringBackFiles?.(parsed.workspaceId)}
                             onPauseAgent={onPauseAgent}
                             onResumeAgent={onResumeAgent}
+                            pluginPanels={features.plugins?.panels ?? []}
                             ops={workspaceOps}
                         />
                     ) : null}

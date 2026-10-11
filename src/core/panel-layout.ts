@@ -1,4 +1,4 @@
-import type { CodeTab, TerminalTab } from './workspace-view.js';
+import type { CodeTab, PluginTab, TerminalTab } from './workspace-view.js';
 
 /**
  * PANEL LAYOUT MODES (§6.5) — pure. Four modes: single, columns, rows, grid. The visible panes are the
@@ -18,10 +18,10 @@ export function layoutModeFrom(values: Readonly<Record<string, unknown>>): Layou
 }
 
 /** Strip order, the active one always included, at most the mode's cap. */
-export function visiblePanes(state: { terminals: readonly TerminalTab[]; codes?: readonly CodeTab[] | undefined; active: string | null }, mode: LayoutMode): string[] {
+export function visiblePanes(state: { terminals: readonly TerminalTab[]; codes?: readonly CodeTab[] | undefined; plugins?: readonly PluginTab[] | undefined; active: string | null }, mode: LayoutMode): string[] {
     const cap = CAP[mode];
     // Strip order: the shells, then the code panes (§4.6). One list, one cap, one active.
-    const ids = [...state.terminals.map((t) => t.id), ...(state.codes ?? []).map((c) => c.id)];
+    const ids = [...state.terminals.map((t) => t.id), ...(state.codes ?? []).map((c) => c.id), ...(state.plugins ?? []).map((p) => p.id)];
     if (ids.length === 0) return [];
     const active = state.active !== null && ids.includes(state.active) ? state.active : null;
     const shown = ids.slice(0, cap);

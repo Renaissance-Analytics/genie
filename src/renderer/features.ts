@@ -92,10 +92,14 @@ export interface IntegrationsSection {
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
+import type { PluginPanelView } from './components/PluginPane.js';
+
 export interface PluginsSection {
     readonly dir: string;
     readonly developerMode: boolean;
     readonly entries: readonly PluginEntry[];
+    /** The panels ENABLED plugins contribute (§6.7), with their plugin's name — what `+plugin` offers. */
+    readonly panels: readonly PluginPanelView[];
 }
 
 export interface FeatureData {
