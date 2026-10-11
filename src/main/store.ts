@@ -110,6 +110,20 @@ export class Store {
         return join(this.#dir, 'agents.json');
     }
 
+    /** Which agents were RUNNING when Genie last closed (§7.6) — written at quit, taken once at launch. */
+    get runningAtQuitFile(): string {
+        return join(this.#dir, 'running-at-quit.json');
+    }
+
+    async readRunningAtQuit(): Promise<readonly string[]> {
+        const raw = await readJson<unknown[]>(this.runningAtQuitFile, []);
+        return raw.filter((id): id is string => typeof id === 'string');
+    }
+
+    async writeRunningAtQuit(ids: readonly string[]): Promise<void> {
+        await writeJsonAtomic(this.runningAtQuitFile, ids);
+    }
+
     async readWorkspaces(): Promise<readonly WorkspaceRecord[]> {
         const raw = await readJson<unknown[]>(this.workspacesFile, []);
         return raw.filter(

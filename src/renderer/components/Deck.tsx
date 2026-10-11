@@ -78,6 +78,22 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                 </div>
             ) : null}
 
+            {signals.update?.phase === 'draining' && signals.update.drain ? (
+                <div data-drain-roster className="shrink-0 border-b border-[var(--border-1)] px-7 py-3 text-xs">
+                    <p className="text-[var(--fg-2)]">Genie is waiting for agents to write their handoffs before installing {signals.update.version}. A quiet agent has not answered in 20 seconds; nobody waits past two minutes.</p>
+                    <ul className="mt-2 flex flex-col gap-1">
+                        {signals.update.drain.entries.map((e) => (
+                            <li key={e.agentId} data-drain-agent={e.agentId} data-drain-state={e.state} className="flex items-center gap-2">
+                                <span className={e.state === 'quiet' ? 'text-[var(--warning)]' : e.state === 'answered' ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}>●</span>
+                                <span className="font-medium">{e.name}</span>
+                                <span className={e.state === 'quiet' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}>{e.state}</span>
+                            </li>
+                        ))}
+                    </ul>
+                    <button type="button" data-action="update-cancel" onClick={() => onSignalAction?.('update-cancel')} className="mt-2 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Cancel the upgrade</button>
+                </div>
+            ) : null}
+
             <div className="min-h-0 flex-1 overflow-auto">
                 {/*
                  * Empty, and it SAYS so.

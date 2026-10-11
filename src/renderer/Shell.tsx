@@ -255,6 +255,7 @@ export function Shell({
                             onSignalAction={(action) => {
                                 if (action === 'update-download') void updates.download();
                                 else if (action === 'update-install') void updates.install();
+                                else if (action === 'update-cancel') void updates.cancel();
                             }}
                         />
                     ) : null}

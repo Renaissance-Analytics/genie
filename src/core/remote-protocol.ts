@@ -42,6 +42,7 @@ export const REMOTE_METHODS = [
     'updates.check',
     'updates.download',
     'updates.install',
+    'updates.cancel',
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -82,6 +83,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.check': 'write',
     'updates.download': 'write',
     'updates.install': 'upgrade',
+    // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
+    'updates.cancel': 'write',
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     'features.setBrowserBounds': 'host-only',

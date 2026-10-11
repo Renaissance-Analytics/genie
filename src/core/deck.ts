@@ -98,7 +98,7 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
-export type SignalAction = 'update-download' | 'update-install';
+export type SignalAction = 'update-download' | 'update-install' | 'update-cancel';
 
 export interface Signal {
     kind: SignalKind;
@@ -114,10 +114,14 @@ export interface Signal {
 }
 
 /** What the strip needs to know about an update — `UpdateState`'s shape, the three fields it reads. */
+import type { DrainRoster } from './upgrade-drain.js';
+
 export interface UpdateSignalInput {
-    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'draining' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
+    /** The drain roster while agents are asked for their handoffs (§7.5); absent otherwise. */
+    drain?: DrainRoster | null;
 }
 
 export interface SignalState {
@@ -187,6 +191,12 @@ export function signalStrip(state: SignalState): readonly Signal[] {
             signals.push({ kind: 'update', label: `Downloading Genie ${u.version}${progress}`, route: 'genie://deck' });
         } else if (u.phase === 'downloaded') {
             signals.push({ kind: 'update', label: `Genie ${u.version} is ready — restart to install`, route: 'genie://deck', action: 'update-install' });
+        } else if (u.phase === 'draining') {
+            // The wait is named, the quiet are counted, and the door is Cancel — which always abandons.
+            const entries = u.drain?.entries ?? [];
+            const waiting = entries.filter((e) => e.state !== 'answered').length;
+            const quiet = entries.filter((e) => e.state === 'quiet').length;
+            signals.push({ kind: 'update', label: `Upgrading to Genie ${u.version}: waiting for ${waiting} of ${entries.length} agents${quiet > 0 ? ` (${quiet} quiet)` : ''}`, route: 'genie://deck', action: 'update-cancel' });
         } else if (u.phase === 'installing') {
             signals.push({ kind: 'update', label: `Installing Genie ${u.version}…`, route: 'genie://deck' });
         }

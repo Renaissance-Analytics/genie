@@ -102,6 +102,7 @@ export class InboxStore {
     readonly #dir: string;
     #mail: MailFile;
     readonly #waiters = new Set<Waiter>();
+    readonly #sendListeners = new Set<(to: Participant) => void>();
     readonly #now: () => string;
 
     private constructor(dir: string, mail: MailFile, now: () => string) {
@@ -122,6 +123,12 @@ export class InboxStore {
 
     get attachmentsDir(): string {
         return join(this.#dir, 'attachments');
+    }
+
+    /** A message landed for `to` — the event the reminder wiring keys on, so nothing polls. */
+    onSend(listener: (to: Participant) => void): () => void {
+        this.#sendListeners.add(listener);
+        return () => { this.#sendListeners.delete(listener); };
     }
 
     async send(input: SendInput): Promise<InboxMessage> {
@@ -145,6 +152,7 @@ export class InboxStore {
         for (const w of [...this.#waiters]) {
             if (w.participant === input.to) w.wake();
         }
+        for (const l of this.#sendListeners) l(input.to);
         return message;
     }
 

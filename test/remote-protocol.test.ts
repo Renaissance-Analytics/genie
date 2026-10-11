@@ -40,7 +40,8 @@ describe('the capability table', () => {
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
-        expect(REMOTE_METHODS.length).toBe(33);
+        // 34 since `updates.cancel` (§7.5): a drain can be abandoned from a remote window too.
+        expect(REMOTE_METHODS.length).toBe(34);
         expect(capabilityOf('workspaces.previewAdd')).toBe('host-only');
         expect(capabilityOf('workspaces.hibernate')).toBe('write');
         expect(capabilityOf('agents.restart')).toBe('write');
