@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Badge, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
-import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
+import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
@@ -435,12 +435,35 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, group, workspaces = [], remoteConnect }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined }) {
+export function SettingsSurface({ data, onAction, group, workspaces = [], remoteConnect, query }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined }) {
     const values = data.settings.values;
     const active = group ?? 'general';
+    // SEARCH across the four groups (§6.9). Transient view state: a query is not a place, so it is not in the route.
+    const [q, setQ] = useState(query ?? '');
+    const results = q.trim() ? searchSettings(q.trim()) : null;
     return (
         <div data-surface="settings" className="flex h-full min-h-0 flex-col">
             <Header title="Settings" />
+            <div className="px-5 pb-2">
+                <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings across all groups" leading={<Icon name="search" size="xs" />} />
+            </div>
+            {results !== null ? (
+                results.length === 0 ? (
+                    <p className="px-5 py-3 text-sm text-[var(--fg-3)]">No setting matches “{q.trim()}”.</p>
+                ) : (
+                    <ul data-settings-results className="min-h-0 flex-1 divide-y divide-[var(--border-1)] overflow-auto" data-skeleton={values === null ? '' : undefined}>
+                        {results.map((def) => (
+                            <li key={def.key} data-setting={def.key} data-setting-group={def.group} className="flex items-center gap-4 px-5 py-3">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2 text-sm font-medium">{def.label}<Badge variant="soft" size="sm">{GROUP_LABEL[def.group]}</Badge></div>
+                                    <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
+                                </div>
+                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} />
+                            </li>
+                        ))}
+                    </ul>
+                )
+            ) : (
             <Tabs activeTab={active} variant="underline" className="flex min-h-0 flex-1 flex-col">
                 <Tabs.List className="px-5">
                     {settingGroups().map((g) => <Tabs.Tab key={g} value={g}>{GROUP_LABEL[g]}</Tabs.Tab>)}
@@ -465,6 +488,7 @@ export function SettingsSurface({ data, onAction, group, workspaces = [], remote
                     ))}
                 </Tabs.Panels>
             </Tabs>
+            )}
         </div>
     );
 }

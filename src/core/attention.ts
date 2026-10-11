@@ -69,6 +69,19 @@ export interface Question {
 
 export const QUESTION_LIMITS = { questions: [1, 4], options: [2, 4], header: 12 } as const;
 
+/**
+ * OPTION VERNACULAR (§6.3). The modal is read by the USER, so an option about who acts names the actor
+ * at the front — `Agent: …` / `You: …`. A bare "I'll…" or "You should…" inverts in the reader's mouth:
+ * the agent's "I" reads as the user's. Matched on the first word only, so "Ice cream" and "Youthful" pass.
+ */
+const SPEAKS_AS_ACTOR = /^\s*(?:i|i['’](?:ll|d|m|ve)|we|we['’](?:ll|d|re)|let\s+me|you|you['’](?:ll|d|re))\b/i;
+const NAMES_ACTOR = /^\s*(?:Agent|You):/;
+
+export function actorVernacular(label: string): string | null {
+    if (NAMES_ACTOR.test(label) || !SPEAKS_AS_ACTOR.test(label)) return null;
+    return `option ${JSON.stringify(label)} speaks as the actor without naming them — the modal is read by the user, so an option about who acts names the actor at the front: "Agent: … / You: …"`;
+}
+
 /** The reason a `ForceTheQuestion` payload is refused, or `null` when it is well-formed. */
 export function validateQuestions(questions: readonly Question[]): string | null {
     const [qMin, qMax] = QUESTION_LIMITS.questions;
@@ -82,6 +95,10 @@ export function validateQuestions(questions: readonly Question[]): string | null
         }
         if (q.options.length < oMin || q.options.length > oMax) {
             return `${q.header}: each question has ${oMin}–${oMax} options; got ${q.options.length}`;
+        }
+        for (const o of q.options) {
+            const vernacular = actorVernacular(o.label);
+            if (vernacular) return `${q.header}: ${vernacular}`;
         }
     }
     return null;
