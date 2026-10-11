@@ -10,6 +10,7 @@ import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { quitPlan } from '../core/quit.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
@@ -250,7 +251,8 @@ async function boot(): Promise<void> {
         isAvailable: () => safeStorage.isEncryptionAvailable(),
         encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
         decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
-    });
+    // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
+    }, () => services?.settings.snapshot() ?? {});
     terminals = new TerminalHost(ptyPort);
     // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
     terminals.onData((id, data) => {
@@ -458,7 +460,10 @@ async function boot(): Promise<void> {
         try {
             // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do.
             const serviceEnv = services?.engines.envFor(workspace.id) ?? {};
-            return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows, ...(Object.keys(serviceEnv).length > 0 ? { env: serviceEnv } : {}) });
+            // cwd RESUME (§6.5): a new terminal opens where the workspace's last shell was, when tracking is on.
+            const trackCwd = (services?.settings.snapshot() ?? {}).track_cwd !== false;
+            const cwd = (trackCwd ? terminals.lastCwd(workspace.id) : null) ?? workspace.path;
+            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(serviceEnv).length > 0 ? { env: serviceEnv } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
             // installed-err.log catches them. The first fancy-pty failure on the installed app
@@ -690,7 +695,18 @@ app.on('second-instance', () => {
  * window went away" — that branch, in the previous build, resurrected eleven agents the owner
  * had deliberately stopped.
  */
-app.on('before-quit', () => {
+let quitConfirmed = false;
+app.on('before-quit', (event) => {
+    // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds.
+    if (!quitConfirmed && host && registry) {
+        const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
+        const plan = quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true });
+        if (plan.confirm) {
+            const choice = dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 });
+            if (choice === 0) { event.preventDefault(); return; }
+        }
+        quitConfirmed = true;
+    }
     host?.stopAll();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
