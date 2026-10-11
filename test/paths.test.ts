@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { installDir, isInside, runtimeDir, sessionsDir } from '../src/main/paths.js';
+import { genieHome, installDir, isInside, runtimeDir, sessionsDir } from '../src/main/paths.js';
 
 /**
  * THE INSTALL DIRECTORY IS NOT THE RUNTIME DIRECTORY.
@@ -54,6 +54,34 @@ describe('the two directories', () => {
         // here, so a file a running process holds open can never block an install.
         expect(isInside(sessionsDir(USER_DATA), runtimeDir(USER_DATA))).toBe(true);
         expect(isInside(sessionsDir(USER_DATA), installDir(EXEC))).toBe(false);
+    });
+});
+
+describe('where Genie keeps its data', () => {
+    /**
+     * The owner, 2026-10-10: "genie's data is supposed to be in ~/.genie no matter what version
+     * we are on." Not Electron's userData — that is per app NAME (`%APPDATA%\genie2`), so a
+     * new major would start empty and an old one could not find what the new one wrote. The
+     * home directory is the one place every version agrees on.
+     */
+    it('is ~/.genie, from the home directory it is given', () => {
+        expect(genieHome('/home/wish')).toBe(join('/home/wish', '.genie'));
+        expect(genieHome('C:\\Users\\wish')).toBe(join('C:\\Users\\wish', '.genie'));
+    });
+
+    it('is NOT an app-name directory — the thing that made every major start empty', () => {
+        expect(genieHome('/home/wish')).not.toContain('genie2');
+        expect(genieHome('/home/wish')).not.toContain('AppData');
+    });
+
+    it('holds the runtime and the sessions under it', () => {
+        const home = genieHome('/home/wish');
+        expect(runtimeDir(home)).toBe(join(home, 'runtime'));
+        expect(sessionsDir(home)).toBe(join(home, 'runtime', 'sessions'));
+    });
+
+    it('is never under the install directory — §7.1 still holds for the new root', () => {
+        expect(isInside(genieHome('C:\\Users\\wish'), 'C:\\Users\\wish\\AppData\\Local\\Programs\\Genie', true)).toBe(false);
     });
 });
 

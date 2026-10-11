@@ -11,6 +11,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { UpdateHost } from './updater.js';
+import { genieHome } from './paths.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
 
@@ -151,13 +152,14 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 async function boot(): Promise<void> {
-    const store = new Store(app.getPath('userData'));
+    // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
+    const store = new Store(genieHome());
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
     registry = theRegistry;
     host = new SessionHost({
-        userData: app.getPath('userData'),
+        userData: genieHome(),
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -192,7 +194,7 @@ async function boot(): Promise<void> {
      * own documented plaintext fallback, which is its call and not decided here.
      */
     terminals = new TerminalHost(
-        realFancyTermPort(app.getPath('userData'), {
+        realFancyTermPort(genieHome(), {
             isAvailable: () => safeStorage.isEncryptionAvailable(),
             encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
             decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),

@@ -1,4 +1,4 @@
-# vm-windows-verify.ps1 — runs INSIDE the genie-test-windows VM, over SSH, in PowerShell 5.1.
+﻿# vm-windows-verify.ps1 — runs INSIDE the genie-test-windows VM, over SSH, in PowerShell 5.1.
 #
 #   scripts/vm-run.sh genie-test-windows repos/genie2 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vm-windows-verify.ps1'
 #
@@ -139,8 +139,8 @@ if (-not $SkipInstaller) {
     Run 'node scripts\smoke-seed.mjs'
     Drive $exe @('--remote-debugging-port=9222') 'installed'
 
-    Step '§7.1 runtime dir is under userData, never under the install dir'
-    $runtime = "$env:APPDATA\genie2\runtime"
+    Step '§7.1 runtime dir is under ~/.genie, never under the install dir'
+    $runtime = "$env:USERPROFILE\.genie\runtime"
     if (-not (Test-Path $runtime)) { throw "no runtime dir at $runtime" }
     $stray = @(Get-ChildItem $installDir -Recurse -File | Where-Object { $_.Name -match '\.(sock|pid|lock|db)$' })
     if ($stray.Count) { $stray | ForEach-Object { Write-Output "  stray: $($_.FullName)" }; throw "$($stray.Count) runtime file(s) under the install dir" }

@@ -44,7 +44,9 @@ function userData() {
     return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'genie2');
 }
 
-const runtime = join(userData(), 'runtime');
+// Genie's data root is ~/.genie on every version (src/main/paths.ts genieHome); `userData()`
+// above is kept only as documentation of what it is NOT.
+const runtime = join(homedir(), '.genie', 'runtime');
 mkdirSync(runtime, { recursive: true });
 
 const now = new Date().toISOString();
