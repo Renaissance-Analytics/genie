@@ -1,0 +1,68 @@
+name: release
+
+# THE ONE DOOR OUT OF THIS REPOSITORY.
+#
+# Runs for a `v*` tag and nothing else. A push to `main` builds in ci.yml and publishes
+# nothing; a tag is the owner's deliberate, approved act, and this workflow is what that act
+# triggers. `test/release-workflow.test.ts` holds every rule below.
+#
+# WHERE IT PUBLISHES: `Renaissance-Analytics/genie` — the OLD repository — because that is the
+# owner/repo inside every installed Genie's `app-update.yml` (0.7.0-beta.342 and 2.0.0-beta.4
+# alike), and an installed copy looks nowhere else. The code lives here; the releases live
+# there (owner decision, 2026-10-10). `GITHUB_TOKEN` cannot write another repository's
+# releases, so the publish uses `GENIE_RELEASE_TOKEN`: a fine-grained token with Contents:
+# read/write on `Renaissance-Analytics/genie`, stored as a secret of THIS repository.
+#
+# The publish target itself (owner, repo, prerelease) is electron-builder.yml's `publish`
+# block — one place, held by test/upgrade.test.ts.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: the tag names the version in package.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package.json: $pkg  tag: $tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag v$tag does not match package.json $pkg — bump the version in a commit first; a tag is a claim about a version"
+            exit 1
+          fi
+
+  publish:
+    name: build and publish (${{ matrix.os }})
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # electron-builder creates (or reuses) the GitHub release for this tag on the repository
+      # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
+      # marks it a prerelease (`releaseType: prerelease`). The macOS artifact is UNSIGNED — a
+      # stated limitation, not a surprise at install time.
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
+        run: npx electron-builder --publish always
