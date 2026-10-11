@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, type Resolution } from '../core/inbox.js';
 import { AttentionStore } from './attention-store.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
@@ -57,6 +57,12 @@ export interface ComposedServices {
     deckItems(): DeckItem[];
     /** Who an agent id is, for the Deck and the inbox listings. */
     registerAgentName(agentId: string, who: { name: string; workspaceId: string }): void;
+    /** An inbox address (`{provider}:{name}` or `{workspace}:{provider}:{name}`) for an agent id. */
+    registerAgentAddress(address: string, agentId: string): void;
+    /** Every registered address with the agent's name — the human's peer list. */
+    agentAddresses(): Array<{ address: string; agentId: string; name: string }>;
+    /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
+    resolveAddress(text: string): Resolution;
     shutdown(): Promise<void>;
 }
 
@@ -100,6 +106,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const agents = new Map<string, { name: string; workspaceId: string }>();
+    const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
 
     return {
@@ -123,6 +130,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 agents: Object.fromEntries(agents),
             }),
         registerAgentName: (agentId, who) => { agents.set(agentId, who); },
+        registerAgentAddress: (address, agentId) => { addresses.set(address, agentId); },
+        agentAddresses: () => [...addresses].map(([address, agentId]) => ({ address, agentId, name: agents.get(agentId)?.name ?? agentId })),
+        resolveAddress: (text) => {
+            if (text === HUMAN || text === 'you') return { kind: 'human' };
+            const exact = addresses.get(text);
+            if (exact !== undefined) return { kind: 'one', id: exact as never };
+            // A short form that several full forms end with is ambiguous; name both.
+            const matches = [...addresses.keys()].filter((a) => a.endsWith(`:${text}`) && a.split(':').length === 3);
+            if (matches.length === 1) return { kind: 'one', id: addresses.get(matches[0]!)! as never };
+            if (matches.length > 1) return { kind: 'ambiguous', forms: matches };
+            return { kind: 'none' };
+        },
         shutdown: () => {
             down ??= (async () => {
                 for (const p of supervisor.list()) supervisor.stop(p.id);

@@ -49,6 +49,14 @@ describe('reading and writing', () => {
         expect(store.get('theme')).toBe('dark');
     });
 
+    it('snapshot reports every setting with its effective value — the user’s where set, else the default', async () => {
+        await store.set('theme', 'light');
+        const snap = store.snapshot();
+        expect(Object.keys(snap).sort()).toEqual(SETTINGS.map((s) => s.key).sort());
+        expect(snap.theme).toBe('light');
+        expect(snap.restore_agents_on_launch).toBe(false);
+    });
+
     it('every registry setting is readable with a value of its declared type', () => {
         for (const def of SETTINGS) {
             const v = store.get(def.key);

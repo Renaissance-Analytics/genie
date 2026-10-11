@@ -9,6 +9,8 @@ import { Dashboard } from './components/Dashboard.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace } from './components/Workspace.js';
+import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface } from './components/FeatureSurfaces.js';
+import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
 
@@ -60,6 +62,10 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
+    /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
+    features?: FeatureData | undefined;
+    /** A feature surface asking the main process for something. */
+    onFeature?: ((action: FeatureAction) => void) | undefined;
     /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
     pinned: DockPanel | null;
     onNavigate: (route: string) => void;
@@ -88,6 +94,8 @@ export function Shell({
     route,
     snapshot,
     servable,
+    features = EMPTY_FEATURES,
+    onFeature = () => {},
     agentDetail,
     agentResolved,
     selectedRowId,
@@ -179,6 +187,14 @@ export function Shell({
                             onAddWorkspace={onAddWorkspace}
                         />
                     ) : null}
+
+                    {canServe && parsed.surface === 'knowledge' ? <KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'flows' ? <FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'hosting' ? <HostingSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} /> : null}
+                    {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
 
                     {canServe && parsed.surface === 'deck' ? (
                         <Deck
