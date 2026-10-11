@@ -1,4 +1,5 @@
 import { classifyNavigation } from '../core/browser-policy.js';
+import { validateFlowForm, validateSiteForm } from '../core/forms.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
@@ -62,6 +63,26 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.addSite':
             // These open a form in the renderer; nothing changes in main until the form is submitted.
             break;
+        case 'hosting.createSite': {
+            const problems = validateSiteForm(action.form, services.sites.list().map((s) => s.host));
+            if (problems.length > 0) throw new Error(problems.map((p) => p.message).join(' '));
+            const f = action.form;
+            services.sites.create({
+                name: f.name,
+                workspaceId: action.workspaceId,
+                repoPath: action.repoPath,
+                serve: f.mode === 'proxy' ? { mode: 'proxy' } : f.mode === 'static' ? { mode: 'static', root: f.root ?? 'dist', spa: f.spa } : { mode: 'php', root: f.root ?? 'public' },
+                ...(f.devServer ? { devServer: f.devServer } : {}),
+                ...(f.hostPort !== null ? { hostPort: f.hostPort } : {}),
+            });
+            break;
+        }
+        case 'flows.create': {
+            const problems = validateFlowForm(action.form);
+            if (problems.length > 0) throw new Error(problems.map((p) => p.message).join(' '));
+            await services.flows.create({ workspaceId: action.form.workspaceId, name: action.form.name, document: action.form.document, by: USER, armed: action.form.armed });
+            break;
+        }
         case 'hosting.stopSite':
             if (!services.sites.stop(action.siteId)) throw new Error(`no site ${action.siteId}`);
             break;
