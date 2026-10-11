@@ -39,6 +39,12 @@ jobs:
             echo "::error::tag v$tag does not match package.json $pkg — bump the version in a commit first; a tag is a claim about a version"
             exit 1
           fi
+          # No notes, no release: the owner attached the known limitations to the go, and a
+          # release body that says nothing is a version number. docs/releases/v<version>.md.
+          if [ ! -s "docs/releases/v$tag.md" ]; then
+            echo "::error::docs/releases/v$tag.md is missing or empty — write the release notes (what is in, known limitations, how it was verified) before tagging"
+            exit 1
+          fi
 
   publish:
     name: build and publish (${{ matrix.os }})
@@ -69,3 +75,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
         run: npx electron-builder --publish always
+
+  notes:
+    name: write the release notes into the GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # electron-builder created the release on the OLD repo (electron-builder.yml publish block);
+      # the body comes from docs/releases/v<version>.md, with the same cross-repo token. The
+      # release stays a prerelease; whether it is a draft is the owner's call after this runs.
+      - name: set the body
+        env:
+          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo Renaissance-Analytics/genie --notes-file "docs/releases/${{ github.ref_name }}.md"

@@ -55,3 +55,30 @@ describe('the release workflow', () => {
         expect(ci()).not.toMatch(/--publish always/);
     });
 });
+
+describe('release notes', () => {
+    /**
+     * A release without notes is a version number. The owner's go for the first beta came
+     * with a condition — the known limitations listed in the release notes — and v1's own
+     * release rule was the same (no notes, no build). So: a non-dev version REQUIRES
+     * `docs/releases/v<version>.md`, the workflow refuses a tag without it, and after the
+     * publish the workflow writes that file into the GitHub release body.
+     */
+    const version = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version;
+
+    it('exist for the version in package.json whenever that version is not the dev placeholder', () => {
+        if (version === '0.0.0') return; // dev tree: no release, no notes required
+        const notes = readFileSync(`docs/releases/v${version}.md`, 'utf8');
+        expect(notes.length).toBeGreaterThan(500);
+        expect(notes).toContain(version);
+        // The condition the owner attached to the go: the limitations are IN the notes.
+        expect(notes).toMatch(/Known limitations/i);
+    });
+
+    it('are guarded by the workflow and written into the release', () => {
+        const wf = workflow();
+        expect(wf).toMatch(/docs\/releases\/v\$\{?[A-Za-z_]*\}?\.md|docs\/releases\//);
+        expect(wf).toMatch(/gh release edit/);
+        expect(wf).toMatch(/--notes-file/);
+    });
+});
