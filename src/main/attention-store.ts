@@ -86,6 +86,8 @@ export interface AskResult {
     readonly userActive: boolean;
     /** True when an identical open question already existed and this call joined it. */
     readonly rejoined: boolean;
+    /** DND (§6.3): the person's configured reply, said at once; `null` when DND is off. */
+    readonly dndReply: string | null;
 }
 
 export interface PendingQuestion {
@@ -203,13 +205,14 @@ export class AttentionStore {
         void this.#flush();
     }
 
-    async ask(input: AskInput, context: { userActive: boolean }): Promise<AskResult> {
+    async ask(input: AskInput, context: { userActive: boolean; dnd?: { on: boolean; reply: string } | undefined }): Promise<AskResult> {
+        const dndReply = context.dnd?.on ? context.dnd.reply : null;
         const refusal = validateQuestions(input.questions);
         if (refusal !== null) throw new Error(refusal);
 
         const key = questionKey(input.agentId, input.questions);
         const existing = this.#data.questions.find((q) => q.key === key);
-        if (existing) return { ok: true, questionId: existing.id, userActive: context.userActive, rejoined: true };
+        if (existing) return { ok: true, questionId: existing.id, userActive: context.userActive, rejoined: true, dndReply };
 
         const pending: PendingQuestion = {
             id: `q_${randomUUID()}`,
@@ -223,7 +226,7 @@ export class AttentionStore {
         };
         this.#data.questions.push(pending);
         await this.#flush();
-        return { ok: true, questionId: pending.id, userActive: context.userActive, rejoined: false };
+        return { ok: true, questionId: pending.id, userActive: context.userActive, rejoined: false, dndReply };
     }
 
     pending(): readonly PendingQuestion[] {

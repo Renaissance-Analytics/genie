@@ -66,6 +66,8 @@ export interface GenieToolsDeps {
     /** Pulse the terminal's row. Returns whether anything received the signal. */
     readonly glow: (terminalId: string) => boolean;
     readonly thumbsUp: (caller: Caller, reason: string) => void;
+    /** DND (§6.3): whether the person is away, and what to tell an agent that asks. */
+    readonly dnd?: () => { on: boolean; reply: string };
 }
 
 const MIRRORED_TERMINAL_ID: JsonObject = {
@@ -174,7 +176,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             const priority = str(args.priority) as 'low' | 'normal' | 'high' | 'urgent' | undefined;
             const r = await deps.attention.ask(
                 { agentId: caller.agentId, agentName: caller.agentName, workspaceId: caller.workspaceId, questions, ...(priority ? { priority } : {}) },
-                { userActive: deps.userActive() },
+                { userActive: deps.userActive(), dnd: deps.dnd?.() },
             );
             return ok(r);
         }),

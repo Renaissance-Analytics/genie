@@ -17,6 +17,8 @@
 export type SettingGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 export type SettingScope = 'device' | 'workspace' | 'host';
 
+import { alertSoundSettings } from './alerts.js';
+
 export type SettingDef =
     | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'boolean'; default: boolean }
     | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'string'; default: string }
@@ -24,6 +26,7 @@ export type SettingDef =
 
 export const SETTINGS: readonly SettingDef[] = [
     { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'Which releases this Genie offers to install.', type: 'enum', options: ['beta', 'stable'], default: 'beta' },
+    { key: 'do_not_disturb', group: 'general', scope: 'host', label: 'Do not disturb', description: 'An agent that asks is told your reply at once; its question still waits for you.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
     { key: 'restore_agents_on_launch', group: 'agents', scope: 'host', label: 'Restore agents on launch', description: 'Start the agents that were running when Genie last closed. Applies to every path that could restart an agent: launch, crash recovery, transport loss, upgrade.', type: 'boolean', default: false },
@@ -33,6 +36,8 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },
     { key: 'theme', group: 'appearance', scope: 'device', label: 'Theme', description: 'Dark, light, or follow the system.', type: 'enum', options: ['dark', 'light', 'system'], default: 'dark' },
     { key: 'sidebar_width', group: 'appearance', scope: 'device', label: 'Sidebar width', description: 'Pixels.', type: 'string', default: '208' },
+    // One row per alert kind, DERIVED from the registry — never a hand-kept list.
+    ...alertSoundSettings(),
 ];
 
 export function settingGroups(): readonly SettingGroup[] {
