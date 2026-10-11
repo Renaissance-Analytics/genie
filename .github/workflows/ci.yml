@@ -153,6 +153,7 @@ jobs:
           # step, and so hides the one log that would have said where it stopped. A hang that
           # fails in five minutes with its output attached is a bug report; one that is
           # cancelled at fifteen is a shrug.
+          timeout 300 node scripts/agents-hold-no-pty-cdp.mjs
           timeout 300 node scripts/smoke-cdp.mjs
           timeout 300 node scripts/layout-sweep.mjs
 
@@ -276,6 +277,7 @@ jobs:
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
           try {
+              node scripts/agents-hold-no-pty-cdp.mjs
               node scripts/smoke-cdp.mjs
               node scripts/layout-sweep.mjs
           } finally {
