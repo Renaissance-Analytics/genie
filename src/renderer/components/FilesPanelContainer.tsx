@@ -9,7 +9,7 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from 
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume }: {
+export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
@@ -20,6 +20,9 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     /** An agent is writing a file you have dirty (§4.3): ask it to pause; lifted when the buffer is clean again. */
     onPause?: ((agent: string, path: string) => void) | undefined;
     onResume?: ((agent: string, path: string) => void) | undefined;
+    /** SINGLE mode (§4.6): this one file, opened on mount; no tree. */
+    single?: string | undefined;
+    onOpenInPane?: ((path: string) => void) | undefined;
 }) {
     const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
     const [state, setState] = useState<FilesPanelState | null>(null);
@@ -40,6 +43,9 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         for (const p of lifted) onResume?.(p.agent, p.path);
         setPaused([...paused.filter((p) => !lifted.includes(p)), ...adds]);
     }, [state, dirtyPath, paused, onPause, onResume]);
+
+    // A code pane (§4.6) opens its one file on mount.
+    useEffect(() => { if (single) { setTabs([single]); void files.open(workspace.id, single).then((r) => setOpen(r)); } }, [single, files, workspace.id]);
 
     const refresh = useCallback(() => {
         void files.tree(workspace.id).then((t) => setTree(t));
@@ -98,5 +104,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
               onMerge: () => { if (conflict) setBuffer({ path: open.path, text: `<<<<<<< mine\n${buffer?.text ?? ''}=======\n${conflict.onDisk}>>>>>>> theirs\n` }); setConflict(null); },
           }
         : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} />;
 }

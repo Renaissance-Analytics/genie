@@ -51,6 +51,10 @@ export interface FilesPanelProps {
     readonly popped?: boolean | undefined;
     /** Agents ASKED to pause on a file you have dirty (§4.3) — named in the footer, marked on the tab. */
     readonly paused?: readonly Pause[] | undefined;
+    /** SINGLE mode (§4.6 a code pane): one file, no tree, no other tabs. */
+    readonly single?: string | undefined;
+    /** Open a file as its own pane in the workspace grid (§4.6); absent where panes cannot be made (the dock, a popped window). */
+    readonly onOpenInPane?: ((path: string) => void) | undefined;
 }
 
 type Tone = 'writing' | 'changed' | 'unreported';
@@ -88,12 +92,14 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [] }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [], single, onOpenInPane }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
+    // Single mode (§4.6): the one file this pane is about, and nothing else to pick from.
+    const shownTabs = single ? tabs.filter((t) => t === single) : tabs;
     return (
-        <section data-files-panel={workspace.id} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]">
+        <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]">
             <header className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3 text-sm">
                 <span className="rounded-md bg-[var(--bg-2)] px-1.5 py-0.5 text-xs font-medium">{workspace.name ?? workspace.id}</span>
                 <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
@@ -111,6 +117,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 )}
             </header>
             <div className="flex min-h-0 flex-1">
+                {single ? null : (
                 <aside className="w-[220px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
                     {tree === null ? (
                         <div data-files-skeleton className="flex flex-col gap-2 px-3 py-2">
@@ -120,14 +127,16 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} defaultExpandAll />
                     )}
                 </aside>
+                )}
                 <div className="flex min-w-0 flex-1 flex-col">
                     <div data-file-tabs className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
-                        {tabs.map((t) => {
+                        {shownTabs.map((t) => {
                             const active = open?.path === t;
                             const mark = marks.get(t);
                             return (
                                 <div key={t} data-file-tab={t} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
                                     <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
+                                    {onOpenInPane && !single ? <button type="button" data-action="open-in-pane" aria-label={`open ${t} in a pane`} title="Open in its own pane beside the terminals" onClick={() => onOpenInPane(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">⧉</button> : null}
                                     <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
                                 </div>
                             );
