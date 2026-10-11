@@ -87,6 +87,8 @@ export interface TerminalOptions {
     command?: string | undefined;
     cols?: number | undefined;
     rows?: number | undefined;
+    /** Extra environment: the Take Over contract (GENIE_MCP_URL / GENIE_TERMINAL_ID / GENIE_MCP_TOKEN) or a site's service env. */
+    env?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface Terminal {
@@ -139,6 +141,7 @@ export class TerminalHost {
             command: options.command,
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
+            ...(options.env === undefined ? {} : { env: options.env }),
         });
 
         this.#terminals = [
