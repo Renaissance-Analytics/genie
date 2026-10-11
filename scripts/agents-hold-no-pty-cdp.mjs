@@ -56,7 +56,7 @@ function ptys() {
 function stubProcesses() {
     if (process.platform === 'win32') {
         const out = execFileSync('powershell', ['-NoProfile', '-Command',
-            "(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' -and $_.CommandLine -notlike '*agents-hold-no-pty*' }).Count"],
+            "@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' -and $_.CommandLine -notlike '*agents-hold-no-pty*' }).Count"],
             { encoding: 'utf8', timeout: 30_000 }).trim();
         return Number(out || 0);
     }

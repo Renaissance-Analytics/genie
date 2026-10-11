@@ -168,3 +168,34 @@ describe('events', () => {
         expect(seen).toEqual(['one']);
     });
 });
+
+describe('a spawn the engine could not make', () => {
+    /**
+     * Measured on the INSTALLED app in the Windows VM, 2026-10-10 21:5x (fancy-term-host
+     * 0.10.0-rc.1): the engine answered `pid: -1` for a terminal it had not started — the
+     * helper could not be executed from inside app.asar — and the port passed that back as if
+     * a terminal had opened. The renderer mounted a pane; the driver read `pid -1` with no
+     * error anywhere. §5: a terminal that did not open must not look like one that did.
+     */
+    it('THROWS, naming the shell, when the engine reports no pid — and drops the engine entry', () => {
+        const { backend } = fakeBackend();
+        backend.create = (opts) => ({ id: opts.id, pid: -1, shell: opts.shell ?? '/bin/sh', existing: false, scrollback: '' });
+        // The fixture's kill only records ids its own create registered; this create is overridden,
+        // so observe the kill CALL itself — the claim is "the port told the engine to drop the id".
+        const dropped: string[] = [];
+        backend.kill = (id) => { dropped.push(id); return true; };
+        const port = fancyTermPort(backend, { defaultShell: () => ({ command: '/bin/zsh', args: [] }) });
+        expect(() => port.open({ cwd: '/tmp' })).toThrow(/could not spawn/);
+        expect(() => port.open({ cwd: '/tmp' })).toThrow(/\/bin\/zsh/);
+        // The engine was told to forget the id it handed out, so nothing half-open lingers.
+        expect(dropped).toHaveLength(2);
+        expect(dropped[0]).toMatch(/^term_/);
+    });
+
+    it('POSITIVE CONTROL: a real pid opens as before', () => {
+        const { backend } = fakeBackend();
+        const port = fancyTermPort(backend, { defaultShell: () => ({ command: '/bin/zsh', args: [] }) });
+        const opened = port.open({ cwd: '/tmp' });
+        expect(opened.pid).toBeGreaterThan(0);
+    });
+});

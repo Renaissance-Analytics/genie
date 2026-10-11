@@ -66,6 +66,17 @@ function Uninstall-AnyGenie() {
     foreach ($d in @("$env:LOCALAPPDATA\Programs\Genie", "$env:LOCALAPPDATA\Programs\genie2", "$env:LOCALAPPDATA\Programs\genie")) {
         if (Test-Path $d) { Write-Output "pre-clean: removing leftover $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
+    # electron-builder's NSIS remembers the install directory in a SECOND key, HKCU\Software\<appId
+    # GUID>\InstallLocation, and every later installer with the same appId goes where it says
+    # (measured 2026-10-10: Uninstall entry and directories gone, the next install still landed
+    # in Programs\genie2 because this key said so).
+    foreach ($k in @(Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^[0-9a-fA-F-]{36}$' })) {
+        $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+        if ($p.InstallLocation -and ($p.InstallLocation -like '*\Programs\genie*' -or $p.InstallLocation -like '*\Programs\Genie*')) {
+            Write-Output ("pre-clean: removing install-memory key HKCU\Software\" + $k.PSChildName + " (" + $p.InstallLocation + ")")
+            Remove-Item $k.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 function Genie-Processes($dir) { return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" }) }
 $current = (Get-Content package.json | ConvertFrom-Json).version
@@ -130,11 +141,17 @@ try {
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
     $env:EXPECT_VERSION = $Next
+    # With fancy-pty installed, the driver's §7.2 control (one open terminal → one helper under
+    # the install dir) is asserted, not merely reported.
+    $fancyPty = Test-Path (Join-Path $root 'node_modules\@particle-academy\fancy-pty\package.json')
+    if ($fancyPty) { $env:EXPECT_HELPERS = '1' } else { Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue }
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     if ($drive -ne 0) {
-        Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 60 -ErrorAction SilentlyContinue
-        Write-Output "--- installed stdout ---"; Get-Content installed-out.log -Tail 40 -ErrorAction SilentlyContinue
+        # 200 lines, not 60: the first fancy-pty failure's engine words (if any) were above a
+        # 60-line tail that showed only the updater's download notice (Fancy asked for this).
+        Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 200 -ErrorAction SilentlyContinue
+        Write-Output "--- installed stdout ---"; Get-Content installed-out.log -Tail 80 -ErrorAction SilentlyContinue
         Write-Output "--- feed ---"; Get-Content feed.log -Tail 20 -ErrorAction SilentlyContinue
         if (-not $app.HasExited) { Kill-Tree $app.Id }
         throw "update-cdp.mjs exited $drive"
@@ -162,6 +179,13 @@ try {
     $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' })
     Write-Output ("§7.4 stub agent processes after quit + relaunch: " + $stubs.Count)
     if ($stubs.Count -ne 0) { $stubs | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "§7.4: $($stubs.Count) agent process(es) survived the upgrade or were revived" }
+    # §7.2's other half: the terminal the driver left open had ONE fancy-pty helper under the
+    # install dir (asserted in the driver when fancy-pty is installed); after the quit and the
+    # relaunch there must be none — a helper that outlived the upgrade is exactly the 31-orphan
+    # shape, and a helper that came back would be a terminal revived without anyone asking.
+    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like "$installDir\*" })
+    Write-Output ("§7.2 fancy-pty helpers under the install dir after quit + relaunch: " + $helpers.Count)
+    if ($helpers.Count -ne 0) { $helpers | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.ExecutablePath) }; throw "§7.2: $($helpers.Count) pty helper(s) survived the upgrade" }
     Write-Output "--- the updated app's install dir ---"
     Get-ChildItem $installDir -File | ForEach-Object { "  " + $_.Name + " " + $_.Length }
     $report = Select-String -Path installed-out.log -Pattern '\[updater\]' -ErrorAction SilentlyContinue | ForEach-Object Line
