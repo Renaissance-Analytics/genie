@@ -38,6 +38,8 @@ export const ICON_NAMES: readonly string[] = [
     'users', 'plus',
     // delivery kinds
     'git-commit-horizontal', 'file-code', 'arrow-right-left', 'message-square-reply',
+    // The Dashboard's "From Tynn" door (§6.1).
+    'link',
 
     /*
      * The stream ledger's icons.
