@@ -80,6 +80,15 @@ describe('opening a terminal', () => {
         expect(pty.opened).toEqual([{ cwd: '/repo', command: 'npm test' }]);
     });
 
+    it('passes an env through to the pty, and passes NOTHING when none is given', () => {
+        const pty = recordingPty();
+        const host = new TerminalHost(pty.port);
+        host.open({ workspaceId: 'tynn', cwd: '/w', command: 'claude', env: { GENIE_TERMINAL_ID: 'term_x', GENIE_MCP_TOKEN: 't' } });
+        host.open({ workspaceId: 'tynn', cwd: '/w' });
+        expect(pty.opened[0]).toMatchObject({ env: { GENIE_TERMINAL_ID: 'term_x', GENIE_MCP_TOKEN: 't' } });
+        expect('env' in pty.opened[1]!).toBe(false);
+    });
+
     it('opens a plain SHELL when no command is given', () => {
         /**
          * `+terminal` is the common case and names no command: the engine resolves the user's
