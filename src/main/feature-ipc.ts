@@ -1,5 +1,8 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { classifyNavigation } from '../core/browser-policy.js';
-import { validateFlowForm, validateSiteForm } from '../core/forms.js';
+import { flowFormDefaults, siteFormDefaults, validateFlowForm, validateSiteForm } from '../core/forms.js';
+import type { FlowAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
@@ -23,6 +26,8 @@ export interface FeatureState {
     knowledgeQuery: string;
     browserUrl?: string | null;
     toolchainCheckedAt?: number | null;
+    siteAdding?: SiteAdding | null;
+    flowAdding?: FlowAdding | null;
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
@@ -30,8 +35,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const peers = services.agentAddresses().map((a) => ({ address: a.address, name: a.name, reachable: true }));
     return {
         knowledge: { hits, query: state.knowledgeQuery },
-        flows: { flows: services.flows.list() },
-        hosting: { sites: services.sites.list(), processes: services.supervisor.list() },
+        flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
+        hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
         inbox: { unread: services.inbox.unread(HUMAN), peers },
         settings: { values: services.settings.snapshot() },
@@ -40,6 +45,27 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 }
 
 const USER = { kind: 'user' } as const;
+
+/** What the form defaults are derived from: the repo's top-level files plus one level of built dirs, and package.json scripts. */
+async function repoFacts(repoPath: string): Promise<{ files: string[]; packageScripts: Record<string, string> }> {
+    const files: string[] = [];
+    let packageScripts: Record<string, string> = {};
+    try {
+        for (const entry of await readdir(repoPath, { withFileTypes: true })) {
+            files.push(entry.name);
+            if (entry.isDirectory() && ['dist', 'build', 'out', 'public'].includes(entry.name)) {
+                try {
+                    for (const inner of await readdir(join(repoPath, entry.name))) files.push(`${entry.name}/${inner}`);
+                } catch { /* unreadable built dir: not a fact we have */ }
+            }
+        }
+        if (files.includes('package.json')) {
+            const pkg = JSON.parse(await readFile(join(repoPath, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+            packageScripts = pkg.scripts ?? {};
+        }
+    } catch { /* a folder we cannot read yields no facts, and the form says so through its hint */ }
+    return { files, packageScripts };
+}
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason. */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }): Promise<FeatureData> {
@@ -59,13 +85,30 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'flows.remove':
             if (!(await services.flows.remove(action.flowId))) throw new Error(`no flow ${action.flowId}`);
             break;
+        // (the old no-op cases for flows.add / hosting.addSite were removed: a switch takes the first match)
+        case 'hosting.addSite': {
+            const facts = await repoFacts(action.repoPath);
+            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: siteFormDefaults({ repoPath: action.repoPath, ...facts }), problems: [] };
+            break;
+        }
+        case 'hosting.cancelForm':
+            next.siteAdding = null;
+            break;
         case 'flows.add':
-        case 'hosting.addSite':
-            // These open a form in the renderer; nothing changes in main until the form is submitted.
+            next.flowAdding = { defaults: flowFormDefaults({ workspaceId: action.workspaceId }), problems: [] };
+            break;
+        case 'flows.cancelForm':
+            next.flowAdding = null;
             break;
         case 'hosting.createSite': {
             const problems = validateSiteForm(action.form, services.sites.list().map((s) => s.host));
-            if (problems.length > 0) throw new Error(problems.map((p) => p.message).join(' '));
+            if (problems.length > 0) {
+                // A refused submit is DATA for the form: shown beside the fields, where it was caused.
+                const open = state.siteAdding ?? { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: siteFormDefaults({ repoPath: action.repoPath, ...(await repoFacts(action.repoPath)) }), problems: [] };
+                next.siteAdding = { ...open, problems };
+                break;
+            }
+            next.siteAdding = null;
             const f = action.form;
             services.sites.create({
                 name: f.name,
@@ -79,7 +122,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'flows.create': {
             const problems = validateFlowForm(action.form);
-            if (problems.length > 0) throw new Error(problems.map((p) => p.message).join(' '));
+            if (problems.length > 0) {
+                const open = state.flowAdding ?? { defaults: action.form, problems: [] };
+                next.flowAdding = { ...open, problems };
+                break;
+            }
+            next.flowAdding = null;
             await services.flows.create({ workspaceId: action.form.workspaceId, name: action.form.name, document: action.form.document, by: USER, armed: action.form.armed });
             break;
         }

@@ -1,4 +1,4 @@
-import type { FlowForm, SiteForm } from '../core/forms.js';
+import type { FlowForm, Problem, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { Hit } from '../main/knowledge-store.js';
@@ -14,10 +14,24 @@ import type { InboxMessage } from '../main/inbox-store.js';
  * the invitation. The two are different claims and never collapse into one.
  */
 
+/** An Add-a-site form open in the Hosting surface: defaults read from the repo, problems from the last refused submit. */
+export interface SiteAdding {
+    readonly workspaceId: string;
+    readonly repoPath: string;
+    readonly defaults: SiteFormDefaults;
+    readonly problems: readonly Problem[];
+}
+
+/** An Add-a-flow form open in the Flows surface. */
+export interface FlowAdding {
+    readonly defaults: FlowForm;
+    readonly problems: readonly Problem[];
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string };
-    readonly flows: { flows: readonly FlowRecord[] } | null;
-    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[] } | null;
+    readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
+    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null } | null;
     readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
@@ -41,10 +55,12 @@ export type FeatureAction =
     | { kind: 'flows.arm'; flowId: string }
     | { kind: 'flows.disarm'; flowId: string }
     | { kind: 'flows.remove'; flowId: string }
-    | { kind: 'flows.add' }
+    | { kind: 'flows.add'; workspaceId: string }
+    | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */
     | { kind: 'flows.create'; form: FlowForm }
-    | { kind: 'hosting.addSite' }
+    | { kind: 'hosting.addSite'; workspaceId: string; repoPath: string }
+    | { kind: 'hosting.cancelForm' }
     /** The Add-a-site form, submitted. Validated in main; a refusal names every problem. */
     | { kind: 'hosting.createSite'; workspaceId: string; repoPath: string; form: SiteForm }
     | { kind: 'hosting.stopSite'; siteId: string }

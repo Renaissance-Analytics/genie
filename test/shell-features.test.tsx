@@ -99,9 +99,9 @@ describe('first paint — skeletons, never zeros or empty states', () => {
 
 describe('measured empties are a different claim', () => {
     it('flows with an empty list invites the first flow; inbox with no mail says so; hosting with no sites offers to add one', () => {
-        expect(render('genie://flows', { flows: { flows: [] } })).toMatch(/first flow|Add a flow/i);
+        expect(render('genie://flows', { flows: { flows: [], adding: null } })).toMatch(/first flow|Add a flow/i);
         expect(render('genie://inbox', { inbox: { unread: [], peers: [] } })).toMatch(/No messages/i);
-        expect(render('genie://hosting', { hosting: { sites: [], processes: [] } })).toMatch(/Add a site/i);
+        expect(render('genie://hosting', { hosting: { sites: [], processes: [], adding: null } })).toMatch(/Add a site/i);
     });
 
     it('settings with values shows the chosen value for a setting and the four groups', () => {

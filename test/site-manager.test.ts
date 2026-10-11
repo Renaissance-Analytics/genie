@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
@@ -9,6 +10,10 @@ import { SiteManager, type SiteManagerDeps } from '../src/main/site-manager.js';
  * server, or Genie's Caddy against a Caddyfile Genie wrote — plus a php-cgi worker for php), and
  * publishes `<name>.gen → 127.0.0.1:<port>` for the front door. Agents never write server config.
  */
+
+// The config path is a REAL path on the platform the test runs on — backslashes on Windows — so the
+// expectation is built with the same `join` the manager uses, not a Linux-shaped literal.
+const CADDYFILE = (id: string) => join('/data/sites', id, 'Caddyfile');
 
 function fakePty() {
     const opened: Array<PtySpawnOptions & { id: string }> = [];
@@ -84,10 +89,10 @@ describe('a static site — Genie’s Caddy against a Caddyfile Genie wrote', ()
         const site = sites.create({ name: 'dash', workspaceId: 'fancy', repoPath: '/repos/fancy', serve: { mode: 'static', root: 'dist', spa: true } });
         expect(site).toMatchObject({ host: 'dash.gen', port: 4101, state: 'running' });
         expect(written).toHaveLength(1);
-        expect(written[0]!.path).toBe('/data/sites/site_dash/Caddyfile');
+        expect(written[0]!.path).toBe(CADDYFILE('site_dash'));
         expect(written[0]!.content).toContain('127.0.0.1:4101');
         expect(written[0]!.content).toContain('try_files {path} /index.html');
-        expect(pty.opened[0]).toMatchObject({ cwd: '/repos/fancy', command: '/opt/genie/runtime/caddy run --config /data/sites/site_dash/Caddyfile --adapter caddyfile' });
+        expect(pty.opened[0]).toMatchObject({ cwd: '/repos/fancy', command: `/opt/genie/runtime/caddy run --config ${CADDYFILE('site_dash')} --adapter caddyfile` });
     });
 
     it('with no Caddy binary available, the site is refused with a reason that names the fix — never a hand-rolled server', () => {
@@ -104,7 +109,7 @@ describe('a php site — a FastCGI worker, then Caddy', () => {
         expect(site).toMatchObject({ port: 4101, state: 'running' });
         expect(pty.opened.map((o) => o.command)).toEqual([
             'php-cgi -b 127.0.0.1:4102',
-            '/opt/genie/runtime/caddy run --config /data/sites/site_app/Caddyfile --adapter caddyfile',
+            `/opt/genie/runtime/caddy run --config ${CADDYFILE('site_app')} --adapter caddyfile`,
         ]);
         for (const o of pty.opened) expect(o).toMatchObject({ cwd: '/repos/app', env: { APP_ENV: 'local' } });
         expect(written[0]!.content).toContain('php_fastcgi 127.0.0.1:4102');

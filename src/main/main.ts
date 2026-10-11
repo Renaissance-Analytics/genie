@@ -402,6 +402,7 @@ async function boot(): Promise<void> {
         const data = await handleFeatureAction(composed, action, featureState);
         if (action.kind === 'knowledge.search') featureState = { ...featureState, knowledgeQuery: action.query };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null };
         return data;
     });
 

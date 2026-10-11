@@ -40,8 +40,8 @@ afterEach(async () => {
 describe('the snapshot', () => {
     it('reports every section MEASURED (never null) once the services exist, with the knowledge hits null until a search is asked for', async () => {
         const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
-        expect(snap.flows).toEqual({ flows: [] });
-        expect(snap.hosting).toEqual({ sites: [], processes: [] });
+        expect(snap.flows).toEqual({ flows: [], adding: null });
+        expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null });
         expect(snap.inbox).toEqual({ unread: [], peers: [] });
         expect(snap.settings.values).toMatchObject({ theme: 'dark', restore_agents_on_launch: false });
         expect(snap.knowledge).toEqual({ hits: null, query: '' });
@@ -108,6 +108,22 @@ describe('actions', () => {
     });
 });
 
+describe('opening the forms', () => {
+    it('hosting.addSite opens the form with defaults read from the repo folder; hosting.cancelForm closes it', async () => {
+        const { writeFile } = await import('node:fs/promises');
+        await writeFile(join(dir, 'artisan'), '');
+        let snap = await handleFeatureAction(services, { kind: 'hosting.addSite', workspaceId: 'tynn', repoPath: dir });
+        expect(snap.hosting!.adding).toMatchObject({ workspaceId: 'tynn', repoPath: dir, problems: [], defaults: { mode: 'proxy', devServer: { stack: 'laravel' } } });
+        snap = await handleFeatureAction(services, { kind: 'hosting.cancelForm' });
+        expect(snap.hosting!.adding).toBeNull();
+    });
+
+    it('flows.add opens the flow form with the hourly default for the workspace', async () => {
+        const snap = await handleFeatureAction(services, { kind: 'flows.add', workspaceId: 'tynn' });
+        expect(snap.flows!.adding).toMatchObject({ problems: [], defaults: { name: 'tynn hourly', armed: false } });
+    });
+});
+
 describe('submitting the forms', () => {
     it('hosting.createSite creates the site from a valid form (the route appears); an invalid form rejects with every problem', async () => {
         const snap = await handleFeatureAction(services, {
@@ -118,15 +134,21 @@ describe('submitting the forms', () => {
         });
         expect(snap.hosting!.sites.map((s) => [s.host, s.port, s.state])).toEqual([['docs.gen', 5173, 'external']]);
         expect(snap.browser.routes).toEqual([{ host: 'docs.gen', target: '127.0.0.1:5173' }]);
-        await expect(
-            handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: dir, form: { name: 'docs', mode: 'proxy', devServer: null, hostPort: null, root: null, spa: false } }),
-        ).rejects.toThrow(/docs\.gen is already a site.*needs either a dev server command or a port/s);
+        // a refused submit keeps the form open with every problem — shown where it was caused, not logged.
+        const refused = await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: dir, form: { name: 'docs', mode: 'proxy', devServer: null, hostPort: null, root: null, spa: false } });
+        expect(refused.hosting!.adding!.problems.map((p) => p.field)).toEqual(['name', 'hostPort']);
+        expect(refused.hosting!.sites).toHaveLength(1);
     });
 
     it('flows.create creates an UNARMED flow from a valid form as the user; an invalid form rejects naming the node', async () => {
         const form = { workspaceId: 'tynn', name: 'nightly', document: { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 2 * * *', timezone: 'UTC' } }], edges: [] }, armed: true };
         const snap = await handleFeatureAction(services, { kind: 'flows.create', form });
         expect(snap.flows!.flows.map((f) => [f.name, f.armed, f.createdBy.kind])).toEqual([['nightly', true, 'user']]);
-        await expect(handleFeatureAction(services, { kind: 'flows.create', form: { ...form, document: { ...form.document, nodes: [{ ...form.document.nodes[0]!, config: { cron: 'nope' } }] } } })).rejects.toThrow(/Node t/);
+        // a refused flow submit keeps the form open naming the node; nothing is created.
+        const refused = await handleFeatureAction(services, { kind: 'flows.create', form: { ...form, document: { ...form.document, nodes: [{ ...form.document.nodes[0]!, config: { cron: 'nope' } }] } } });
+        expect(refused.flows!.adding!.problems[0]!.message).toMatch(/Node t/);
+        expect(refused.flows!.flows).toHaveLength(1);
+        // and a successful submit closes the form.
+        expect(snap.flows!.adding).toBeNull();
     });
 });
