@@ -107,3 +107,26 @@ describe('actions', () => {
         expect(snap.browser.routes).toEqual([]);
     });
 });
+
+describe('submitting the forms', () => {
+    it('hosting.createSite creates the site from a valid form (the route appears); an invalid form rejects with every problem', async () => {
+        const snap = await handleFeatureAction(services, {
+            kind: 'hosting.createSite',
+            workspaceId: 'tynn',
+            repoPath: dir,
+            form: { name: 'docs', mode: 'proxy', devServer: null, hostPort: 5173, root: null, spa: false },
+        });
+        expect(snap.hosting!.sites.map((s) => [s.host, s.port, s.state])).toEqual([['docs.gen', 5173, 'external']]);
+        expect(snap.browser.routes).toEqual([{ host: 'docs.gen', target: '127.0.0.1:5173' }]);
+        await expect(
+            handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: dir, form: { name: 'docs', mode: 'proxy', devServer: null, hostPort: null, root: null, spa: false } }),
+        ).rejects.toThrow(/docs\.gen is already a site.*needs either a dev server command or a port/s);
+    });
+
+    it('flows.create creates an UNARMED flow from a valid form as the user; an invalid form rejects naming the node', async () => {
+        const form = { workspaceId: 'tynn', name: 'nightly', document: { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 2 * * *', timezone: 'UTC' } }], edges: [] }, armed: true };
+        const snap = await handleFeatureAction(services, { kind: 'flows.create', form });
+        expect(snap.flows!.flows.map((f) => [f.name, f.armed, f.createdBy.kind])).toEqual([['nightly', true, 'user']]);
+        await expect(handleFeatureAction(services, { kind: 'flows.create', form: { ...form, document: { ...form.document, nodes: [{ ...form.document.nodes[0]!, config: { cron: 'nope' } }] } } })).rejects.toThrow(/Node t/);
+    });
+});

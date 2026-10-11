@@ -1,3 +1,4 @@
+import type { FlowForm, SiteForm } from '../core/forms.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { Hit } from '../main/knowledge-store.js';
@@ -41,7 +42,11 @@ export type FeatureAction =
     | { kind: 'flows.disarm'; flowId: string }
     | { kind: 'flows.remove'; flowId: string }
     | { kind: 'flows.add' }
+    /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */
+    | { kind: 'flows.create'; form: FlowForm }
     | { kind: 'hosting.addSite' }
+    /** The Add-a-site form, submitted. Validated in main; a refusal names every problem. */
+    | { kind: 'hosting.createSite'; workspaceId: string; repoPath: string; form: SiteForm }
     | { kind: 'hosting.stopSite'; siteId: string }
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }
