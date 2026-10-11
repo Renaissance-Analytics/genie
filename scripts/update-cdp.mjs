@@ -153,11 +153,25 @@ try {
         await new Promise((r) => setTimeout(r, 1500));
         const { execFileSync } = await import('node:child_process');
         const helpers = execFileSync('powershell', ['-NoProfile', '-Command',
-            "(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" }).Count"],
+            // @(...) on purpose: in Windows PowerShell 5.1, (pipeline).Count on exactly ONE CimInstance
+            // result is $null (the PSObject intrinsic-member bug) — the first run read "0 helper(s)"
+            // while the dump showed the helper, pid 4700, right there. Zero and two counted fine.
+            "@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" }).Count"],
             { encoding: 'utf8', timeout: 30_000 }).trim();
         const n = Number(helpers || 0);
         if (n === 0 && !process.env.EXPECT_HELPERS) console.log('  (no fancy-pty helper under the install dir — node-pty engine, or the helper is elsewhere; set EXPECT_HELPERS=1 to assert)');
         else check(n === 1, '11e. CONTROL: that terminal is exactly ONE fancy-pty-helper under the install dir — the §7.2 scan has something to find', `${n} helper(s)`);
+        if (process.env.EXPECT_HELPERS && n !== 1) {
+            // Say what IS there, so a failed control is a measurement and not a shrug: every
+            // process that names fancy-pty anywhere, and everything running from the install dir
+            // that is not Genie.exe itself (pid, parent, path, first 160 chars of the command line).
+            const dump = execFileSync('powershell', ['-NoProfile', '-Command',
+                "Get-CimInstance Win32_Process | Where-Object { ($_.Name -like '*fancy*') -or ($_.CommandLine -like '*fancy-pty*') -or ($_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" -and $_.Name -ne 'Genie.exe') } | ForEach-Object { \"$($_.ProcessId) ppid=$($_.ParentProcessId) $($_.Name) path=$($_.ExecutablePath) cmd=$(if ($_.CommandLine) { $_.CommandLine.Substring(0, [Math]::Min(160, $_.CommandLine.Length)) })\" }"],
+                { encoding: 'utf8', timeout: 30_000 }).trim();
+            console.log(`  --- processes naming fancy-pty, or under the install dir (not Genie.exe) ---\n${dump ? dump.split(/\r?\n/).map((l) => `  ${l}`).join('\n') : '  (none)'}`);
+            const term = await cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(wsId)})`).catch(() => null);
+            console.log(`  --- terminals the host lists for the workspace ---\n  ${JSON.stringify(term)}`);
+        }
     }
 
     // §7.2 report, through the bridge this time so the caller gets the text.
