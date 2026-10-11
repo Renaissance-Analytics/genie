@@ -42,6 +42,7 @@ function fakes() {
             onData: (cb) => { listeners.data.add(cb); return () => listeners.data.delete(cb); },
             onExit: (cb) => { listeners.exit.add(cb); return () => listeners.exit.delete(cb); },
         },
+        uploads: { sendFile: async (to, text, name, bytes) => { calls.push(`upload:${to}:${name}:${bytes.byteLength}`); return { ok: true, messageId: 'msg_u' }; } },
         serviceEnvFor: (ws) => (ws === 'tynn' ? { DB_PORT: '54301' } : {}),
         workspaceOps: {
             confirmAdd: async (path) => { calls.push(`ws-add:${path}`); return { ok: true }; },
@@ -138,6 +139,9 @@ describe('invoke', () => {
         const api = buildHostApi(f.deps);
         expect(await api.invoke('features.snapshot', [])).toEqual({ knowledge: { hits: null } });
         expect(await api.invoke('features.act', [{ kind: 'knowledge.search', query: 'x' }])).toEqual({ knowledge: { hits: [] } });
+        // A phone's upload (§6.8): base64 on the wire, bytes to the sender.
+        expect(await api.invoke('inbox.sendFile', ['kai', 'hi', 'a.txt', Buffer.from('xyz').toString('base64')])).toEqual({ ok: true, messageId: 'msg_u' });
+        expect(f.calls).toContain('upload:kai:a.txt:3');
         expect(await api.invoke('updates.state', [])).toMatchObject({ phase: 'idle' });
         expect(await api.invoke('updates.check', [])).toMatchObject({ phase: 'none' });
         expect(await api.invoke('updates.download', [])).toBe(true);

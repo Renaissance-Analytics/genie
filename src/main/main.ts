@@ -44,6 +44,7 @@ import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
+import { uploadSender } from './uploads.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -710,6 +711,8 @@ async function boot(): Promise<void> {
                 onData: (cb) => terminals!.onData(cb),
                 onExit: (cb) => terminals!.onExit(cb),
             },
+            // A phone's upload (§6.8): a temp file under ~/.genie/uploads for exactly as long as the inbox copies it.
+            uploads: uploadSender({ dir: join(genieHome(), 'uploads'), resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),

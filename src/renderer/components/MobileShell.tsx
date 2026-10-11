@@ -1,6 +1,9 @@
 import { Icon, Input } from '@particle-academy/react-fancy';
-import type { FormEvent } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type FormEvent, type ReactNode } from 'react';
 import type { DeckItem } from '../../core/deck.js';
+import { mobileTerminal, type Orientation } from '../../core/mobile.js';
+import type { GenieBridge } from '../bridge.js';
+import type { TerminalPaneProps } from './TerminalPane.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
 /**
@@ -27,9 +30,29 @@ export interface MobileShellProps {
     answering: string | null;
     onAnswer: (item: DeckItem, optionId: string) => void;
     onDisconnect: () => void;
+    /** The landscape-only terminal (§6.8); absent when the app does not offer it. */
+    terminal?: MobileTerminalSection | undefined;
+    /** Upload to an agent's inbox (§6.8); absent when the app does not offer it. */
+    upload?: MobileUploadSection | undefined;
 }
 
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect }: MobileShellProps) {
+export interface MobileTerminalSection {
+    orientation: Orientation | null;
+    open: boolean;
+    /** The pane the app holds while a shell is open; drawn only in landscape. */
+    pane: ReactNode | null;
+    workspaces: readonly { id: string; path: string }[];
+    onOpen: (workspaceId: string) => void;
+}
+
+export interface MobileUploadSection {
+    agents: readonly { id: string; name: string; provider: string; workspaceId: string }[];
+    sending: boolean;
+    outcome: string | null;
+    onSend: (input: { to: string; text: string; file: File }) => void;
+}
+
+export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, terminal, upload }: MobileShellProps) {
     return (
         <div data-mobile="shell" className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
@@ -84,7 +107,106 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                         ))}
                     </ul>
                 )}
+                {terminal ? <TerminalSection host={host} {...terminal} /> : null}
+                {upload ? <UploadSection {...upload} /> : null}
             </main>
+        </div>
+    );
+}
+
+/**
+ * THE TERMINAL, LANDSCAPE ONLY (§6.8). Portrait draws the sentence and nothing else — the pane the
+ * app holds stays out of the markup, not hidden by CSS. Landscape draws the pane when a shell is
+ * open, otherwise one picker and one button. No workspaces is said.
+ */
+function TerminalSection({ host, orientation, open, pane, workspaces, onOpen }: MobileTerminalSection & { host: string }) {
+    const gate = mobileTerminal(orientation);
+    if (!gate.allowed) {
+        return (
+            <section data-mobile-terminal={orientation ?? 'unknown'} className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-[13px] text-[var(--fg-3)]">
+                <h2 className="text-sm font-semibold text-[var(--fg-1)]">Terminal</h2>
+                <p className="mt-1">{gate.reason}</p>
+            </section>
+        );
+    }
+    return (
+        <section data-mobile-terminal="landscape" className="flex min-h-[40dvh] flex-col rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)]">
+            {open && pane ? (
+                <div className="min-h-0 flex-1">{pane}</div>
+            ) : workspaces.length === 0 ? (
+                <p className="p-3 text-[13px] text-[var(--fg-3)]">No workspaces on {host} yet, so there is nowhere to open a shell.</p>
+            ) : (
+                <form
+                    className="flex items-center gap-2 p-3"
+                    onSubmit={(e) => { e.preventDefault(); onOpen(String(new FormData(e.currentTarget).get('workspace') ?? '')); }}
+                >
+                    <select name="workspace" aria-label="Workspace" className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1.5 text-sm">
+                        {workspaces.map((w) => <option key={w.id} value={w.id}>{w.id}</option>)}
+                    </select>
+                    <button type="submit" data-action="open-terminal" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1.5 text-sm">Open a shell</button>
+                </form>
+            )}
+        </section>
+    );
+}
+
+/**
+ * UPLOAD (§6.8): a recipient from the host's own agents by FULL address (the short form can be
+ * ambiguous and the phone has no room for a disambiguation dance), one file, a line of text, one
+ * button. The outcome — sent, or the inbox's refusal — is a sentence under the form.
+ */
+function UploadSection({ agents, sending, outcome, onSend }: MobileUploadSection) {
+    const submit = (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const data = new FormData(e.currentTarget);
+        const file = data.get('file');
+        if (!(file instanceof File)) return;
+        onSend({ to: String(data.get('to') ?? ''), text: String(data.get('text') ?? ''), file });
+    };
+    return (
+        <section data-mobile-upload className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
+            <h2 className="text-sm font-semibold">Send a file</h2>
+            <form onSubmit={submit} className="mt-2 flex flex-col gap-2">
+                <select name="to" aria-label="To" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1.5 text-sm">
+                    {agents.map((a) => <option key={a.id} value={`${a.workspaceId}:${a.provider}:${a.name}`}>{a.name} · {a.workspaceId}</option>)}
+                </select>
+                <input type="file" name="file" aria-label="File" className="text-sm" />
+                <Input name="text" placeholder="a line to go with it" aria-label="Message" />
+                <button type="submit" data-action="send-file" disabled={sending} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60">{sending ? 'Sending…' : 'Send'}</button>
+            </form>
+            {outcome ? <p data-upload-outcome className="mt-2 text-xs text-[var(--fg-3)]">{outcome}</p> : null}
+        </section>
+    );
+}
+
+export interface MobileTerminalPaneProps {
+    terminalId: string;
+    output: string;
+    exited: number | null;
+    terminals: GenieBridge['terminals'];
+}
+
+/** The pane for one remote terminal, lazy like the Take Over window's — xterm never loads before a shell is open. */
+export function MobileTerminalPane({ terminalId, output, exited, terminals }: MobileTerminalPaneProps) {
+    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
+    const size = useRef<{ cols: number; rows: number }>({ cols: 100, rows: 30 });
+    useEffect(() => {
+        let live = true;
+        void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
+        return () => { live = false; };
+    }, []);
+    return (
+        <div data-mobile-pane={terminalId} className="h-full w-full">
+            {Pane ? (
+                <Pane
+                    paneId={terminalId}
+                    output={output}
+                    readOnly={exited !== null}
+                    onData={(data) => terminals.write(terminalId, data)}
+                    onResize={({ cols, rows }) => { size.current = { cols, rows }; terminals.resize(terminalId, cols, rows); }}
+                />
+            ) : null}
+            {exited !== null ? <p className="px-3 py-1 font-mono text-[11px] text-[var(--fg-3)]">the shell exited with code {exited}</p> : null}
         </div>
     );
 }

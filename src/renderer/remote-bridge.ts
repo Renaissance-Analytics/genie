@@ -168,6 +168,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: NO_FILES,
+        // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
+        uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
         terminals: {
             // Another machine's previous session is not this window's to seed.
             previousSession: async () => null,

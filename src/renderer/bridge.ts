@@ -245,6 +245,11 @@ export interface GenieBridge {
         cancel(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
     };
+
+    /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
+    uploads?: {
+        sendFile(to: string, text: string, name: string, base64: string): Promise<{ ok: true; messageId: string } | { ok: false; reason: string }>;
+    };
 }
 
 /** Mirror of `src/main/updater.ts`'s state, crossed as-is — every unknown is `null`. */

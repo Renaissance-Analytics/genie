@@ -41,7 +41,9 @@ describe('the capability table', () => {
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
         // 34 since `updates.cancel` (§7.5): a drain can be abandoned from a remote window too.
-        expect(REMOTE_METHODS.length).toBe(45);
+        // 46 since `inbox.sendFile` (§6.8): a phone's upload rides the socket as bytes.
+        expect(REMOTE_METHODS.length).toBe(46);
+        expect(capabilityOf('inbox.sendFile')).toBe('write');
         expect(capabilityOf('workspaces.previewAdd')).toBe('host-only');
         expect(capabilityOf('workspaces.hibernate')).toBe('write');
         expect(capabilityOf('agents.restart')).toBe('write');

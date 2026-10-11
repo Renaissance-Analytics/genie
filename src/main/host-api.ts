@@ -38,6 +38,10 @@ export interface HostApiDeps {
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
+    /** A phone's upload (§6.8): the bytes land in a temp file for exactly as long as the inbox copies them. */
+    uploads: {
+        sendFile(to: string, text: string, name: string, bytes: Uint8Array): Promise<{ ok: true; messageId: string } | { ok: false; reason: string }>;
+    };
     serviceEnvFor(workspaceId: string): Record<string, string>;
     workspaceOps: {
         confirmAdd(path: string): Promise<unknown>;
@@ -202,6 +206,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates?.install() ?? null;
             case 'updates.cancel':
                 return deps.updates?.cancel() ?? false;
+            case 'inbox.sendFile':
+                return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
         }
     };
 
