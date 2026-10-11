@@ -77,6 +77,7 @@ interface SiteRecord {
 export class SiteManager {
     readonly #deps: SiteManagerDeps;
     readonly #sites = new Map<string, SiteRecord>();
+    readonly #listeners = new Set<() => void>();
 
     constructor(deps: SiteManagerDeps) {
         this.#deps = deps;
@@ -127,7 +128,18 @@ export class SiteManager {
             record = { input, id, host, port, processIds: [id, ...processIds], external: false, stopped: false };
         }
         this.#sites.set(id, record);
+        this.#changed();
         return this.#info(record);
+    }
+
+    /** Fires after create, stop and remove — what re-renders the external front door's Caddyfile. */
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => this.#listeners.delete(listener);
+    }
+
+    #changed(): void {
+        for (const l of this.#listeners) l();
     }
 
     get(id: string): SiteInfo | null {
@@ -152,15 +164,24 @@ export class SiteManager {
     stop(id: string): boolean {
         const record = this.#sites.get(id);
         if (!record) return false;
-        for (const procId of record.processIds) this.#deps.supervisor.stop(procId);
-        record.stopped = true;
+        this.#stopProcesses(record);
+        this.#changed();
         return true;
     }
 
+    /** Stop and forget. ONE change event, not two — a listener re-rendering a config file should not do it twice. */
     remove(id: string): boolean {
-        if (!this.stop(id)) return false;
+        const record = this.#sites.get(id);
+        if (!record) return false;
+        this.#stopProcesses(record);
         this.#sites.delete(id);
+        this.#changed();
         return true;
+    }
+
+    #stopProcesses(record: SiteRecord): void {
+        for (const procId of record.processIds) this.#deps.supervisor.stop(procId);
+        record.stopped = true;
     }
 
     #info(record: SiteRecord): SiteInfo {

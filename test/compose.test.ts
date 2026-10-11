@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -109,5 +109,31 @@ describe('shutdown', () => {
         expect(services.supervisor.status('proc_a')?.state).toBe('stopped');
         await services.shutdown();
         expect(port).toBeGreaterThan(0);
+    });
+});
+
+describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', () => {
+    it('with a Caddy binary, a supervised caddy process is started ONCE with --watch and the Caddyfile is rewritten as sites come and go; without one, nothing starts and the reason is recorded', async () => {
+        await services.shutdown();
+        await rm(dir, { recursive: true, force: true });
+        dir = await mkdtemp(join(tmpdir(), 'genie2-compose-caddy-'));
+        pty = fakePty();
+        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0 });
+        const caddyProcs = () => pty.opened.filter((o) => o.command?.includes('/opt/genie/runtime/caddy run') && o.command.includes('--watch'));
+        expect(caddyProcs()).toHaveLength(1);
+        const caddyfile = join(dir, 'runtime', 'caddy', 'Caddyfile');
+        expect((await readFile(caddyfile)).toString()).toContain('default_bind 127.0.0.1');
+
+        services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
+        expect((await readFile(caddyfile)).toString()).toContain('https://docs.gen {');
+        services.sites.stop('site_docs');
+        expect((await readFile(caddyfile)).toString()).not.toContain('docs.gen');
+        // COUNTED: still one caddy process — --watch reloads it; we never spawn a second.
+        expect(caddyProcs()).toHaveLength(1);
+        expect(services.externalFrontDoor).toEqual({ running: true, caddyfile });
+
+        await services.shutdown();
+        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+        expect(services.externalFrontDoor).toEqual({ running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' });
     });
 });

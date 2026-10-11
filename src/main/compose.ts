@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
+import { frontDoorCaddyfile } from '../core/front-door-caddy.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
@@ -54,6 +55,8 @@ export interface ComposedServices {
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: ApprovalQueue;
     readonly frontDoorPort: number;
+    /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
+    readonly externalFrontDoor: { running: true; caddyfile: string } | { running: false; reason: string };
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
     /** The Deck's items from the stores, now. */
@@ -67,6 +70,36 @@ export interface ComposedServices {
     /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
     resolveAddress(text: string): Resolution;
     shutdown(): Promise<void>;
+}
+
+/**
+ * The EXTERNAL front door: Genie's bundled Caddy serving https://<name>.gen on 443 with its internal
+ * CA, as ONE supervised process started with --watch, so the routes change by rewriting the Caddyfile
+ * and never by spawning a second Caddy. Without a bundled binary nothing starts, and the reason is
+ * recorded for the Hosting surface — the in-app browser does not need this path.
+ */
+function startExternalFrontDoor(caddyBin: string | null, caddyDir: string, sites: SiteManager, supervisor: ProcessSupervisor): ComposedServices['externalFrontDoor'] {
+    if (caddyBin === null) {
+        return { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' };
+    }
+    const caddyfile = join(caddyDir, 'Caddyfile');
+    const render = () => {
+        mkdirSync(caddyDir, { recursive: true });
+        writeFileSync(caddyfile, frontDoorCaddyfile(sites.routes()), 'utf8');
+    };
+    render();
+    sites.onChange(render);
+    supervisor.onChange(render);
+    supervisor.start({
+        id: 'genie-front-door',
+        workspaceId: '_genie',
+        name: 'Genie front door (Caddy)',
+        command: `${caddyBin} run --config ${caddyfile} --adapter caddyfile --watch`,
+        cwd: caddyDir,
+        env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
+        restart: 'always',
+    });
+    return { running: true, caddyfile };
 }
 
 export async function composeServices(input: ComposeInput): Promise<ComposedServices> {
@@ -109,6 +142,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const approvals = new ApprovalQueue({ now });
+    const externalFrontDoor = startExternalFrontDoor(input.caddyBin, join(runtimeDir(input.userData), 'caddy'), sites, supervisor);
     const agents = new Map<string, { name: string; workspaceId: string }>();
     const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
@@ -125,6 +159,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         frontDoor,
         approvals,
         frontDoorPort,
+        externalFrontDoor,
         routes,
         deckItems: () => [
             ...approvals.deckItems(),
