@@ -186,6 +186,8 @@ export interface GenieBridge {
         close(id: string): void;
         /** Open terminals in one workspace — so a window that reloads can re-attach (§6.5). */
         list(workspaceId: string): Promise<readonly { id: string; pid: number; shell: string }[]>;
+        /** The previous session's scrollback for this workspace, ONCE (§6.5); `null` when there is none. */
+        previousSession(workspaceId: string): Promise<string | null>;
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
@@ -280,6 +282,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
     resize: () => {},
     close: () => {},
     list: () => Promise.resolve([]),
+    previousSession: () => Promise.resolve(null),
     onData: () => () => {},
     onExit: () => () => {},
 };

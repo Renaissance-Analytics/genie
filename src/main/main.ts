@@ -38,6 +38,7 @@ import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
+import { TerminalSnapshots } from './terminal-snapshots.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -82,6 +83,7 @@ let window: BrowserWindow | null = null;
 let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
 let filesHost: FilesHost | null = null;
+let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let host: SessionHost | null = null;
 let updates: UpdateHost | null = null;
@@ -264,6 +266,8 @@ async function boot(): Promise<void> {
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
     }, () => services?.settings.snapshot() ?? {});
     terminals = new TerminalHost(ptyPort);
+    // §6.5: what the terminals showed at the last quit, handed back once per workspace.
+    snapshots = await TerminalSnapshots.open(genieHome());
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
     filesHost = new FilesHost({
         workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
@@ -525,6 +529,8 @@ async function boot(): Promise<void> {
         typeof rawWorkspaceId === 'string'
             ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
             : []);
+
+    ipcMain.handle('genie:terminal-previous', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? snapshots?.take(workspaceId) ?? null : null));
 
     // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
     ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
@@ -792,7 +798,9 @@ app.on('before-quit', (event) => {
         runningRecorded = true;
         const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
         event.preventDefault();
-        void registry.markRunningAtQuit(running).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
+        const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
+        void Promise.all([registry.markRunningAtQuit(running), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
     host?.stopAll();

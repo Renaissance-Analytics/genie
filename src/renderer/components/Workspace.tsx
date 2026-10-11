@@ -85,6 +85,8 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     }, []);
     /** A pane size the engine can be opened at, so the first paint is not the wrong shape. */
     const lastSize = useRef<{ cols: number; rows: number }>({ cols: 120, rows: 30 });
+    /** The previous session is seeded into the FIRST terminal opened here, once (§6.5). */
+    const seededPrevious = useRef(false);
 
     // Output and exits for EVERY terminal arrive on the same channel; the reducer drops what is
     // not this workspace's. Subscribed once per mount, released on unmount — the old build
@@ -117,12 +119,16 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     }, [terminals, workspace.id]);
 
     const openTerminal = useCallback(() => {
-        void terminals.open(workspace.id, { ...lastSize.current }).then((opened) => {
+        const previous = seededPrevious.current ? Promise.resolve<string | null>(null) : terminals.previousSession(workspace.id);
+        seededPrevious.current = true;
+        void Promise.all([terminals.open(workspace.id, { ...lastSize.current }), previous]).then(([opened, restored]) => {
             setState((s) =>
                 terminalOpened(
                     s,
                     { id: opened.id, workspaceId: workspace.id, shell: opened.shell, pid: opened.pid, exited: null },
-                    opened.scrollback,
+                    // A snapshot from the last quit opens ABOVE the divider; the new shell's own output follows live.
+                    restored ?? opened.scrollback,
+                    restored ? { restored: true } : {},
                 ),
             );
         });
