@@ -64,6 +64,11 @@ export class FlowScheduler {
     }
 
     /** Resolves when no run is in flight — what a host awaits before quitting, and what a test awaits. */
+    /** How many flows are executing right now — the Deck's "N flows running" signal. */
+    inFlightCount(): number {
+        return this.#inFlight === null ? 0 : 1;
+    }
+
     settled(): Promise<void> {
         return this.#inFlight ?? Promise.resolve();
     }

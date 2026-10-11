@@ -1,14 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile as readFileP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
-import type { DeckItem } from '../core/deck.js';
+import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
+import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { configSyncTargets } from './config-sync-targets.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
@@ -65,6 +67,8 @@ export interface ComposeInput {
     readonly remoteTransport?: ServerTransport;
     /** What a remote connection may perform here; main.ts wires the real one. Refuses everything by default. */
     readonly remoteApi?: HostApi;
+    /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
+    readonly mcpEndpoint?: () => { url: string; token: string } | null;
 }
 
 /** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
@@ -90,6 +94,12 @@ export interface ComposedServices {
     readonly remote: RemoteHost;
     /** Feedback about Genie itself (§6.3 submitFeedback), kept here until Tynn is connected. */
     readonly feedback: FeedbackStore;
+    /** The Deck's signal strip, MEASURED from the stores (§4.5). */
+    signals(context: { osAgentWorking: boolean }): SignalState;
+    /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
+    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[] };
+    /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
+    syncConfig(workspacePath: string): Promise<SyncResult[]>;
     readonly frontDoorPort: number;
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
     readonly externalFrontDoor: FrontDoorStatus;
@@ -305,6 +315,36 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 agents: Object.fromEntries(agents),
             }),
         ],
+        signals: ({ osAgentWorking }) => ({
+            flowsRunning: flowScheduler.inFlightCount(),
+            // Mail agents have not collected: unread for every registered agent, the human excluded.
+            uncollectedMail: [...agents.keys()].reduce((n, id) => n + inbox.unread(id as never).length, 0),
+            githubBlocked: githubAppStatus({ authorized: settings.snapshot().github_authorized === true, installedRepos: settings.snapshot().github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }).blocking,
+            osAgentWorking,
+        }),
+        integrations: () => {
+            const values = settings.snapshot();
+            return {
+                tynnSignedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0,
+                github: githubAppStatus({ authorized: values.github_authorized === true, installedRepos: values.github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }),
+                gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0 }),
+            };
+        },
+        syncConfig: async (workspacePath) => {
+            const endpoint = input.mcpEndpoint?.() ?? null;
+            if (!endpoint) throw new Error('Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace');
+            const values = settings.snapshot();
+            const flag = (k: string) => values[k] !== false;
+            const targets = configSyncTargets({
+                workspacePath,
+                fs: {
+                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
+                },
+                flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
+            });
+            return configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+        },
         registerAgentName: (agentId, who) => { agents.set(agentId, who); },
         registerAgentAddress: (address, agentId) => { addresses.set(address, agentId); },
         agentAddresses: () => [...addresses].map(([address, agentId]) => ({ address, agentId, name: agents.get(agentId)?.name ?? agentId })),

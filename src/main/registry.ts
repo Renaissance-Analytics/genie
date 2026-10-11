@@ -2,7 +2,7 @@ import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
 import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
-import type { DeckItem } from '../core/deck.js';
+import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
 
@@ -48,6 +48,7 @@ export class Registry {
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
     #listeners = new Set<(snapshot: GenieSnapshot) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
+    #signals: (() => SignalState) | null = null;
     #loaded = false;
 
     constructor(store: Store) {
@@ -91,6 +92,11 @@ export class Registry {
         });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
+    }
+
+    /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
+    setSignals(provider: () => SignalState): void {
+        this.#signals = provider;
     }
 
     setProbe(probe: SessionProbe): void {
@@ -154,7 +160,7 @@ export class Registry {
              * the GitHub integration are not built, so none of them has anything to report. The
              * strip renders nothing, which is exactly what it should do when nothing is true.
              */
-            signals: { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
+            signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
         };
     }

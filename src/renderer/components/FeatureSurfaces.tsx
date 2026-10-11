@@ -459,6 +459,7 @@ export function SettingsSurface({ data, onAction, group, workspaces = [], remote
                                     </li>
                                 ))}
                             </ul>
+                            {g === 'workstation' ? <Integrations integrations={data.integrations} workspaces={workspaces} onAction={onAction} /> : null}
                             {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                         </Tabs.Panel>
                     ))}
@@ -522,6 +523,90 @@ function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteCon
             <button type="submit" className={button}>Connect</button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
         </form>
+    );
+}
+
+const GITHUB_APP_URL = 'https://github.com/apps/genie-aos';
+
+/**
+ * INTEGRATIONS (§6.9). Tynn is OPTIONAL: signed out shows the sign-in and every Tynn-gated row still
+ * listed, annotated with the route; signed in shows Sign out. The GitHub App is TWO distinct steps,
+ * each confirmed by the person after doing it in the browser (the app's own URL is plain text to
+ * open). Config sync is a button per workspace; the last run's four results each get their own line.
+ */
+function Integrations({ integrations, workspaces, onAction }: { integrations: FeatureData['integrations']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction'] }) {
+    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    return (
+        <section data-integrations className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
+            <h2 className="text-sm font-semibold">Integrations</h2>
+            {integrations === null ? (
+                <Skeletons rows={3} />
+            ) : (
+                <>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
+                        {integrations.tynnSignedIn ? (
+                            <div className="flex items-center gap-3 text-sm">
+                                <span>Signed in to Tynn.</span>
+                                <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'integrations.tynnToken', token: '' })}>Sign out</button>
+                            </div>
+                        ) : (
+                            <form data-form="tynn-sign-in" className="flex flex-wrap items-end gap-2 text-sm" onSubmit={(e) => { e.preventDefault(); onAction({ kind: 'integrations.tynnToken', token: String(new FormData(e.currentTarget).get('token') ?? '') }); }}>
+                                <span className="basis-full text-[var(--fg-3)]">Genie is fully usable signed out; Tynn adds identity and work-item sync. Rows that need it are listed below, annotated, never hidden.</span>
+                                <Input name="token" type="password" placeholder="Tynn API token" />
+                                <button type="submit" className={button}>Sign in</button>
+                            </form>
+                        )}
+                        <ul className="mt-2 divide-y divide-[var(--border-1)]">
+                            {integrations.gated.map((row) => (
+                                <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
+                                    <span className={row.enabled ? '' : 'text-[var(--fg-3)]'}>{row.label}</span>
+                                    {row.note ? <span className="text-xs text-[var(--fg-3)]">{row.note}</span> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">GitHub App — two steps</h3>
+                        <p className="text-sm text-[var(--fg-3)]">Open <span className="font-mono">{GITHUB_APP_URL}</span>, do each step there, then confirm it here.</p>
+                        <ol className="mt-1 flex flex-col gap-1 text-sm">
+                            {integrations.github.steps.map((step, i) => {
+                                const offered = integrations.github.blockedBy === step.id;
+                                return (
+                                    <li key={step.id} data-github-step={step.id} {...(step.done ? { 'data-github-done': step.id } : {})} className="flex items-center gap-3">
+                                        <span className="font-mono text-xs text-[var(--fg-4)]">{i + 1}</span>
+                                        <span>{step.id === 'authorize' ? 'Authorize the app for your account' : 'Install the app on the repositories Genie works in'}</span>
+                                        {step.done ? <Badge variant="soft" size="sm">done</Badge> : offered ? (
+                                            <button type="button" data-action={`github-confirm-${step.id}`} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'integrations.githubConfirm', step: step.id })}>I did this</button>
+                                        ) : null}
+                                    </li>
+                                );
+                            })}
+                        </ol>
+                        {integrations.github.signal ? <p className="mt-1 text-xs text-[var(--warning)]">{integrations.github.signal.label}</p> : null}
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Config sync</h3>
+                        <form className="flex items-center gap-2 text-sm" onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'integrations.syncConfig', workspaceId: w.id, workspacePath: w.path }); }}>
+                            <WorkspacePick workspaces={workspaces} name="workspace" />
+                            <button type="submit" data-action="sync-config" disabled={workspaces.length === 0} className={`${button} disabled:opacity-50`}>Sync now</button>
+                            <span className="text-xs text-[var(--fg-3)]">Writes Genie’s MCP endpoint into the four harness configs of that workspace.</span>
+                        </form>
+                        {integrations.lastSync ? (
+                            <ul className="mt-2 divide-y divide-[var(--border-1)]">
+                                {integrations.lastSync.results.map((r) => (
+                                    <li key={r.id} data-sync-result={r.id} data-ok={r.ok ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
+                                        <span>{r.label}</span>
+                                        <Badge variant="soft" size="sm">{r.ok ? 'written' : 'failed'}</Badge>
+                                        {r.error ? <span className="text-xs text-[var(--danger)]">{r.error}</span> : null}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : null}
+                    </div>
+                </>
+            )}
+        </section>
     );
 }
 
