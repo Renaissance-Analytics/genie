@@ -21,6 +21,7 @@
   "dependencies": {
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
+    "@particle-academy/fancy-flow": "^0.81.0",
     "@particle-academy/fancy-term": "^0.6.2",
     "@particle-academy/fancy-term-host": "0.10.0-rc.1",
     "@particle-academy/prism-acp": "^0.6.2",
