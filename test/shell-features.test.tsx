@@ -20,7 +20,7 @@ const SNAP: GenieSnapshot = {
 };
 
 const FEATURES: FeatureData = {
-    knowledge: { hits: null, query: '' },
+    knowledge: { hits: null, query: '', adding: null, lastAdd: null },
     flows: null,
     hosting: null,
     services: null,

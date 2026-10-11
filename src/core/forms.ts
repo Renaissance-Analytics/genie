@@ -145,3 +145,24 @@ export function validateServiceForm(form: ServiceForm): Problem[] {
     if (def.sharing === 'shared-only' && form.scope === 'dedicated') problems.push({ field: 'scope', message: `${form.engine} is a shared service — one per workstation, never per workspace.` });
     return problems;
 }
+
+export type KnowledgeClass = 'profile' | 'episodic' | 'procedural' | 'knowledge';
+export type KnowledgeScope = { readonly kind: 'system' } | { readonly kind: 'workspace'; readonly id: string };
+
+/** "Add a memory": a title, a body (wikilinks welcome), a class, and where it files. */
+export interface KnowledgeForm {
+    readonly title: string;
+    readonly body: string;
+    readonly class: KnowledgeClass;
+    readonly scope: KnowledgeScope;
+}
+
+export function knowledgeFormDefaults(input: { workspaceId?: string }): KnowledgeForm {
+    return { title: '', body: '', class: 'knowledge', scope: input.workspaceId ? { kind: 'workspace', id: input.workspaceId } : { kind: 'system' } };
+}
+
+export function validateKnowledgeForm(form: KnowledgeForm): Problem[] {
+    const problems: Problem[] = [];
+    if (form.title.trim().length === 0) problems.push({ field: 'title', message: 'A memory needs a title.' });
+    return problems;
+}

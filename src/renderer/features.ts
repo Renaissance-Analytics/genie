@@ -1,4 +1,4 @@
-import type { FlowForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
+import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { DeckItem } from '../core/deck.js';
@@ -50,8 +50,21 @@ export interface ServiceView {
     readonly status: ServiceStatus;
 }
 
+/** An Add-a-memory form open in the Knowledge surface. */
+export interface KnowledgeAdding {
+    readonly defaults: KnowledgeForm;
+    readonly problems: readonly Problem[];
+}
+
+/** What the last add did: the node, and every `[[wikilink]]` that did not resolve, with why. */
+export interface KnowledgeAdded {
+    readonly id: string;
+    readonly title: string;
+    readonly unresolved: readonly { ref: string; reason: 'ambiguous' | 'missing' }[];
+}
+
 export interface FeatureData {
-    readonly knowledge: { hits: readonly Hit[] | null; query: string };
+    readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
@@ -63,7 +76,7 @@ export interface FeatureData {
 
 /** First paint: nothing has been asked yet. */
 export const EMPTY_FEATURES: FeatureData = {
-    knowledge: { hits: null, query: '' },
+    knowledge: { hits: null, query: '', adding: null, lastAdd: null },
     flows: null,
     hosting: null,
     services: null,
@@ -76,6 +89,10 @@ export const EMPTY_FEATURES: FeatureData = {
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
 export type FeatureAction =
     | { kind: 'knowledge.search'; query: string }
+    | { kind: 'knowledge.openAdd'; workspaceId?: string }
+    | { kind: 'knowledge.cancelForm' }
+    /** The Add-a-memory form, submitted as the USER. Validated in main; the add's unresolved links are reported back. */
+    | { kind: 'knowledge.create'; form: KnowledgeForm }
     | { kind: 'flows.arm'; flowId: string }
     | { kind: 'flows.disarm'; flowId: string }
     | { kind: 'flows.remove'; flowId: string }
