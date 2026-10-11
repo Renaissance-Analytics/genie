@@ -113,13 +113,22 @@ export class FilesHost {
             if (typeof filename !== 'string') return;
             const rel = confine(ws.path, filename);
             if (rel === null || rel === '' || rel.split('/').some((seg) => SKIP.has(seg))) return;
-            const set = this.#changedOnDisk.get(workspaceId) ?? new Set<string>();
-            set.add(rel);
-            this.#changedOnDisk.set(workspaceId, set);
-            for (const l of this.#listeners) l(workspaceId);
+            // Windows reports the parent DIRECTORIES of a written file as changed too; only files are "changes" here.
+            // A path that no longer exists is a deletion and still counts.
+            void stat(join(ws.path, ...rel.split('/'))).then(
+                (info) => { if (!info.isDirectory()) this.#recordChange(workspaceId, rel); },
+                () => { this.#recordChange(workspaceId, rel); },
+            );
         });
         watcher.on('error', () => { /* a lost watcher means no new unreported marks; the tree still opens */ });
         this.#watchers.set(workspaceId, watcher);
+    }
+
+    #recordChange(workspaceId: string, rel: string): void {
+        const set = this.#changedOnDisk.get(workspaceId) ?? new Set<string>();
+        set.add(rel);
+        this.#changedOnDisk.set(workspaceId, set);
+        for (const l of this.#listeners) l(workspaceId);
     }
 
     onChange(listener: (workspaceId: string) => void): () => void {

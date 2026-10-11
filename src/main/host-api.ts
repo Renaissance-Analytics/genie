@@ -50,6 +50,7 @@ export interface HostApiDeps {
         settings(workspaceId: string): Promise<unknown> | unknown;
         setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
+        setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
     };
     agentOps: {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
@@ -155,6 +156,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), typeof args[2] === 'boolean' ? args[2] : str(args[2]));
             case 'workspaces.resetSetting':
                 return deps.workspaceOps.resetSetting(str(args[0]), str(args[1]));
+            case 'workspaces.setGoverns':
+                return deps.workspaceOps.setGoverns(str(args[0]), Array.isArray(args[1]) ? args[1].map(str) : []);
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':

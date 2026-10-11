@@ -262,6 +262,7 @@ function GroupHeader({
                 <span className="font-semibold">{group.workspaceId}</span>
                 <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
+                {group.governedBy ? <span data-governed-by={group.governedBy} className="ml-2.5 shrink-0 text-[var(--fg-4)]">governed by {group.governedBy}</span> : null}
                 <span className="ml-auto shrink-0 text-[var(--fg-3)]">Open workspace →</span>
             </div>
 
@@ -305,7 +306,7 @@ export interface DashboardProps {
      * which renders the first-run invitation. Collapsing them puts a confident claim about an
      * empty machine on screen before anybody has looked.
      */
-    workspaces: readonly { id: string; path: string }[] | null;
+    workspaces: readonly { id: string; path: string; governedBy?: string | null | undefined }[] | null;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
@@ -315,6 +316,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
+        Object.fromEntries((workspaces ?? []).flatMap((w) => (w.governedBy ? [[w.id, w.governedBy]] : []))),
     );
     const chips = summaryChips(rows);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';

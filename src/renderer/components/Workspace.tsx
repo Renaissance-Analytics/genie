@@ -57,6 +57,12 @@ export interface WorkspaceOpsProps {
         readonly onRemove: (slug: string) => void;
         readonly onOpen: (path: string) => void;
     } | undefined;
+    /** Ops projects (§6.1): which other workspaces this one governs; absent = not offered. */
+    readonly governs?: {
+        readonly children: readonly string[];
+        readonly candidates: readonly { id: string }[];
+        readonly onSet: (childIds: string[]) => void;
+    } | undefined;
     /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
     readonly settings?: {
         readonly values: Readonly<Record<string, boolean | string>> | null;
@@ -205,6 +211,31 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
 
+            {ops?.governs ? (
+                <section data-governs className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Governs</h2>
+                        <span className="text-[var(--fg-4)]">An ops project governs other workspaces: they sit under it in the rail and the Dashboard, and its agents reach theirs as if from inside. Nothing is written into their folders.</span>
+                    </div>
+                    {ops.governs.candidates.length === 0 ? (
+                        <p className="mt-1 text-[var(--fg-3)]">No other workspaces to govern.</p>
+                    ) : (
+                        <ul className="mt-1 flex flex-wrap gap-3">
+                            {ops.governs.candidates.map((c) => {
+                                const on = ops.governs!.children.includes(c.id);
+                                return (
+                                    <li key={c.id}>
+                                        <label className="flex items-center gap-1.5">
+                                            <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
+                                            <span>{c.id}</span>
+                                        </label>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
+            ) : null}
             {ops?.settings ? (
                 <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
                     <div className="flex items-center gap-3">

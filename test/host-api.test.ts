@@ -54,6 +54,7 @@ function fakes() {
             settings: async (id) => ({ ok: true, values: {}, overridden: [] }),
             setSetting: async (id, key, value) => { calls.push(`ws-setting:${id}:${key}=${String(value)}`); return { ok: true }; },
             resetSetting: async (id, key) => { calls.push(`ws-setting-reset:${id}:${key}`); return { ok: true }; },
+            setGoverns: async (id, children) => { calls.push(`ws-governs:${id}:${children.join('+')}`); return { ok: true, governs: [...children] }; },
         },
         agentOps: {
             restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },

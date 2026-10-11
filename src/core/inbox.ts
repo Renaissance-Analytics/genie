@@ -94,6 +94,8 @@ export function agentCapFrom(values: Readonly<Record<string, unknown>>): number 
 export interface ReachableOptions {
     /** For an agent whose own scope is `specific`: the workspace ids it allows. */
     readonly agentWorkspaces?: readonly string[];
+    /** Ops projects (§6.1): true when `fromWorkspace` governs `toWorkspace` — the governor then counts as the child's own workspace in both tiers. */
+    readonly governs?: (fromWorkspace: string, toWorkspace: string) => boolean;
 }
 
 function tierAllows(
@@ -131,9 +133,11 @@ export function reachable(
     if (from === HUMAN || to === HUMAN) return true;
     if (to.accessScope === 'none') return false;
 
+    // A governor (§6.1) stands where the child's own workspace stands — in both tiers; the reverse is not implied.
+    const fromWorkspace = options.governs?.(from.workspaceId, to.workspaceId) === true ? to.workspaceId : from.workspaceId;
     const ws = workspaceSetting(to.workspaceId);
-    const workspaceTier = tierAllows(ws.scope, from.workspaceId, to.workspaceId, ws.workspaces ?? []);
-    const agentTier = tierAllows(to.accessScope, from.workspaceId, to.workspaceId, options.agentWorkspaces ?? []);
+    const workspaceTier = tierAllows(ws.scope, fromWorkspace, to.workspaceId, ws.workspaces ?? []);
+    const agentTier = tierAllows(to.accessScope, fromWorkspace, to.workspaceId, options.agentWorkspaces ?? []);
     return workspaceTier && agentTier;
 }
 

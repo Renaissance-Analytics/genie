@@ -604,6 +604,9 @@ async function boot(): Promise<void> {
         if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
         try { await services.settings.resetFor(raw, key); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
     });
+    // OPS PROJECTS (§6.1): which workspaces this one governs.
+    ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
+        (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
     ipcMain.handle('genie:workspace-preview-add', async () => {
         if (!window) return { ok: false, reason: 'no window to pick a folder from' };
         const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
@@ -699,6 +702,7 @@ async function boot(): Promise<void> {
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                setGoverns: (id, children) => registry!.setGoverns(id, children),
             },
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),

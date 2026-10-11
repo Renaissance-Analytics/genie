@@ -167,6 +167,8 @@ export interface GenieBridge {
         settings(workspaceId: string): Promise<{ ok: true; values: Record<string, boolean | string>; overridden: string[] } | { ok: false; reason: string }>;
         setSetting(workspaceId: string, key: string, value: boolean | string): Promise<{ ok: true } | { ok: false; reason: string }>;
         resetSetting(workspaceId: string, key: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Ops projects (§6.1): which other workspaces this one governs; known ids only, never itself. */
+        setGoverns(workspaceId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
