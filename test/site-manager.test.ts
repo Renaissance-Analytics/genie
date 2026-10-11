@@ -146,3 +146,15 @@ describe('lifecycle', () => {
         expect(sites.get('site_tynn')).toMatchObject({ state: 'stopped' });
     });
 });
+
+describe('change events', () => {
+    it('fires onChange on create, stop and remove — the external front door re-renders its Caddyfile from it', () => {
+        const { sites } = make();
+        const seen: string[] = [];
+        sites.onChange(() => seen.push(sites.routes().map((r) => r.host).join(',')));
+        sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: '/r', serve: { mode: 'proxy' }, hostPort: 5173 });
+        sites.stop('site_docs');
+        sites.remove('site_docs');
+        expect(seen).toEqual(['docs.gen', '', '']);
+    });
+});

@@ -13,6 +13,7 @@ import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
 import { readV1Settings } from './v1-settings.js';
+import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate } from './toolchain-prober.js';
 import { HOST_TOOLS } from '../core/toolchain.js';
@@ -416,7 +417,8 @@ async function boot(): Promise<void> {
         userData: genieHome(),
         pty: ptyPort,
         v1Settings: () => readV1Settings(join(genieHome(), 'genie.db')),
-        caddyBin: null,
+        // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
+        caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,
     });
     services = composed;
