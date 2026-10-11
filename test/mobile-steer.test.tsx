@@ -52,13 +52,19 @@ describe('MobileShell agents', () => {
     });
 });
 
-const event = (id: string, kind: 'agent_message_chunk' | 'tool_call', at: number): TimedEvent =>
-    ({ id, at, event: kind === 'tool_call' ? { kind: 'tool_call', id, title: 'Bash npm test', status: 'completed', rawInput: null, toolKind: 'execute' } : { kind: 'agent_message_chunk', text: 'done with the migration' } } as unknown as TimedEvent);
+// Genie's OWN ledger shape (`StreamEvent`), not ACP's update kinds: the phone draws what the desktop Stream draws.
+const event = (id: string, kind: 'message' | 'tool', at: number): TimedEvent => ({
+    id,
+    at,
+    event: kind === 'tool'
+        ? { kind: 'tool', toolCallId: id, name: 'Bash', title: 'npm test', status: 'completed', toolKind: 'execute', rawInput: null }
+        : { kind: 'message', speaker: 'agent', peerName: null, text: 'done with the migration' },
+});
 
 const detail = (over: Partial<AgentDetail> = {}): AgentDetail => ({
     agent: { id: 'agent_kai', name: 'kai', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' } as AgentDetail['agent'],
     session: { running: true, state: 'thinking' } as unknown as AgentDetail['session'],
-    rows: [event('e1', 'tool_call', 1_760_000_000_000), event('e2', 'agent_message_chunk', 1_760_000_001_000)],
+    rows: [event('e1', 'tool', 1_760_000_000_000), event('e2', 'message', 1_760_000_001_000)],
     turns: 3,
     cost: null,
     refusal: null,
