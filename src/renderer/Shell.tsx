@@ -2,6 +2,7 @@ import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute } from '../core/route.js';
 import { dockReserve, type DockPanel } from '../core/dock.js';
 import { Deck } from './components/Deck.js';
+import type { DeckItem } from '../core/deck.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView } from './components/AgentView.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
@@ -74,7 +75,8 @@ export interface ShellProps {
     answeringApproval: string | null;
     onAnswerApproval: (optionId: string) => void;
     /** Answering from the DECK names its agent, because the route is not on that agent. */
-    onAnswerDeckItem: (agentId: string, optionId: string) => void;
+    /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
+    onAnswerDeckItem: (item: DeckItem, optionId: string) => void;
     onTogglePin: () => void;
     onCloseChat: () => void;
     onOpenAgent: (agentId: string) => void;
@@ -201,7 +203,7 @@ export function Shell({
                             items={snapshot.deckItems ?? []}
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
-                            onAnswer={(item, optionId) => { if (item.agentId) onAnswerDeckItem(item.agentId, optionId); }}
+                            onAnswer={(item, optionId) => onAnswerDeckItem(item, optionId)}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {
