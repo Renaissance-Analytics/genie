@@ -25,10 +25,11 @@ const render = (r: FeatureData['remote']) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
 
 describe('pairing QR', () => {
-    it('with a PIN the panel draws an SVG QR carrying the host URL and the PIN, labelled for the destination, value beside it as text', () => {
+    it('with a PIN the panel draws an SVG QR carrying the PAGE a phone opens (§6.8) and the PIN, labelled for the destination, value beside it as text', () => {
         const html = render(remote);
         expect(html).toContain('data-pairing-qr');
-        expect(html).toContain('data-qr-value="ws://alphar.tailnet.invalid:7421/genie#pin=482913"');
+        // The socket URL is nothing a phone can scan into; the page URL on the same port is, and it dials the socket itself.
+        expect(html).toContain('data-qr-value="http://alphar.tailnet.invalid:7421/mobile#pin=482913"');
         expect(html).toMatch(/<svg[^>]*>/);
         expect(html).toMatch(/Pair this device/);
         expect(html).toContain('data-pin="482913"');

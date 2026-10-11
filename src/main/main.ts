@@ -43,6 +43,7 @@ import { addRepoTo, listReposOf, removeRepoFrom, type RepoOpsPorts } from './rep
 import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
+import { staticServer } from './static-page.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -663,6 +664,8 @@ async function boot(): Promise<void> {
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
+        // The phone's page (§6.8): the built renderer, from the same directory the window loads it from.
+        serve: staticServer(join(here, '../renderer')),
     });
     remoteSocketNow = remoteSocket;
     const composed = await composeServices({

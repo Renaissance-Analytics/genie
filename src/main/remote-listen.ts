@@ -2,6 +2,7 @@ import { createServer as nodeCreateServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 import { REMOTE_PATH, parseTailscaleStatus, remoteListenAddress } from '../core/tailscale.js';
+import type { PageServer } from './static-page.js';
 import { fancyWsTransport, type AttachWebSocketServer } from './ws-server-transport.js';
 
 /**
@@ -18,6 +19,8 @@ export interface RemoteListenerInput {
     readonly port: number;
     readonly attach: AttachWebSocketServer;
     readonly createServer?: () => Server;
+    /** The phone's page (§6.8): GET on this port serves the built renderer through it. Absent, the port serves nothing but the socket. */
+    readonly serve?: PageServer;
 }
 
 /** The listener's transport always answers where it listens and why not — never optional here. */
@@ -65,8 +68,24 @@ export function remoteListener(input: RemoteListenerInput): RemoteListener {
                 return;
             }
             const s = (input.createServer ?? nodeCreateServer)();
-            // Anything that is not the socket upgrade gets a 404 — this port serves nothing else.
-            s.on('request', (_req, res) => { res.statusCode = 404; res.end(); });
+            // THE PHONE'S PAGE (§6.8) rides the same port: GET/HEAD for what `serve` allows, 405 for any other method,
+            // 404 for everything else — and with no `serve`, 404 for everything: the port carries the socket alone.
+            const serve = input.serve;
+            s.on('request', (req, res) => {
+                void (async () => {
+                    if (!serve) { res.statusCode = 404; res.end(); return; }
+                    if (req.method !== 'GET' && req.method !== 'HEAD') { res.statusCode = 405; res.setHeader('Allow', 'GET, HEAD'); res.end(); return; }
+                    const served = await serve(req.url ?? '/');
+                    if (!served) { res.statusCode = 404; res.end(); return; }
+                    res.statusCode = 200;
+                    res.setHeader('Content-Type', served.contentType);
+                    res.setHeader('Cache-Control', served.cache);
+                    res.setHeader('X-Content-Type-Options', 'nosniff');
+                    res.setHeader('Content-Length', served.body.byteLength);
+                    if (req.method === 'HEAD') res.end();
+                    else res.end(Buffer.from(served.body));
+                })().catch(() => { res.statusCode = 500; res.end(); });
+            });
             await new Promise<void>((resolve, reject) => {
                 s.once('error', reject);
                 s.listen(input.port, where.bind, () => { s.off('error', reject); resolve(); });

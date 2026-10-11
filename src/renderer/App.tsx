@@ -13,6 +13,8 @@ import { soundFor, toastFor } from '../core/alerts.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
+import { mobileEntry, type MobileEntry } from '../core/mobile.js';
+import { MobilePair, MobileShell } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
@@ -210,7 +212,83 @@ export interface AppProps {
     bridge?: GenieBridge | undefined;
 }
 
+/**
+ * THE ENTRY DECISION (§6.8). Served over http at `/mobile` with no preload bridge, this renderer is a
+ * phone's shell; loaded from disk by the window (or handed a bridge by a test), it is the desktop.
+ * Decided once, from the page's own location — not from anything the host says.
+ */
 export function App({ bridge }: AppProps) {
+    const [entry] = useState<MobileEntry>(() =>
+        typeof window === 'undefined' ? { kind: 'desktop' } : mobileEntry(window.location, (bridge ?? window.genie) !== undefined),
+    );
+    return entry.kind === 'mobile' ? <MobileApp entry={entry} /> : <DesktopApp bridge={bridge} />;
+}
+
+/**
+ * THE PHONE (§6.8 mobile UI: questions mirrored). One remote client to the page's own origin — the
+ * QR's PIN or a remembered token dials it on arrival, otherwise the pairing form asks — then the
+ * host's snapshot drives `MobileShell`. Answers take the Deck's own routing: an approval goes to
+ * the provider, a feature answer to `features.act`, and an "open it" option is said to belong to
+ * the desktop rather than navigating a screen that has nowhere to go.
+ */
+function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> }) {
+    const remote = useRemote();
+    const connected = remote.state?.connected === true;
+    const bridge = connected ? remote.client!.bridge : undefined;
+    const snapshot = useSnapshot(bridge);
+    const [answering, setAnswering] = useState<string | null>(null);
+    const [note, setNote] = useState<string | null>(null);
+    const dialed = useRef(false);
+    const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
+    useEffect(() => {
+        if (dialed.current || !canDial) return;
+        dialed.current = true;
+        remote.connect({ host: entry.socketUrl, pin: entry.pin ?? '', label: 'phone' });
+        // The PIN is spent once dialed; a reload must not resend it (the token is remembered on welcome).
+        if (entry.pin !== null) window.history.replaceState(null, '', window.location.pathname);
+    }, [canDial, entry, remote]);
+
+    if (!connected || !remote.state) {
+        const connecting = remote.client !== null && (remote.state?.lastRefusal ?? null) === null;
+        return <MobilePair host={window.location.host} refusal={remote.state?.lastRefusal ?? null} connecting={connecting} onConnect={({ pin, label }) => remote.connect({ host: entry.socketUrl, pin, label: label || 'phone' })} />;
+    }
+    const host = remote.state.host ?? window.location.host;
+    return (
+        <MobileShell
+            host={host}
+            locked={remote.state.locked}
+            refusal={note ?? remote.state.lastRefusal}
+            items={snapshot.deckItems}
+            answering={answering}
+            onAnswer={(item, optionId) => {
+                setNote(null);
+                const route = deckAnswerRoute(item, optionId);
+                switch (route.kind) {
+                    case 'refused':
+                        setNote(route.reason);
+                        return;
+                    case 'navigate':
+                        setNote(`Open it on ${host}'s screen — this one only answers.`);
+                        return;
+                    case 'restart-with-handoff':
+                        void bridge!.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
+                        return;
+                    case 'provider':
+                        setAnswering(optionId);
+                        bridge!.answerApproval(route.agentId, optionId);
+                        return;
+                    case 'feature':
+                        setAnswering(optionId);
+                        void bridge!.features.act({ kind: 'deck.answer', item, optionId }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setAnswering(null));
+                        return;
+                }
+            }}
+            onDisconnect={remote.disconnect}
+        />
+    );
+}
+
+function DesktopApp({ bridge }: AppProps) {
     const [route, navigate] = useRoute();
     const remote = useRemote();
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));

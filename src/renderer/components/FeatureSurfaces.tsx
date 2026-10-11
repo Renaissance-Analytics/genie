@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
+import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
@@ -758,6 +759,8 @@ const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
  */
 function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
+    const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
@@ -778,10 +781,10 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
                                 </span>
                             ) : null}
                             {remote.pin ? (
-                                // A phone scans the host URL and the PIN together; both stay beside it as text (a code is an image of a value).
-                                <div data-pairing-qr data-qr-value={`${remote.url}#pin=${remote.pin.code}`} className="basis-full">
+                                // A phone scans the page URL and the PIN together; both stay beside it as text (a code is an image of a value).
+                                <div data-pairing-qr data-qr-value={`${pairUrl}#pin=${remote.pin.code}`} className="basis-full">
                                     <div className="w-fit rounded-xl bg-white p-2">
-                                        <QrCode value={`${remote.url}#pin=${remote.pin.code}`} label="Pair this device" size={128} errorCorrection="M" quietZone={4} foreground="#0b0b0c" background="#ffffff" />
+                                        <QrCode value={`${pairUrl}#pin=${remote.pin.code}`} label="Pair this device" size={128} errorCorrection="M" quietZone={4} foreground="#0b0b0c" background="#ffffff" />
                                     </div>
                                 </div>
                             ) : null}
