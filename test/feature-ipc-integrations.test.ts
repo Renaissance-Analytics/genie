@@ -43,6 +43,8 @@ describe('integrations in the snapshot', () => {
             github: { steps: [{ id: 'authorize', done: false }, { id: 'install', done: false }], blocking: true, blockedBy: 'authorize', missingRepos: ['this workstation'], signal: { label: 'GitHub permissions are blocking features', route: 'genie://settings/github' } },
             gated: [{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true, enabled: false, note: 'Sign in to Tynn to use this', route: 'genie://settings/tynn' }],
             lastSync: null,
+            // The endpoint composeServices was given flows into the section; nothing has probed it in this test.
+            mcp: { url: 'http://127.0.0.1:51717/mcp/abc', verified: null },
         });
     });
 

@@ -678,6 +678,23 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                 <Skeletons rows={3} />
             ) : (
                 <>
+                    {/* THE TRANSPORT, VERIFIED AT BOOT (§6.4, §6.9): where Genie's own MCP server listens and whether a real server/discover answered. */}
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Genie’s MCP server</h3>
+                        {integrations.mcp.url === null ? (
+                            <p data-mcp-status="off" className="text-sm text-[var(--fg-3)]">Not listening — agents in terminals have no Genie tools until it does.</p>
+                        ) : integrations.mcp.verified?.ok ? (
+                            <p data-mcp-status="verified" className="flex flex-wrap items-center gap-2 text-sm">
+                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
+                                <span className="text-[var(--fg-3)]">verified at boot — serves {integrations.mcp.verified.versions.join(', ')}</span>
+                            </p>
+                        ) : (
+                            <p data-mcp-status="unverified" className="flex flex-wrap items-center gap-2 text-sm">
+                                <span className="font-mono text-xs">{integrations.mcp.url}</span>
+                                <span className="text-red-500">listening, but the boot probe did not answer: {integrations.mcp.verified ? integrations.mcp.verified.reason : 'not probed yet'}</span>
+                            </p>
+                        )}
+                    </div>
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
                         {integrations.tynnSignedIn ? (
