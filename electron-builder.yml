@@ -2,6 +2,11 @@
 # identifies the application by it: keep it and the installer UPGRADES in place; change it and the
 # installer puts a second Genie beside the old one. test/upgrade.test.ts holds it.
 appId: ai.tynn.genie
+# And package.json is named `genie`, not genie2: a one-click per-user installer puts the app in
+# %LOCALAPPDATA%\Programs\<package name> (app-builder-lib targetUtil.getWindowsInstallationDirName —
+# only an assisted or per-machine install uses the product name). Every installed Genie is in
+# Programs\Genie because v1's package name is genie; measured 2026-10-10 when the first one-click
+# build landed in Programs\genie2 beside it. test/upgrade.test.ts holds both.
 productName: Genie
 copyright: Genie
 
