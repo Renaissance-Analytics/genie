@@ -1,3 +1,4 @@
+import { ATTACHMENT_LIMITS, isExecutableName } from './inbox.js';
 import { REMOTE_PATH } from './tailscale.js';
 
 /**
@@ -94,4 +95,39 @@ export function staticFile(urlPath: string): StaticFile | null {
     const contentType = ASSET_TYPES[ext];
     if (!contentType || ext === name) return null;
     return { relative: `assets/${name}`, contentType, cache: IMMUTABLE };
+}
+
+export type Orientation = 'portrait' | 'landscape';
+
+/**
+ * THE TERMINAL IS LANDSCAPE-ONLY on a phone (§6.8): eighty columns are not readable sideways-less.
+ * Portrait gets the sentence and no pane; a browser that cannot report its orientation gets no pane
+ * either, with that said rather than guessed.
+ */
+export function mobileTerminal(orientation: Orientation | null): { allowed: true } | { allowed: false; reason: string } {
+    if (orientation === 'landscape') return { allowed: true };
+    if (orientation === 'portrait') return { allowed: false, reason: 'Rotate to landscape for the terminal.' };
+    return { allowed: false, reason: 'This browser does not report its orientation, so the terminal stays closed.' };
+}
+
+const MB = 1024 * 1024;
+
+/**
+ * What the inbox would refuse (§6.4), said BEFORE the bytes leave the phone: a natively executable
+ * name, a file over the per-file cap, no name, no bytes. `null` means the inbox gets to decide.
+ */
+export function uploadRefusal(name: string, bytes: number): string | null {
+    if (name.trim().length === 0) return 'the file has no name';
+    if (isExecutableName(name)) return `${name} is a natively executable file and is refused`;
+    if (bytes === 0) return `${name} is empty`;
+    if (bytes > ATTACHMENT_LIMITS.perFileBytes) return `${name} is ${Math.ceil(bytes / MB)} MB; the limit is ${ATTACHMENT_LIMITS.perFileBytes / MB} MB per file`;
+    return null;
+}
+
+/** Base64 for the wire, in chunks — one `btoa` over a spread of a few MB blows the argument limit. */
+export function bytesToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    return btoa(binary);
 }

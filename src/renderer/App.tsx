@@ -13,8 +13,8 @@ import { soundFor, toastFor } from '../core/alerts.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
-import { mobileEntry, type MobileEntry } from '../core/mobile.js';
-import { MobilePair, MobileShell } from './components/MobileShell.js';
+import { bytesToBase64, mobileEntry, uploadRefusal, type MobileEntry, type Orientation } from '../core/mobile.js';
+import { MobilePair, MobileShell, MobileTerminalPane } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
@@ -240,6 +240,25 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const [note, setNote] = useState<string | null>(null);
     const dialed = useRef(false);
     const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
+    // M2/M3 (§6.8): the landscape-only terminal and upload. The terminal's output lives HERE, not in the
+    // pane, so rotating to portrait hides the pane and loses nothing; the shell keeps running on the host.
+    const orientation = useOrientation();
+    const [term, setTerm] = useState<{ id: string; output: string; exited: number | null } | null>(null);
+    const [upload, setUpload] = useState<{ sending: boolean; outcome: string | null }>({ sending: false, outcome: null });
+    const termId = term?.id ?? null;
+    useEffect(() => {
+        if (!bridge || !termId) return;
+        const offData = bridge.terminals.onData((id, data) => { if (id === termId) setTerm((t) => (t && t.id === id ? { ...t, output: t.output + data } : t)); });
+        const offExit = bridge.terminals.onExit((id, code) => { if (id === termId) setTerm((t) => (t && t.id === id ? { ...t, exited: code } : t)); });
+        return () => { offData(); offExit(); };
+    }, [bridge, termId]);
+    // Writes need the baton (§6.8); the phone asks for it once it is in. A refusal is said in the shell.
+    const batonAsked = useRef(false);
+    useEffect(() => {
+        if (!connected || batonAsked.current || !remote.client) return;
+        batonAsked.current = true;
+        void remote.client.takeBaton().then((r) => { if (!r.ok) setNote(r.reason); });
+    }, [connected, remote.client]);
     useEffect(() => {
         if (dialed.current || !canDial) return;
         dialed.current = true;
@@ -284,8 +303,48 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 }
             }}
             onDisconnect={remote.disconnect}
+            terminal={{
+                orientation,
+                open: term !== null,
+                pane: term && bridge ? <MobileTerminalPane terminalId={term.id} output={term.output} exited={term.exited} terminals={bridge.terminals} /> : null,
+                workspaces: snapshot.workspaces ?? [],
+                onOpen: (workspaceId) => {
+                    void bridge!.terminals.open(workspaceId, { cols: 100, rows: 30 })
+                        .then((t) => setTerm({ id: t.id, output: t.scrollback, exited: null }))
+                        .catch((error: unknown) => setNote((error as Error).message));
+                },
+            }}
+            upload={{
+                agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, provider: a.provider, workspaceId: a.workspaceId })),
+                sending: upload.sending,
+                outcome: upload.outcome,
+                onSend: ({ to, text, file }) => {
+                    const refusal = uploadRefusal(file.name, file.size);
+                    if (refusal) { setUpload({ sending: false, outcome: refusal }); return; }
+                    if (!bridge?.uploads) { setUpload({ sending: false, outcome: 'this host does not take uploads' }); return; }
+                    setUpload({ sending: true, outcome: null });
+                    void file.arrayBuffer()
+                        .then((buf) => bridge.uploads!.sendFile(to, text, file.name, bytesToBase64(new Uint8Array(buf))))
+                        .then((r) => setUpload({ sending: false, outcome: r.ok ? `sent ${file.name} to ${to}` : r.reason }))
+                        .catch((error: unknown) => setUpload({ sending: false, outcome: (error as Error).message }));
+                },
+            }}
         />
     );
+}
+
+/** The phone's orientation from the browser; `null` when it cannot say (no matchMedia). Re-reads on every change. */
+function useOrientation(): Orientation | null {
+    const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(orientation: landscape)') : null;
+    const [orientation, setOrientation] = useState<Orientation | null>(query ? (query.matches ? 'landscape' : 'portrait') : null);
+    useEffect(() => {
+        if (!query) return;
+        const onChange = (e: MediaQueryListEvent) => setOrientation(e.matches ? 'landscape' : 'portrait');
+        query.addEventListener('change', onChange);
+        return () => query.removeEventListener('change', onChange);
+    // The query object is recreated per render; its target is the same window, so subscribe once.
+    }, []);
+    return orientation;
 }
 
 function DesktopApp({ bridge }: AppProps) {
