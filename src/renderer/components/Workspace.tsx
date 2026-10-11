@@ -12,6 +12,7 @@ import { terminalHidden, terminalShown, terminalSuspended } from '../../core/wor
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
+import { FilesPanelContainer } from './FilesPanelContainer.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -53,6 +54,10 @@ export interface WorkspaceProps {
     workspace: { id: string; name?: string; path: string };
     terminals: GenieBridge['terminals'];
     ops?: WorkspaceOpsProps | undefined;
+    /** The file panel (§4.3), mounted for `?panel=files`; absent = no files host in this window. */
+    files?: GenieBridge['files'] | undefined;
+    panel?: 'files' | null | undefined;
+    onTogglePanel?: (() => void) | undefined;
     /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
     initialState?: WorkspaceState | undefined;
 }
@@ -62,7 +67,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -139,8 +144,11 @@ export function Workspace({ workspace, terminals, ops, initialState }: Workspace
             <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+                {files ? (
+                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}>Files</button>
+                ) : null}
                 {ops ? (
-                    <div className="ml-auto flex items-center gap-1">
+                    <div className={`${files ? '' : 'ml-auto '}flex items-center gap-1`}>
                         {ops.asleep ? (
                             <button type="button" data-action="wake" onClick={ops.onWake} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
                         ) : (
@@ -169,6 +177,11 @@ export function Workspace({ workspace, terminals, ops, initialState }: Workspace
                 </div>
             ) : null}
 
+            {panel === 'files' && files ? (
+                <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => { /* the dock slot (§4.4) is wired with the chat's pin in a later row */ }} onClose={() => onTogglePanel?.()} />
+                </div>
+            ) : null}
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
             <div data-terminal-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
                 {state.terminals.map((t) => {

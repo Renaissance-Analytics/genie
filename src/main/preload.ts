@@ -125,6 +125,17 @@ const bridge: GenieBridge = {
      * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose
      * answers are the host's own (a refusal is `false` / `null`, crossed as-is).
      */
+    files: {
+        tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
+        open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
+        state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
+        watch: (workspaceId) => ipcRenderer.invoke('genie:files-watch', workspaceId) as Promise<void>,
+        onChange: (listener) => {
+            const handler = (_e: unknown, workspaceId: string) => listener(workspaceId);
+            ipcRenderer.on('genie:files-changed', handler);
+            return () => { ipcRenderer.removeListener('genie:files-changed', handler); };
+        },
+    },
     features: {
         snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,
         subscribe: (onChange) => {

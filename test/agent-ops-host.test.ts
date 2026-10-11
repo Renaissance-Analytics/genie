@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import type { LiveSession } from '../src/core/roster.js';
@@ -81,7 +82,8 @@ describe('delete', () => {
 
         const d = fakes({ linked: ['tynn'] });
         expect(await deleteAgent(d.ports, 'agent_a', 'delete', ['tynn'])).toMatchObject({ ok: true, plan: { outcome: 'delete', external: [{ system: 'tynn', action: 'removed' }] } });
-        expect(d.calls).toEqual(['stop:agent_a', 'forget:agent_a', 'rmdir:/w/tynn/.agents/atlas', 'rmhandoff:atlas']);
+        // The host joins the persona folder with the OS's separator; on Windows that is backslashes.
+        expect(d.calls).toEqual(['stop:agent_a', 'forget:agent_a', `rmdir:${join('/w/tynn', '.agents', 'atlas')}`, 'rmhandoff:atlas']);
     });
 });
 
