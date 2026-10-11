@@ -1,22 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ATTACHMENT_LIMITS } from '../src/core/inbox.js';
-import { bytesToBase64, mobileTerminal, uploadRefusal } from '../src/core/mobile.js';
+import { bytesToBase64, uploadRefusal } from '../src/core/mobile.js';
 
 /**
- * THE PHONE'S TERMINAL AND UPLOAD RULES (§6.8 mobile UI: landscape-only terminal, upload) — pure.
- * A terminal on a phone is readable only sideways, so portrait gets a sentence and no pane; a
- * browser that cannot report its orientation gets no pane either, with that said. An upload is
- * checked against the inbox's own attachment rules before any byte leaves the phone.
+ * THE PHONE'S UPLOAD RULES (§6.8 mobile UI: upload) — pure. An upload is checked against the inbox's own
+ * attachment rules before any byte leaves the phone. (The terminal gate that lived here went with the
+ * owner's 2026-10-11 ruling: no terminals on the phone.)
  */
-
-describe('mobileTerminal', () => {
-    it('landscape allows the pane; portrait gets the sentence; an unknown orientation is said, not guessed', () => {
-        expect(mobileTerminal('landscape')).toEqual({ allowed: true });
-        expect(mobileTerminal('portrait')).toEqual({ allowed: false, reason: 'Rotate to landscape for the terminal.' });
-        expect(mobileTerminal(null)).toMatchObject({ allowed: false });
-        expect((mobileTerminal(null) as { reason: string }).reason).toMatch(/orientation/);
-    });
-});
 
 describe('bytesToBase64', () => {
     it('encodes the way the host decodes, for a payload larger than one btoa call wants', () => {

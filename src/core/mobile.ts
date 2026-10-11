@@ -97,17 +97,16 @@ export function staticFile(urlPath: string): StaticFile | null {
     return { relative: `assets/${name}`, contentType, cache: IMMUTABLE };
 }
 
-export type Orientation = 'portrait' | 'landscape';
+export type MobileViewState = { kind: 'home' } | { kind: 'agent'; agentId: string };
 
 /**
- * THE TERMINAL IS LANDSCAPE-ONLY on a phone (§6.8): eighty columns are not readable sideways-less.
- * Portrait gets the sentence and no pane; a browser that cannot report its orientation gets no pane
- * either, with that said rather than guessed.
+ * WHAT THE PHONE SHOWS rides the hash — `#agent=<id>` for one agent, anything else is home — so the phone's
+ * back button leaves an agent the way it leaves a page. (The owner, 2026-10-11: the phone is for steering
+ * agents — dashboard, chat, activity — not terminals or panels; there is no terminal view to route to.)
  */
-export function mobileTerminal(orientation: Orientation | null): { allowed: true } | { allowed: false; reason: string } {
-    if (orientation === 'landscape') return { allowed: true };
-    if (orientation === 'portrait') return { allowed: false, reason: 'Rotate to landscape for the terminal.' };
-    return { allowed: false, reason: 'This browser does not report its orientation, so the terminal stays closed.' };
+export function mobileView(hash: string): MobileViewState {
+    const m = /^#agent=(.+)$/.exec(hash);
+    return m && m[1] ? { kind: 'agent', agentId: m[1] } : { kind: 'home' };
 }
 
 const MB = 1024 * 1024;

@@ -1,24 +1,41 @@
 import { Icon, Input } from '@particle-academy/react-fancy';
-import { useEffect, useRef, useState, type ComponentType, type FormEvent, type ReactNode } from 'react';
+import type { FormEvent } from 'react';
+import type { AgentRow } from '../../core/dashboard-view.js';
+import { statusOf, summaryChips } from '../../core/dashboard-view.js';
 import type { DeckItem } from '../../core/deck.js';
-import { mobileTerminal, type Orientation } from '../../core/mobile.js';
-import type { GenieBridge } from '../bridge.js';
-import type { TerminalPaneProps } from './TerminalPane.js';
+import { ledgerRow } from '../../core/stream-view.js';
+import type { AgentDetail } from '../bridge.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
 /**
- * THE PHONE'S SHELL (§6.8 mobile UI: questions mirrored).
+ * THE PHONE'S SHELL — the minimum to respond to agents, keep them going and set up new work (the owner,
+ * 2026-10-11: "mobile does not need panel support and no terminals at all … dashboards and agent chats
+ * and activity"). One column, thumb-sized:
  *
- * One screen, one column, thumb-sized: the loud `● REMOTE — <host>` badge (the same words the
- * desktop wears when it drives another machine), then everything that needs you, answerable in
- * place when answering inline is the whole answer — the SAME approval card as the Deck, so an
- * option reads the same on both screens. A form question is not faked into a button here: it
- * names the screen it belongs to. A forwarded one names its host. `null` items is "not heard yet"
- * and draws a skeleton; `[]` is "nothing needs you" and says so.
+ *  - the loud `● REMOTE — <host>` badge, the same words the desktop wears when it drives another machine;
+ *  - NEEDS YOU: everything waiting on you, answerable in place with the Deck's own approval card (a form
+ *    question names the desktop; a forwarded one names its host);
+ *  - AGENTS: every agent with its status word and detail, the summary chips above; tap one to open it;
+ *  - one agent at a time (`MobileAgent`): its activity ledger — the same rows the desktop Stream draws,
+ *    one line each — and a composer to keep it going, or Start when it is not running;
+ *  - SEND A FILE to an agent's inbox.
  *
- * Before the welcome there is `MobilePair`: the host is the page's own origin (shown, not typed),
- * the PIN is typed unless the QR carried it, and the device gets a name the desktop's roster shows.
+ * There is no terminal and no panel here, not hidden: absent. `null` is "not heard yet" (a skeleton);
+ * `[]` is a sentence. Before the welcome there is `MobilePair`.
  */
+
+export interface MobileAgentsSection {
+    /** `null` until the first snapshot. */
+    rows: readonly AgentRow[] | null;
+    onOpen: (agentId: string) => void;
+}
+
+export interface MobileUploadSection {
+    agents: readonly { id: string; name: string; provider: string; workspaceId: string }[];
+    sending: boolean;
+    outcome: string | null;
+    onSend: (input: { to: string; text: string; file: File }) => void;
+}
 
 export interface MobileShellProps {
     host: string;
@@ -30,29 +47,20 @@ export interface MobileShellProps {
     answering: string | null;
     onAnswer: (item: DeckItem, optionId: string) => void;
     onDisconnect: () => void;
-    /** The landscape-only terminal (§6.8); absent when the app does not offer it. */
-    terminal?: MobileTerminalSection | undefined;
-    /** Upload to an agent's inbox (§6.8); absent when the app does not offer it. */
+    /** The agents (dashboard); absent when the app does not offer it. */
+    agents?: MobileAgentsSection | undefined;
+    /** Upload to an agent's inbox; absent when the app does not offer it. */
     upload?: MobileUploadSection | undefined;
 }
 
-export interface MobileTerminalSection {
-    orientation: Orientation | null;
-    open: boolean;
-    /** The pane the app holds while a shell is open; drawn only in landscape. */
-    pane: ReactNode | null;
-    workspaces: readonly { id: string; path: string }[];
-    onOpen: (workspaceId: string) => void;
-}
+const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
+    ok: 'text-emerald-500',
+    warn: 'text-amber-500',
+    bad: 'text-red-500',
+    muted: 'text-[var(--fg-4)]',
+};
 
-export interface MobileUploadSection {
-    agents: readonly { id: string; name: string; provider: string; workspaceId: string }[];
-    sending: boolean;
-    outcome: string | null;
-    onSend: (input: { to: string; text: string; file: File }) => void;
-}
-
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, terminal, upload }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, upload }: MobileShellProps) {
     return (
         <div data-mobile="shell" className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
@@ -77,7 +85,7 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                         <div className="h-16 animate-pulse rounded-xl bg-[var(--bg-2)]" />
                     </div>
                 ) : items.length === 0 ? (
-                    <p data-mobile-items="clear" className="py-8 text-center text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
+                    <p data-mobile-items="clear" className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
                 ) : (
                     <ul data-mobile-items={items.length} className="flex flex-col gap-3">
                         {items.map((item) => (
@@ -107,53 +115,60 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                         ))}
                     </ul>
                 )}
-                {terminal ? <TerminalSection host={host} {...terminal} /> : null}
+                {agents ? <AgentsSection {...agents} /> : null}
                 {upload ? <UploadSection {...upload} /> : null}
             </main>
         </div>
     );
 }
 
-/**
- * THE TERMINAL, LANDSCAPE ONLY (§6.8). Portrait draws the sentence and nothing else — the pane the
- * app holds stays out of the markup, not hidden by CSS. Landscape draws the pane when a shell is
- * open, otherwise one picker and one button. No workspaces is said.
- */
-function TerminalSection({ host, orientation, open, pane, workspaces, onOpen }: MobileTerminalSection & { host: string }) {
-    const gate = mobileTerminal(orientation);
-    if (!gate.allowed) {
-        return (
-            <section data-mobile-terminal={orientation ?? 'unknown'} className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-[13px] text-[var(--fg-3)]">
-                <h2 className="text-sm font-semibold text-[var(--fg-1)]">Terminal</h2>
-                <p className="mt-1">{gate.reason}</p>
-            </section>
-        );
-    }
+/** THE AGENTS, as the Dashboard sees them (§4.1's words: Working / Idle / Waiting on you / Broken / Unreachable), one row each; tap to open. */
+function AgentsSection({ rows, onOpen }: MobileAgentsSection) {
     return (
-        <section data-mobile-terminal="landscape" className="flex min-h-[40dvh] flex-col rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)]">
-            {open && pane ? (
-                <div className="min-h-0 flex-1">{pane}</div>
-            ) : workspaces.length === 0 ? (
-                <p className="p-3 text-[13px] text-[var(--fg-3)]">No workspaces on {host} yet, so there is nowhere to open a shell.</p>
+        <section className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold">Agents</h2>
+            {rows === null ? (
+                <div data-mobile-agents="loading" className="flex flex-col gap-2" aria-busy>
+                    <div className="h-12 animate-pulse rounded-xl bg-[var(--bg-2)]" />
+                    <div className="h-12 animate-pulse rounded-xl bg-[var(--bg-2)]" />
+                </div>
+            ) : rows.length === 0 ? (
+                <p data-mobile-agents="none" className="py-2 text-[13px] text-[var(--fg-3)]">No agents yet. Add one on {'the desktop'}; it shows here the moment it exists.</p>
             ) : (
-                <form
-                    className="flex items-center gap-2 p-3"
-                    onSubmit={(e) => { e.preventDefault(); onOpen(String(new FormData(e.currentTarget).get('workspace') ?? '')); }}
-                >
-                    <select name="workspace" aria-label="Workspace" className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1.5 text-sm">
-                        {workspaces.map((w) => <option key={w.id} value={w.id}>{w.id}</option>)}
-                    </select>
-                    <button type="submit" data-action="open-terminal" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1.5 text-sm">Open a shell</button>
-                </form>
+                <>
+                    <div data-mobile-chips className="flex flex-wrap gap-2 text-xs text-[var(--fg-3)]">
+                        {summaryChips(rows).map((c) => <span key={c.state} data-chip={c.state} className="rounded-md bg-[var(--bg-2)] px-2 py-0.5">{c.label}</span>)}
+                    </div>
+                    <ul data-mobile-agents={rows.length} className="flex flex-col gap-2">
+                        {rows.map((r) => {
+                            const status = statusOf(r);
+                            return (
+                                <li key={r.id}>
+                                    <button type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left">
+                                        <span className="flex items-center gap-2 text-[13px]">
+                                            <span className="font-medium">{r.name}</span>
+                                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.provider}</span>
+                                            <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{r.workspaceId}</span>
+                                        </span>
+                                        <span className="flex items-baseline gap-2 text-xs">
+                                            <span className={`font-medium ${TONE[status.tone]}`}>{status.word}</span>
+                                            {status.detail ? <span className="truncate text-[var(--fg-3)]">{status.detail}</span> : null}
+                                        </span>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </>
             )}
         </section>
     );
 }
 
 /**
- * UPLOAD (§6.8): a recipient from the host's own agents by FULL address (the short form can be
- * ambiguous and the phone has no room for a disambiguation dance), one file, a line of text, one
- * button. The outcome — sent, or the inbox's refusal — is a sentence under the form.
+ * UPLOAD: a recipient from the host's own agents by FULL address (the short form can be ambiguous and
+ * the phone has no room for a disambiguation dance), one file, a line of text, one button. The outcome
+ * — sent, or the inbox's refusal — is a sentence under the form.
  */
 function UploadSection({ agents, sending, outcome, onSend }: MobileUploadSection) {
     const submit = (e: FormEvent<HTMLFormElement>) => {
@@ -179,34 +194,71 @@ function UploadSection({ agents, sending, outcome, onSend }: MobileUploadSection
     );
 }
 
-export interface MobileTerminalPaneProps {
-    terminalId: string;
-    output: string;
-    exited: number | null;
-    terminals: GenieBridge['terminals'];
+export interface MobileAgentProps {
+    /** `null` while the host has not answered. */
+    detail: AgentDetail | null;
+    sending: boolean;
+    onBack: () => void;
+    onSend: (text: string) => void;
+    onStart: () => void;
 }
 
-/** The pane for one remote terminal, lazy like the Take Over window's — xterm never loads before a shell is open. */
-export function MobileTerminalPane({ terminalId, output, exited, terminals }: MobileTerminalPaneProps) {
-    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
-    const size = useRef<{ cols: number; rows: number }>({ cols: 100, rows: 30 });
-    useEffect(() => {
-        let live = true;
-        void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
-        return () => { live = false; };
-    }, []);
+/**
+ * ONE AGENT on the phone: its activity as a ledger — the same rows the desktop Stream draws, one line each,
+ * oldest first — and a composer to keep it going. Not running: Start instead of the composer, and the
+ * refusal (if a start was refused) in words. The back control returns to the shell.
+ */
+export function MobileAgent({ detail, sending, onBack, onSend, onStart }: MobileAgentProps) {
+    if (!detail) {
+        return (
+            <div data-mobile-agent-view="loading" className="flex min-h-dvh flex-col bg-[var(--bg-0)] p-4" aria-busy>
+                <button type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</button>
+                <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
+            </div>
+        );
+    }
+    const running = detail.session !== null;
+    const submit = (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const text = String(new FormData(e.currentTarget).get('text') ?? '').trim();
+        if (text.length > 0) onSend(text);
+        e.currentTarget.reset();
+    };
     return (
-        <div data-mobile-pane={terminalId} className="h-full w-full">
-            {Pane ? (
-                <Pane
-                    paneId={terminalId}
-                    output={output}
-                    readOnly={exited !== null}
-                    onData={(data) => terminals.write(terminalId, data)}
-                    onResize={({ cols, rows }) => { size.current = { cols, rows }; terminals.resize(terminalId, cols, rows); }}
-                />
-            ) : null}
-            {exited !== null ? <p className="px-3 py-1 font-mono text-[11px] text-[var(--fg-3)]">the shell exited with code {exited}</p> : null}
+        <div data-mobile-agent-view={detail.agent.id} className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
+            <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
+                <button type="button" data-action="back" onClick={onBack} className="text-xs text-[var(--fg-3)]">← back</button>
+                <span className="text-sm font-semibold">{detail.agent.name}</span>
+                <span className="font-mono text-[11px] text-[var(--fg-4)]">{detail.agent.provider}</span>
+                <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-emerald-500' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
+            </header>
+            {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-red-500">{detail.refusal}</p> : null}
+            <main data-mobile-activity className="flex flex-1 flex-col gap-1 overflow-auto px-4 py-3">
+                {detail.rows.length === 0 ? (
+                    <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
+                ) : (
+                    detail.rows.map((r) => {
+                        const row = ledgerRow(r);
+                        return (
+                            <div key={row.id} data-mobile-row={row.id} className="flex items-start gap-2 text-[13px]">
+                                <Icon name={row.icon} size="xs" className="mt-0.5 shrink-0 text-[var(--fg-4)]" />
+                                <span className={`min-w-0 flex-1 ${row.mono ? 'font-mono text-xs' : ''} ${row.italic ? 'italic text-[var(--fg-3)]' : ''} ${row.clamp ? 'truncate' : 'break-words'}`}>{row.main}</span>
+                                {row.meta ? <span className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-red-500' : 'text-[var(--fg-4)]'}`}>{row.meta}</span> : null}
+                            </div>
+                        );
+                    })
+                )}
+            </main>
+            <footer className="border-t border-[var(--border-1)] p-3">
+                {running ? (
+                    <form data-mobile-composer onSubmit={submit} className="flex flex-col gap-2">
+                        <textarea name="text" rows={3} aria-label={`Message ${detail.agent.name}`} placeholder={`Tell ${detail.agent.name} what to do next`} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1.5 text-sm" />
+                        <button type="submit" data-action="send-prompt" disabled={sending} className="self-end rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60">{sending ? 'Sending…' : 'Send'}</button>
+                    </form>
+                ) : (
+                    <button type="button" data-action="start-agent" onClick={onStart} className="w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white">Start {detail.agent.name}</button>
+                )}
+            </footer>
         </div>
     );
 }
