@@ -73,3 +73,38 @@ describe('geometry and hiding', () => {
         expect(pane.current()).toBeNull();
     });
 });
+
+describe('the view is created LAZILY', () => {
+    /**
+     * CI's real-window smokes attach to the first `type: "page"` CDP target. A WebContentsView created
+     * at boot is a second page target (about:blank) that can be found first — PR #43's smoke hung on it
+     * for five minutes. So the view does not exist until the browser surface first shows a URL;
+     * bounds and visibility set before then are kept and applied on creation.
+     */
+    it('nothing is created until the first loadURL; bounds/visibility set earlier are applied on creation; rewrites too', async () => {
+        const { lazyViewPort } = await import('../src/main/browser-pane.js');
+        let created = 0;
+        const f = fakeView();
+        const port = lazyViewPort(() => { created += 1; return f.view; });
+        port.setBounds({ x: 1, y: 2, width: 3, height: 4 });
+        port.setVisible(false);
+        port.rewriteHost('tynn.gen', '127.0.0.1:4101');
+        expect(created).toBe(0);
+        await port.loadURL('http://127.0.0.1:4101/');
+        expect(created).toBe(1);
+        expect(f.bounds).toEqual([{ x: 1, y: 2, width: 3, height: 4 }]);
+        expect(f.headers).toEqual([{ host: 'tynn.gen', target: '127.0.0.1:4101' }]);
+        expect(f.loaded).toEqual(['http://127.0.0.1:4101/']);
+        await port.loadURL('http://127.0.0.1:4101/x');
+        expect(created).toBe(1);
+    });
+
+    it('hiding before creation creates nothing — a pane nobody opened leaves no target behind', async () => {
+        const { lazyViewPort } = await import('../src/main/browser-pane.js');
+        let created = 0;
+        const port = lazyViewPort(() => { created += 1; return fakeView().view; });
+        port.setVisible(false);
+        port.clearRewrites();
+        expect(created).toBe(0);
+    });
+});

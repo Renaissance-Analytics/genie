@@ -203,6 +203,7 @@ export function App({ bridge }: AppProps) {
             pinned={pinned}
             onNavigate={navigate}
             features={features}
+            onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) => {
                 void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
                     // A refusal is a fact the surface shows; it is never swallowed. Until the surfaces

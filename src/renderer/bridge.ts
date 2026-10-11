@@ -77,6 +77,8 @@ export const FEATURE_CHANNELS = {
     snapshot: 'genie:features-snapshot',
     act: 'genie:features-act',
     changed: 'genie:features-changed',
+    /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
+    browserBounds: 'genie:features-browser-bounds',
 } as const;
 
 export interface GenieBridge {
@@ -89,6 +91,8 @@ export interface GenieBridge {
         snapshot(): Promise<FeatureData>;
         subscribe(onChange: (data: FeatureData) => void): () => void;
         act(action: FeatureAction): Promise<FeatureData>;
+        /** Where the browser surface's box is, in window coordinates; sent on mount and resize, never polled. */
+        setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     };
 
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */
@@ -200,6 +204,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     snapshot: async () => EMPTY_FEATURES,
     subscribe: () => () => {},
     act: async () => { throw new Error('no main process to act on'); },
+    setBrowserBounds: async () => {},
 };
 
 export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
