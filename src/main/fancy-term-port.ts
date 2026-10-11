@@ -43,6 +43,8 @@ export interface HostBackend {
         args?: string[];
         cols?: number;
         rows?: number;
+        /** Extra env overrides, merged on top of the engine's process.env. */
+        env?: Record<string, string>;
     }): { id: string; pid: number; shell: string; existing: boolean; scrollback: string };
     write(id: string, data: string): boolean;
     resize(id: string, cols: number, rows: number): boolean;
@@ -91,6 +93,8 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 args,
                 ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
                 ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
+                // Only when given — a plain shell gets the user's environment untouched.
+                ...(spawn.env === undefined ? {} : { env: { ...spawn.env } }),
             });
             // An engine that could not start the process answers a non-positive pid rather than
             // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be
