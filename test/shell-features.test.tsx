@@ -30,6 +30,7 @@ const FEATURES: FeatureData = {
     browser: { url: null, routes: [] },
     remote: null,
     integrations: null,
+    plugins: null,
 };
 
 function render(route: string, features: Partial<FeatureData> = {}): string {

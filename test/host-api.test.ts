@@ -48,6 +48,9 @@ function fakes() {
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
+            listRepos: async (id) => { calls.push(`ws-repos:${id}`); return { ok: true, repos: [] }; },
+            addRepo: async (id, input) => { calls.push(`ws-repo-add:${id}:${input.name}`); return { ok: true, slug: input.name }; },
+            removeRepo: async (id, slug) => { calls.push(`ws-repo-remove:${id}:${slug}`); return { ok: true }; },
         },
         agentOps: {
             restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },

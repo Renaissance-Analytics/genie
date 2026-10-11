@@ -482,6 +482,7 @@ export function SettingsSurface({ data, onAction, group, workspaces = [], remote
                                     </li>
                                 ))}
                             </ul>
+                            {g === 'workstation' ? <Plugins plugins={data.plugins} onAction={onAction} /> : null}
                             {g === 'workstation' ? <Integrations integrations={data.integrations} workspaces={workspaces} onAction={onAction} /> : null}
                             {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                         </Tabs.Panel>
@@ -547,6 +548,55 @@ function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteCon
             <button type="submit" className={button}>Connect</button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
         </form>
+    );
+}
+
+/**
+ * PLUGINS (§6.7). Every folder in the plugins directory is listed with its state and label — signed by
+ * whom, or UNSIGNED under developer mode — and a refused or invalid plugin shows its REASON rather than
+ * vanishing. Enable/Disable only for installable ones. The folder path is shown so a person knows where
+ * plugins go; developer mode is named when it is on.
+ */
+function Plugins({ plugins, onAction }: { plugins: FeatureData['plugins']; onAction: SurfaceProps['onAction'] }) {
+    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    const tone = (state: string) => (state === 'enabled' ? 'emerald' : state === 'disabled' ? undefined : 'amber') as 'emerald' | 'amber' | undefined;
+    return (
+        <section data-plugins className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
+            <h2 className="text-sm font-semibold">Plugins</h2>
+            {plugins === null ? (
+                <Skeletons rows={3} />
+            ) : (
+                <>
+                    <p className="text-xs text-[var(--fg-3)]">
+                        Plugins live in <span className="font-mono">{plugins.dir}</span>. Signed by default: a plugin signed by a publisher key Genie carries is installed; anything else is listed with the reason.
+                        {plugins.developerMode ? ' Developer mode is on: local unsigned plugins run, labelled UNSIGNED.' : ''}
+                    </p>
+                    {plugins.entries.length === 0 ? (
+                        <p className="text-sm text-[var(--fg-3)]">No plugins yet. Drop a folder with a genie-plugin.json into the plugins directory.</p>
+                    ) : (
+                        <ul className="divide-y divide-[var(--border-1)]">
+                            {plugins.entries.map((p) => {
+                                const colour = tone(p.state);
+                                return (
+                                <li key={p.id} data-plugin={p.id} data-plugin-state={p.state} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                                    <span className="font-medium">{p.name}</span>
+                                    {p.version ? <span className="font-mono text-xs text-[var(--fg-4)]">{p.version}</span> : null}
+                                    <Badge variant="soft" size="sm" {...(colour ? { color: colour } : {})}>{p.state}</Badge>
+                                    {p.label ? <span className={`text-xs ${p.label.startsWith('UNSIGNED') ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{p.label}</span> : null}
+                                    {p.reason ? <span className="basis-full text-xs text-[var(--fg-3)]">{p.reason}</span> : null}
+                                    {p.state === 'enabled' ? (
+                                        <button type="button" data-action="plugin-disable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: false })}>Disable</button>
+                                    ) : p.state === 'disabled' ? (
+                                        <button type="button" data-action="plugin-enable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: true })}>Enable</button>
+                                    ) : null}
+                                </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </>
+            )}
+        </section>
     );
 }
 

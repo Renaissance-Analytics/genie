@@ -63,6 +63,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes() },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
+        plugins: { dir: services.pluginsDir, developerMode: services.settings.snapshot().developer_mode === true, entries: services.plugins.list() },
         remote: {
             host: services.remote.hostName,
             url: services.remote.url(),
@@ -318,6 +319,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'settings.set':
             await services.settings.set(action.key, action.value);
+            // Developer mode decides whether unsigned local plugins are admitted: re-read the folder under the new rule.
+            if (action.key === 'developer_mode') await services.pluginsRefresh();
             break;
         case 'settings.reset':
             await services.settings.reset(action.key);
@@ -349,6 +352,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.settings.set(action.step === 'authorize' ? 'github_authorized' : 'github_installed', true);
             break;
         }
+        case 'plugins.setEnabled':
+            await services.plugins.setEnabled(action.id, action.enabled);
+            break;
         case 'integrations.syncConfig':
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath) };
             break;

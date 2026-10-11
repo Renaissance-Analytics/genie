@@ -39,6 +39,7 @@ import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
+import { addRepoTo, listReposOf, removeRepoFrom, type RepoOpsPorts } from './repo-ops-host.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -572,6 +573,14 @@ async function boot(): Promise<void> {
         now: Date.now,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     };
+    // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
+    const repoOps: RepoOpsPorts = { fs: workspaceOps.fs, registry: { workspace: (id) => registry?.workspace(id) ?? null } };
+    ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
+    ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
+        const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
+        return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
+    });
+    ipcMain.handle('genie:workspace-repo-remove', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoFrom(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
     ipcMain.handle('genie:workspace-preview-add', async () => {
         if (!window) return { ok: false, reason: 'no window to pick a folder from' };
         const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
@@ -661,6 +670,9 @@ async function boot(): Promise<void> {
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
                 remove: (id) => removeWorkspace(workspaceOps, id),
+                listRepos: (id) => listReposOf(repoOps, id),
+                addRepo: (id, input) => addRepoTo(repoOps, id, input),
+                removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
             },
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),

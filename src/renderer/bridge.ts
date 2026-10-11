@@ -9,6 +9,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { FilesState, OpenResult } from '../main/files-host.js';
 import type { DrainRoster } from '../core/upgrade-drain.js';
+import type { RepoEntry } from '../core/repo-registry.js';
 
 /**
  * THE RENDERER'S ONLY WINDOW ONTO THE MAIN PROCESS.
@@ -154,6 +155,10 @@ export interface GenieBridge {
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Forgets the workspace and its agents. The folder on disk is never touched. */
         remove(workspaceId: string): Promise<{ ok: true; agentsForgotten: number; path: string; folderUntouched: true } | { ok: false; reason: string }>;
+        /** The repo registry (§6.1): the envelope's repos[]; the host repo cannot be removed. */
+        listRepos(workspaceId: string): Promise<{ ok: true; repos: RepoEntry[] } | { ok: false; reason: string }>;
+        addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
+        removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
