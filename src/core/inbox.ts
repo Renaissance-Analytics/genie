@@ -79,6 +79,18 @@ export interface WorkspaceInboxSetting {
     readonly workspaces?: readonly string[];
 }
 
+/** The workspace's half of the two-tier rule, from its settings; anything unknown falls back to `self`, never to open. */
+export function inboxSettingFrom(values: Readonly<Record<string, unknown>>): WorkspaceInboxSetting {
+    const v = values.inbox_access;
+    return { scope: v === 'none' || v === 'all' || v === 'self' ? v : 'self' };
+}
+
+/** How many agents may run in a workspace at once (§6.1 caps); the default when the value is not a number Genie offers. */
+export function agentCapFrom(values: Readonly<Record<string, unknown>>): number {
+    const n = Number(values.agent_cap);
+    return [1, 2, 4, 8, 16].includes(n) ? n : 8;
+}
+
 export interface ReachableOptions {
     /** For an agent whose own scope is `specific`: the workspace ids it allows. */
     readonly agentWorkspaces?: readonly string[];

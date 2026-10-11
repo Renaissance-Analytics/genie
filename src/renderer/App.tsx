@@ -243,6 +243,14 @@ export function App({ bridge }: AppProps) {
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
     const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
+    // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
+    const [wsSettings, setWsSettings] = useState<{ values: Record<string, boolean | string>; overridden: string[] } | null>(null);
+    const reloadWsSettings = (bridge: GenieBridge, id: string) => {
+        void bridge.workspaces.settings(id).then((r) => {
+            setWsSettings(r.ok ? { values: r.values, overridden: r.overridden } : { values: {}, overridden: [] });
+            if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason }));
+        });
+    };
     const reloadRepos = (bridge: GenieBridge, id: string) => {
         void bridge.workspaces.listRepos(id).then((r) => {
             setRepos(r.ok ? r.repos : []);
@@ -251,7 +259,8 @@ export function App({ bridge }: AppProps) {
     };
     useEffect(() => {
         setRepos(null);
-        if (resolvedBridge && workspaceId) reloadRepos(resolvedBridge, workspaceId);
+        setWsSettings(null);
+        if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
     }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
     const previewAdd = () => {
@@ -264,6 +273,12 @@ export function App({ bridge }: AppProps) {
               agentCount: snapshot.agents.filter((a) => a.workspaceId === workspaceId).length,
               removePreview: wsView.removePreview,
               lastOutcome: wsView.lastOutcome,
+              settings: {
+                  values: wsSettings?.values ?? null,
+                  overridden: wsSettings?.overridden ?? [],
+                  onSet: (key, value) => { void resolvedBridge.workspaces.setSetting(workspaceId, key, value).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+                  onReset: (key) => { void resolvedBridge.workspaces.resetSetting(workspaceId, key).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              },
               repos: {
                   list: repos,
                   onAdd: (input) => { void resolvedBridge.workspaces.addRepo(workspaceId, input).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
@@ -292,6 +307,10 @@ export function App({ bridge }: AppProps) {
               diagnosis: opsView.diagnosis,
               lastOutcome: opsView.lastOutcome,
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
+              mode: detail?.agent.mode ?? 'manual',
+              accessScope: detail?.agent.accessScope ?? 'self',
+              onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
               onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.noop ? `already running on ${r.to}` : `switched ${r.from} → ${r.to}; carried ${r.carries.join(', ')}. Start it when ready.`) : r.reason }))); },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
@@ -445,6 +464,7 @@ export function App({ bridge }: AppProps) {
             onAddWorkspace={previewAdd}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
+            pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onSelectRow={setSelectedRowId}

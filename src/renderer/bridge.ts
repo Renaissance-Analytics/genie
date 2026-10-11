@@ -67,7 +67,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; dailyBudgetUsd?: number | null };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all' };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -85,6 +85,8 @@ export const FEATURE_CHANNELS = {
     changed: 'genie:features-changed',
     /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
     browserBounds: 'genie:features-browser-bounds',
+    /** The host's file picker, for attachments (§6.4): paths never typed, never guessed. */
+    pickFiles: 'genie:features-pick-files',
 } as const;
 
 export interface GenieBridge {
@@ -99,6 +101,8 @@ export interface GenieBridge {
         act(action: FeatureAction): Promise<FeatureData>;
         /** Where the browser surface's box is, in window coordinates; sent on mount and resize, never polled. */
         setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
+        /** The host's own file picker; the paths it answers are what `inbox.send` may attach. `[]` when cancelled. */
+        pickFiles(): Promise<string[]>;
     };
 
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */
@@ -159,6 +163,10 @@ export interface GenieBridge {
         listRepos(workspaceId: string): Promise<{ ok: true; repos: RepoEntry[] } | { ok: false; reason: string }>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** This workspace's effective values for the workspace-scoped settings and which keys it overrides (§6.1). */
+        settings(workspaceId: string): Promise<{ ok: true; values: Record<string, boolean | string>; overridden: string[] } | { ok: false; reason: string }>;
+        setSetting(workspaceId: string, key: string, value: boolean | string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        resetSetting(workspaceId: string, key: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
@@ -171,6 +179,10 @@ export interface GenieBridge {
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /** Mode is wording for the agent (§6.2), not a permission boundary. */
+        setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** The agent's own half of who may message it (§6.4). */
+        setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /**
@@ -264,6 +276,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     subscribe: () => () => {},
     act: async () => { throw new Error('no main process to act on'); },
     setBrowserBounds: async () => {},
+    pickFiles: async () => [],
 };
 
 export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];

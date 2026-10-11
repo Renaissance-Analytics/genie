@@ -34,13 +34,16 @@ const BY_KEY: ReadonlyMap<string, SettingDef> = new Map(SETTINGS.map((s) => [s.k
 export class SettingsStore {
     readonly file: string;
     #values: Record<string, Value>;
+    /** Per-workspace overrides for `scope: 'workspace'` keys (§6.1), by workspace id. */
+    #workspaces: Record<string, Record<string, Value>>;
     #carriedOver: CarriedOver | null;
     readonly #now: () => string;
-    readonly #listeners = new Set<(key: string, value: Value) => void>();
+    readonly #listeners = new Set<(key: string, value: Value, workspaceId?: string) => void>();
 
-    private constructor(file: string, data: SettingsFile, now: () => string) {
+    private constructor(file: string, data: SettingsFile, now: () => string, workspaces: Record<string, Record<string, Value>>) {
         this.file = file;
         this.#values = { ...data.values };
+        this.#workspaces = workspaces;
         this.#carriedOver = data.carriedOver;
         this.#now = now;
     }
@@ -50,12 +53,24 @@ export class SettingsStore {
         const raw = await readJson<Partial<SettingsFile> & Record<string, unknown>>(file, { values: {}, carriedOver: null });
         // The file holds the user's values at the top level; the carry-over record rides beside them
         // under a key no setting may use.
-        const { __carriedOver, ...values } = raw as Record<string, unknown> & { __carriedOver?: CarriedOver | null };
+        const { __carriedOver, __workspaces, ...values } = raw as Record<string, unknown> & { __carriedOver?: CarriedOver | null; __workspaces?: unknown };
+        // Workspace overrides: only workspace-scoped keys with well-typed values survive the read.
+        const workspaces: Record<string, Record<string, Value>> = {};
+        if (typeof __workspaces === 'object' && __workspaces !== null) {
+            for (const [wid, vals] of Object.entries(__workspaces as Record<string, unknown>)) {
+                if (typeof vals !== 'object' || vals === null) continue;
+                const kept: Record<string, Value> = {};
+                for (const [k, v] of Object.entries(vals as Record<string, unknown>)) {
+                    if (BY_KEY.get(k)?.scope === 'workspace' && (typeof v === 'boolean' || typeof v === 'string')) kept[k] = v;
+                }
+                if (Object.keys(kept).length > 0) workspaces[wid] = kept;
+            }
+        }
         const clean: Record<string, Value> = {};
         for (const [k, v] of Object.entries(values)) {
             if (BY_KEY.has(k) && (typeof v === 'boolean' || typeof v === 'string')) clean[k] = v;
         }
-        return new SettingsStore(file, { values: clean, carriedOver: __carriedOver ?? null }, now);
+        return new SettingsStore(file, { values: clean, carriedOver: __carriedOver ?? null }, now, workspaces);
     }
 
     get(key: string): Value {
@@ -74,6 +89,42 @@ export class SettingsStore {
         for (const l of this.#listeners) l(key, checked);
     }
 
+    /** Override a workspace-scoped setting for ONE workspace (§6.1). A workstation setting is refused, never written globally by accident. */
+    async setFor(workspaceId: string, key: string, value: unknown): Promise<void> {
+        const def = BY_KEY.get(key);
+        if (!def) throw new Error(`${key} is not a setting Genie knows`);
+        if (def.scope !== 'workspace') throw new Error(`${key} is a workstation setting, not a workspace one`);
+        const checked = check(def, value);
+        const current = this.#workspaces[workspaceId] ?? {};
+        if (current[key] === checked) return;
+        this.#workspaces = { ...this.#workspaces, [workspaceId]: { ...current, [key]: checked } };
+        await this.#flush();
+        for (const l of this.#listeners) l(key, checked, workspaceId);
+    }
+
+    async resetFor(workspaceId: string, key: string): Promise<void> {
+        const def = BY_KEY.get(key);
+        if (!def) throw new Error(`${key} is not a setting Genie knows`);
+        const current = this.#workspaces[workspaceId];
+        if (!current || !(key in current)) return;
+        const { [key]: _dropped, ...rest } = current;
+        const next = { ...this.#workspaces };
+        if (Object.keys(rest).length > 0) next[workspaceId] = rest; else delete next[workspaceId];
+        this.#workspaces = next;
+        await this.#flush();
+        for (const l of this.#listeners) l(key, this.#values[key] ?? def.default, workspaceId);
+    }
+
+    /** The overrides this workspace holds — what the surface marks as "overriding the workstation value". */
+    workspaceValues(workspaceId: string): Record<string, Value> {
+        return { ...(this.#workspaces[workspaceId] ?? {}) };
+    }
+
+    /** The effective view for one workspace: its override, else the workstation value, else the default. */
+    snapshotFor(workspaceId: string): Record<string, Value> {
+        return { ...this.snapshot(), ...(this.#workspaces[workspaceId] ?? {}) };
+    }
+
     async reset(key: string): Promise<void> {
         const def = BY_KEY.get(key);
         if (!def) throw new Error(`${key} is not a setting Genie knows`);
@@ -83,7 +134,7 @@ export class SettingsStore {
         for (const l of this.#listeners) l(key, def.default);
     }
 
-    onChange(listener: (key: string, value: Value) => void): () => void {
+    onChange(listener: (key: string, value: Value, workspaceId?: string) => void): () => void {
         this.#listeners.add(listener);
         return () => this.#listeners.delete(listener);
     }
@@ -124,6 +175,8 @@ export class SettingsStore {
     async #flush(): Promise<void> {
         const out: Record<string, unknown> = { ...this.#values };
         if (this.#carriedOver) out.__carriedOver = this.#carriedOver;
+        // Only what the user set is written: no overrides, no key — a default-shaped file stays default-shaped.
+        if (Object.keys(this.#workspaces).length > 0) out.__workspaces = this.#workspaces;
         await writeJsonAtomic(this.file, out);
     }
 }

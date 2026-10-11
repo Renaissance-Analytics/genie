@@ -11,7 +11,8 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
 
 describe('channels', () => {
     it('are three, named once, and both halves import the constant rather than retyping the strings', () => {
-        expect(FEATURE_CHANNELS).toEqual({ snapshot: 'genie:features-snapshot', act: 'genie:features-act', changed: 'genie:features-changed', browserBounds: 'genie:features-browser-bounds' });
+        // Five since the attachments picker (§6.4): the host's own file dialog, never a typed path.
+        expect(FEATURE_CHANNELS).toEqual({ snapshot: 'genie:features-snapshot', act: 'genie:features-act', changed: 'genie:features-changed', browserBounds: 'genie:features-browser-bounds', pickFiles: 'genie:features-pick-files' });
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         for (const src of [preload, main]) {

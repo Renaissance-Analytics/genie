@@ -69,6 +69,8 @@ export interface ShellProps {
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
     onFeature?: ((action: FeatureAction) => void) | undefined;
+    /** The host's file picker for attachments (§6.4); absent = no Attach button. */
+    pickFiles?: (() => Promise<string[]>) | undefined;
     /** The browser surface's box, for main to place the view over. */
     onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
     /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
@@ -118,6 +120,7 @@ export function Shell({
     servable,
     features = EMPTY_FEATURES,
     onFeature = () => {},
+    pickFiles,
     onBrowserBounds,
     agentDetail,
     agentResolved,
@@ -150,6 +153,16 @@ export function Shell({
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
+    // The AgentInbox composer's picked files (§6.4): held here, cleared after a send.
+    const [attachments, setAttachments] = useState<readonly string[]>([]);
+    const inboxCompose = pickFiles
+        ? {
+              attachments,
+              onPick: () => { void pickFiles().then((paths) => setAttachments((a) => [...a, ...paths.filter((p) => !a.includes(p))])); },
+              onRemove: (path: string) => setAttachments((a) => a.filter((p) => p !== path)),
+              onClear: () => setAttachments([]),
+          }
+        : undefined;
     /** The workspace a route names, from the snapshot — `null` both for unknown and not-yet-loaded; the caller tells them apart. */
     const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
     const canServe = servable.includes(parsed.surface);
@@ -240,7 +253,7 @@ export function Shell({
                     {canServe && parsed.surface === 'flows' ? <FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.flows?.adding ? { kind: 'flow', ...features.flows.adding } : undefined} onCloseForm={() => onFeature({ kind: 'flows.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'hosting' ? <HostingSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
-                    {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
+                    {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} compose={inboxCompose} /> : null}
                     {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} /> : null}
                     {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
 

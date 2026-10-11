@@ -67,6 +67,12 @@ export interface AgentOpsProps {
     /** The last operation's refusal or result, shown where it was caused. */
     readonly lastOutcome: string | null;
     readonly budgetUsd: number | null;
+    /** Mode is WORDING for the agent (§6.2): automated / manual. Not a permission boundary. */
+    readonly mode: 'automated' | 'manual';
+    /** The agent's own half of who may message it (§6.4). */
+    readonly accessScope: 'none' | 'self' | 'specific' | 'all';
+    readonly onSetMode: (mode: 'automated' | 'manual') => void;
+    readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
@@ -454,7 +460,7 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
-                {plan || budget || budgetLimit !== null ? (
+                {plan || budget || budgetLimit !== null || ops ? (
                 <aside data-rail-column className="flex w-[260px] shrink-0 flex-col gap-4 border-l border-[var(--border-1)] p-4 text-xs">
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
@@ -470,6 +476,27 @@ export function AgentView({
                                 {plan.step}/{plan.of}
                             </p>
                             <p className="mt-1 text-[var(--fg-2)]">{plan.doing}</p>
+                        </section>
+                    ) : null}
+
+                    {ops ? (
+                        <section data-rail="mode" data-mode={ops.mode}>
+                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Mode</h2>
+                            <div className="flex items-center gap-1 text-[11px]">
+                                <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
+                                <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual')} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                    switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
+                                </button>
+                            </div>
+                            <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
+                            <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
+                                Who may message {agent.name}
+                                <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                    <option value="none">nobody</option>
+                                    <option value="self">this workspace</option>
+                                    <option value="all">any workspace here</option>
+                                </select>
+                            </label>
                         </section>
                     ) : null}
 
