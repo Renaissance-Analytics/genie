@@ -121,6 +121,25 @@ try {
     check(ready !== null && ready.action === 'update-install', '11. the signal now offers install', JSON.stringify(ready));
     await cdp.screenshot(`${process.cwd()}/update-downloaded.png`);
 
+    // §7.4 — "an upgrade ends every agent session and does not revive them" — is only a claim
+    // if an agent is RUNNING when install is asked. Start the seeded codex agent (the stub
+    // app-server behind GENIE2_CODEX_BINARY) through the same door a person uses, and wait for
+    // the host to report its session running. The caller proves the other half afterwards:
+    // no stub process survives the quit, and none is back after the relaunch.
+    const codexId = await cdp.evaluate('window.genie.snapshot().then((s) => (s.agents.find((a) => a.provider === "codex") ?? {}).id ?? null)');
+    check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
+    if (typeof codexId === 'string') {
+        await cdp.evaluate(`window.genie.openAgent(${JSON.stringify(codexId)}); true`);
+        const end = Date.now() + 30_000;
+        let running = null;
+        while (Date.now() < end) {
+            running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
+            if (running === true) break;
+            await new Promise((r) => setTimeout(r, 500));
+        }
+        check(running === true, '11c. that agent\'s session is RUNNING when install is asked', String(running));
+    }
+
     // §7.2 report, through the bridge this time so the caller gets the text.
     const result = await cdp.evaluate('window.genie.updates.install()');
     check(result !== null && typeof result.report === 'string', '12. install answers with the teardown report', result?.report?.split('\n')[0] ?? 'null');
