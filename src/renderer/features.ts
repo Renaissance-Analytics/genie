@@ -166,7 +166,8 @@ export type FeatureAction =
     | { kind: 'deck.answer'; item: DeckItem; optionId: string }
     /** The person adds a memory. */
     | { kind: 'knowledge.add'; title: string; body: string; class?: MemoryClass; scope: Scope; tags?: string[] }
-    | { kind: 'inbox.send'; to: string; text: string }
+    /** Attachments are host paths from the host's own picker; the store keeps BYTE COPIES, never the path. */
+    | { kind: 'inbox.send'; to: string; text: string; attachments?: readonly string[] }
     | { kind: 'inbox.markRead'; messageId: string }
     | { kind: 'settings.set'; key: string; value: boolean | string }
     | { kind: 'settings.reset'; key: string }

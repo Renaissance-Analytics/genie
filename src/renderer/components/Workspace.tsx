@@ -12,6 +12,8 @@ import { terminalHidden, terminalShown, terminalSuspended } from '../../core/wor
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
 import type { RepoEntry } from '../../core/repo-registry.js';
+import { SETTINGS } from '../../core/settings.js';
+import { LAYOUT_MODES, gridTemplate, layoutModeFrom, visiblePanes } from '../../core/panel-layout.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 
@@ -54,6 +56,14 @@ export interface WorkspaceOpsProps {
         readonly onAdd: (input: { name: string; path: string }) => void;
         readonly onRemove: (slug: string) => void;
         readonly onOpen: (path: string) => void;
+    } | undefined;
+    /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
+    readonly settings?: {
+        readonly values: Readonly<Record<string, boolean | string>> | null;
+        /** Keys this workspace overrides (the workstation value differs). */
+        readonly overridden: readonly string[];
+        readonly onSet: (key: string, value: boolean | string) => void;
+        readonly onReset: (key: string) => void;
     } | undefined;
 }
 
@@ -151,6 +161,10 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     );
 
     const active = state.terminals.find((t) => t.id === state.active) ?? null;
+    // LAYOUT (§6.5): the workspace's own setting decides how many panes show; the grid is for that count only.
+    const layout = layoutModeFrom(ops?.settings?.values ?? {});
+    const shown = visiblePanes(state, layout);
+    const template = gridTemplate(layout, shown.length);
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
@@ -191,6 +205,46 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
 
+            {ops?.settings ? (
+                <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Workspace settings</h2>
+                        <span className="text-[var(--fg-4)]">these apply to {workspace.name ?? workspace.id} only; an override replaces the workstation value</span>
+                    </div>
+                    {ops.settings.values === null ? (
+                        <div data-ws-settings-skeleton className="mt-2 flex flex-col gap-1">
+                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
+                            <div className="h-3 w-1/4 animate-pulse rounded bg-[var(--bg-2)]" />
+                        </div>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {SETTINGS.filter((def) => def.scope === 'workspace').map((def) => {
+                                const values = ops.settings!.values!;
+                                const value = values[def.key] ?? def.default;
+                                const overridden = ops.settings!.overridden.includes(def.key);
+                                return (
+                                    <li key={def.key} data-ws-setting={def.key} {...(overridden ? { 'data-ws-overridden': def.key } : {})} className="flex items-center gap-3 py-1.5">
+                                        <div className="flex-1">
+                                            <div className="font-medium">{def.label}</div>
+                                            <div className="text-[var(--fg-3)]">{def.description}</div>
+                                        </div>
+                                        {def.type === 'boolean' ? (
+                                            <input type="checkbox" checked={value === true} onChange={(e) => ops.settings!.onSet(def.key, e.target.checked)} />
+                                        ) : def.type === 'enum' ? (
+                                            <select value={String(value)} onChange={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                                            </select>
+                                        ) : (
+                                            <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                                        )}
+                                        {overridden ? <button type="button" data-action="ws-setting-reset" data-ws-key={def.key} onClick={() => ops.settings!.onReset(def.key)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]" title="Drop this workspace's override; the workstation value applies again">reset</button> : null}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
+            ) : null}
             {ops?.repos ? (
                 <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
                     <div className="flex items-center gap-3">
@@ -230,6 +284,15 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
             ) : null}
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
             <div data-terminal-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
+                {ops?.settings ? (
+                    <div data-layout-control className="flex items-center gap-0.5 border-r border-[var(--border-1)] px-1.5" title="Terminal layout — remembered for this workspace">
+                        {LAYOUT_MODES.map((m) => (
+                            <button key={m} type="button" data-action={`layout-${m}`} {...(m === layout ? { 'data-current': 'true' } : {})} aria-label={`${m} layout`} onClick={() => ops.settings!.onSet('panel_layout', m)} className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${m === layout ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-4)] hover:bg-[var(--bg-2)]'}`}>
+                                {m}
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
                 {state.terminals.map((t) => {
                     const isActive = t.id === state.active;
                     return (
@@ -313,19 +376,30 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
             <div className="min-h-0 flex-1 bg-[var(--bg-0)]">
-                {active && Pane ? (
-                    <Pane
-                        key={active.id}
-                        paneId={active.id}
-                        output={state.output[active.id] ?? ''}
-                        readOnly={active.exited !== null}
-                        onData={(data) => terminals.write(active.id, data)}
-                        onResize={({ cols, rows }) => {
-                            lastSize.current = { cols, rows };
-                            terminals.resize(active.id, cols, rows);
-                        }}
-                    />
-                ) : active ? null : (
+                {active ? (
+                    <div data-layout={layout} className="grid h-full min-h-0 gap-px bg-[var(--border-1)]" style={{ gridTemplateColumns: template.columns, gridTemplateRows: template.rows }}>
+                        {shown.map((id) => {
+                            const t = state.terminals.find((x) => x.id === id)!;
+                            return (
+                                <div key={id} data-pane-slot={id} {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>
+                                    {Pane ? (
+                                        <Pane
+                                            key={id}
+                                            paneId={id}
+                                            output={state.output[id] ?? ''}
+                                            readOnly={t.exited !== null}
+                                            onData={(data) => terminals.write(id, data)}
+                                            onResize={({ cols, rows }) => {
+                                                lastSize.current = { cols, rows };
+                                                terminals.resize(id, cols, rows);
+                                            }}
+                                        />
+                                    ) : null}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ) : (
                     <div data-terminal-empty="" className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-[var(--fg-3)]">
                         <p>No terminals open in {workspace.name ?? workspace.id}.</p>
                         <button

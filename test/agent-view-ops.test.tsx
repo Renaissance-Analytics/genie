@@ -13,8 +13,8 @@ import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentV
 
 const agent = { id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared' as const, cwd: '/w/tynn' };
 const ops = (over: Partial<AgentOpsProps> = {}): AgentOpsProps => ({
-    deletePreview: null, diagnosis: null, lastOutcome: null, budgetUsd: null,
-    onRestart: () => {}, onSwitchDriver: () => {}, onDiagnose: () => {}, onPreviewDelete: () => {}, onConfirmDelete: () => {}, onCancelDelete: () => {}, onSetBudget: () => {},
+    deletePreview: null, diagnosis: null, lastOutcome: null, budgetUsd: null, mode: 'manual', accessScope: 'self',
+    onRestart: () => {}, onSwitchDriver: () => {}, onDiagnose: () => {}, onPreviewDelete: () => {}, onConfirmDelete: () => {}, onCancelDelete: () => {}, onSetBudget: () => {}, onSetMode: () => {}, onSetAccessScope: () => {},
     ...over,
 });
 const render = (o?: AgentOpsProps) =>

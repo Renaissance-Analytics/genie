@@ -149,6 +149,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             listRepos: (workspaceId) => answer('workspaces.listRepos', workspaceId),
             addRepo: (workspaceId, input) => answer('workspaces.addRepo', workspaceId, input),
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
+            settings: (workspaceId) => answer('workspaces.settings', workspaceId),
+            setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
+            resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),
@@ -156,6 +159,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             delete: (agentId, outcome, also) => answer('agents.delete', agentId, outcome, [...also]),
             switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
             setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
+            setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
+            setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
@@ -177,6 +182,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             act: (action) => read<FeatureData>('features.act', action),
             // Nothing to place on a screen that is not the host's.
             setBrowserBounds: async () => {},
+            // A remote window cannot reach the host's files to attach; it answers nothing picked.
+            pickFiles: async () => [],
         },
         updates: {
             state: () => read<UpdateState>('updates.state'),

@@ -151,9 +151,12 @@ export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: strin
 }
 
 /** Why an agent may not start right now, or `null`. The one rule: an asleep workspace starts nothing. */
-export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord): string | null {
+export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
     const workspace = ports.registry.workspace(record.workspaceId);
-    return workspace?.asleep ? `${workspace.id} is hibernating; wake it before starting ${record.name}` : null;
+    if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;
+    // §6.1 caps: a start past the cap is refused with the number and the setting named — never queued, never silent.
+    if (load && load.running >= load.cap) return `${record.workspaceId} is at its cap of ${load.cap} running agents; stop one or raise agent_cap in the workspace settings before starting ${record.name}`;
+    return null;
 }
 
 export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: string): Promise<{ ok: true; agentsForgotten: number; path: string; folderUntouched: true } | Refusal> {

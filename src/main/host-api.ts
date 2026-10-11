@@ -47,6 +47,9 @@ export interface HostApiDeps {
         listRepos(workspaceId: string): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
+        settings(workspaceId: string): Promise<unknown> | unknown;
+        setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
+        resetSetting(workspaceId: string, key: string): Promise<unknown>;
     };
     agentOps: {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
@@ -54,6 +57,8 @@ export interface HostApiDeps {
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
+        setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
     };
     features: {
@@ -120,6 +125,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
             case 'agents.setBudget':
                 return deps.agentOps.setBudget(str(args[0]), args[1] === null ? null : Number(args[1]));
+            case 'agents.setMode':
+                return deps.agentOps.setMode(str(args[0]), args[1] === 'automated' ? 'automated' : 'manual');
+            case 'agents.setAccessScope':
+                return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
             case 'agents.diagnose':
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':
@@ -140,6 +149,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'workspaces.removeRepo':
                 return deps.workspaceOps.removeRepo(str(args[0]), str(args[1]));
+            case 'workspaces.settings':
+                return deps.workspaceOps.settings(str(args[0]));
+            case 'workspaces.setSetting':
+                return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), typeof args[2] === 'boolean' ? args[2] : str(args[2]));
+            case 'workspaces.resetSetting':
+                return deps.workspaceOps.resetSetting(str(args[0]), str(args[1]));
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':

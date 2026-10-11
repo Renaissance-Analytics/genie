@@ -304,7 +304,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (target.kind === 'none') throw new Error(`nobody at ${action.to}`);
             if (target.kind === 'ambiguous') throw new Error(`${action.to} names more than one agent — use one of: ${target.forms.join(', ')}`);
             if (target.kind === 'human') throw new Error('that is you');
-            await services.inbox.send({ from: HUMAN, to: target.id, text: action.text });
+            // One unreadable or executable path fails the whole send; the store says which (§6.4).
+            await services.inbox.send({ from: HUMAN, to: target.id, text: action.text, ...(action.attachments && action.attachments.length > 0 ? { attachments: action.attachments } : {}) });
             break;
         }
         case 'inbox.markRead': {

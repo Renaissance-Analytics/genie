@@ -9,7 +9,7 @@ import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { quitPlan } from '../core/quit.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -40,6 +40,7 @@ import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, listReposOf, removeRepoFrom, type RepoOpsPorts } from './repo-ops-host.js';
+import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -164,6 +165,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             fidelity: 'declared',
             cwd: cwdFor(record),
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
+            mode: record.mode,
+            accessScope: record.accessScope,
         },
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),
@@ -367,7 +370,10 @@ async function boot(): Promise<void> {
         if (!record || !host) return { ok: false, reason: 'unknown agent' };
 
         // An asleep workspace starts nothing (§6.1) — refused by name, never silently.
-        const asleep = startRefusal(workspaceOps, record);
+        const asleep = startRefusal(workspaceOps, record, {
+            running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
+        });
         if (asleep) return { ok: false, reason: asleep };
         // Start or REATTACH. Starting one that is already running returns the same session
         // rather than a second — two provider processes answering as one agent is how a user
@@ -425,6 +431,8 @@ async function boot(): Promise<void> {
             clearThread: (id) => registry!.clearThread(id),
             setProvider: (id, provider) => registry!.setProvider(id, provider),
             setBudget: (id, usd) => registry!.setBudget(id, usd),
+            setMode: (id, mode) => registry!.setMode(id, mode),
+            setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
         },
         host: {
             start: (record, cwd) => host!.start(record, cwd),
@@ -467,6 +475,10 @@ async function boot(): Promise<void> {
         if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
         return switchDriver(agentOps, raw, to).finally(() => registry?.touch());
     });
+    ipcMain.handle('genie:agent-set-mode', (_event, raw: unknown, mode: unknown) =>
+        (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
+    ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
+        (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
     ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
         if (typeof raw !== 'string' || (usd !== null && !(typeof usd === 'number' && usd >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
         return setBudget(agentOps, raw, usd as number | null).finally(() => registry?.touch());
@@ -581,6 +593,17 @@ async function boot(): Promise<void> {
         return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
     });
     ipcMain.handle('genie:workspace-repo-remove', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoFrom(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
+    // WORKSPACE SETTINGS (§6.1): the workspace-scoped keys with THIS workspace's effective values and its overrides.
+    ipcMain.handle('genie:workspace-settings', (_event, raw: unknown) =>
+        (typeof raw === 'string' && services ? { ok: true, values: services.settings.snapshotFor(raw), overridden: Object.keys(services.settings.workspaceValues(raw)) } : { ok: false, reason: 'name a workspace' }));
+    ipcMain.handle('genie:workspace-setting-set', async (_event, raw: unknown, key: unknown, value: unknown) => {
+        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
+        try { await services.settings.setFor(raw, key, value); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+    });
+    ipcMain.handle('genie:workspace-setting-reset', async (_event, raw: unknown, key: unknown) => {
+        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
+        try { await services.settings.resetFor(raw, key); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+    });
     ipcMain.handle('genie:workspace-preview-add', async () => {
         if (!window) return { ok: false, reason: 'no window to pick a folder from' };
         const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
@@ -673,6 +696,9 @@ async function boot(): Promise<void> {
                 listRepos: (id) => listReposOf(repoOps, id),
                 addRepo: (id, input) => addRepoTo(repoOps, id, input),
                 removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
+                settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
+                setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
             },
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),
@@ -680,6 +706,8 @@ async function boot(): Promise<void> {
                 delete: (id, outcome, also) => deleteAgent(agentOps, id, outcome, also),
                 switchDriver: (id, to) => switchDriver(agentOps, id, to),
                 setBudget: (id, usd) => setBudget(agentOps, id, usd),
+                setMode: (id, mode) => setMode(agentOps, id, mode),
+                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
                 diagnose: (id) => diagnose(agentOps, id),
             },
             features: {
@@ -745,6 +773,12 @@ async function boot(): Promise<void> {
         // A zero-sized box means the surface is not on screen: hide rather than paint over another surface.
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
+    });
+    // §6.4 attachments: the host's own picker; what it answers is all a send may attach.
+    ipcMain.handle(FEATURE_CHANNELS.pickFiles, async () => {
+        if (!window || window.isDestroyed()) return [];
+        const picked = await dialog.showOpenDialog(window, { title: 'Attach files', properties: ['openFile', 'multiSelections'] });
+        return picked.canceled ? [] : picked.filePaths;
     });
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState));
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {

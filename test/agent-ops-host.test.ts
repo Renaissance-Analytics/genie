@@ -25,6 +25,8 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             clearThread: async (id) => { if (!current || current.id !== id) return null; current = { ...current, threadId: null }; calls.push(`clearThread:${id}`); return current; },
             setProvider: async (id, provider) => { if (!current || current.id !== id) return { ok: false, reason: 'no agent' }; current = { ...current, provider: provider as never }; calls.push(`setProvider:${id}:${provider}`); return { ok: true, record: current }; },
             setBudget: async (id, usd) => { if (!current || current.id !== id) return null; current = { ...current, dailyBudgetUsd: usd } as AgentRecord; calls.push(`setBudget:${id}:${usd}`); return current; },
+            setMode: async (id, mode) => { if (!current || current.id !== id) return null; current = { ...current, mode }; return current; },
+            setAccessScope: async (id, accessScope) => { if (!current || current.id !== id) return null; current = { ...current, accessScope }; return current; },
         },
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${r.threadId}:${cwd}`); return { ok: true }; },

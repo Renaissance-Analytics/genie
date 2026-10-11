@@ -242,7 +242,7 @@ export class Registry {
      * nameable and persistable without anything running, so that a workspace can be set up
      * before anyone is ready to spend a provider turn on it.
      */
-    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string }): Promise<AgentRecord> {
+    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; sidecarOf?: AgentId }): Promise<AgentRecord> {
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
@@ -352,6 +352,26 @@ export class Registry {
         await this.#store.writeAgents(this.#agents);
         this.#emit();
         return { ok: true, record };
+    }
+
+    /** Mode is WORDING for the agent (§6.2) — automated or manual — not a permission boundary. */
+    async setMode(agentId: AgentId, mode: AgentRecord['mode']): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, mode }));
+    }
+
+    /** The agent's own half of who may message it (§6.4). */
+    async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, accessScope }));
+    }
+
+    async #update(agentId: AgentId, change: (a: AgentRecord) => AgentRecord): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing) return null;
+        const record = change(existing);
+        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
+        await this.#store.writeAgents(this.#agents);
+        this.#emit();
+        return record;
     }
 
     async setBudget(agentId: AgentId, dailyBudgetUsd: number | null): Promise<AgentRecord | null> {

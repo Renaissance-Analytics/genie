@@ -51,6 +51,9 @@ function fakes() {
             listRepos: async (id) => { calls.push(`ws-repos:${id}`); return { ok: true, repos: [] }; },
             addRepo: async (id, input) => { calls.push(`ws-repo-add:${id}:${input.name}`); return { ok: true, slug: input.name }; },
             removeRepo: async (id, slug) => { calls.push(`ws-repo-remove:${id}:${slug}`); return { ok: true }; },
+            settings: async (id) => ({ ok: true, values: {}, overridden: [] }),
+            setSetting: async (id, key, value) => { calls.push(`ws-setting:${id}:${key}=${String(value)}`); return { ok: true }; },
+            resetSetting: async (id, key) => { calls.push(`ws-setting-reset:${id}:${key}`); return { ok: true }; },
         },
         agentOps: {
             restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },
@@ -58,6 +61,8 @@ function fakes() {
             delete: async (id, outcome) => { calls.push(`agent-delete:${id}:${outcome}`); return { ok: true, plan: { outcome, removes: [], keeps: [], external: [] } }; },
             switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, carries: [], from: 'claude', to }; },
             setBudget: async (id, usd) => { calls.push(`agent-budget:${id}:${usd}`); return { ok: true, decision: { kind: 'proceed', remainingUsd: null } }; },
+            setMode: async (id, mode) => { calls.push(`agent-mode:${id}:${mode}`); return { ok: true }; },
+            setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },
             diagnose: async () => ({ ok: true, diagnosis: { state: 'healthy', fault: false, cause: null, repair: null } }),
         },
         features: {

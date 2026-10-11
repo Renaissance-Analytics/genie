@@ -87,6 +87,12 @@ export interface AgentRecord {
      * No provider reports a cost over ACP today, so it is shown as unenforceable until one does.
      */
     readonly dailyBudgetUsd?: number | null;
+    /**
+     * The agent this one is the SIDECAR of (§6.2): `<driver>-slave`, registered by that agent as its own
+     * review partner. OPTIONAL and not in AGENT_RECORD_FIELDS for the same reason as the budget. Genie
+     * never stops a sidecar for you: nothing links the parent's stop to this record.
+     */
+    readonly sidecarOf?: AgentId | null;
 }
 
 /**
@@ -140,6 +146,7 @@ export interface NewAgent {
     /** Defaults to `manual` — see the field doc. */
     mode?: AgentRecord['mode'];
     accessScope?: AgentRecord['accessScope'];
+    sidecarOf?: AgentId | null;
     now?: () => string;
 }
 
@@ -156,5 +163,6 @@ export function agentRecord(input: NewAgent): AgentRecord {
         lastUsedAt: null,
         mode: input.mode ?? 'manual',
         accessScope: input.accessScope ?? 'self',
+        ...(input.sidecarOf ? { sidecarOf: input.sidecarOf } : {}),
     };
 }

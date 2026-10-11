@@ -25,6 +25,8 @@ export interface AgentOpsPorts {
         clearThread(id: AgentRecord['id']): Promise<AgentRecord | null>;
         setProvider(id: AgentRecord['id'], provider: AcpProvider): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }>;
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
+        setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
+        setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
     };
     host: {
         start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
@@ -115,6 +117,22 @@ export async function setBudget(ports: AgentOpsPorts, agentId: string, dailyLimi
     // No provider reports a cost over ACP today, so a dollar budget is UNENFORCEABLE — said, not silent.
     const decision = budgetDecision({ dailyLimitUsd, spentTodayUsd: 0, turnInFlight: session?.turnState === 'working', costReported: false, agentName: record.name });
     return { ok: true, record: updated, decision };
+}
+
+/** Mode is wording for the agent, not a permission boundary (§6.2). */
+export async function setMode(ports: AgentOpsPorts, agentId: string, mode: AgentRecord['mode']): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setMode(record.id, mode);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/** The agent's own half of who may message it (§6.4). */
+export async function setAccessScope(ports: AgentOpsPorts, agentId: string, scope: AgentRecord['accessScope']): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setAccessScope(record.id, scope);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 
 export async function diagnose(ports: AgentOpsPorts, agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | Refusal> {
