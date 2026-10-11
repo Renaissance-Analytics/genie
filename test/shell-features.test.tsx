@@ -23,6 +23,7 @@ const FEATURES: FeatureData = {
     knowledge: { hits: null, query: '' },
     flows: null,
     hosting: null,
+    services: null,
     toolchain: null,
     inbox: null,
     settings: { values: null },

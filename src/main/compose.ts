@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,9 +16,12 @@ import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runtimeDir } from './paths.js';
 import { ProcessSupervisor } from './process-supervisor.js';
+import { ServiceDriver, type DockerRunner } from './service-driver.js';
+import { ServiceRegistry } from './service-registry.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager } from './site-manager.js';
 import type { PtyPort } from './terminal-host.js';
+import { execFileRunner } from './toolchain-runner.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -40,6 +44,8 @@ export interface ComposeInput {
     readonly frontDoorPort?: number;
     readonly allocatePort?: () => number;
     readonly now?: () => number;
+    /** Runs `docker <args>`; execFile in production. A missing Docker answers a non-zero exit, never a throw. */
+    readonly docker?: DockerRunner;
 }
 
 export interface ComposedServices {
@@ -51,6 +57,8 @@ export interface ComposedServices {
     readonly settings: SettingsStore;
     readonly supervisor: ProcessSupervisor;
     readonly sites: SiteManager;
+    /** Service engines per workspace (and the shared ones), on the Docker driver. */
+    readonly engines: ServiceRegistry;
     readonly frontDoor: GenRouterServer;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: ApprovalQueue;
@@ -126,9 +134,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
 
     const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
     let nextPort = 4100;
+    // ONE loopback allocator for sites and engines: two things never share a port.
+    const allocatePort = input.allocatePort ?? (() => ++nextPort);
+    const docker: DockerRunner = input.docker ?? ((args) => execFileRunner('docker', args).catch((e: unknown) => ({ stdout: e instanceof Error ? e.message : String(e), exitCode: 127 })));
+    const engines = await ServiceRegistry.open(input.userData, new ServiceDriver(docker), { allocatePort, randomPassword: () => randomBytes(18).toString('base64url') });
     const sites = new SiteManager({
         supervisor,
-        allocatePort: input.allocatePort ?? (() => ++nextPort),
+        allocatePort,
         caddyBin: input.caddyBin,
         configDir: join(runtimeDir(input.userData), 'sites'),
         writeConfig: (path, content) => {
@@ -156,6 +168,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         settings,
         supervisor,
         sites,
+        engines,
         frontDoor,
         approvals,
         frontDoorPort,

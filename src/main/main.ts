@@ -370,7 +370,9 @@ async function boot(): Promise<void> {
         const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
         const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
         try {
-            return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows });
+            // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do.
+            const serviceEnv = services?.engines.envFor(workspace.id) ?? {};
+            return terminals.open({ workspaceId: workspace.id, cwd: workspace.path, command, cols, rows, ...(Object.keys(serviceEnv).length > 0 ? { env: serviceEnv } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
             // installed-err.log catches them. The first fancy-pty failure on the installed app
@@ -455,7 +457,7 @@ async function boot(): Promise<void> {
             const shown = await browserPane.show(data.browser.url);
             if (!shown.ok) console.error('[genie] browser:', shown.reason);
         }
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null };
         return data;
     });
 

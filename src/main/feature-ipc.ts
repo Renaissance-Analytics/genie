@@ -4,8 +4,8 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { resolveDeckAnswer } from '../core/deck-resolve.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowFormDefaults, siteFormDefaults, validateFlowForm, validateSiteForm } from '../core/forms.js';
-import type { FlowAdding, SiteAdding } from '../renderer/features.js';
+import { flowFormDefaults, serviceFormDefaults, siteFormDefaults, validateFlowForm, validateServiceForm, validateSiteForm } from '../core/forms.js';
+import type { FlowAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
@@ -40,6 +40,7 @@ export interface FeatureState {
     toolchainCheckedAt?: number | null;
     siteAdding?: SiteAdding | null;
     flowAdding?: FlowAdding | null;
+    serviceAdding?: ServiceAdding | null;
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
@@ -49,6 +50,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         knowledge: { hits, query: state.knowledgeQuery },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
         hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null },
+        // Status is READ from Docker for every instance on every snapshot — never remembered.
+        services: { instances: await Promise.all(services.engines.list().map(async (instance) => ({ instance, status: (await services.engines.status(instance.id)).state }))), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
         inbox: { unread: services.inbox.unread(HUMAN), peers },
         settings: { values: services.settings.snapshot() },
@@ -122,7 +125,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             next.siteAdding = null;
             const f = action.form;
+            // The workspace's service env (its engines + the shared ones) reaches every process of the site.
+            const env = services.engines.envFor(action.workspaceId);
             services.sites.create({
+                ...(Object.keys(env).length > 0 ? { env } : {}),
                 name: f.name,
                 workspaceId: action.workspaceId,
                 repoPath: action.repoPath,
@@ -154,6 +160,41 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'hosting.stopProcess':
             if (!services.supervisor.stop(action.processId)) throw new Error(`no process ${action.processId}`);
+            break;
+        case 'services.add':
+            next.serviceAdding = { workspaceId: action.workspaceId, defaults: serviceFormDefaults({ workspaceId: action.workspaceId }), problems: [], consent: null };
+            break;
+        case 'services.cancelForm':
+            next.serviceAdding = null;
+            break;
+        case 'services.create': {
+            const open: ServiceAdding = state.serviceAdding ?? { workspaceId: action.form.workspaceId, defaults: action.form, problems: [], consent: null };
+            const problems = validateServiceForm(action.form);
+            if (problems.length > 0) {
+                next.serviceAdding = { ...open, problems, consent: null };
+                break;
+            }
+            const scope = action.form.scope === 'shared' ? { kind: 'shared' as const } : { kind: 'dedicated' as const, workspaceId: action.form.workspaceId };
+            const r = await services.engines.add({ engine: action.form.engine, major: action.form.major, scope, consent: action.consent });
+            if (r.kind === 'needs-consent') {
+                // The pull is a download the person should know about: the form stays open, ASKING, with the image named.
+                next.serviceAdding = { ...open, problems: [], consent: { image: r.image, note: r.note, form: action.form } };
+                break;
+            }
+            next.serviceAdding = null;
+            break;
+        }
+        case 'services.setActive':
+            await services.engines.setActive(action.workspaceId, action.engine, action.version);
+            break;
+        case 'services.start':
+            await services.engines.start(action.serviceId);
+            break;
+        case 'services.stop':
+            await services.engines.stop(action.serviceId);
+            break;
+        case 'services.remove':
+            await services.engines.remove(action.serviceId, { deleteData: action.deleteData });
             break;
         case 'toolchain.check': {
             const tc = ports.toolchain;
