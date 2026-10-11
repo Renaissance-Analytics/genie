@@ -36,6 +36,33 @@ export function deckAnswerChannel(item: DeckItem): { kind: 'provider'; agentId: 
     return { kind: 'provider', agentId: item.agentId };
 }
 
+export type DeckAnswerRoute =
+    | { kind: 'provider'; agentId: string; optionId: string }
+    | { kind: 'feature' }
+    | { kind: 'navigate'; route: string }
+    | { kind: 'restart-with-handoff'; agentId: string; finishedId: string }
+    | { kind: 'refused'; reason: string };
+
+/**
+ * WHERE an answer goes — the renderer's one decision: a provider approval back through the session
+ * layer; Open is a navigation the window does itself; Restart-with-this is a session command with
+ * its own bridge call; everything else is a feature action main resolves against the stores.
+ */
+export function deckAnswerRoute(item: DeckItem, optionId: string): DeckAnswerRoute {
+    const channel = deckAnswerChannel(item);
+    if (channel.kind === 'refused') return channel;
+    if (channel.kind === 'provider') return { kind: 'provider', agentId: channel.agentId, optionId };
+    const command = resolveDeckAnswer(item, optionId);
+    switch (command.kind) {
+        case 'refused':
+        case 'navigate':
+        case 'restart-with-handoff':
+            return command;
+        default:
+            return { kind: 'feature' };
+    }
+}
+
 export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand {
     if (item.forwardedFrom !== null || item.answer.kind === 'elsewhere') {
         const host = item.answer.kind === 'elsewhere' ? item.answer.host : item.forwardedFrom;
