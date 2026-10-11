@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import { parseCron } from './cron.js';
+import { SERVICE_CATALOG } from './services.js';
 import { detectDevServer, detectStaticServe, type DevServer, type RepoFacts } from './serve-config.js';
 
 /**
@@ -115,5 +116,32 @@ export function validateFlowForm(form: FlowForm): Problem[] {
         if (parseCron(cron) === null) problems.push({ field: 'cron', message: `Node ${n.id}: "${cron}" is not a cron expression Genie can evaluate (five fields: minute hour day month weekday).` });
         if (tz !== undefined && tz !== 'UTC' && tz !== 'Etc/UTC') problems.push({ field: 'timezone', message: `Node ${n.id}: timezone ${tz} is not supported yet; schedules are evaluated in UTC.` });
     }
+    return problems;
+}
+
+export type ServiceScopeKind = 'dedicated' | 'shared';
+
+/** "Add an engine": which engine, which major, dedicated to the workspace or shared by the workstation. */
+export interface ServiceForm {
+    readonly workspaceId: string;
+    readonly engine: string;
+    readonly major: string;
+    readonly scope: ServiceScopeKind;
+}
+
+export function serviceFormDefaults(input: { workspaceId: string }): ServiceForm {
+    const def = SERVICE_CATALOG[0]!;
+    return { workspaceId: input.workspaceId, engine: def.engine, major: def.majors[def.majors.length - 1]!, scope: 'dedicated' };
+}
+
+export function validateServiceForm(form: ServiceForm): Problem[] {
+    const problems: Problem[] = [];
+    const def = SERVICE_CATALOG.find((e) => e.engine === form.engine);
+    if (!def) {
+        problems.push({ field: 'engine', message: `${form.engine} is not an engine Genie manages.` });
+        return problems;
+    }
+    if (!def.majors.includes(form.major)) problems.push({ field: 'major', message: `${form.engine} ${form.major} is not a version Genie knows (${def.majors.join(', ')}).` });
+    if (def.sharing === 'shared-only' && form.scope === 'dedicated') problems.push({ field: 'scope', message: `${form.engine} is a shared service — one per workstation, never per workspace.` });
     return problems;
 }

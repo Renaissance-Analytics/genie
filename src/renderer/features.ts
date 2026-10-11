@@ -1,4 +1,5 @@
-import type { FlowForm, Problem, SiteForm, SiteFormDefaults } from '../core/forms.js';
+import type { FlowForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
+import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
@@ -30,10 +31,27 @@ export interface FlowAdding {
     readonly problems: readonly Problem[];
 }
 
+/** An Add-an-engine form open in the Services tab. `consent` is the driver's answer when the image is not here: the person pulls it, or cancels. */
+export interface ServiceAdding {
+    readonly workspaceId: string;
+    readonly defaults: ServiceForm;
+    readonly problems: readonly Problem[];
+    readonly consent: { image: string; note: string; form: ServiceForm } | null;
+}
+
+export type ServiceStatus = 'running' | 'exited' | 'absent';
+
+/** One engine instance with its status as Docker reported it on this snapshot — never remembered. */
+export interface ServiceView {
+    readonly instance: ServiceInstance;
+    readonly status: ServiceStatus;
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null } | null;
+    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
     readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
@@ -45,6 +63,7 @@ export const EMPTY_FEATURES: FeatureData = {
     knowledge: { hits: null, query: '' },
     flows: null,
     hosting: null,
+    services: null,
     toolchain: null,
     inbox: null,
     settings: { values: null },
@@ -69,6 +88,15 @@ export type FeatureAction =
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }
     | { kind: 'hosting.stopProcess'; processId: string }
+    | { kind: 'services.add'; workspaceId: string }
+    | { kind: 'services.cancelForm' }
+    /** The Add-an-engine form, submitted. `consent: true` is the person's answer to the pull question. */
+    | { kind: 'services.create'; form: ServiceForm; consent: boolean }
+    /** The warning is on the row before this is sent (core/services.ts says it). */
+    | { kind: 'services.setActive'; workspaceId: string; engine: string; version: string }
+    | { kind: 'services.start'; serviceId: string }
+    | { kind: 'services.stop'; serviceId: string }
+    | { kind: 'services.remove'; serviceId: string; deleteData: boolean }
     | { kind: 'toolchain.check'; force?: boolean }
     | { kind: 'toolchain.update'; tool: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */

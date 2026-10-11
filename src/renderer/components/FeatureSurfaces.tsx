@@ -4,8 +4,9 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
 import type { FeatureAction, FeatureData } from '../features.js';
-import type { FlowForm, Problem, SiteFormDefaults } from '../../core/forms.js';
-import { AddFlowForm, AddSiteForm } from './AddForms.js';
+import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
+import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
+import { AddFlowForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -20,7 +21,8 @@ import { AddFlowForm, AddSiteForm } from './AddForms.js';
 /** A form open inside a surface — renderer-local state; the problems are the last refused submit's. */
 export type AddingForm =
     | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[] }
-    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] };
+    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] }
+    | { kind: 'service'; workspaceId: string; defaults: ServiceForm; problems: readonly Problem[]; consent: { image: string; note: string; form: ServiceForm } | null };
 
 const NO_BOUNDS = () => {};
 
@@ -31,6 +33,8 @@ interface SurfaceProps {
     readonly workspaces?: readonly { id: string; path: string }[] | undefined;
     readonly adding?: AddingForm | undefined;
     readonly onCloseForm?: (() => void) | undefined;
+    /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
+    readonly tab?: string | undefined;
     readonly data: FeatureData;
     readonly onAction: (action: FeatureAction) => void;
     readonly onNavigate: (route: string) => void;
@@ -149,7 +153,7 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
     );
 }
 
-export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
+export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
     const hosting = data.hosting;
     return (
         <div data-surface="hosting" className="flex h-full min-h-0 flex-col">
@@ -187,13 +191,17 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                     onCancel={() => onCloseForm?.()}
                 />
             ) : null}
+            {adding?.kind === 'service' ? (
+                <AddServiceForm defaults={adding.defaults} problems={adding.problems} consent={adding.consent} onSubmit={(form, consent) => onAction({ kind: 'services.create', form, consent })} onCancel={() => onCloseForm?.()} />
+            ) : null}
             {hosting === null ? (
                 <Skeletons />
             ) : (
-                <Tabs defaultTab="sites" variant="underline" className="flex min-h-0 flex-1 flex-col">
+                <Tabs defaultTab={tab ?? 'sites'} variant="underline" className="flex min-h-0 flex-1 flex-col">
                     <Tabs.List className="px-5">
                         <Tabs.Tab value="sites">Sites</Tabs.Tab>
                         <Tabs.Tab value="processes">Processes</Tabs.Tab>
+                        <Tabs.Tab value="services">Services</Tabs.Tab>
                     </Tabs.List>
                     <Tabs.Panels className="min-h-0 flex-1 overflow-auto">
                         <Tabs.Panel value="sites">
@@ -228,8 +236,71 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                                 </ul>
                             )}
                         </Tabs.Panel>
+                        <Tabs.Panel value="services">
+                            <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} />
+                        </Tabs.Panel>
                     </Tabs.Panels>
                 </Tabs>
+            )}
+        </div>
+    );
+}
+
+function sameScope(a: ServiceInstance, b: ServiceInstance): boolean {
+    return a.scope.kind === b.scope.kind && (a.scope.kind === 'shared' || (b.scope.kind === 'dedicated' && a.scope.workspaceId === b.scope.workspaceId));
+}
+
+/**
+ * SERVICE ENGINES (§6.6). Each row: engine and version, scope, status as Docker reported it, the
+ * loopback port. The active version is marked; another version offers "Make active" with the data
+ * warning ON THE ROW, before the click — a switch is never a surprise. Remove keeps the data volume.
+ */
+function ServicesPanel({ services, workspaces, onAction }: { services: FeatureData['services']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction'] }) {
+    if (services === null) return <Skeletons />;
+    return (
+        <div className="flex flex-col">
+            <form
+                className="flex items-center gap-2 px-5 py-2"
+                onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'services.add', workspaceId: w.id }); }}
+            >
+                <WorkspacePick workspaces={workspaces} name="workspace" />
+                <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                    Add an engine
+                </button>
+            </form>
+            {services.instances.length === 0 ? (
+                <Empty>No service engines yet. Add an engine — Postgres, MySQL, MariaDB, Redis, Mongo — dedicated to a workspace or shared by the workstation.</Empty>
+            ) : (
+                <ul className="divide-y divide-[var(--border-1)]">
+                    {services.instances.map(({ instance: i, status }) => {
+                        const activeSibling = services.instances.find((o) => o.instance.engine === i.engine && o.instance.active && sameScope(o.instance, i))?.instance;
+                        const warning = !i.active && activeSibling ? switchActiveWarning({ engine: i.engine, from: activeSibling.version, to: i.version }) : null;
+                        const scope = i.scope;
+                        return (
+                            <li key={i.id} data-service={i.id} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
+                                <div className="flex items-center gap-3">
+                                    <span className="font-mono">{i.engine} {i.version}</span>
+                                    <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : scope.workspaceId}</Badge>
+                                    <Badge variant="soft" size="sm">{status}</Badge>
+                                    {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
+                                    <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
+                                    <span className="ml-auto flex gap-3 text-[13px]">
+                                        {warning !== null && scope.kind === 'dedicated' ? (
+                                            <button type="button" onClick={() => onAction({ kind: 'services.setActive', workspaceId: scope.workspaceId, engine: i.engine, version: i.version })}>Make active</button>
+                                        ) : null}
+                                        {status === 'running' ? (
+                                            <button type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</button>
+                                        ) : (
+                                            <button type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</button>
+                                        )}
+                                        <button type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</button>
+                                    </span>
+                                </div>
+                                {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
+                            </li>
+                        );
+                    })}
+                </ul>
             )}
         </div>
     );

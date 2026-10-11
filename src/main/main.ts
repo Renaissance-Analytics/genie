@@ -455,7 +455,7 @@ async function boot(): Promise<void> {
             const shown = await browserPane.show(data.browser.url);
             if (!shown.ok) console.error('[genie] browser:', shown.reason);
         }
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null };
         return data;
     });
 

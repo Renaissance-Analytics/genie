@@ -1,5 +1,6 @@
 import { Input } from '@particle-academy/react-fancy';
-import type { FlowForm, Problem, SiteFormDefaults, SiteMode } from '../../core/forms.js';
+import type { FlowForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
+import { SERVICE_CATALOG } from '../../core/services.js';
 
 /**
  * THE FORMS — "Add a site" and "Add a flow".
@@ -137,6 +138,83 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowF
             </label>
             <div className="flex gap-2">
                 <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add flow</button>
+                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
+            </div>
+        </form>
+    );
+}
+
+export interface AddServiceFormProps {
+    readonly defaults: ServiceForm;
+    readonly problems: readonly Problem[];
+    /** The driver's answer when the image is not on this machine: the person pulls it, or cancels. */
+    readonly consent: { image: string; note: string; form: ServiceForm } | null;
+    readonly onSubmit: (form: ServiceForm, consent: boolean) => void;
+    readonly onCancel: () => void;
+}
+
+/**
+ * "Add an engine". A pull is a download the person should know about, so when the driver asks for
+ * consent the form shows the note, names the image, and the pull is its OWN labelled submit — the
+ * plain "Add engine" never pulls.
+ */
+export function AddServiceForm({ defaults, problems, consent, onSubmit, onCancel }: AddServiceFormProps) {
+    return (
+        <form
+            data-form="add-service"
+            className="flex flex-col gap-4 p-5"
+            onSubmit={(e) => {
+                e.preventDefault();
+                const data = new FormData(e.currentTarget);
+                const pull = (e.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'pull';
+                onSubmit(
+                    {
+                        workspaceId: defaults.workspaceId,
+                        engine: String(data.get('engine') ?? ''),
+                        major: String(data.get('major') ?? '').trim(),
+                        scope: data.get('scope') === 'shared' ? 'shared' : 'dedicated',
+                    },
+                    pull,
+                );
+            }}
+        >
+            <p className="text-sm text-[var(--fg-3)]">An engine in a container on this machine, reached over 127.0.0.1 on a port Genie picks. Its credentials go into the workspace’s environment.</p>
+            <Row label="Engine">
+                <select name="engine" defaultValue={defaults.engine} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                    {SERVICE_CATALOG.map((d) => (
+                        <option key={d.engine} value={d.engine}>
+                            {d.engine} — {d.sharing === 'shared-only' ? 'shared, one per workstation' : `versions ${d.majors.join(', ')}`}
+                        </option>
+                    ))}
+                </select>
+                <ProblemLine field="engine" problems={problems} />
+            </Row>
+            <Row label="Version (major)">
+                <Input name="major" defaultValue={defaults.major} placeholder="17" />
+                <ProblemLine field="major" problems={problems} />
+            </Row>
+            <fieldset className="flex flex-col gap-1 text-sm">
+                <span className="font-medium">Scope</span>
+                <label className="flex items-center gap-2">
+                    <input type="radio" name="scope" value="dedicated" defaultChecked={defaults.scope === 'dedicated'} />
+                    Dedicated to {defaults.workspaceId} — its own data and port
+                </label>
+                <label className="flex items-center gap-2">
+                    <input type="radio" name="scope" value="shared" defaultChecked={defaults.scope === 'shared'} />
+                    Shared — one per workstation, every workspace reaches it
+                </label>
+                <ProblemLine field="scope" problems={problems} />
+            </fieldset>
+            {consent ? (
+                <div data-consent className="rounded-xl border border-[var(--warning)] p-3 text-sm">
+                    <p>{consent.note}</p>
+                    <button type="submit" name="consent" value="pull" className="mt-2 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">
+                        Pull {consent.image} and add
+                    </button>
+                </div>
+            ) : null}
+            <div className="flex gap-2">
+                <button type="submit" value="add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add engine</button>
                 <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
             </div>
         </form>
