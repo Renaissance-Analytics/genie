@@ -1,0 +1,147 @@
+import type { AgentRecord } from '../core/identity.js';
+import type { RemoteMethod } from '../core/remote-protocol.js';
+import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
+import type { FeatureAction, FeatureData } from '../renderer/features.js';
+import type { Finished } from './attention-store.js';
+import type { HostApi } from './remote-host.js';
+import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
+import type { PtyOpened, TerminalOptions } from './terminal-host.js';
+
+/**
+ * THE HOST API (§6.8) — what a remote connection may perform on THIS Genie: one `invoke` over the
+ * 22 bridge methods and one event stream, built from the same parts the IPC handlers in main.ts use.
+ * The parts are PORTS so this is a table under test; main.ts hands in the real registry, session
+ * host, terminal host, feature IPC and updater. Host-only methods throw with where to do them — the
+ * RemoteHost refuses them before they get here; this is the backstop.
+ */
+
+export interface HostApiDeps {
+    snapshot(): GenieSnapshot;
+    subscribeSnapshot(listener: (snapshot: GenieSnapshot) => void): () => void;
+    find(agentId: string): AgentRecord | null;
+    detailFor(agentId: string): AgentDetail | null;
+    cwdFor(record: AgentRecord): string;
+    host: RestartPorts & {
+        answerApproval(agentId: AgentRecord['id'], optionId: string): boolean;
+        subscribe(listener: (agentId: string) => void): () => void;
+    };
+    registerAgent(workspaceId: string): Promise<{ id: string }>;
+    attention: { finished(): readonly Finished[]; markSeen(id: string): void };
+    terminals: {
+        open(options: TerminalOptions): PtyOpened;
+        write(id: string, data: string): boolean;
+        resize(id: string, cols: number, rows: number): boolean;
+        close(id: string): boolean;
+        list(): readonly { id: string; pid: number; shell: string; workspaceId: string }[];
+        onData(listener: (id: string, data: string) => void): () => void;
+        onExit(listener: (id: string, exitCode: number) => void): () => void;
+    };
+    serviceEnvFor(workspaceId: string): Record<string, string>;
+    features: {
+        snapshot(): Promise<FeatureData>;
+        act(action: FeatureAction): Promise<FeatureData>;
+        onChange(listener: (data: FeatureData) => void): () => void;
+    };
+    updates: {
+        state(): UpdateState;
+        check(): Promise<UpdateState>;
+        download(): Promise<boolean>;
+        install(): { report: string } | null;
+        onChange(listener: (state: UpdateState) => void): () => void;
+    } | null;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
+const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
+
+export function buildHostApi(deps: HostApiDeps): HostApi {
+    const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
+
+    const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        switch (method) {
+            case 'snapshot':
+                return deps.snapshot();
+            case 'agentDetail':
+                return deps.detailFor(str(args[0]));
+            case 'openAgent': {
+                const r = agent(args[0]);
+                return r ? deps.host.start(r, deps.cwdFor(r)) : { ok: false, reason: 'unknown agent' };
+            }
+            case 'stopAgent': {
+                const r = agent(args[0]);
+                return { ok: r ? deps.host.stop(r.id) : false };
+            }
+            case 'prompt': {
+                const r = agent(args[0]);
+                const text = str(args[1]);
+                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text) };
+            }
+            case 'answerApproval': {
+                const r = agent(args[0]);
+                return { ok: r !== null && deps.host.answerApproval(r.id, str(args[1])) };
+            }
+            case 'addAgent': {
+                const created = await deps.registerAgent(str(args[0]));
+                return { ok: true, id: created.id };
+            }
+            case 'restartWithHandoff': {
+                const r = agent(args[0]);
+                if (!r) return { ok: false, reason: 'unknown agent' };
+                return restartWithHandoff(deps.host, deps.attention, r, deps.cwdFor(r), str(args[1]));
+            }
+            case 'addWorkspace':
+                throw new Error('addWorkspace opens a folder picker on the host; do it there');
+            case 'takeOver':
+                throw new Error('takeOver opens a window on the host; do it there');
+            case 'features.setBrowserBounds':
+                throw new Error("features.setBrowserBounds places a view on the host's own window; nothing to do remotely");
+            case 'terminals.open': {
+                const workspaceId = str(args[0]);
+                const workspace = deps.snapshot().workspaces?.find((w) => w.id === workspaceId) ?? null;
+                if (!workspace) throw new Error(`no workspace ${workspaceId}`);
+                const options = (args[1] ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
+                const env = deps.serviceEnvFor(workspace.id);
+                const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
+                return deps.terminals.open({ workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, ...(Object.keys(env).length > 0 ? { env } : {}) });
+            }
+            case 'terminals.write':
+                return deps.terminals.write(str(args[0]), str(args[1]));
+            case 'terminals.resize':
+                return deps.terminals.resize(str(args[0]), Math.floor(Number(args[1])), Math.floor(Number(args[2])));
+            case 'terminals.close':
+                return deps.terminals.close(str(args[0]));
+            case 'terminals.list': {
+                const workspaceId = str(args[0]);
+                return deps.terminals.list().filter((t) => t.workspaceId === workspaceId).map(({ id, pid, shell }) => ({ id, pid, shell }));
+            }
+            case 'features.snapshot':
+                return deps.features.snapshot();
+            case 'features.act':
+                return deps.features.act(args[0] as FeatureAction);
+            case 'updates.state':
+                return deps.updates?.state() ?? null;
+            case 'updates.check':
+                return deps.updates ? deps.updates.check() : null;
+            case 'updates.download':
+                return deps.updates ? deps.updates.download() : false;
+            case 'updates.install':
+                return deps.updates?.install() ?? null;
+        }
+    };
+
+    return {
+        invoke,
+        workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
+        onEvent: (listener) => {
+            const offs = [
+                deps.subscribeSnapshot((s) => listener('snapshot', s)),
+                deps.host.subscribe((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
+                deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
+                deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
+                deps.features.onChange((data) => listener('features', data)),
+                deps.updates?.onChange((state) => listener('updates', state)) ?? (() => {}),
+            ];
+            return () => { for (const off of offs) off(); };
+        },
+    };
+}

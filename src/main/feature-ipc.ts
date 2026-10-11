@@ -43,6 +43,8 @@ export interface FeatureState {
     serviceAdding?: ServiceAdding | null;
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
+    /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
+    servedLink?: { id: string; url: string } | null;
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
@@ -58,6 +60,16 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         inbox: { unread: services.inbox.unread(HUMAN), peers },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes() },
+        remote: {
+            host: services.remote.hostName,
+            url: services.remote.url(),
+            locked: services.remote.locked(),
+            pin: services.remote.activePin(),
+            devices: services.remote.devices(),
+            shares: services.remote.shares(),
+            connections: services.remote.connections(),
+            servedLink: state.servedLink ?? null,
+        },
     };
 }
 
@@ -305,6 +317,27 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'settings.reset':
             await services.settings.reset(action.key);
+            break;
+        case 'remote.issuePin':
+            services.remote.issuePin();
+            break;
+        case 'remote.revokeDevice':
+            if (!services.remote.revokeDevice(action.deviceId)) throw new Error(`no device ${action.deviceId}`);
+            break;
+        case 'remote.lock':
+            services.remote.lock();
+            break;
+        case 'remote.unlock':
+            services.remote.unlock();
+            break;
+        case 'remote.mintShare': {
+            // Served exactly once: the URL rides this answer and no snapshot after it.
+            const m = services.remote.mintShare({ workspaceId: action.workspaceId, grantedTo: action.grantedTo, expiresInMs: action.expiresInMs });
+            next.servedLink = { id: m.link.id, url: m.url };
+            break;
+        }
+        case 'remote.revokeShare':
+            if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
             break;
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());

@@ -30,6 +30,8 @@ import { FEATURE_ICONS } from '../../core/rail-view.js';
  * the rail beside it carries the rest.
  */
 
+import { remoteBadge } from '../../core/remote-protocol.js';
+
 export interface TitleBarProps {
     /** The current route, shown verbatim. */
     route: string;
@@ -42,6 +44,8 @@ export interface TitleBarProps {
      * a reading.
      */
     workstation: { name: string; healthy: boolean } | null;
+    /** Driving another machine (§6.8): the loud badge, who holds the baton, the lock. Absent on the local machine. */
+    remote?: { host: string; driver: string | null; driving: boolean; locked: boolean } | null | undefined;
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
     /**
@@ -51,7 +55,7 @@ export interface TitleBarProps {
     platform?: FancyPlatform | undefined;
 }
 
-export function TitleBar({ route, workstation, onNavigate, onOpenPalette, platform }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -153,6 +157,15 @@ export function TitleBar({ route, workstation, onNavigate, onOpenPalette, platfo
              * status message and this is a persistent reading. A remote workstation shows its
              * own chip here, which is how "am I driving another machine" stays answerable.
              */}
+            {remote ? (
+                <div
+                    data-remote-badge
+                    className="flex shrink-0 items-center gap-2 rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-[11px] text-[var(--warning)]"
+                >
+                    <span className="font-semibold">{remoteBadge(remote.host)}</span>
+                    <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
+                </div>
+            ) : null}
             {workstation ? (
                 <div
                     data-workstation-health={workstation.healthy ? 'healthy' : 'unhealthy'}

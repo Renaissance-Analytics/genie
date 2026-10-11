@@ -4,6 +4,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
+import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
@@ -434,7 +435,7 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, group }: SurfaceProps & { group: SettingsGroup | null }) {
+export function SettingsSurface({ data, onAction, group, workspaces = [], remoteConnect }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined }) {
     const values = data.settings.values;
     const active = group ?? 'general';
     return (
@@ -458,11 +459,187 @@ export function SettingsSurface({ data, onAction, group }: SurfaceProps & { grou
                                     </li>
                                 ))}
                             </ul>
+                            {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                         </Tabs.Panel>
                     ))}
                 </Tabs.Panels>
             </Tabs>
         </div>
+    );
+}
+
+/** The client side of §6.8: this window driving another machine. Absent when the window cannot connect. */
+export interface RemoteConnectProps {
+    /** `null` until a connection has been attempted. */
+    readonly state: RemoteState | null;
+    /** Host URLs this device already holds a token for — no PIN needed. */
+    readonly remembered: readonly string[];
+    readonly onConnect: (input: { host: string; pin: string; label: string }) => void;
+    readonly onDisconnect: () => void;
+}
+
+/**
+ * "DRIVE ANOTHER MACHINE" — a host, a PIN (or a remembered token), a label for this screen. While
+ * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
+ */
+function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteConnectProps) {
+    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    if (state?.connected && state.host) {
+        return (
+            <div data-remote-connected className="flex items-center gap-3 text-sm">
+                <span>Driving {state.host} — {state.locked ? 'locked' : state.driving ? 'you hold the baton' : state.driver ? `${state.driver} is driving` : 'nobody is driving'}</span>
+                <button type="button" className={`ml-auto ${button}`} onClick={onDisconnect}>Disconnect</button>
+            </div>
+        );
+    }
+    return (
+        <form
+            data-form="connect-remote"
+            className="flex flex-wrap items-end gap-2"
+            onSubmit={(e) => {
+                e.preventDefault();
+                const data = new FormData(e.currentTarget);
+                onConnect({ host: String(data.get('host') ?? ''), pin: String(data.get('pin') ?? ''), label: String(data.get('label') ?? '') });
+            }}
+        >
+            <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium">Host</span>
+                <Input name="host" list="remote-hosts" placeholder="studio.tail1234.ts.net:7421" defaultValue={remembered[0]?.replace(/^wss?:\/\//, '').replace(/\/genie$/, '') ?? ''} />
+                {remembered.length > 0 ? (
+                    <datalist id="remote-hosts">
+                        {remembered.map((h) => <option key={h} value={h.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')} />)}
+                    </datalist>
+                ) : null}
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium">PIN (blank if this device is already paired)</span>
+                <Input name="pin" inputMode="numeric" placeholder="482913" />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium">This screen’s name</span>
+                <Input name="label" placeholder="glenn’s laptop" />
+            </label>
+            <button type="submit" className={button}>Connect</button>
+            {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
+        </form>
+    );
+}
+
+const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
+    { ms: 3_600_000, label: '1 hour' },
+    { ms: 86_400_000, label: '1 day' },
+    { ms: 7 * 86_400_000, label: '7 days' },
+];
+
+/**
+ * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
+ * and who is driving, the lock as one button, and SHARING as a roster FIRST and the mint form SECOND:
+ * a link is a credential you cannot unsend, so you see who already holds one before minting another.
+ * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
+ */
+function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
+    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    return (
+        <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
+            <h2 className="text-sm font-semibold">Remote access</h2>
+            {remote === null ? (
+                <Skeletons rows={3} />
+            ) : (
+                <>
+                    {remote.url === null ? (
+                        <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host} yet, so devices cannot connect yet. The in-app surfaces are unaffected.</p>
+                    ) : (
+                        <div className="flex flex-wrap items-center gap-3 text-sm">
+                            <span className="font-mono text-xs text-[var(--fg-4)]">{remote.url}</span>
+                            <button type="button" className={button} onClick={() => onAction({ kind: 'remote.issuePin' })}>Pair a device</button>
+                            {remote.pin ? (
+                                <span className="flex items-center gap-2">
+                                    <span data-pin={remote.pin.code} className="font-mono text-lg tracking-[0.3em]">{remote.pin.code}</span>
+                                    <span className="text-xs text-[var(--fg-3)]">type this on the device within two minutes</span>
+                                </span>
+                            ) : null}
+                        </div>
+                    )}
+                    {connect ? (
+                        <div>
+                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
+                            <ConnectRemote {...connect} />
+                        </div>
+                    ) : null}
+                    <div className="flex items-center gap-3 text-sm">
+                        <button type="button" className={button} onClick={() => onAction({ kind: remote.locked ? 'remote.unlock' : 'remote.lock' })}>{remote.locked ? 'Unlock' : 'Lock'}</button>
+                        <span className="text-xs text-[var(--fg-3)]">{remote.locked ? 'Locked: every remote change is refused until you unlock; reading still works.' : 'Lock refuses every remote change at once.'}</span>
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Paired devices</h3>
+                        {remote.devices.length === 0 ? <p className="text-sm text-[var(--fg-3)]">No device has paired with {remote.host}.</p> : (
+                            <ul className="divide-y divide-[var(--border-1)]">
+                                {remote.devices.map((d) => (
+                                    <li key={d.id} data-device={d.id} className="flex items-center gap-3 py-1.5 text-sm">
+                                        <span className="font-medium">{d.label}</span>
+                                        <span className="font-mono text-xs text-[var(--fg-4)]">paired {d.pairedAt} · seen {d.lastSeenAt}</span>
+                                        <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</button>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Connected now</h3>
+                        {remote.connections.length === 0 ? <p className="text-sm text-[var(--fg-3)]">Nobody is connected.</p> : (
+                            <ul className="divide-y divide-[var(--border-1)]">
+                                {remote.connections.map((c) => (
+                                    <li key={c.id} data-connection={c.id} className="flex items-center gap-3 py-1.5 text-sm">
+                                        <span className="font-medium">{c.label}</span>
+                                        <Badge variant="soft" size="sm">{c.isOwner ? 'owner' : `shared: ${c.workspaceId}`}</Badge>
+                                        {c.driving ? <Badge variant="soft" size="sm">driving</Badge> : null}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Sharing</h3>
+                        {remote.shares.length === 0 ? <p className="text-sm text-[var(--fg-3)]">No share links. A link admits one person to one workspace on {remote.host}.</p> : (
+                            <ul className="divide-y divide-[var(--border-1)]">
+                                {remote.shares.map((s) => (
+                                    <li key={s.id} data-share={s.id} className="flex items-center gap-3 py-1.5 text-sm">
+                                        <span className="font-medium">{s.grantedTo}</span>
+                                        <span className="font-mono text-xs text-[var(--fg-4)]">{s.workspaceId}</span>
+                                        <Badge variant="soft" size="sm">{s.revoked ? 'revoked' : s.served ? 'served' : 'not shown yet'}</Badge>
+                                        {!s.revoked ? <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeShare', shareId: s.id })}>Revoke</button> : null}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        {remote.servedLink ? (
+                            <div data-served-link className="mt-2 rounded-xl border border-[var(--warning)] p-3 text-sm">
+                                <p>This URL is shown once — copy it now; Genie will not show it again.</p>
+                                <code className="block select-all break-all font-mono text-xs">{remote.servedLink.url}</code>
+                            </div>
+                        ) : null}
+                        <form
+                            data-form="mint-share"
+                            className="mt-2 flex flex-wrap items-end gap-2"
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                const data = new FormData(e.currentTarget);
+                                const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
+                                if (!w) return;
+                                onAction({ kind: 'remote.mintShare', workspaceId: w.id, grantedTo: String(data.get('grantedTo') ?? ''), expiresInMs: Number(data.get('expiresInMs') ?? EXPIRIES[0]!.ms) });
+                            }}
+                        >
+                            <WorkspacePick workspaces={workspaces} name="workspace" />
+                            <Input name="grantedTo" placeholder="who gets it" />
+                            <select name="expiresInMs" defaultValue={String(EXPIRIES[0]!.ms)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                                {EXPIRIES.map((x) => <option key={x.ms} value={String(x.ms)}>{x.label}</option>)}
+                            </select>
+                            <button type="submit" disabled={workspaces.length === 0} className={`${button} disabled:opacity-50`}>Mint a link</button>
+                        </form>
+                    </div>
+                </>
+            )}
+        </section>
     );
 }
 

@@ -7,6 +7,9 @@ import { pinPanel } from '../core/dock.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
+import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { remoteUrl, rememberedTokens } from './remote-session.js';
+import { webSocketTransport } from './ws-transport.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 
 /**
@@ -119,6 +122,53 @@ function useAgentDetail(
     return state;
 }
 
+/**
+ * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
+ * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
+ */
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; connect: (input: { host: string; pin: string; label: string }) => void; disconnect: () => void } {
+    const [client, setClient] = useState<RemoteClient | null>(null);
+    const [state, setState] = useState<RemoteState | null>(null);
+    const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
+    const [remembered, setRemembered] = useState<string[]>(() => tokens?.hosts() ?? []);
+
+    useEffect(() => {
+        if (!client) return;
+        const off = client.onState((s) => {
+            setState(s);
+            if (s.connected && s.token && s.host && tokens) {
+                // The URL is the key; the welcome carries the host's name, the hello went to the URL.
+                setRemembered(tokens.hosts());
+            }
+        });
+        return off;
+    }, [client, tokens]);
+
+    return {
+        client,
+        state,
+        remembered,
+        connect: ({ host, pin, label }) => {
+            const url = remoteUrl(host);
+            if (!url.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: url.reason })); return; }
+            client?.close();
+            const token = tokens?.tokenFor(url.url) ?? null;
+            const auth = pin.trim() ? { kind: 'pin' as const, code: pin.trim(), label } : token ? { kind: 'token' as const, token, label } : null;
+            if (!auth) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'type the PIN shown on that machine — this device has not paired with it yet' })); return; }
+            const next = connectRemote(webSocketTransport(url.url), auth, label || 'another screen');
+            setClient(next);
+            setState(next.state());
+            void next.ready.then((r) => {
+                if (r.ok) { const t = next.state().token; if (t && tokens) { tokens.remember(url.url, t); setRemembered(tokens.hosts()); } }
+                else setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: r.reason }));
+            });
+        },
+        disconnect: () => { client?.close(); setClient(null); setState(null); },
+    };
+}
+
+const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
+
 export interface AppProps {
     /** Injected by tests and by the live check. The real app reads `window.genie`. */
     bridge?: GenieBridge | undefined;
@@ -126,7 +176,8 @@ export interface AppProps {
 
 export function App({ bridge }: AppProps) {
     const [route, navigate] = useRoute();
-    const resolvedBridge = bridge ?? (typeof window === 'undefined' ? undefined : window.genie);
+    const remote = useRemote();
+    const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));
     const snapshot = useSnapshot(resolvedBridge);
     const [features, setFeatures] = useFeatures(resolvedBridge);
 
@@ -196,6 +247,8 @@ export function App({ bridge }: AppProps) {
             route={route}
             snapshot={snapshot}
             servable={SERVABLE}
+            remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
+            remoteConnect={{ state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect }}
             agentDetail={detail}
             agentResolved={resolved}
             selectedRowId={selectedRowId}
