@@ -1,5 +1,7 @@
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
+import { randomUUID } from 'node:crypto';
+import { takeOverEnv } from '../core/take-over-env.js';
 import type { TerminalHost } from './terminal-host.js';
 
 /**
@@ -34,6 +36,12 @@ export interface TakeOverOptions {
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;
     clock?: () => number;
+    /**
+     * The Genie MCP server, when one is running: its loopback URL and this process's bearer token.
+     * `null` means no server — and then NO environment is set, not a fake URL, not a stale one.
+     * The TUI reads GENIE_MCP_URL / GENIE_MCP_TOKEN / GENIE_TERMINAL_ID from its environment.
+     */
+    mcp?: (() => { mcpUrl: string; token: string } | null) | undefined;
 }
 
 interface Live {
@@ -50,12 +58,16 @@ export class TakeOverHost {
     readonly #terminals: TerminalHost;
     readonly #openWindow: (route: string) => void;
     readonly #clock: () => number;
+    readonly #mcp: () => { mcpUrl: string; token: string } | null;
+    /** GENIE_TERMINAL_ID values this host minted, back to the agent they were minted for. */
+    readonly #callers = new Map<string, { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string }>();
     readonly #live = new Map<AgentId, Live>();
 
     constructor(options: TakeOverOptions) {
         this.#terminals = options.terminals;
         this.#openWindow = options.openWindow;
         this.#clock = options.clock ?? (() => Date.now());
+        this.#mcp = options.mcp ?? (() => null);
 
         // Every terminal's output arrives here; only a take-over's is an agent's activity. A
         // build somebody ran in the workspace panel must not draw bars on an agent's row.
@@ -103,11 +115,23 @@ export class TakeOverHost {
             return { ok: true, terminalId: existing.terminalId };
         }
 
+        // The attribution id the TUI will pass as `terminalId` on every tool call. Minted HERE, before
+        // the pty exists, because the environment must be in place at spawn; the pty's own id is a
+        // different key and stays the terminal host's. This host is the one place that maps the two.
+        const mcp = this.#mcp();
+        const callerId = `takeover_${randomUUID()}`;
+        const env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
         // A WORKSPACE terminal. There is no agent parameter to pass, which is the point.
-        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui });
+        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, ...(env === undefined ? {} : { env }) });
+        if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
         this.#openWindow(`genie://takeover/${opened.id}`);
         return { ok: true, terminalId: opened.id };
+    }
+
+    /** Who a GENIE_TERMINAL_ID this host minted belongs to — the MCP tools' `resolveCaller`. `null` for any other id. */
+    callerFor(terminalId: string): { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string } | null {
+        return this.#callers.get(terminalId) ?? null;
     }
 
     /** What is known about this agent's TUI, or `null` — never a fake Observed row. */

@@ -43,6 +43,31 @@ function setup() {
     return { pty, terminals, windows, host, record, tick: (ms: number) => { now += ms; } };
 }
 
+describe('the MCP environment contract', () => {
+    it('with a server: the TUI gets GENIE_MCP_URL, GENIE_MCP_TOKEN and a GENIE_TERMINAL_ID this host can resolve back to the agent', () => {
+        const pty = recordingPty();
+        const terminals = new TerminalHost(pty.port);
+        const host = new TakeOverHost({ terminals, openWindow: () => {}, clock: () => 0, mcp: () => ({ mcpUrl: 'http://127.0.0.1:4242/mcp', token: 'tok' }) });
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'kora' });
+
+        host.start(record, '/repos/tynn', 'claude');
+
+        const env = (pty.opened[0] as { env?: Record<string, string> }).env!;
+        expect(env.GENIE_MCP_URL).toBe('http://127.0.0.1:4242/mcp');
+        expect(env.GENIE_MCP_TOKEN).toBe('tok');
+        expect(env.GENIE_TERMINAL_ID).toMatch(/^takeover_/);
+        expect(host.callerFor(env.GENIE_TERMINAL_ID!)).toEqual({ agentId: record.id, agentName: 'kora', workspaceId: 'tynn', workspacePath: '/repos/tynn' });
+        expect(host.callerFor('term_1')).toBeNull();
+    });
+
+    it('without a server: NO environment — not a fake URL, not a stale one', () => {
+        const s = setup();
+        s.host.start(s.record, '/repos/tynn', 'claude');
+        expect('env' in (s.pty.opened[0] as object)).toBe(false);
+        expect(s.host.callerFor('anything')).toBeNull();
+    });
+});
+
 describe('taking over', () => {
     it('opens a terminal in the agent’s workspace running the chosen TUI, and a window for it', () => {
         const s = setup();
