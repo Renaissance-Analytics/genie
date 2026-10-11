@@ -125,7 +125,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             next.siteAdding = null;
             const f = action.form;
+            // The workspace's service env (its engines + the shared ones) reaches every process of the site.
+            const env = services.engines.envFor(action.workspaceId);
             services.sites.create({
+                ...(Object.keys(env).length > 0 ? { env } : {}),
                 name: f.name,
                 workspaceId: action.workspaceId,
                 repoPath: action.repoPath,

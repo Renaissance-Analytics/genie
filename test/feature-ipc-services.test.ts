@@ -15,8 +15,9 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * every instance with its status read from Docker. Stop, start, make-active and remove go through.
  */
 
+const opened: Array<{ command?: string | undefined; env?: Readonly<Record<string, string>> | undefined }> = [];
 const pty: PtyPort = {
-    open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
+    open: (o) => { opened.push({ command: o.command, env: o.env }); return { id: `term_${opened.length}`, pid: 1, shell: o.command ?? 'sh', scrollback: '' }; },
     write: () => true, resize: () => true, kill: () => true, scrollback: () => '',
     onData: () => () => {}, onExit: () => () => {},
 };
@@ -52,6 +53,7 @@ const form = { workspaceId: 'tynn', engine: 'postgres', major: '17', scope: 'ded
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-services-'));
     docker = fakeDocker();
+    opened.length = 0;
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run });
 });
 
@@ -106,6 +108,23 @@ describe('adding an engine', () => {
         // The site allocator and the engine allocator are ONE: no two things on the same loopback port.
         const site = services.sites.create({ name: 'tynn', workspaceId: 'tynn', repoPath: '/w/tynn', serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } });
         expect(site.port).not.toBe(v!.instance.publishedPort);
+    });
+});
+
+describe('the env a workspace gets', () => {
+    it('a site created from the Hosting surface runs its dev server WITH the workspace’s service env; a workspace with no engines gets none', async () => {
+        const added = await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
+        const port = added.services!.instances[0]!.instance.publishedPort;
+        const site = { name: 'tynn', mode: 'proxy' as const, devServer: { stack: 'node' as const, command: 'npm run dev -- --port {port}' }, hostPort: null, root: null, spa: false };
+        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: '/w/tynn', form: site }, state());
+        const dev = opened.find((o) => o.command?.startsWith('npm run dev'));
+        expect(dev?.env).toMatchObject({ DB_PORT: String(port), PGPORT: String(port), DB_DATABASE: 'tynn', DB_USERNAME: 'genie' });
+        expect(dev?.env?.DB_PASSWORD).toMatch(/.+/);
+
+        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'fancy', repoPath: '/w/fancy', form: { ...site, name: 'fancy' } }, state());
+        const other = opened.filter((o) => o.command?.startsWith('npm run dev')).at(-1);
+        // Positive control above; here the ABSENCE is the claim: no engines, no service env.
+        expect(other?.env ?? {}).not.toHaveProperty('DB_PORT');
     });
 });
 
