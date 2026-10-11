@@ -67,7 +67,7 @@ try {
     # A one-click install may auto-launch the app; it must not be running when we point its feed.
     foreach ($p in (Genie-Processes $installDir)) { Kill-Tree $p.Id }
     Start-Sleep 1
-    $before = Installed-Genies
+    $before = @(Installed-Genies)
     Write-Output ("uninstall registry before: " + (($before | ForEach-Object { "$($_.Key)=$($_.Version)" }) -join ', '))
     if ($before.Count -ne 1) { throw "expected exactly ONE Genie in the uninstall registry, found $($before.Count)" }
     if ($before[0].Version -ne $From) { throw "installed v1 reports $($before[0].Version), expected $From" }
@@ -121,8 +121,8 @@ try {
 
     Step "v1 quits, the Genie 2 installer applies $Next in place, Genie 2 relaunches"
     $deadline = (Get-Date).AddSeconds(240)
-    $now = Installed-Genies
-    while ((Get-Date) -lt $deadline -and -not ($now.Count -eq 1 -and $now[0].Version -eq $Next)) { Start-Sleep 3; $now = Installed-Genies }
+    $now = @(Installed-Genies)
+    while ((Get-Date) -lt $deadline -and -not ($now.Count -eq 1 -and $now[0].Version -eq $Next)) { Start-Sleep 3; $now = @(Installed-Genies) }
     Write-Output ("uninstall registry after: " + (($now | ForEach-Object { "$($_.Key)=$($_.Version)" }) -join ', '))
     if ($now.Count -ne 1) { Get-Content v1-out.log -Tail 30 -ErrorAction SilentlyContinue; throw "expected exactly ONE Genie after the upgrade, found $($now.Count) — a second install, not an upgrade" }
     if ($now[0].Version -ne $Next) { Get-Content v1-out.log -Tail 30 -ErrorAction SilentlyContinue; throw "Genie still reports $($now[0].Version) after 240 s" }
@@ -131,8 +131,8 @@ try {
     Write-Output "Genie.exe now: $newExe bytes (was $v1Exe)"
     if ($newExe -eq $v1Exe) { throw 'Genie.exe is byte-for-byte the v1 size; the build did not replace it' }
     $deadline = (Get-Date).AddSeconds(60)
-    $relaunched = Genie-Processes $installDir
-    while ((Get-Date) -lt $deadline -and $relaunched.Count -eq 0) { Start-Sleep 2; $relaunched = Genie-Processes $installDir }
+    $relaunched = @(Genie-Processes $installDir)
+    while ((Get-Date) -lt $deadline -and $relaunched.Count -eq 0) { Start-Sleep 2; $relaunched = @(Genie-Processes $installDir) }
     Write-Output ("Genie processes after the upgrade: " + $relaunched.Count)
     if ($relaunched.Count -eq 0) { throw 'Genie 2 did not relaunch after the upgrade' }
     Start-Sleep 5
@@ -146,12 +146,12 @@ try {
     Step 'tear down the relaunched Genie 2, uninstall'
     foreach ($p in $relaunched) { Kill-Tree $p.Id }
     Start-Sleep 2
-    $left = Genie-Processes $installDir
+    $left = @(Genie-Processes $installDir)
     if ($left.Count) { throw "$($left.Count) process(es) survived" }
     Start-Process $uninst -ArgumentList '/S' -Wait
     Start-Sleep 2
     Write-Output ("install dir gone: " + (-not (Test-Path $exe)))
-    Write-Output ("uninstall registry after uninstall: " + (Installed-Genies).Count)
+    Write-Output ("uninstall registry after uninstall: " + @(Installed-Genies).Count)
 
     Write-Output ""
     Write-Output "UPGRADE PROVEN: v1 $From -> Genie 2 $Next, in place, through v1's own updater; one Genie before and after; v1 data untouched"
