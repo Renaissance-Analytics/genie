@@ -68,3 +68,15 @@ describe('the other three sources', () => {
         expect(resolveDeckAnswer(item, 'done')).toEqual({ kind: 'refused', reason: 'this item names no workspace; it cannot be marked done from here' });
     });
 });
+
+describe('which channel an answer travels', () => {
+    it('a provider approval goes back to the session layer with the agent; everything else is a feature action', async () => {
+        const { deckAnswerChannel } = await import('../src/core/deck-resolve.js');
+        expect(deckAnswerChannel(base({ id: 'approval:agent_a' }))).toEqual({ kind: 'provider', agentId: 'agent_a' });
+        expect(deckAnswerChannel(base({ id: 'q_1' }))).toEqual({ kind: 'feature' });
+        expect(deckAnswerChannel(base({ id: 'appr_1' }))).toEqual({ kind: 'feature' });
+        expect(deckAnswerChannel(base({ id: 'li_1', source: 'user-list' }))).toEqual({ kind: 'feature' });
+        // A provider approval with no agent cannot be answered anywhere — refused, not routed.
+        expect(deckAnswerChannel(base({ id: 'approval:x', agentId: null }))).toEqual({ kind: 'refused', reason: 'this approval names no agent' });
+    });
+});

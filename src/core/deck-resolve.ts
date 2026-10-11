@@ -25,6 +25,17 @@ export type DeckCommand =
 
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
 
+/**
+ * Which channel an answer travels: a PROVIDER approval (`approval:<agent>`) goes back through the
+ * session layer with the provider's own option id; everything else is a feature action the main
+ * process resolves against the stores. Decided here so the renderer has no judgement in it.
+ */
+export function deckAnswerChannel(item: DeckItem): { kind: 'provider'; agentId: string } | { kind: 'feature' } | { kind: 'refused'; reason: string } {
+    if (!item.id.startsWith('approval:')) return { kind: 'feature' };
+    if (!item.agentId) return { kind: 'refused', reason: 'this approval names no agent' };
+    return { kind: 'provider', agentId: item.agentId };
+}
+
 export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand {
     if (item.forwardedFrom !== null || item.answer.kind === 'elsewhere') {
         const host = item.answer.kind === 'elsewhere' ? item.answer.host : item.forwardedFrom;
