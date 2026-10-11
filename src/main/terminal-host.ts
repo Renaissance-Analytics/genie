@@ -38,6 +38,12 @@ export interface PtySpawnOptions {
     command?: string | undefined;
     cols?: number | undefined;
     rows?: number | undefined;
+    /**
+     * Extra environment for a SUPERVISED process or a site's server (§6.6) — the service env a
+     * queue worker needs to reach the managed database. Merged over the user's environment by
+     * the engine. Absent for a plain shell.
+     */
+    env?: Readonly<Record<string, string>> | undefined;
 }
 
 /** A live pty, as the engine reports it. */

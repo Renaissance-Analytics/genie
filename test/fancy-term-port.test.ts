@@ -199,3 +199,16 @@ describe('a spawn the engine could not make', () => {
         expect(opened.pid).toBeGreaterThan(0);
     });
 });
+
+describe('environment for a supervised process', () => {
+    it('passes an env map through to the engine, and passes NOTHING when none is given', () => {
+        // A background process or a site's server needs the service env (§6.6); a plain shell
+        // must not get an empty env object that the engine could read as "replace the user's".
+        const f = fakeBackend();
+        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }) });
+        port.open({ cwd: '/repo', command: 'php artisan queue:work', env: { APP_ENV: 'local' } });
+        port.open({ cwd: '/repo' });
+        expect(f.created[0]).toMatchObject({ env: { APP_ENV: 'local' } });
+        expect('env' in f.created[1]!).toBe(false);
+    });
+});
