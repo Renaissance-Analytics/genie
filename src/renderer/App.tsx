@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
@@ -7,6 +7,8 @@ import { pinPanel } from '../core/dock.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
+import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
+import { soundFor, toastFor } from '../core/alerts.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -174,6 +176,33 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
 
 const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
 
+/**
+ * ALERTS (§6.3) — derived from consecutive snapshots, never a timer: a new question, approval,
+ * finish or mail item, or an agent that turned broken, plays its registered sound (if that row and
+ * the master switch are on) and raises a toast naming the WORKSPACE and the AGENT. The first
+ * snapshot after boot alerts nobody.
+ */
+function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null): void {
+    const prev = useRef<AlertSnapshot | null>(null);
+    useEffect(() => {
+        const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
+        if (snapshot.deckItems !== null) {
+            for (const alert of alertsBetween(prev.current, next)) {
+                const sound = soundFor(alert.kind, settings ?? {});
+                if (sound && typeof Audio !== 'undefined') {
+                    const audio = new Audio(new URL(`./sounds/${sound}`, import.meta.url).href);
+                    void audio.play().catch(() => { /* autoplay refused: the toast still says it */ });
+                }
+                if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+                    const toast = toastFor(alert);
+                    try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
+                }
+            }
+            prev.current = next;
+        }
+    }, [snapshot, settings]);
+}
+
 export interface AppProps {
     /** Injected by tests and by the live check. The real app reads `window.genie`. */
     bridge?: GenieBridge | undefined;
@@ -185,6 +214,7 @@ export function App({ bridge }: AppProps) {
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));
     const snapshot = useSnapshot(resolvedBridge);
     const [features, setFeatures] = useFeatures(resolvedBridge);
+    useAlerts(snapshot, features.settings.values);
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;

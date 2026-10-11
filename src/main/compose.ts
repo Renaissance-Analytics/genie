@@ -14,6 +14,7 @@ import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { realHostsIo, runElevated as runElevatedViaOs, type Step } from './elevate.js';
+import { FeedbackStore } from './feedback-store.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
@@ -87,6 +88,8 @@ export interface ComposedServices {
     readonly approvals: ApprovalQueue;
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
+    /** Feedback about Genie itself (§6.3 submitFeedback), kept here until Tynn is connected. */
+    readonly feedback: FeedbackStore;
     readonly frontDoorPort: number;
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
     readonly externalFrontDoor: FrontDoorStatus;
@@ -244,6 +247,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const approvals = new ApprovalQueue({ now });
+    const feedback = await FeedbackStore.open(input.userData, now);
 
     const hostName = input.hostName ?? hostname();
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
@@ -284,6 +288,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         frontDoor,
         approvals,
         remote,
+        feedback,
         frontDoorPort,
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,
@@ -320,6 +325,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();
                 await remoteDevices.flushed();
+                await feedback.flushed();
                 knowledge.close();
             })();
             return down;
