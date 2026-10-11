@@ -11,7 +11,7 @@ import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
-import { AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
+import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
@@ -108,6 +108,12 @@ export interface ShellProps {
     workspaceOps?: WorkspaceOpsProps | undefined;
     /** A folder picked and classified, awaiting confirmation — shown over the Dashboard / onboarding. */
     addPreview?: AddPreviewView | null | undefined;
+    /** Add from a git URL (§6.1): the form is up, and what its two steps call. */
+    addFromGit?: boolean | undefined;
+    onAddWorkspaceFromGit?: (() => void) | undefined;
+    onPreviewFromGit?: ((url: string) => void) | undefined;
+    onConfirmAddGit?: ((url: string, parent: string) => void) | undefined;
+    onCancelAddGit?: (() => void) | undefined;
     onConfirmAdd?: ((path: string) => void) | undefined;
     onCancelAdd?: (() => void) | undefined;
 }
@@ -148,6 +154,11 @@ export function Shell({
     agentOps,
     workspaceOps,
     addPreview,
+    addFromGit,
+    onAddWorkspaceFromGit,
+    onPreviewFromGit,
+    onConfirmAddGit,
+    onCancelAddGit,
     onConfirmAdd,
     onCancelAdd,
 }: ShellProps) {
@@ -234,11 +245,13 @@ export function Shell({
                                 tynnSignedIn: null,
                             }}
                             onAddWorkspace={onAddWorkspace}
+                            onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                             onAddAgent={() => { const w = snapshot.workspaces?.[0]; if (w) onAddAgent(w.id); }}
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addFromGit && !addPreview ? <AddFromGitForm onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
                     {canServe && parsed.surface === 'dashboard' ? (
                         <Dashboard
                             rows={snapshot.agents}
@@ -246,6 +259,7 @@ export function Shell({
                             onOpenAgent={onOpenAgent}
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
+                            onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                         />
                     ) : null}
 

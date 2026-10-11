@@ -69,6 +69,8 @@ const bridge: GenieBridge = {
     workspaces: {
         previewAdd: () => ipcRenderer.invoke('genie:workspace-preview-add') as never,
         confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
+        previewAddFromGit: (url) => ipcRenderer.invoke('genie:workspace-preview-add-git', url) as never,
+        confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
         hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
         wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
         remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,

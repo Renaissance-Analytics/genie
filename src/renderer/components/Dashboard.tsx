@@ -310,9 +310,10 @@ export interface DashboardProps {
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
+    onAddWorkspaceFromGit?: (() => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -371,6 +372,11 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                     <Icon name="plus" size="sm" />
                     Add a workspace
                 </button>
+                {onAddWorkspaceFromGit ? (
+                    <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
+                        From a git URL
+                    </button>
+                ) : null}
             </div>
         );
     }

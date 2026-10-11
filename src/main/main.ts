@@ -12,7 +12,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { quitPlan } from '../core/quit.js';
 import { buildHostApi } from './host-api.js';
-import { addWorkspace as addWorkspaceOp, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, hibernateWorkspace, previewAddFromGit, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -566,6 +566,10 @@ async function boot(): Promise<void> {
             writeJson: (p, value) => writeFileText(p, `${JSON.stringify(value, null, 2)}\n`, 'utf8'),
             mkdir: (p) => mkdir(p, { recursive: true }).then(() => {}),
             gitInit: (p) => new Promise<void>((resolve, reject) => { execFileCb('git', ['init'], { cwd: p }, (error) => (error ? reject(error) : resolve())); }),
+            // The clone's own stderr is the reason a person reads; a bare exit code is not.
+            gitClone: (url, into) => new Promise<void>((resolve, reject) => {
+                execFileCb('git', ['clone', '--', url, into], { windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
+            }),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
@@ -614,6 +618,17 @@ async function boot(): Promise<void> {
         if (picked.canceled || !path) return { ok: false, reason: 'no folder picked' };
         return previewAddWorkspace(workspaceOps, path);
     });
+    // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
+    ipcMain.handle('genie:workspace-preview-add-git', async (_event, rawUrl: unknown) => {
+        if (typeof rawUrl !== 'string' || !window) return { ok: false, reason: 'give a git URL' };
+        const picked = await dialog.showOpenDialog(window, { title: 'Where should the clone land? Pick the parent folder', properties: ['openDirectory'] });
+        const parent = picked.filePaths[0];
+        if (picked.canceled || !parent) return { ok: false, reason: 'no folder picked' };
+        const plan = await previewAddFromGit(workspaceOps, rawUrl, parent);
+        return plan.ok ? { ...plan, parent } : plan;
+    });
+    ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
+        (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
@@ -693,6 +708,7 @@ async function boot(): Promise<void> {
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
+                confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
                 remove: (id) => removeWorkspace(workspaceOps, id),

@@ -45,6 +45,7 @@ function fakes() {
         serviceEnvFor: (ws) => (ws === 'tynn' ? { DB_PORT: '54301' } : {}),
         workspaceOps: {
             confirmAdd: async (path) => { calls.push(`ws-add:${path}`); return { ok: true }; },
+            confirmAddFromGit: async (url, parent) => { calls.push(`ws-add-git:${url}:${parent}`); return { ok: true }; },
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
