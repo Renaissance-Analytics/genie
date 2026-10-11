@@ -12,6 +12,8 @@ import { HUMAN, type Resolution } from '../core/inbox.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { configSyncTargets } from './config-sync-targets.js';
+import { PluginHost } from './plugin-host.js';
+import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
@@ -103,6 +105,11 @@ export interface ComposedServices {
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
     syncConfig(workspacePath: string): Promise<SyncResult[]>;
+    /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
+    readonly plugins: PluginHost;
+    readonly pluginsDir: string;
+    /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
+    pluginsRefresh(): Promise<void>;
     readonly frontDoorPort: number;
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
     readonly externalFrontDoor: FrontDoorStatus;
@@ -263,6 +270,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const feedback = await FeedbackStore.open(input.userData, now);
 
     const hostName = input.hostName ?? hostname();
+    // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
+    const pluginsDir = join(input.userData, 'plugins');
+    const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true });
+    let plugins = await openPlugins();
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
     const remote = new RemoteHost({
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
@@ -339,6 +350,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0 }),
             };
         },
+        get plugins() { return plugins; },
+        pluginsDir,
+        pluginsRefresh: async () => { plugins = await openPlugins(); },
         syncConfig: async (workspacePath) => {
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) throw new Error('Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace');

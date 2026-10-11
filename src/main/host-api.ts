@@ -44,6 +44,9 @@ export interface HostApiDeps {
         hibernate(workspaceId: string): Promise<unknown>;
         wake(workspaceId: string): Promise<unknown>;
         remove(workspaceId: string): Promise<unknown>;
+        listRepos(workspaceId: string): Promise<unknown>;
+        addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
+        removeRepo(workspaceId: string, slug: string): Promise<unknown>;
     };
     agentOps: {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
@@ -129,6 +132,14 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.wake(str(args[0]));
             case 'workspaces.remove':
                 return deps.workspaceOps.remove(str(args[0]));
+            case 'workspaces.listRepos':
+                return deps.workspaceOps.listRepos(str(args[0]));
+            case 'workspaces.addRepo': {
+                const input = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as { name?: unknown; path?: unknown };
+                return deps.workspaceOps.addRepo(str(args[0]), { name: str(input.name), path: str(input.path) });
+            }
+            case 'workspaces.removeRepo':
+                return deps.workspaceOps.removeRepo(str(args[0]), str(args[1]));
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':

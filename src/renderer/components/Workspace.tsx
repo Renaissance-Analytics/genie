@@ -11,6 +11,7 @@ import {
 import { terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
+import type { RepoEntry } from '../../core/repo-registry.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 
@@ -47,6 +48,13 @@ export interface WorkspaceOpsProps {
     readonly onPreviewRemove: () => void;
     readonly onConfirmRemove: () => void;
     readonly onCancelRemove: () => void;
+    /** The repo registry (§6.1); absent = not offered here. `list: null` = not loaded yet. */
+    readonly repos?: {
+        readonly list: readonly RepoEntry[] | null;
+        readonly onAdd: (input: { name: string; path: string }) => void;
+        readonly onRemove: (slug: string) => void;
+        readonly onOpen: (path: string) => void;
+    } | undefined;
 }
 
 export interface WorkspaceProps {
@@ -183,6 +191,38 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
 
+            {ops?.repos ? (
+                <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Repos</h2>
+                        <span className="text-[var(--fg-4)]">the envelope's repositories; the host repo is the envelope itself</span>
+                    </div>
+                    {ops.repos.list === null ? (
+                        <div data-repos-skeleton className="mt-2 flex flex-col gap-1">
+                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
+                            <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--bg-2)]" />
+                        </div>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.repos.list.map((r) => (
+                                <li key={r.slug} data-repo={r.slug} {...(r.host ? { 'data-repo-host': '' } : {})} className="flex items-center gap-3 py-1">
+                                    <span className="font-medium">{r.slug}</span>
+                                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.path}</span>
+                                    {r.host ? <span className="rounded bg-[var(--bg-2)] px-1 text-[10px] uppercase tracking-wide text-[var(--fg-3)]">host</span> : null}
+                                    <span className="ml-auto" />
+                                    <button type="button" data-action="open-repo" onClick={() => ops.repos!.onOpen(r.path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Open</button>
+                                    {!r.host ? <button type="button" data-action="remove-repo" data-repo-slug={r.slug} onClick={() => ops.repos!.onRemove(r.slug)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Remove</button> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    <form data-form="add-repo" className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); ops.repos!.onAdd({ name: String(d.get('name') ?? ''), path: String(d.get('path') ?? '') }); e.currentTarget.reset(); }}>
+                        <input name="name" placeholder="Name" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                        <input name="path" placeholder="repos/<folder>" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono" />
+                        <button type="submit" className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Add repo</button>
+                    </form>
+                </section>
+            ) : null}
             {panel === 'files' && files ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
                     <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => { /* the dock slot (§4.4) is wired with the chat's pin in a later row */ }} onClose={() => onTogglePanel?.()} />

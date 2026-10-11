@@ -10,6 +10,7 @@ import type { SiteInfo } from '../main/site-manager.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
 import type { AnnotatedRow, GithubAppStatus, SyncResult } from '../core/integrations.js';
+import type { PluginEntry } from '../main/plugin-host.js';
 import type { Device } from '../main/remote-devices.js';
 
 export type { FrontDoorStatus };
@@ -88,6 +89,13 @@ export interface IntegrationsSection {
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
+/** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
+export interface PluginsSection {
+    readonly dir: string;
+    readonly developerMode: boolean;
+    readonly entries: readonly PluginEntry[];
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
@@ -99,6 +107,7 @@ export interface FeatureData {
     readonly browser: { url: string | null; routes: readonly GenRoute[] };
     readonly remote: RemoteSection | null;
     readonly integrations: IntegrationsSection | null;
+    readonly plugins: PluginsSection | null;
 }
 
 /** First paint: nothing has been asked yet. */
@@ -113,6 +122,7 @@ export const EMPTY_FEATURES: FeatureData = {
     browser: { url: null, routes: [] },
     remote: null,
     integrations: null,
+    plugins: null,
 };
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
@@ -172,4 +182,6 @@ export type FeatureAction =
     | { kind: 'integrations.tynnToken'; token: string }
     /** The person confirms a GitHub App step they did in the browser; install needs authorize first. */
     | { kind: 'integrations.githubConfirm'; step: 'authorize' | 'install' }
-    | { kind: 'integrations.syncConfig'; workspaceId: string; workspacePath: string };
+    | { kind: 'integrations.syncConfig'; workspaceId: string; workspacePath: string }
+    /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
+    | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };

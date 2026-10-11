@@ -146,6 +146,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),
             wake: (workspaceId) => answer('workspaces.wake', workspaceId),
             remove: (workspaceId) => answer('workspaces.remove', workspaceId),
+            listRepos: (workspaceId) => answer('workspaces.listRepos', workspaceId),
+            addRepo: (workspaceId, input) => answer('workspaces.addRepo', workspaceId, input),
+            removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),

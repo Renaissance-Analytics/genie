@@ -72,6 +72,9 @@ const bridge: GenieBridge = {
         hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
         wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
         remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,
+        listRepos: (workspaceId) => ipcRenderer.invoke('genie:workspace-repos', workspaceId) as never,
+        addRepo: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-repo-add', workspaceId, input) as never,
+        removeRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-remove', workspaceId, slug) as never,
     },
 
     agents: {

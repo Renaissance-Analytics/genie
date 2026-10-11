@@ -18,6 +18,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import type { DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
+import type { RepoEntry } from '../core/repo-registry.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -240,6 +241,18 @@ export function App({ bridge }: AppProps) {
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
     const workspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
+    // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
+    const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
+    const reloadRepos = (bridge: GenieBridge, id: string) => {
+        void bridge.workspaces.listRepos(id).then((r) => {
+            setRepos(r.ok ? r.repos : []);
+            if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason }));
+        });
+    };
+    useEffect(() => {
+        setRepos(null);
+        if (resolvedBridge && workspaceId) reloadRepos(resolvedBridge, workspaceId);
+    }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
     const previewAdd = () => {
         void resolvedBridge?.workspaces.previewAdd().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
@@ -251,6 +264,13 @@ export function App({ bridge }: AppProps) {
               agentCount: snapshot.agents.filter((a) => a.workspaceId === workspaceId).length,
               removePreview: wsView.removePreview,
               lastOutcome: wsView.lastOutcome,
+              repos: {
+                  list: repos,
+                  onAdd: (input) => { void resolvedBridge.workspaces.addRepo(workspaceId, input).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+                  onRemove: (slug) => { void resolvedBridge.workspaces.removeRepo(workspaceId, slug).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+                  // Open: the files panel of this workspace (the repo's folder is in its tree). A per-folder deep link is a later row.
+                  onOpen: () => navigate(`genie://workspace/${workspaceId}?panel=files`),
+              },
               onHibernate: () => { void resolvedBridge.workspaces.hibernate(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? `hibernated; handoffs landed from ${r.handoffs.landed.length === 0 ? 'nobody' : r.handoffs.landed.join(', ')}; ${r.handoffs.missing.length === 0 ? 'none missing' : `missing from ${r.handoffs.missing.join(', ')}`}` : r.reason }))); },
               onWake: () => { void resolvedBridge.workspaces.wake(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? 'awake' : r.reason }))); },
               onPreviewRemove: () => setWsView((v) => ({ ...v, removePreview: true })),
