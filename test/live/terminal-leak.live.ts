@@ -89,8 +89,8 @@ async function main(): Promise<void> {
     const host = new TerminalHost(realFancyTermPort(userData, encryptor));
     const exits = new Set<string>();
     host.onExit((id) => { exits.add(id); });
-    const shortCommand = process.platform === 'win32' ? 'cmd /c exit 0' : 'true';
-    const longCommand = process.platform === 'win32' ? 'cmd /c ping -n 60 127.0.0.1 >nul' : 'sleep 60';
+    const shortCommand = process.platform === 'win32' ? 'cmd.exe /c exit 0' : 'true';
+    const longCommand = process.platform === 'win32' ? 'cmd.exe /c ping -n 60 127.0.0.1 >nul' : 'sleep 60';
 
     try {
         // Warm-up: the first pty pays one-time costs (engine init, conpty load). Not counted.

@@ -22,3 +22,4 @@ sandbox/
 # The smoke mirrors its result here so a long run cannot lose it to a caller timeout.
 # Regenerable, and the run that matters is the next one.
 smoke.txt
+v1-installers/

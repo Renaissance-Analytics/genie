@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -27,6 +28,19 @@ import { join } from 'node:path';
  * can be tested without Electron. The caller passes `app.getPath('userData')` and
  * `process.execPath`.
  */
+
+/**
+ * Where Genie keeps its data: `~/.genie`, on every version.
+ *
+ * Owner, 2026-10-10: "genie's data is supposed to be in ~/.genie no matter what version we are
+ * on." Electron's `userData` is per app NAME — `%APPDATA%\\genie2` here, `%APPDATA%\\genie` for
+ * the previous build — so keyed on it, every major starts empty and no version can find what
+ * another wrote. The runtime (§7.1) and the sessions live under this; Chromium's own caches
+ * stay in `userData`, which is Electron's business rather than Genie's.
+ */
+export function genieHome(home: string = homedir()): string {
+    return join(home, '.genie');
+}
 
 /** The directory the installer owns. Read-only at runtime, as far as Genie is concerned. */
 export function installDir(execPath: string): string {

@@ -1,4 +1,7 @@
-appId: ai.aionima.genie2
+# `ai.tynn.genie` is the appId every installed Genie carries (0.7.0-beta.342, 2.0.0-beta.4). Windows
+# identifies the application by it: keep it and the installer UPGRADES in place; change it and the
+# installer puts a second Genie beside the old one. test/upgrade.test.ts holds it.
+appId: ai.tynn.genie
 productName: Genie
 copyright: Genie
 
@@ -67,7 +70,10 @@ afterPack: ./scripts/after-pack.cjs
 publish:
   provider: github
   owner: Renaissance-Analytics
-  repo: genie2
+  # The OLD repo, on purpose: every installed Genie (0.7.0-beta.342, 2.0.0-beta.4) carries this
+  # owner/repo in its app-update.yml, and that is where it looks. Publishing anywhere else means
+  # no installed copy ever sees Genie 2 (owner decision 2026-10-10). The code stays in genie2.
+  repo: genie
   releaseType: prerelease
 
 win:
@@ -76,9 +82,10 @@ win:
   artifactName: ${productName}-${version}-setup.${ext}
 
 nsis:
-  oneClick: false
+  # One-click and per-user, exactly as every installed Genie was built, so the upgrade is the
+  # same installer shape the in-app updater has always run (owner decision 2026-10-10).
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
   # §7.1 is enforced in `src/main/paths.ts`: the runtime directory lives under `userData` and
   # never under the install directory, so an upgrade cannot be blocked by a file a running
   # helper holds open. That is the structural half of the fix for the 31-orphan jam; the

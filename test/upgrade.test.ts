@@ -154,3 +154,75 @@ describe('orphans under the install directory', () => {
         expect(ORPHAN_REPORT_LIMIT).toBeLessThan(100);
     });
 });
+
+describe('the installer UPGRADES the installed Genie rather than installing beside it', () => {
+    /**
+     * The owner, 2026-10-10 evening: "our genie 2.0 installer needs to be able to upgrade from
+     * the stable v1 beta we are on now AND the 2.0 beta.4". Measured from both repos' configs:
+     * every installed Genie — `0.7.0-beta.342` and `2.0.0-beta.4` alike — was built with
+     * appId `ai.tynn.genie`, productName `Genie`, per-user NSIS. Windows identifies an
+     * application by its appId: a different one installs a SECOND Genie beside the old and
+     * leaves the old one's uninstall entry, data and shortcuts in place. The in-place upgrade
+     * is proven in the VM with the real v1 installers; this is the part a test can hold.
+     */
+    const yaml = () => readFileSync('electron-builder.yml', 'utf8').replace(/\r\n/g, '\n');
+
+    it('keeps the appId every installed Genie was built with', () => {
+        expect(yaml()).toMatch(/^appId:\s*ai\.tynn\.genie\s*$/m);
+    });
+
+    it('keeps the product name, so the install directory and shortcuts are the same ones', () => {
+        expect(yaml()).toMatch(/^productName:\s*Genie\s*$/m);
+    });
+
+    it('is a per-user install like every installed Genie — a per-machine one cannot replace it', () => {
+        expect(yaml()).toMatch(/^\s*perMachine:\s*false\s*$/m);
+    });
+
+    it('ships a version an installed 2.0.0-beta.4 will take, or the dev placeholder', () => {
+        // electron-updater compares with semver; `2.0.0-beta.4` is what the newest installed
+        // Genie reports, so the first Genie 2 release must sort above it — and `0.0.0` is the
+        // dev tree, never released (the release bump is a deliberate commit).
+        const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
+        expect(version === '0.0.0' || releasesAbove(version, '2.0.0-beta.4')).toBe(true);
+        // POSITIVE CONTROLS for the comparison itself.
+        expect(releasesAbove('2.0.0-beta.5', '2.0.0-beta.4')).toBe(true);
+        expect(releasesAbove('2.0.0', '2.0.0-beta.4')).toBe(true);
+        expect(releasesAbove('2.0.0-beta.4', '2.0.0-beta.4')).toBe(false);
+        expect(releasesAbove('0.7.0-beta.343', '2.0.0-beta.4')).toBe(false);
+        expect(releasesAbove('2.0.0-beta.10', '2.0.0-beta.4')).toBe(true);
+    });
+});
+
+/** semver "a > b" for the shapes Genie uses: MAJOR.MINOR.PATCH with an optional -beta.N. */
+function releasesAbove(a: string, b: string): boolean {
+    const parse = (v: string) => {
+        const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v);
+        if (!m) throw new Error(`not a Genie version: ${v}`);
+        return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] === undefined ? null : { tag: m[4], n: Number(m[5]) } };
+    };
+    const x = parse(a), y = parse(b);
+    for (let i = 0; i < 3; i += 1) if (x.core[i] !== y.core[i]) return x.core[i]! > y.core[i]!;
+    if (x.pre === null) return y.pre !== null;   // a release beats the same version's prerelease
+    if (y.pre === null) return false;
+    if (x.pre.tag !== y.pre.tag) return x.pre.tag > y.pre.tag;
+    return x.pre.n > y.pre.n;
+}
+
+describe('the release lands where the installed Genies look', () => {
+    const yaml = () => readFileSync('electron-builder.yml', 'utf8').replace(/\r\n/g, '\n');
+
+    it('publishes to Renaissance-Analytics/genie — the owner/repo baked into every installed app-update.yml', () => {
+        // Measured from the old repo at both tags: `provider: github, owner: Renaissance-Analytics,
+        // repo: genie`. The feed address is inside every installed copy; the release must be there.
+        expect(yaml()).toMatch(/^\s*owner:\s*Renaissance-Analytics\s*$/m);
+        expect(yaml()).toMatch(/^\s*repo:\s*genie\s*$/m);
+    });
+
+    it('installs one-click, as every installed Genie did', () => {
+        expect(yaml()).toMatch(/^\s*oneClick:\s*true\s*$/m);
+        // `allowToChangeInstallationDirectory` is an assisted-installer option; with one-click it
+        // is refused by electron-builder, so its absence is part of the contract.
+        expect(yaml()).not.toMatch(/allowToChangeInstallationDirectory/);
+    });
+});
