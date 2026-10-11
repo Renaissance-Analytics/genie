@@ -32,7 +32,7 @@ export interface WorkspaceRecord {
     path: string;
 }
 
-async function readJson<T>(file: string, fallback: T): Promise<T> {
+export async function readJson<T>(file: string, fallback: T): Promise<T> {
     let raw: string;
     try {
         raw = await readFile(file, 'utf8');
@@ -54,7 +54,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
     }
 }
 
-async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+export async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
     await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
