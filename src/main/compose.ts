@@ -9,6 +9,7 @@ import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
+import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { configSyncTargets } from './config-sync-targets.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
@@ -96,6 +97,8 @@ export interface ComposedServices {
     readonly feedback: FeedbackStore;
     /** The Deck's signal strip, MEASURED from the stores (§4.5). */
     signals(context: { osAgentWorking: boolean }): SignalState;
+    /** §6.4: the reminders due now for registered agents with unread mail that are idle. Decides; never sends. */
+    inboxReminders(input: { now: number; idle: (agentId: string) => boolean }): Array<{ agentId: string; text: string }>;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
@@ -282,6 +285,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         runElevated: input.runElevated ?? ((step) => runElevatedViaOs(process.platform, step, elevationRun)),
     });
     const agents = new Map<string, { name: string; workspaceId: string }>();
+    const reminders = new ReminderBook();
     const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
 
@@ -315,6 +319,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 agents: Object.fromEntries(agents),
             }),
         ],
+        inboxReminders: ({ now, idle }) =>
+            [...agents.keys()].flatMap((id) => {
+                const text = reminders.due({ agentId: id, unread: inbox.unread(id as never).length, idle: idle(id), now });
+                return text ? [{ agentId: id, text }] : [];
+            }),
         signals: ({ osAgentWorking }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
             // Mail agents have not collected: unread for every registered agent, the human excluded.

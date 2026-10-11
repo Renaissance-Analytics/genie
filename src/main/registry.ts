@@ -49,6 +49,7 @@ export class Registry {
     #listeners = new Set<(snapshot: GenieSnapshot) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #runningAtQuit: AgentId[] = [];
     #loaded = false;
 
     constructor(store: Store) {
@@ -61,6 +62,7 @@ export class Registry {
     async load(workstation: { name: string; healthy: boolean }): Promise<void> {
         this.#workspaces = await this.#store.readWorkspaces();
         this.#agents = await this.#store.readAgents();
+        this.#runningAtQuit = (await this.#store.readRunningAtQuit()).filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
         this.faults.push(...this.#store.dropped);
         this.#workstation = workstation;
         this.#loaded = true;
@@ -97,6 +99,24 @@ export class Registry {
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
     setSignals(provider: () => SignalState): void {
         this.#signals = provider;
+    }
+
+    /** Who was RUNNING when Genie last closed (§7.6). What the user had stopped was not running, so it is never here. */
+    runningAtQuit(): readonly AgentId[] {
+        return this.#runningAtQuit;
+    }
+
+    async markRunningAtQuit(ids: readonly AgentId[]): Promise<void> {
+        this.#runningAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
+        await this.#store.writeRunningAtQuit(this.#runningAtQuit);
+    }
+
+    /** Read once and cleared, so a crash mid-restore does not start anyone twice. */
+    async takeRunningAtQuit(): Promise<readonly AgentId[]> {
+        const ids = this.#runningAtQuit;
+        this.#runningAtQuit = [];
+        await this.#store.writeRunningAtQuit([]);
+        return ids;
     }
 
     setProbe(probe: SessionProbe): void {

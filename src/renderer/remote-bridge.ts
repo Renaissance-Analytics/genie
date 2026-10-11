@@ -178,6 +178,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             subscribe: (onChange) => on('updates', (p) => onChange(p as UpdateState)),
             check: () => read<UpdateState>('updates.check'),
             download: () => read<boolean>('updates.download'),
+            cancel: () => read<boolean>('updates.cancel'),
             install: () => read<{ report: string } | null>('updates.install'),
         },
     };

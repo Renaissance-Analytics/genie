@@ -36,6 +36,7 @@ import { UpdateHost } from './updater.js';
 import { genieHome } from './paths.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
+import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -84,6 +85,9 @@ let filesHost: FilesHost | null = null;
 let takeOvers: TakeOverHost | null = null;
 let host: SessionHost | null = null;
 let updates: UpdateHost | null = null;
+let drainTimer: ReturnType<typeof setInterval> | null = null;
+/** Set once the running set has been recorded for §7.6, so quit does not overwrite it with an empty list after the drain stopped everyone. */
+let runningRecorded = false;
 
 /**
  * A Take Over window: the OS frame (there is no Genie chrome to replace it), one terminal.
@@ -309,6 +313,24 @@ async function boot(): Promise<void> {
         ownPid: process.pid,
         processes: listProcesses,
         kill: killProcess,
+        // §7.5: the live agents to drain before installing; §7.4: every session ends with the upgrade.
+        agents: {
+            live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
+            ask: (id, text) => { host?.prompt(id as AgentId, text); },
+            handoffSince: (id, since) => (services?.attention.finished() ?? []).some((f) => f.agentId === id && Date.parse(f.at) >= since),
+            stopAll: () => {
+                // Record who was running BEFORE the sessions end, so a restore after the upgrade knows (§7.6).
+                const running = (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
+                runningRecorded = true;
+                void registry?.markRunningAtQuit(running);
+                host?.stopAll();
+            },
+        },
+    });
+    // The drain advances on a clock while it lasts: handoffs that landed, agents gone quiet, the limit.
+    updates.onChange((state) => {
+        if (state.phase === 'draining' && drainTimer === null) drainTimer = setInterval(() => updates?.tick(), 1_000);
+        else if (state.phase !== 'draining' && drainTimer !== null) { clearInterval(drainTimer); drainTimer = null; }
     });
     updates.onChange((state) => {
         for (const w of BrowserWindow.getAllWindows()) {
@@ -324,6 +346,7 @@ async function boot(): Promise<void> {
         return result ? { report: result.report } : null;
     });
 
+    ipcMain.handle('genie:updates-cancel', () => updates?.cancel() ?? false);
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
     ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
@@ -652,6 +675,7 @@ async function boot(): Promise<void> {
                       check: () => updates!.check(),
                       download: () => updates!.download(),
                       install: () => { const r = updates!.install(); return r ? { report: r.report } : null; },
+                      cancel: () => updates!.cancel(),
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
@@ -668,10 +692,28 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
+    // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
+    void registry.takeRunningAtQuit().then((ids) => {
+        if (composed.settings.snapshot().restore_agents_on_launch !== true) return;
+        for (const { agentId, at } of restoreSchedule(ids)) {
+            setTimeout(() => { const record = registry?.find(agentId as AgentId); if (record && host) host.start(record, cwdFor(record)); }, at);
+        }
+    });
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     void remoteSocket.start().then(pushFeatures, pushFeatures);
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
+    // §6.4 REMINDERS, event-driven: a message landing for an agent, or that agent's session changing (a turn
+    // ending), never a poll. Only an IDLE agent is told; the book keeps the gap. Other agents' gaps are untouched
+    // when one agent is being considered.
+    const remind = (only: string) => {
+        for (const r of composed.inboxReminders({ now: Date.now(), idle: (id) => id === only && host?.probe(id as AgentId)?.turnState === 'idle' })) {
+            host?.prompt(r.agentId as AgentId, r.text);
+        }
+    };
+    composed.inbox.onSend((to) => { if (to !== 'human') remind(to); });
+    host.subscribe((agentId) => remind(agentId));
     const featurePorts: FeaturePorts = {
         toolchain: {
             probe: () => probeToolsLive(latestFor),
@@ -744,6 +786,14 @@ app.on('before-quit', (event) => {
             if (choice === 0) { event.preventDefault(); return; }
         }
         quitConfirmed = true;
+    }
+    // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
+    if (!runningRecorded && registry && host) {
+        runningRecorded = true;
+        const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
+        event.preventDefault();
+        void registry.markRunningAtQuit(running).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        return;
     }
     host?.stopAll();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
