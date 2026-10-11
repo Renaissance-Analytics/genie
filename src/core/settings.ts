@@ -99,9 +99,10 @@ export function carryOverV1(v1: Readonly<Record<string, string>>): CarryOver {
 export interface OnboardingState {
     readonly workspaces: number;
     readonly agents: number;
-    readonly providers: readonly string[];
-    readonly githubConnected: boolean;
-    readonly tynnSignedIn: boolean;
+    /** `null` = not looked yet. A line is drawn only for a MEASURED absence (§5). */
+    readonly providers: readonly string[] | null;
+    readonly githubConnected: boolean | null;
+    readonly tynnSignedIn: boolean | null;
 }
 
 export interface OnboardingPlan {
@@ -117,8 +118,8 @@ export function onboardingPlan(state: OnboardingState): OnboardingPlan {
     if (state.workspaces === 0) steps.push({ id: 'pick-folder', label: 'Pick a folder to work in', required: true });
     if (state.agents === 0) steps.push({ id: 'meet-agent', label: 'Meet your first agent', required: true });
     const lines: OnboardingPlan['lines'] = [];
-    if (state.providers.length === 0) lines.push({ id: 'no-provider', label: 'No agent provider is installed yet', route: 'genie://settings/agents' });
-    if (!state.githubConnected) lines.push({ id: 'github', label: 'GitHub is not connected', route: 'genie://settings/github' });
-    if (!state.tynnSignedIn) lines.push({ id: 'tynn', label: 'Not signed in to Tynn (optional)', route: 'genie://settings/tynn' });
+    if (state.providers !== null && state.providers.length === 0) lines.push({ id: 'no-provider', label: 'No agent provider is installed yet', route: 'genie://settings/agents' });
+    if (state.githubConnected === false) lines.push({ id: 'github', label: 'GitHub is not connected', route: 'genie://settings/github' });
+    if (state.tynnSignedIn === false) lines.push({ id: 'tynn', label: 'Not signed in to Tynn (optional)', route: 'genie://settings/tynn' });
     return { steps, lines, done: steps.length === 0 };
 }

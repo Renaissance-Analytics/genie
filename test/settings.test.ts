@@ -94,3 +94,13 @@ describe('onboarding — two steps, two decisions', () => {
         expect(plan.lines).toEqual([]);
     });
 });
+
+describe('onboarding — what Genie cannot see yet is NOT a line', () => {
+    it('providers / GitHub / Tynn unknown (null) draw no line — "we have not looked" is not "it is missing"', () => {
+        const plan = onboardingPlan({ workspaces: 0, agents: 0, providers: null, githubConnected: null, tynnSignedIn: null });
+        expect(plan.steps.map((s) => s.id)).toEqual(['pick-folder', 'meet-agent']);
+        expect(plan.lines).toEqual([]);
+        // POSITIVE CONTROL: the same plan with measured absences draws all three lines.
+        expect(onboardingPlan({ workspaces: 0, agents: 0, providers: [], githubConnected: false, tynnSignedIn: false }).lines).toHaveLength(3);
+    });
+});
