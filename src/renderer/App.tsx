@@ -15,8 +15,8 @@ import { soundFor, toastFor } from '../core/alerts.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
-import { bytesToBase64, mobileEntry, uploadRefusal, type MobileEntry, type Orientation } from '../core/mobile.js';
-import { MobilePair, MobileShell, MobileTerminalPane } from './components/MobileShell.js';
+import { bytesToBase64, mobileEntry, mobileView, uploadRefusal, type MobileEntry } from '../core/mobile.js';
+import { MobileAgent, MobilePair, MobileShell } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
@@ -242,18 +242,19 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const [note, setNote] = useState<string | null>(null);
     const dialed = useRef(false);
     const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
-    // M2/M3 (§6.8): the landscape-only terminal and upload. The terminal's output lives HERE, not in the
-    // pane, so rotating to portrait hides the pane and loses nothing; the shell keeps running on the host.
-    const orientation = useOrientation();
-    const [term, setTerm] = useState<{ id: string; output: string; exited: number | null } | null>(null);
-    const [upload, setUpload] = useState<{ sending: boolean; outcome: string | null }>({ sending: false, outcome: null });
-    const termId = term?.id ?? null;
+    // WHAT IS ON SCREEN rides the hash (home, or one agent) so the phone's back button works. The PIN that
+    // may have arrived in the hash is spent before the first view is read.
+    const [hash, setHash] = useState(() => (typeof window === 'undefined' ? '' : window.location.hash));
     useEffect(() => {
-        if (!bridge || !termId) return;
-        const offData = bridge.terminals.onData((id, data) => { if (id === termId) setTerm((t) => (t && t.id === id ? { ...t, output: t.output + data } : t)); });
-        const offExit = bridge.terminals.onExit((id, code) => { if (id === termId) setTerm((t) => (t && t.id === id ? { ...t, exited: code } : t)); });
-        return () => { offData(); offExit(); };
-    }, [bridge, termId]);
+        const onHash = () => setHash(window.location.hash);
+        window.addEventListener('hashchange', onHash);
+        return () => window.removeEventListener('hashchange', onHash);
+    }, []);
+    const view = mobileView(hash);
+    const agentId = view.kind === 'agent' ? view.agentId : null;
+    const { detail } = useAgentDetail(bridge, agentId);
+    const [sending, setSending] = useState(false);
+    const [upload, setUpload] = useState<{ sending: boolean; outcome: string | null }>({ sending: false, outcome: null });
     // Writes need the baton (§6.8); the phone asks for it once it is in. A refusal is said in the shell.
     const batonAsked = useRef(false);
     useEffect(() => {
@@ -266,7 +267,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         dialed.current = true;
         remote.connect({ host: entry.socketUrl, pin: entry.pin ?? '', label: 'phone' });
         // The PIN is spent once dialed; a reload must not resend it (the token is remembered on welcome).
-        if (entry.pin !== null) window.history.replaceState(null, '', window.location.pathname);
+        if (entry.pin !== null) { window.history.replaceState(null, '', window.location.pathname); setHash(''); }
     }, [canDial, entry, remote]);
 
     if (!connected || !remote.state) {
@@ -274,6 +275,19 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         return <MobilePair host={window.location.host} refusal={remote.state?.lastRefusal ?? null} connecting={connecting} onConnect={({ pin, label }) => remote.connect({ host: entry.socketUrl, pin, label: label || 'phone' })} />;
     }
     const host = remote.state.host ?? window.location.host;
+
+    // ONE AGENT: its activity, and a composer to keep it going (or Start). Back is the browser's back.
+    if (agentId !== null) {
+        return (
+            <MobileAgent
+                detail={detail}
+                sending={sending}
+                onBack={() => { window.history.back(); }}
+                onSend={(text) => { setSending(true); bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
+                onStart={() => bridge!.openAgent(agentId)}
+            />
+        );
+    }
     return (
         <MobileShell
             host={host}
@@ -305,16 +319,9 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 }
             }}
             onDisconnect={remote.disconnect}
-            terminal={{
-                orientation,
-                open: term !== null,
-                pane: term && bridge ? <MobileTerminalPane terminalId={term.id} output={term.output} exited={term.exited} terminals={bridge.terminals} /> : null,
-                workspaces: snapshot.workspaces ?? [],
-                onOpen: (workspaceId) => {
-                    void bridge!.terminals.open(workspaceId, { cols: 100, rows: 30 })
-                        .then((t) => setTerm({ id: t.id, output: t.scrollback, exited: null }))
-                        .catch((error: unknown) => setNote((error as Error).message));
-                },
+            agents={{
+                rows: snapshot.workspaces === null ? null : snapshot.agents,
+                onOpen: (id) => { window.location.hash = `#agent=${id}`; },
             }}
             upload={{
                 agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, provider: a.provider, workspaceId: a.workspaceId })),
@@ -333,20 +340,6 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             }}
         />
     );
-}
-
-/** The phone's orientation from the browser; `null` when it cannot say (no matchMedia). Re-reads on every change. */
-function useOrientation(): Orientation | null {
-    const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(orientation: landscape)') : null;
-    const [orientation, setOrientation] = useState<Orientation | null>(query ? (query.matches ? 'landscape' : 'portrait') : null);
-    useEffect(() => {
-        if (!query) return;
-        const onChange = (e: MediaQueryListEvent) => setOrientation(e.matches ? 'landscape' : 'portrait');
-        query.addEventListener('change', onChange);
-        return () => query.removeEventListener('change', onChange);
-    // The query object is recreated per render; its target is the same window, so subscribe once.
-    }, []);
-    return orientation;
 }
 
 function DesktopApp({ bridge }: AppProps) {
