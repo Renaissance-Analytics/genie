@@ -46,6 +46,10 @@ interface Common {
 export type DashboardGroup = 'workspace' | 'status';
 export type AgentTab = 'stream' | 'files' | 'changes' | 'terminal' | 'activity';
 export type WorkspacePanel = 'files';
+/** The settings surface's four groups (`core/settings.ts` owns the registry; this is the URL's view of it). */
+export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
+/** Surfaces with no parameters of their own beyond the common modifiers. */
+export type PlainFeature = 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox';
 
 export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
@@ -53,11 +57,20 @@ export type Route =
     | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
     | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
-    | ({ surface: 'takeover'; terminalId: string } & Common);
+    | ({ surface: 'takeover'; terminalId: string } & Common)
+    /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
+    | ({ surface: PlainFeature } & Common)
+    | ({ surface: 'settings'; group: SettingsGroup | null } & Common)
+    /** The Genie browser; the page it shows rides the URL so back and deep links work. */
+    | ({ surface: 'browser'; url: string | null } & Common);
 
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'terminal', 'activity'];
+const SETTINGS_GROUPS: readonly SettingsGroup[] = ['general', 'agents', 'workstation', 'appearance'];
+const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox'];
+/** The sub-routes lines and signals point at (`genie://settings/github`) → the group that holds them. */
+const SETTINGS_ALIASES: Readonly<Record<string, SettingsGroup>> = { github: 'workstation', tynn: 'general', agents: 'agents', updates: 'general' };
 
 function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };
@@ -122,7 +135,17 @@ export function parseRoute(input: string): Route {
         case 'dashboard':
             return dashboard(params.get('group') === 'status' ? 'status' : 'workspace', common);
 
+        case 'settings': {
+            const asked = tail ? SETTINGS_ALIASES[tail] ?? null : params.get('group');
+            const group = SETTINGS_GROUPS.includes(asked as SettingsGroup) ? (asked as SettingsGroup) : null;
+            return { surface: 'settings', group, ...common };
+        }
+
+        case 'browser':
+            return { surface: 'browser', url: params.get('url') || null, ...common };
+
         default:
+            if (PLAIN_FEATURES.includes(head as PlainFeature)) return { surface: head as PlainFeature, ...common };
             return dashboard('workspace', common);
     }
 }
@@ -131,6 +154,12 @@ export function formatRoute(route: Route): string {
     const params = new URLSearchParams();
 
     switch (route.surface) {
+        case 'settings':
+            if (route.group !== null) params.set('group', route.group);
+            break;
+        case 'browser':
+            if (route.url !== null) params.set('url', route.url);
+            break;
         case 'dashboard':
             params.set('group', route.group);
             break;
