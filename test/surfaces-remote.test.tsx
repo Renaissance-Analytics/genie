@@ -37,6 +37,8 @@ describe('Remote access', () => {
         const html = render(remote);
         expect(html).toMatch(/Pair a device/);
         expect(html).toContain('data-pin="482913"');
+        // The QR is the PAGE a phone opens (§6.8), with the PIN in its hash — not the socket URL.
+        expect(html).toContain('data-qr-value="https://alphar.tailnet.invalid:7421/mobile#pin=482913"');
         expect(html).toContain('data-device="dev_1"');
         expect(html).toMatch(/glenn’s phone/);
         expect((html.match(/>Revoke</g) ?? []).length).toBeGreaterThanOrEqual(2);
