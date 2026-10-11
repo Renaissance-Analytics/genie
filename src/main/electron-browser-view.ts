@@ -1,5 +1,5 @@
 import { WebContentsView, session, type BrowserWindow } from 'electron';
-import type { ViewPort } from './browser-pane.js';
+import { lazyViewPort, type ViewPort } from './browser-pane.js';
 
 /**
  * THE ELECTRON ADAPTER FOR THE BROWSER PANE — the thin half. Everything decidable is in
@@ -14,7 +14,12 @@ import type { ViewPort } from './browser-pane.js';
  * Not unit-tested (Electron-only); the VM smoke drives it through the real window.
  */
 
+/** The pane's port on this window — created lazily (see `lazyViewPort`), so no second page target exists at boot. */
 export function electronBrowserView(window: BrowserWindow): ViewPort {
+    return lazyViewPort(() => createElectronView(window));
+}
+
+function createElectronView(window: BrowserWindow): ViewPort {
     const ses = session.fromPartition('persist:genie-browser');
     const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

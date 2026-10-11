@@ -21,6 +21,35 @@ export interface ViewPort {
     clearRewrites(): void;
 }
 
+/**
+ * A ViewPort that creates the real view on the FIRST loadURL and not before.
+ *
+ * CI's real-window smokes attach to the first `type: "page"` CDP target; a WebContentsView created at
+ * boot is a second page target (about:blank) that can be found first — PR #43's smoke hung on it for
+ * five minutes. Bounds, visibility and Host rewrites set before creation are kept and applied on it.
+ */
+export function lazyViewPort(create: () => ViewPort): ViewPort {
+    let view: ViewPort | null = null;
+    let bounds: { x: number; y: number; width: number; height: number } | null = null;
+    let visible: boolean | null = null;
+    let rewrites: Array<{ host: string; target: string }> = [];
+    const ensure = (): ViewPort => {
+        if (view) return view;
+        view = create();
+        if (bounds) view.setBounds(bounds);
+        for (const r of rewrites) view.rewriteHost(r.host, r.target);
+        if (visible !== null) view.setVisible(visible);
+        return view;
+    };
+    return {
+        loadURL: (url) => ensure().loadURL(url),
+        setBounds: (b) => { bounds = b; view?.setBounds(b); },
+        setVisible: (v) => { visible = v; view?.setVisible(v); },
+        rewriteHost: (host, target) => { rewrites = [...rewrites.filter((r) => r.host !== host), { host, target }]; view?.rewriteHost(host, target); },
+        clearRewrites: () => { rewrites = []; view?.clearRewrites(); },
+    };
+}
+
 export class BrowserPane {
     readonly #view: ViewPort;
     readonly #routes: () => readonly GenRoute[];
