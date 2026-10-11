@@ -97,7 +97,7 @@ describe('runPluginTool', () => {
             if (msg.reply) return [JSON.stringify({ result: { sawError: msg.reply.error } }), { exit: 0 }];
             return [];
         });
-        const result = await runPluginTool({ pluginDir: '/p', tool, args: {}, caller, guard, api: async (m) => { api.push(m); return null; }, launch: () => fake.child, timeoutMs: 5_000 });
+        const result = await runPluginTool({ pluginDir: '/plugins/acme.lint', tool, args: {}, caller, guard, api: async (m) => { api.push(m); return null; }, launch: () => fake.child, timeoutMs: 5_000 });
         expect(api).toEqual([]);
         expect(result.ok).toBe(true);
         expect((result as { result: { sawError: string } }).result.sawError).toMatch(/did not declare genieApi "inbox.send"/);
@@ -106,16 +106,16 @@ describe('runPluginTool', () => {
     it('a crash before a result is an error with the exit code and the stderr tail; garbage is an error; a timeout kills the child', async () => {
         // The child writes to stderr, THEN dies: the exit must come after the test has emitted the line.
         const crash = fakeChild((line) => (JSON.parse(line).call ? [{ wait: 5 }, { exit: 2 }] : []));
-        const p = runPluginTool({ pluginDir: '/p', tool, args: {}, caller, guard, api: async () => null, launch: () => crash.child, timeoutMs: 5_000 });
+        const p = runPluginTool({ pluginDir: '/plugins/acme.lint', tool, args: {}, caller, guard, api: async () => null, launch: () => crash.child, timeoutMs: 5_000 });
         crash.stderr.emit('line', 'TypeError: boom');
         const crashed = await p;
         expect(crashed).toEqual({ ok: false, reason: 'acme.lint.lint exited with code 2 before answering: TypeError: boom' });
 
         const garbage = fakeChild((line) => (JSON.parse(line).call ? ['not json at all', { exit: 0 }] : []));
-        expect(await runPluginTool({ pluginDir: '/p', tool, args: {}, caller, guard, api: async () => null, launch: () => garbage.child, timeoutMs: 5_000 })).toEqual({ ok: false, reason: 'acme.lint.lint wrote something that is not a JSON line: not json at all' });
+        expect(await runPluginTool({ pluginDir: '/plugins/acme.lint', tool, args: {}, caller, guard, api: async () => null, launch: () => garbage.child, timeoutMs: 5_000 })).toEqual({ ok: false, reason: 'acme.lint.lint wrote something that is not a JSON line: not json at all' });
 
         const silent = fakeChild(() => []);
-        const timedOut = await runPluginTool({ pluginDir: '/p', tool, args: {}, caller, guard, api: async () => null, launch: () => silent.child, timeoutMs: 30 });
+        const timedOut = await runPluginTool({ pluginDir: '/plugins/acme.lint', tool, args: {}, caller, guard, api: async () => null, launch: () => silent.child, timeoutMs: 30 });
         expect(timedOut).toEqual({ ok: false, reason: 'acme.lint.lint did not answer within 30 ms and was stopped' });
         expect(silent.wasKilled()).toBe(true);
     });
