@@ -1,0 +1,109 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { featureSnapshot, handleFeatureAction } from '../src/main/feature-ipc.js';
+import type { PtyPort } from '../src/main/terminal-host.js';
+
+/**
+ * THE FEATURE SURFACES' MAIN-SIDE HALF — the renderer sends a `FeatureAction`, the main process
+ * applies it to the composed services and answers with the next `FeatureData`. Every action from a
+ * surface is a USER action, so arming a flow here is allowed (an agent's arm goes through the MCP
+ * tool and is refused there). Tested against the real composition root on a temp dir, with a fake
+ * pty — no Electron.
+ */
+
+const pty: PtyPort = {
+    open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
+    write: () => true,
+    resize: () => true,
+    kill: () => true,
+    scrollback: () => '',
+    onData: () => () => {},
+    onExit: () => () => {},
+};
+
+let dir: string;
+let services: ComposedServices;
+
+beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-'));
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+});
+
+afterEach(async () => {
+    await services.shutdown();
+    await rm(dir, { recursive: true, force: true });
+});
+
+describe('the snapshot', () => {
+    it('reports every section MEASURED (never null) once the services exist, with the knowledge hits null until a search is asked for', async () => {
+        const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
+        expect(snap.flows).toEqual({ flows: [] });
+        expect(snap.hosting).toEqual({ sites: [], processes: [] });
+        expect(snap.inbox).toEqual({ unread: [], peers: [] });
+        expect(snap.settings.values).toMatchObject({ theme: 'dark', restore_agents_on_launch: false });
+        expect(snap.knowledge).toEqual({ hits: null, query: '' });
+        // The toolchain is the one section that needs a scan — null until one has run.
+        expect(snap.toolchain).toBeNull();
+        expect(snap.browser).toEqual({ url: null, routes: [] });
+    });
+});
+
+describe('actions', () => {
+    it('knowledge.search answers with hits for the query, system + every workspace (the human sees all)', async () => {
+        services.knowledge.add({ title: 'Caddy note', body: 'replace breaks h2', scope: { kind: 'workspace', id: 'tynn' }, source: 'user' });
+        const snap = await handleFeatureAction(services, { kind: 'knowledge.search', query: 'caddy' });
+        expect(snap.knowledge.query).toBe('caddy');
+        expect(snap.knowledge.hits!.map((h) => h.title)).toEqual(['Caddy note']);
+    });
+
+    it('flows.arm / disarm / remove act as the USER, so arming succeeds; the snapshot reflects it', async () => {
+        const doc = { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '*/5 * * * *', timezone: 'UTC' } }], edges: [] };
+        const f = await services.flows.create({ workspaceId: 'tynn', name: 'tick', document: doc, by: { kind: 'agent', id: 'agent_a', name: 'atlas' } });
+        expect(f.armed).toBe(false);
+        let snap = await handleFeatureAction(services, { kind: 'flows.arm', flowId: f.id });
+        expect(snap.flows!.flows[0]!.armed).toBe(true);
+        snap = await handleFeatureAction(services, { kind: 'flows.disarm', flowId: f.id });
+        expect(snap.flows!.flows[0]!.armed).toBe(false);
+        snap = await handleFeatureAction(services, { kind: 'flows.remove', flowId: f.id });
+        expect(snap.flows!.flows).toEqual([]);
+    });
+
+    it('settings.set validates through the store and settings.reset returns the default', async () => {
+        let snap = await handleFeatureAction(services, { kind: 'settings.set', key: 'theme', value: 'light' });
+        expect(snap.settings.values!.theme).toBe('light');
+        await expect(handleFeatureAction(services, { kind: 'settings.set', key: 'theme', value: 'sepia' })).rejects.toThrow(/sepia/);
+        snap = await handleFeatureAction(services, { kind: 'settings.reset', key: 'theme' });
+        expect(snap.settings.values!.theme).toBe('dark');
+    });
+
+    it('inbox.markRead commits the HUMAN’s cursor for that message and nothing else', async () => {
+        const a = 'agent_' + 'a'.repeat(32);
+        await services.inbox.send({ from: a as never, to: 'human', text: 'one' });
+        await services.inbox.send({ from: a as never, to: 'human', text: 'two' });
+        const first = services.inbox.unread('human')[0]!;
+        const snap = await handleFeatureAction(services, { kind: 'inbox.markRead', messageId: first.id });
+        expect(snap.inbox!.unread.map((m) => m.text)).toEqual(['two']);
+    });
+
+    it('inbox.send from the human reaches the agent by address, and the snapshot stays the human’s view', async () => {
+        const a = 'agent_' + 'b'.repeat(32);
+        services.registerAgentName(a, { name: 'atlas', workspaceId: 'tynn' });
+        services.registerAgentAddress('claude:atlas', a);
+        await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'hello atlas' });
+        expect(services.inbox.unread(a as never).map((m) => m.text)).toEqual(['hello atlas']);
+        await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:ghost', text: 'x' })).rejects.toThrow(/claude:ghost/);
+    });
+
+    it('hosting.stopSite stops the site and the routes empty; browser.navigate records the url', async () => {
+        services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
+        let snap = await handleFeatureAction(services, { kind: 'browser.navigate', url: 'tynn.gen' });
+        expect(snap.browser.url).toBe('https://tynn.gen/');
+        expect(snap.browser.routes).toEqual([{ host: 'docs.gen', target: '127.0.0.1:5173' }]);
+        snap = await handleFeatureAction(services, { kind: 'hosting.stopSite', siteId: 'site_docs' });
+        expect(snap.hosting!.sites[0]!.state).toBe('stopped');
+        expect(snap.browser.routes).toEqual([]);
+    });
+});

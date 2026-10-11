@@ -88,6 +88,13 @@ export class SettingsStore {
         return () => this.#listeners.delete(listener);
     }
 
+    /** Every registry setting with its effective value — the user's or the default. */
+    snapshot(): Record<string, Value> {
+        const out: Record<string, Value> = {};
+        for (const def of SETTINGS) out[def.key] = this.#values[def.key] ?? def.default;
+        return out;
+    }
+
     carriedOver(): CarriedOver | null {
         return this.#carriedOver;
     }

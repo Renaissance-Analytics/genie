@@ -176,7 +176,7 @@ export const NO_UPDATES: GenieBridge['updates'] = {
  *
  * **Add a surface in the commit that makes it render, never before.**
  */
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`
