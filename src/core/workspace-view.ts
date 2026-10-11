@@ -22,8 +22,18 @@ export interface TerminalTab {
     droppedWhileSuspended?: number;
 }
 
+/** A CODE PANE (§4.6 `+code`): one file open in the grid beside the shells. The id is the path under a prefix: one pane per file. */
+export interface CodeTab {
+    id: string;
+    path: string;
+}
+
+export const CODE_PANE_PREFIX = 'code:';
+
 export interface WorkspaceState {
     terminals: readonly TerminalTab[];
+    /** Code panes (§4.6), after the terminals in the strip. Absent on an older state = none. */
+    codes?: readonly CodeTab[];
     /** The terminal shown. `null` when there are none. */
     active: string | null;
     /** Output per terminal, as one growing string — the shape `fancy-term`'s `output` prop wants. */
@@ -46,7 +56,7 @@ export const PREVIOUS_SESSION_DIVIDER = '\r\n\x1b[2m— previous session —\x1b
 export const OUTPUT_CAP = 2_000_000;
 
 export function emptyWorkspace(): WorkspaceState {
-    return { terminals: [], active: null, output: {}, hidden: [] };
+    return { terminals: [], active: null, output: {}, hidden: [], codes: [] };
 }
 
 /** A terminal the engine just opened. It becomes the active one — the user asked for it. */
@@ -141,6 +151,23 @@ export function terminalSuspended(state: WorkspaceState, id: string, suspended: 
 }
 
 export function activate(state: WorkspaceState, id: string): WorkspaceState {
-    if (!state.terminals.some((t) => t.id === id)) return state;
+    if (!state.terminals.some((t) => t.id === id) && !(state.codes ?? []).some((c) => c.id === id)) return state;
     return { ...state, active: id };
+}
+
+/** Open a file as a pane (§4.6): one pane per path; opening it again just activates it. */
+export function codeOpened(state: WorkspaceState, path: string): WorkspaceState {
+    const id = `${CODE_PANE_PREFIX}${path}`;
+    const codes = state.codes ?? [];
+    if (codes.some((c) => c.id === id)) return { ...state, active: id };
+    return { ...state, codes: [...codes, { id, path }], active: id };
+}
+
+/** Close a code pane: the file stays on disk, the shells keep running; the active pane falls back to a neighbour, then a terminal. */
+export function codeClosed(state: WorkspaceState, id: string): WorkspaceState {
+    const codes = state.codes ?? [];
+    if (!codes.some((c) => c.id === id)) return state;
+    const rest = codes.filter((c) => c.id !== id);
+    const active = state.active === id ? (rest[rest.length - 1]?.id ?? state.terminals[state.terminals.length - 1]?.id ?? null) : state.active;
+    return { ...state, codes: rest, active };
 }

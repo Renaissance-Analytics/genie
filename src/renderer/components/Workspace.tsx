@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import {
     activate,
     emptyWorkspace,
@@ -8,12 +8,12 @@ import {
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
-import { terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { codeClosed, codeOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { Icon } from '@particle-academy/react-fancy';
 import type { GenieBridge } from '../bridge.js';
 import type { RepoEntry } from '../../core/repo-registry.js';
 import { SETTINGS } from '../../core/settings.js';
-import { LAYOUT_MODES, gridTemplate, layoutModeFrom, visiblePanes } from '../../core/panel-layout.js';
+import { LAYOUT_MODES, dragSplit, gridTemplate, layoutModeFrom, serializeSplits, splitsFrom, visiblePanes } from '../../core/panel-layout.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachAll } from '../reattach.js';
@@ -176,7 +176,30 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     // LAYOUT (§6.5): the workspace's own setting decides how many panes show; the grid is for that count only.
     const layout = layoutModeFrom(ops?.settings?.values ?? {});
     const shown = visiblePanes(state, layout);
-    const template = gridTemplate(layout, shown.length);
+    // SPLITS (§4.6): remembered per workspace and per arrangement; a stored split that does not fit is equal panes.
+    const splits = splitsFrom(ops?.settings?.values ?? {}, layout, shown.length);
+    const template = gridTemplate(layout, shown.length, splits);
+    const gridRef = useRef<HTMLDivElement | null>(null);
+    const startDrag = (index: number, axis: 'columns' | 'rows') => (e: ReactPointerEvent<HTMLDivElement>) => {
+        const el = gridRef.current;
+        const set = ops?.settings?.onSet;
+        if (!el || !set) return;
+        const total = axis === 'columns' ? el.clientWidth : el.clientHeight;
+        const start = axis === 'columns' ? e.clientX : e.clientY;
+        // Handles exist only in the columns and rows arrangements, where every shown pane is one track.
+        const from = (axis === 'columns' ? splits.columns : splits.rows) ?? Array.from({ length: shown.length }, () => 1 / shown.length);
+        const onMove = (ev: PointerEvent) => {
+            const delta = ((axis === 'columns' ? ev.clientX : ev.clientY) - start) / Math.max(1, total);
+            const next = dragSplit(from, index, delta);
+            set('panel_splits', serializeSplits(String(ops?.settings?.values?.panel_splits ?? ''), layout, axis === 'columns' ? { columns: next, rows: splits.rows } : { columns: splits.columns, rows: next }));
+        };
+        const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    };
+    // Handles sit between tracks in the columns and rows arrangements; the 2×2 grid keeps equal tracks until it earns its own handles.
+    const handleAxis: 'columns' | 'rows' | null = layout === 'columns' ? 'columns' : layout === 'rows' ? 'rows' : null;
+    const handleFractions = handleAxis ? ((handleAxis === 'columns' ? splits.columns : splits.rows) ?? Array.from({ length: shown.length }, () => 1 / shown.length)) : [];
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
@@ -255,7 +278,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                         </div>
                     ) : (
                         <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                            {SETTINGS.filter((def) => def.scope === 'workspace').map((def) => {
+                            {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
                                 const values = ops.settings!.values!;
                                 const value = values[def.key] ?? def.default;
                                 const overridden = ops.settings!.overridden.includes(def.key);
@@ -322,7 +345,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
             ) : null}
             {panel === 'files' && files && !filesPinned && !filesPopped ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} />
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} />
                 </div>
             ) : null}
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
@@ -406,6 +429,19 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                         ))}
                     </div>
                 ) : null}
+                {/* CODE PANES (§4.6): one file each, after the shells in the strip. */}
+                {(state.codes ?? []).map((c) => {
+                    const isActive = c.id === state.active;
+                    return (
+                        <div key={c.id} data-code-tab={c.id} data-active={isActive ? 'true' : 'false'} className={`flex items-center gap-2 border-r border-[var(--border-1)] px-3 text-[12px] ${isActive ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}>
+                            <button type="button" onClick={() => setState((s) => activate(s, c.id))} className="flex items-center gap-2">
+                                <Icon name="file-code" className="h-3.5 w-3.5" />
+                                <span className="font-mono">{c.path.split('/').pop()}</span>
+                            </button>
+                            <button type="button" aria-label={`close ${c.path}`} data-code-close={c.id} onClick={() => setState((s) => codeClosed(s, c.id))} className="rounded px-1 text-[var(--fg-4)] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]">×</button>
+                        </div>
+                    );
+                })}
                 <button
                     type="button"
                     data-terminal-add=""
@@ -415,13 +451,34 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     <Icon name="plus" className="h-3.5 w-3.5" />
                     terminal
                 </button>
+                {files ? (
+                    <button type="button" data-action="add-code" title="Open a file as its own pane: pick it in the file panel, then ⧉ on its tab" onClick={() => { if (panel !== 'files') onTogglePanel?.(); }} className="flex items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">
+                        <Icon name="plus" className="h-3.5 w-3.5" />
+                        code
+                    </button>
+                ) : null}
             </div>
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
             <div className="min-h-0 flex-1 bg-[var(--bg-0)]">
-                {active ? (
-                    <div data-layout={layout} className="grid h-full min-h-0 gap-px bg-[var(--border-1)]" style={{ gridTemplateColumns: template.columns, gridTemplateRows: template.rows }}>
+                {shown.length > 0 ? (
+                    <div ref={gridRef} data-layout={layout} className="relative grid h-full min-h-0 gap-px bg-[var(--border-1)]" style={{ gridTemplateColumns: template.columns, gridTemplateRows: template.rows }}>
+                        {/* SPLIT HANDLES (§4.6): one between each pair of tracks; dragging writes panel_splits for this arrangement. */}
+                        {handleAxis && shown.length > 1 ? handleFractions.slice(0, -1).map((_, i) => {
+                            const at = handleFractions.slice(0, i + 1).reduce((a, b) => a + b, 0) * 100;
+                            return handleAxis === 'columns'
+                                ? <div key={i} data-split-handle={i} role="separator" aria-orientation="vertical" onPointerDown={startDrag(i, 'columns')} className="absolute inset-y-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-[var(--accent)]/40" style={{ left: `${at}%` }} />
+                                : <div key={i} data-split-handle={i} role="separator" aria-orientation="horizontal" onPointerDown={startDrag(i, 'rows')} className="absolute inset-x-0 z-10 h-1.5 -translate-y-1/2 cursor-row-resize hover:bg-[var(--accent)]/40" style={{ top: `${at}%` }} />;
+                        }) : null}
                         {shown.map((id) => {
+                            const code = (state.codes ?? []).find((c) => c.id === id);
+                            if (code) {
+                                return (
+                                    <div key={id} data-pane-slot={id} data-pane-kind="code" {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>
+                                        {files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} single={code.path} onPin={() => {}} onClose={() => setState((s) => codeClosed(s, id))} onPause={onPauseAgent} onResume={onResumeAgent} /> : null}
+                                    </div>
+                                );
+                            }
                             const t = state.terminals.find((x) => x.id === id)!;
                             return (
                                 <div key={id} data-pane-slot={id} {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>

@@ -19,10 +19,11 @@ export type SettingScope = 'device' | 'workspace' | 'host';
 
 import { alertSoundSettings } from './alerts.js';
 
+/** INTERNAL settings are remembered, never drawn and never found by search — state the UI writes, not a choice a person makes. */
 export type SettingDef =
-    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'boolean'; default: boolean }
-    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'string'; default: string }
-    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'enum'; options: readonly string[]; default: string };
+    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'boolean'; default: boolean; hidden?: true }
+    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'string'; default: string; hidden?: true }
+    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'enum'; options: readonly string[]; default: string; hidden?: true };
 
 export const SETTINGS: readonly SettingDef[] = [
     { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'Which releases this Genie offers to install.', type: 'enum', options: ['beta', 'stable'], default: 'beta' },
@@ -43,6 +44,7 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'mcp_sync_codex', group: 'workstation', scope: 'host', label: 'Sync Genie into Codex (.codex/config.toml)', description: 'Config sync writes Genie’s MCP server block into the workspace’s Codex config.', type: 'boolean', default: true },
     { key: 'mcp_sync_hooks', group: 'workstation', scope: 'host', label: 'Seed the imDone Stop hook (.claude/settings.local.json)', description: 'Config sync adds the hook that files a handoff when a Claude Code agent stops.', type: 'boolean', default: true },
     { key: 'developer_mode', group: 'workstation', scope: 'host', label: 'Developer mode', description: 'Run local UNSIGNED plugins from the plugins folder, labelled as such. Off: only plugins signed by a publisher key Genie carries are installed.', type: 'boolean', default: false },
+    { key: 'panel_splits', group: 'workstation', scope: 'workspace', label: 'Pane split sizes', description: 'Where the splits between panes sit, per layout — written by dragging, remembered per workspace.', type: 'string', default: '', hidden: true },
     { key: 'panel_layout', group: 'workstation', scope: 'workspace', label: 'Terminal layout', description: 'How this workspace’s terminals are laid out: one at a time, two columns, two rows, or a 2×2 grid. Remembered per workspace.', type: 'enum', options: ['single', 'columns', 'rows', 'grid'], default: 'single' },
     { key: 'track_cwd', group: 'workstation', scope: 'host', label: 'Track terminal directory', description: 'Let terminals report their working directory so a new one opens where the last was.', type: 'boolean', default: true },
     { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },
@@ -58,8 +60,8 @@ export function settingGroups(): readonly SettingGroup[] {
 
 export function searchSettings(query: string): Array<SettingDef & { group: SettingGroup }> {
     const q = query.trim().toLowerCase();
-    if (q.length === 0) return [...SETTINGS];
-    return SETTINGS.filter((s) => s.key.toLowerCase().includes(q) || s.label.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+    if (q.length === 0) return SETTINGS.filter((s) => !s.hidden);
+    return SETTINGS.filter((s) => !s.hidden && (s.key.toLowerCase().includes(q) || s.label.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)));
 }
 
 /** v1 key → genie2 key. A v1 key with no entry here does not carry over, and says why. */
