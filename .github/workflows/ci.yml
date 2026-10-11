@@ -201,6 +201,9 @@ jobs:
       # This job BUILDS an installer; it does not release one. Implementation authorisation is
       # not release authorisation, and nothing here may create a tag, a release or an
       # auto-update feed entry. Publishing is a separate, human-approved step.
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+
       - name: build the installers
         run: npx electron-builder --publish never
 

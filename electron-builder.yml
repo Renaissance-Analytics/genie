@@ -51,6 +51,12 @@ npmRebuild: false
 # because an installer that silently cannot open a terminal is the exact green build this
 # project exists to stop. The CI `it packages` jobs run it on both platforms.
 # ─────────────────────────────────────────────────────────────────────────────────────────
+# Genie's own Caddy (§6.6): fetched at build time by scripts/fetch-caddy.ts, pinned by version + sha512.
+extraResources:
+  - from: build/runtime
+    to: runtime
+    filter: ['caddy', 'caddy.exe']
+
 asarUnpack:
   - "**/node_modules/node-pty/**"
   # fancy-pty (fancy-term-host >= 0.10): one helper EXECUTABLE per pty, resolved in place under the
