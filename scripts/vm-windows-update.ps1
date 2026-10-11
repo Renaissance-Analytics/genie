@@ -130,6 +130,10 @@ try {
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
     $env:EXPECT_VERSION = $Next
+    # With fancy-pty installed, the driver's §7.2 control (one open terminal → one helper under
+    # the install dir) is asserted, not merely reported.
+    $fancyPty = Test-Path (Join-Path $root 'node_modules\@particle-academy\fancy-pty\package.json')
+    if ($fancyPty) { $env:EXPECT_HELPERS = '1' } else { Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue }
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     if ($drive -ne 0) {
@@ -162,6 +166,13 @@ try {
     $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' })
     Write-Output ("§7.4 stub agent processes after quit + relaunch: " + $stubs.Count)
     if ($stubs.Count -ne 0) { $stubs | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "§7.4: $($stubs.Count) agent process(es) survived the upgrade or were revived" }
+    # §7.2's other half: the terminal the driver left open had ONE fancy-pty helper under the
+    # install dir (asserted in the driver when fancy-pty is installed); after the quit and the
+    # relaunch there must be none — a helper that outlived the upgrade is exactly the 31-orphan
+    # shape, and a helper that came back would be a terminal revived without anyone asking.
+    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like "$installDir\*" })
+    Write-Output ("§7.2 fancy-pty helpers under the install dir after quit + relaunch: " + $helpers.Count)
+    if ($helpers.Count -ne 0) { $helpers | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.ExecutablePath) }; throw "§7.2: $($helpers.Count) pty helper(s) survived the upgrade" }
     Write-Output "--- the updated app's install dir ---"
     Get-ChildItem $installDir -File | ForEach-Object { "  " + $_.Name + " " + $_.Length }
     $report = Select-String -Path installed-out.log -Pattern '\[updater\]' -ErrorAction SilentlyContinue | ForEach-Object Line

@@ -140,6 +140,26 @@ try {
         check(running === true, '11c. that agent\'s session is RUNNING when install is asked', String(running));
     }
 
+    // §7.2's POSITIVE CONTROL (Fancy, 2026-10-10): with fancy-pty every live terminal is one
+    // helper process under the install dir, so N live terminals must show N helpers to the same
+    // process scan the teardown uses — a scan that has only ever observed nothing is not a
+    // scan. One terminal is opened here and LEFT OPEN through install(); the helper is our own
+    // child (excluded from the orphan kill by descent) and before-quit closes it. The caller
+    // asserts 0 helpers after the relaunch.
+    const wsId = await cdp.evaluate('window.genie.snapshot().then((s) => s.workspaces?.[0]?.id ?? null)');
+    if (typeof wsId === 'string') {
+        const term = await cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
+        check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);
+        await new Promise((r) => setTimeout(r, 1500));
+        const { execFileSync } = await import('node:child_process');
+        const helpers = execFileSync('powershell', ['-NoProfile', '-Command',
+            "(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" }).Count"],
+            { encoding: 'utf8', timeout: 30_000 }).trim();
+        const n = Number(helpers || 0);
+        if (n === 0 && !process.env.EXPECT_HELPERS) console.log('  (no fancy-pty helper under the install dir — node-pty engine, or the helper is elsewhere; set EXPECT_HELPERS=1 to assert)');
+        else check(n === 1, '11e. CONTROL: that terminal is exactly ONE fancy-pty-helper under the install dir — the §7.2 scan has something to find', `${n} helper(s)`);
+    }
+
     // §7.2 report, through the bridge this time so the caller gets the text.
     const result = await cdp.evaluate('window.genie.updates.install()');
     check(result !== null && typeof result.report === 'string', '12. install answers with the teardown report', result?.report?.split('\n')[0] ?? 'null');

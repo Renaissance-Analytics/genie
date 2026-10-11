@@ -114,7 +114,12 @@ if (-not $SkipSource) {
     & cmd /c 'npm run verify:leak > leak.log 2>&1'
     $leak = $LASTEXITCODE
     Get-Content leak.log -Tail 14
-    if ($leak -eq 0) { Write-Output 'LEAK BASELINE: GREEN' } else { Write-Output "LEAK BASELINE: RED (exit $leak) — known until fancy-pty; not a gate in this script yet" }
+    # With fancy-pty installed (fancy-term-host >= 0.10) the leak check IS the gate — the owner's
+    # release hold is "until fancy-pty passes the Windows VM acceptance", and this is the number.
+    $fancyPty = Test-Path (Join-Path $root 'node_modules\@particle-academy\fancy-pty\package.json')
+    if ($leak -eq 0) { Write-Output 'LEAK BASELINE: GREEN' }
+    elseif ($fancyPty) { throw "LEAK CHECK RED (exit $leak) with fancy-pty installed — the acceptance gate" }
+    else { Write-Output "LEAK BASELINE: RED (exit $leak) — known until fancy-pty; not a gate without it" }
 
     Step 'build'
     Run 'npm run build' 'build.log'

@@ -53,6 +53,10 @@ npmRebuild: false
 # ─────────────────────────────────────────────────────────────────────────────────────────
 asarUnpack:
   - "**/node_modules/node-pty/**"
+  # fancy-pty (fancy-term-host >= 0.10): one helper EXECUTABLE per pty, resolved in place under the
+  # package — it must live on disk, outside the asar, under the install dir (§7.2 scans there).
+  # Fancy: this one line is the whole packaging requirement for the fancy-pty engine.
+  - "**/node_modules/@particle-academy/fancy-pty/bin/**"
 afterPack: ./scripts/after-pack.cjs
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
