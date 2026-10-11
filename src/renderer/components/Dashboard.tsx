@@ -311,9 +311,11 @@ export interface DashboardProps {
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
     onAddWorkspaceFromGit?: (() => void) | undefined;
+    /** The third source (§6.1): the envelope from the Tynn project the token belongs to. */
+    onAddWorkspaceFromTynn?: (() => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -375,6 +377,12 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 {onAddWorkspaceFromGit ? (
                     <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
                         From a git URL
+                    </button>
+                ) : null}
+                {onAddWorkspaceFromTynn ? (
+                    <button type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
+                        <Icon name="link" size="sm" />
+                        From Tynn
                     </button>
                 ) : null}
             </div>

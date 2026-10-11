@@ -1,5 +1,6 @@
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
+import type { TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
@@ -158,6 +159,9 @@ export interface GenieBridge {
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
+        /** From Tynn (§6.1): the parent picked on the host, the project the token belongs to, the plan before anything is written. */
+        previewAddFromTynn(): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        confirmAddFromTynn(parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Forgets the workspace and its agents. The folder on disk is never touched. */

@@ -145,6 +145,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
             previewAddFromGit: () => answer('workspaces.previewAddFromGit'),
             confirmAddFromGit: (url, parent) => answer('workspaces.confirmAddFromGit', url, parent),
+            previewAddFromTynn: () => answer('workspaces.previewAddFromTynn'),
+            confirmAddFromTynn: (parent) => answer('workspaces.confirmAddFromTynn', parent),
             hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),
             wake: (workspaceId) => answer('workspaces.wake', workspaceId),
             remove: (workspaceId) => answer('workspaces.remove', workspaceId),

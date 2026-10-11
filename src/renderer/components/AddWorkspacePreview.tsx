@@ -1,4 +1,5 @@
 import type { FolderKind, PlanStep } from '../../core/workspace-model.js';
+import type { TynnProject } from '../../core/tynn.js';
 
 /**
  * ADDING A FOLDER, PREVIEWED (§6.1) — what Genie found the folder to be and every step it would take,
@@ -6,7 +7,11 @@ import type { FolderKind, PlanStep } from '../../core/workspace-model.js';
  * A refusal shows its reason and offers only to pick again.
  */
 
-export type AddPreviewView = { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source?: 'git'; url?: string; parent?: string } | { ok: false; reason: string };
+export type AddPreviewView =
+    | { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source?: 'git'; url?: string; parent?: string }
+    /** From Tynn (§6.1): the project the token belongs to becomes the envelope; the link is recorded in project.json. */
+    | { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source: 'tynn'; project: TynnProject; host: string; parent: string }
+    | { ok: false; reason: string };
 
 const KIND_LABEL: Record<FolderKind, string> = {
     empty: 'an empty folder — Genie will set up a new envelope here',
@@ -33,7 +38,7 @@ export function AddFromGitForm({ onPreview, onCancel }: { onPreview: (url: strin
     );
 }
 
-export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit }: { preview: AddPreviewView; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined }) {
+export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string) => void) | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     if (!preview.ok) {
         return (
@@ -48,6 +53,11 @@ export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit
         <section data-add-preview={preview.kind} {...(preview.source ? { 'data-add-source': preview.source } : {})} className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">
             <p className="font-semibold">Add <span className="font-mono">{preview.path}</span>?</p>
             {preview.source === 'git' ? <p className="text-[var(--fg-2)]">From <span className="font-mono">{preview.url}</span> — cloned into this folder first. Nothing is cloned until you confirm.</p> : null}
+            {preview.source === 'tynn' ? (
+                <p className="text-[var(--fg-2)]">
+                    From Tynn project <span className="font-medium text-[var(--fg-1)]">{preview.project.name}</span> at <span className="font-mono">{preview.host}</span> — a new envelope named by its slug, linked back to the project. Repos are added afterwards through the registry. Nothing is written until you confirm.
+                </p>
+            ) : null}
             <p className="text-[var(--fg-2)]">This is {KIND_LABEL[preview.kind]}. Nothing has been written yet. Genie would:</p>
             <ol className="flex flex-col gap-1 pl-5">
                 {preview.steps.map((s, i) => (
@@ -58,7 +68,7 @@ export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit
                 ))}
             </ol>
             <div className="flex gap-2">
-                <button type="button" data-action="confirm-add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white" onClick={() => (preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'git' ? 'Clone and add' : 'Add this workspace'}</button>
+                <button type="button" data-action="confirm-add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white" onClick={() => (preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? 'Create and add' : preview.source === 'git' ? 'Clone and add' : 'Add this workspace'}</button>
                 <button type="button" className={button} onClick={onCancel}>Cancel</button>
             </div>
         </section>

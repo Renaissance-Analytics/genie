@@ -13,7 +13,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { quitPlan } from '../core/quit.js';
 import { buildHostApi } from './host-api.js';
-import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, hibernateWorkspace, previewAddFromGit, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -46,6 +46,7 @@ import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
+import { tynnClient } from './tynn-client.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -637,6 +638,14 @@ async function boot(): Promise<void> {
         supervisor: { list: () => services?.supervisor.list() ?? [], stop: (id) => services?.supervisor.stop(id) ?? false },
         now: Date.now,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        // TYNN (§6.1 add from Tynn): the host and token from settings, read at call time; the client is one fetch.
+        tynn: {
+            get host() { const h = services?.settings.snapshot().tynn_host; return typeof h === 'string' && h.trim().length > 0 ? h.trim() : 'https://tynn.ai'; },
+            project() {
+                const token = services?.settings.snapshot().tynn_token;
+                return tynnClient((url, init) => fetch(url, init)).project(this.host, typeof token === 'string' ? token : '');
+            },
+        },
     };
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
     const repoOps: RepoOpsPorts = { fs: workspaceOps.fs, registry: { workspace: (id) => registry?.workspace(id) ?? null } };
@@ -678,6 +687,16 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
         (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
+    // ADD FROM TYNN (§6.1): the parent folder is picked on the host; Tynn is asked for the project; the plan is shown before anything is written.
+    ipcMain.handle('genie:workspace-preview-add-tynn', async () => {
+        if (!window) return { ok: false, reason: 'no window' };
+        const picked = await dialog.showOpenDialog(window, { title: 'Where should the Tynn envelope be created? Pick the parent folder', properties: ['openDirectory'] });
+        const parent = picked.filePaths[0];
+        if (picked.canceled || !parent) return { ok: false, reason: 'no folder picked' };
+        return previewAddFromTynn(workspaceOps, parent);
+    });
+    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown) =>
+        (typeof rawParent === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent) : { ok: false, reason: 'give a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
@@ -763,6 +782,7 @@ async function boot(): Promise<void> {
             workspaceOps: {
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
+                confirmAddFromTynn: (parent) => addWorkspaceFromTynn(workspaceOps, parent),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
                 remove: (id) => removeWorkspace(workspaceOps, id),
