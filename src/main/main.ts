@@ -36,6 +36,9 @@ import { UpdateHost } from './updater.js';
 import { genieHome } from './paths.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
+import { remoteListener } from './remote-listen.js';
+import { REMOTE_PORT } from '../core/tailscale.js';
+import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
 /**
  * THE MAIN PROCESS.
@@ -552,6 +555,13 @@ async function boot(): Promise<void> {
      * the .gen front door, composed once (compose.ts). The v1 settings carry-over runs here on first
      * run, from v1's own database under the same ~/.genie.
      */
+    // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
+    const remoteSocket = remoteListener({
+        tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        port: REMOTE_PORT,
+        attach: attachWebSocketServer,
+    });
+    remoteSocketNow = remoteSocket;
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
@@ -560,6 +570,7 @@ async function boot(): Promise<void> {
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,
         hostName: hostname(),
+        remoteTransport: remoteSocket.transport,
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
@@ -635,6 +646,8 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
+    void remoteSocket.start().then(pushFeatures, pushFeatures);
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
     const featurePorts: FeaturePorts = {
@@ -698,6 +711,7 @@ app.on('second-instance', () => {
  * had deliberately stopped.
  */
 let quitConfirmed = false;
+let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
 app.on('before-quit', (event) => {
     // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds.
     if (!quitConfirmed && host && registry) {
@@ -712,6 +726,7 @@ app.on('before-quit', (event) => {
     host?.stopAll();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
+    void remoteSocketNow?.stop();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();

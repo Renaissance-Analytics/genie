@@ -86,6 +86,12 @@ export class RemoteHost {
         return this.#transport.address?.() ?? null;
     }
 
+    /** Why devices cannot connect, in the transport's own words; `null` while the socket listens. */
+    unavailable(): string | null {
+        if (this.url() !== null) return null;
+        return this.#transport.unavailable?.() ?? `nothing is listening on ${this.#hostName}`;
+    }
+
     locked(): boolean {
         return this.#locked;
     }

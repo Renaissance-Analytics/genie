@@ -71,7 +71,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-remote-host-'));
     api = fakeApi();
     pins = new PairingPins({ now: () => now, random: () => 0.482913 });
-    shares = new ShareLinks({ host: 'alphar.tail.ts.net:7421', now: () => now, random: () => 'sekrit' });
+    shares = new ShareLinks({ host: 'alphar.tailnet.invalid:7421', now: () => now, random: () => 'sekrit' });
     devices = await DeviceStore.open(dir, { now: () => now, random: () => 'tok' + (devices?.list().length ?? 0) });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
     host = new RemoteHost({

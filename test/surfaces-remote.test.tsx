@@ -13,7 +13,8 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 
 const remote: NonNullable<FeatureData['remote']> = {
     host: 'alphar',
-    url: 'wss://alphar.tail.ts.net:7421',
+    url: 'wss://alphar.tailnet.invalid:7421',
+    unavailable: null,
     locked: false,
     pin: { code: '482913', expiresAt: 10 },
     devices: [{ id: 'dev_1', label: 'glenn’s phone', pairedAt: 't', lastSeenAt: 't' }],
@@ -51,7 +52,7 @@ describe('Remote access', () => {
         expect(html).toMatch(/wren/);
         expect(html).toContain('data-form="mint-share"');
         expect(html.indexOf('data-share="share_s"')).toBeLessThan(html.indexOf('data-form="mint-share"'));
-        const served = render({ ...remote, servedLink: { id: 'share_new', url: 'wss://alphar.tail.ts.net:7421/share/share_new#sekrit' } });
+        const served = render({ ...remote, servedLink: { id: 'share_new', url: 'wss://alphar.tailnet.invalid:7421/share/share_new#sekrit' } });
         expect(served).toContain('data-served-link');
         expect(served).toMatch(/share\/share_new#sekrit/);
         expect(served).toMatch(/shown once/i);

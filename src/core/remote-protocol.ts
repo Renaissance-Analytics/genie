@@ -192,6 +192,8 @@ export interface ServerTransport {
     onConnection(listener: (connection: ServerConnection) => void): () => void;
     /** Where this transport listens, for the device to type; absent or `null` while nothing listens. */
     address?(): string | null;
+    /** Why nothing listens, in words a person can act on; `null` while something does. */
+    unavailable?(): string | null;
 }
 
 /** Two ends wired to each other in memory. Frames are delivered on the microtask queue, in order. */

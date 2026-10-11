@@ -66,6 +66,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         remote: {
             host: services.remote.hostName,
             url: services.remote.url(),
+            unavailable: services.remote.unavailable(),
             locked: services.remote.locked(),
             pin: services.remote.activePin(),
             devices: services.remote.devices(),

@@ -70,6 +70,8 @@ export interface KnowledgeAdded {
 export interface RemoteSection {
     readonly host: string;
     readonly url: string | null;
+    /** Why `url` is null, in the listener's own words; `null` while something listens. */
+    readonly unavailable: string | null;
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
     readonly devices: readonly Device[];

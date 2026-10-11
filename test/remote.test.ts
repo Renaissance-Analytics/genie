@@ -61,18 +61,18 @@ describe('share links — a credential you cannot unsend', () => {
     const now = () => clock;
 
     it('mints a link for THIS host with a one-time secret, and serves the URL exactly once', () => {
-        const links = new ShareLinks({ host: 'studio.tail1234.ts.net', now, random: () => 'r4nd0m' });
+        const links = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 'r4nd0m' });
         const link = links.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 3_600_000 });
         expect(link.id).toMatch(/^share_/);
         const first = links.serve(link.id);
-        expect(first).toEqual({ ok: true, url: 'https://studio.tail1234.ts.net/share/share_r4nd0m#r4nd0m' });
+        expect(first).toEqual({ ok: true, url: 'https://studio.tailnet.invalid/share/share_r4nd0m#r4nd0m' });
         // COUNTED: a second serve is refused — the URL is gone from the server the moment it was shown.
         expect(links.serve(link.id)).toEqual({ ok: false, reason: 'this link was already served once and cannot be shown again; mint a new one' });
         expect(links.roster().map((r) => [r.id, r.grantedTo, r.served])).toEqual([[link.id, 'wren', true]]);
     });
 
     it('redeems with the secret while unexpired and unrevoked; a wrong secret, an expired or a revoked link all refuse', () => {
-        const links = new ShareLinks({ host: 'studio.tail1234.ts.net', now, random: () => 's3cret' });
+        const links = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 's3cret' });
         const link = links.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 1_000 });
         expect(links.redeem(link.id, 'wrong')).toEqual({ ok: false, reason: 'not a valid link' });
         expect(links.redeem(link.id, 's3cret')).toEqual({ ok: true, workspaceId: 'tynn', grantedTo: 'wren' });
@@ -84,11 +84,11 @@ describe('share links — a credential you cannot unsend', () => {
     });
 
     it('a link minted for another host is refused at redemption, by host', () => {
-        const a = new ShareLinks({ host: 'studio.tail1234.ts.net', now, random: () => 'x' });
-        const b = new ShareLinks({ host: 'laptop.tail1234.ts.net', now, random: () => 'x' });
+        const a = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 'x' });
+        const b = new ShareLinks({ host: 'laptop.tailnet.invalid', now, random: () => 'x' });
         const link = a.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
         expect(b.redeem(link.id, 'x')).toEqual({ ok: false, reason: 'not a valid link' });
-        expect(ShareLinks.hostOf(a.serve(link.id).ok ? 'https://studio.tail1234.ts.net/share/share_x#x' : '')).toBe('studio.tail1234.ts.net');
+        expect(ShareLinks.hostOf(a.serve(link.id).ok ? 'https://studio.tailnet.invalid/share/share_x#x' : '')).toBe('studio.tailnet.invalid');
     });
 });
 
