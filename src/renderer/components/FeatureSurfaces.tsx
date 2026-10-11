@@ -3,6 +3,8 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
 import type { FeatureAction, FeatureData } from '../features.js';
+import type { FlowForm, Problem, SiteFormDefaults } from '../../core/forms.js';
+import { AddFlowForm, AddSiteForm } from './AddForms.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -14,7 +16,16 @@ import type { FeatureAction, FeatureData } from '../features.js';
  * looked.
  */
 
+/** A form open inside a surface — renderer-local state; the problems are the last refused submit's. */
+export type AddingForm =
+    | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[] }
+    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] };
+
 interface SurfaceProps {
+    /** The workspaces a form can add into. The route names none, so the surface offers them. */
+    readonly workspaces?: readonly { id: string; path: string }[] | undefined;
+    readonly adding?: AddingForm | undefined;
+    readonly onCloseForm?: (() => void) | undefined;
     readonly data: FeatureData;
     readonly onAction: (action: FeatureAction) => void;
     readonly onNavigate: (route: string) => void;
@@ -27,6 +38,22 @@ function Header({ title, children }: { title: string; children?: React.ReactNode
             {children}
         </div>
     );
+}
+
+/** Which workspace an Add goes into: a select when there are several, nothing when there is one, a reason when none. */
+function WorkspacePick({ workspaces, name }: { workspaces: readonly { id: string; path: string }[]; name: string }) {
+    if (workspaces.length === 0) return <span className="text-xs text-[var(--fg-3)]">Add a workspace first</span>;
+    if (workspaces.length === 1) return <input type="hidden" name={name} value={workspaces[0]!.id} />;
+    return (
+        <select name={name} defaultValue={workspaces[0]!.id} aria-label="Workspace" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+            {workspaces.map((w) => <option key={w.id} value={w.id}>{w.id}</option>)}
+        </select>
+    );
+}
+
+function pickedWorkspace(form: HTMLFormElement, workspaces: readonly { id: string; path: string }[], name: string): { id: string; path: string } | null {
+    const id = String(new FormData(form).get(name) ?? '');
+    return workspaces.find((w) => w.id === id) ?? workspaces[0] ?? null;
 }
 
 function Skeletons({ rows = 4 }: { rows?: number }) {
@@ -72,15 +99,24 @@ export function KnowledgeSurface({ data, onAction }: SurfaceProps) {
     );
 }
 
-export function FlowsSurface({ data, onAction }: SurfaceProps) {
+export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
     const flows = data.flows;
     return (
         <div data-surface="flows" className="flex h-full min-h-0 flex-col">
             <Header title="Flows">
-                <button type="button" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'flows.add' })}>
-                    Add a flow
-                </button>
+                <form
+                    className="ml-auto flex items-center gap-2"
+                    onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'flows.add', workspaceId: w.id }); }}
+                >
+                    <WorkspacePick workspaces={workspaces} name="workspace" />
+                    <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                        Add a flow
+                    </button>
+                </form>
             </Header>
+            {adding?.kind === 'flow' ? (
+                <AddFlowForm defaults={adding.defaults} problems={adding.problems} onSubmit={(form) => onAction({ kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
+            ) : null}
             {flows === null ? (
                 <Skeletons />
             ) : flows.flows.length === 0 ? (
@@ -108,15 +144,44 @@ export function FlowsSurface({ data, onAction }: SurfaceProps) {
     );
 }
 
-export function HostingSurface({ data, onAction }: SurfaceProps) {
+export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
     const hosting = data.hosting;
     return (
         <div data-surface="hosting" className="flex h-full min-h-0 flex-col">
             <Header title="Hosting">
-                <button type="button" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'hosting.addSite' })}>
-                    Add a site
-                </button>
+                <form
+                    className="ml-auto flex items-center gap-2"
+                    onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'hosting.addSite', workspaceId: w.id, repoPath: w.path }); }}
+                >
+                    <WorkspacePick workspaces={workspaces} name="workspace" />
+                    <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                        Add a site
+                    </button>
+                </form>
             </Header>
+            {adding?.kind === 'site' ? (
+                <AddSiteForm
+                    defaults={adding.defaults}
+                    existingHosts={(hosting?.sites ?? []).map((s) => s.host)}
+                    problems={adding.problems}
+                    onSubmit={(f) =>
+                        onAction({
+                            kind: 'hosting.createSite',
+                            workspaceId: adding.workspaceId,
+                            repoPath: adding.repoPath,
+                            form: {
+                                name: f.name,
+                                mode: f.mode,
+                                devServer: f.command ? { stack: adding.defaults.devServer?.stack ?? 'node', command: f.command } : null,
+                                hostPort: f.hostPort,
+                                root: f.root,
+                                spa: f.spa,
+                            },
+                        })
+                    }
+                    onCancel={() => onCloseForm?.()}
+                />
+            ) : null}
             {hosting === null ? (
                 <Skeletons />
             ) : (
