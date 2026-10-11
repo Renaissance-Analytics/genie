@@ -49,7 +49,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     return {
         knowledge: { hits, query: state.knowledgeQuery },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
-        hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null },
+        hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered.
         services: { instances: await Promise.all(services.engines.list().map(async (instance) => ({ instance, status: (await services.engines.status(instance.id)).state }))), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
@@ -149,6 +149,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.flows.create({ workspaceId: action.form.workspaceId, name: action.form.name, document: action.form.document, by: USER, armed: action.form.armed });
             break;
         }
+        case 'hosting.trustCertificate': {
+            const r = await services.trustCertificate();
+            if (!r.ok) throw new Error(r.reason);
+            break;
+        }
+        case 'hosting.syncHosts':
+            await services.syncHosts();
+            break;
         case 'hosting.stopSite':
             if (!services.sites.stop(action.siteId)) throw new Error(`no site ${action.siteId}`);
             break;

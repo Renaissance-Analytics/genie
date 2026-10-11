@@ -3,7 +3,7 @@ import { Badge, Icon, Input, Skeleton, Tabs } from '@particle-academy/react-fanc
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
-import type { FeatureAction, FeatureData } from '../features.js';
+import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { AddFlowForm, AddServiceForm, AddSiteForm } from './AddForms.js';
@@ -197,6 +197,8 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
             {hosting === null ? (
                 <Skeletons />
             ) : (
+                <>
+                <FrontDoorLines frontDoor={hosting.frontDoor} onAction={onAction} />
                 <Tabs defaultTab={tab ?? 'sites'} variant="underline" className="flex min-h-0 flex-1 flex-col">
                     <Tabs.List className="px-5">
                         <Tabs.Tab value="sites">Sites</Tabs.Tab>
@@ -241,8 +243,41 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                         </Tabs.Panel>
                     </Tabs.Panels>
                 </Tabs>
+                </>
             )}
         </div>
+    );
+}
+
+/**
+ * THE FRONT DOOR'S LINES — each a fact with its fix beside it, shown ONLY when true (§4.5's signal
+ * rule): the root not yet trusted offers the one-click trust; a declined hosts-file prompt shows the
+ * error, the block to paste and where, and a retry; no bundled Caddy says so. All quiet → nothing.
+ */
+function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; onAction: SurfaceProps['onAction'] }) {
+    if (!frontDoor.running) return <p data-frontdoor-line="off" className="px-5 py-2 text-sm text-[var(--fg-3)]">{frontDoor.reason}</p>;
+    const hosts = frontDoor.hosts;
+    const button = 'ml-auto shrink-0 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    return (
+        <>
+            {!frontDoor.trusted ? (
+                <div data-frontdoor-line="trust" className="flex items-center gap-3 border-b border-[var(--border-1)] px-5 py-2 text-sm">
+                    <span>https://&lt;name&gt;.gen in your browser needs Genie’s local certificate trusted; your OS will ask for permission once.</span>
+                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</button>
+                </div>
+            ) : null}
+            {hosts && 'error' in hosts ? (
+                <div data-frontdoor-line="hosts" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-5 py-2 text-sm">
+                    <div className="flex items-center gap-3">
+                        <span>
+                            Genie could not update the hosts file ({hosts.error}). Paste this block into <span className="font-mono">{frontDoor.hostsPath}</span> yourself, or try again.
+                        </span>
+                        <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.syncHosts' })}>Try again</button>
+                    </div>
+                    <pre data-manual-block className="overflow-auto rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{hosts.manualBlock}</pre>
+                </div>
+            ) : null}
+        </>
     );
 }
 

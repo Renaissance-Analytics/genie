@@ -14,7 +14,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
  * asks for CONSENT before a pull, naming the image, and the pull is a separate, labelled submit.
  */
 
-const base: FeatureData = { ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null }, services: { instances: [], adding: null } };
+const base: FeatureData = { ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } }, services: { instances: [], adding: null } };
 const pg = (version: string, active: boolean, port: number): ServiceInstance => ({
     id: `svc_${version}`, engine: 'postgres', version, scope: { kind: 'dedicated', workspaceId: 'tynn' }, publishedPort: port, credentials: { user: 'genie', password: 'x', database: 'tynn' }, active,
 });

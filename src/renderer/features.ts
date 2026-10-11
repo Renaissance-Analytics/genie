@@ -7,6 +7,9 @@ import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
+import type { FrontDoorStatus } from '../main/compose.js';
+
+export type { FrontDoorStatus };
 import type { ProcessStatus } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
 
@@ -50,7 +53,7 @@ export interface ServiceView {
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
-    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null } | null;
+    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
     readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[] } | null;
@@ -84,6 +87,10 @@ export type FeatureAction =
     | { kind: 'hosting.cancelForm' }
     /** The Add-a-site form, submitted. Validated in main; a refusal names every problem. */
     | { kind: 'hosting.createSite'; workspaceId: string; repoPath: string; form: SiteForm }
+    /** One OS prompt: install Genie's local root so browsers accept https://<name>.gen. */
+    | { kind: 'hosting.trustCertificate' }
+    /** Try the hosts block again after a declined prompt. */
+    | { kind: 'hosting.syncHosts' }
     | { kind: 'hosting.stopSite'; siteId: string }
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }

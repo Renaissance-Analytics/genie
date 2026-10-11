@@ -2,7 +2,9 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostsFilePath } from '../src/core/front-door-caddy.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 
 /**
@@ -118,7 +120,10 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
         await rm(dir, { recursive: true, force: true });
         dir = await mkdtemp(join(tmpdir(), 'genie2-compose-caddy-'));
         pty = fakePty();
-        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0 });
+        let hostsContent = '127.0.0.1 localhost\n';
+        const hostsIo: HostsIo = { read: async () => hostsContent, write: async (n) => { hostsContent = n; }, writeElevated: async (n) => { hostsContent = n; } };
+        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, runElevated: async () => {} });
+        await new Promise((r) => setTimeout(r, 15));
         const caddyProcs = () => pty.opened.filter((o) => o.command?.includes('/opt/genie/runtime/caddy run') && o.command.includes('--watch'));
         expect(caddyProcs()).toHaveLength(1);
         const caddyfile = join(dir, 'runtime', 'caddy', 'Caddyfile');
@@ -130,7 +135,9 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
         expect((await readFile(caddyfile)).toString()).not.toContain('docs.gen');
         // COUNTED: still one caddy process — --watch reloads it; we never spawn a second.
         expect(caddyProcs()).toHaveLength(1);
-        expect(services.externalFrontDoor).toEqual({ running: true, caddyfile });
+        await new Promise((r) => setTimeout(r, 15));
+        expect(services.externalFrontDoor).toEqual({ running: true, caddyfile, hostsPath: hostsFilePath(process.platform), hosts: { changed: true, elevated: false }, trusted: false });
+        expect(hostsContent).toContain('# >>> genie .gen sites');
 
         await services.shutdown();
         services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });

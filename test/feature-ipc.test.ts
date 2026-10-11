@@ -41,7 +41,7 @@ describe('the snapshot', () => {
     it('reports every section MEASURED (never null) once the services exist, with the knowledge hits null until a search is asked for', async () => {
         const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
         expect(snap.flows).toEqual({ flows: [], adding: null });
-        expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null });
+        expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } });
         expect(snap.inbox).toEqual({ unread: [], peers: [] });
         expect(snap.settings.values).toMatchObject({ theme: 'dark', restore_agents_on_launch: false });
         expect(snap.knowledge).toEqual({ hits: null, query: '' });

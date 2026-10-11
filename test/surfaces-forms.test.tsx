@@ -11,7 +11,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
  * shown where it was caused rather than logged somewhere nobody reads.
  */
 
-const data: FeatureData = { ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null }, flows: { flows: [], adding: null } };
+const data: FeatureData = { ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } }, flows: { flows: [], adding: null } };
 
 describe('Hosting', () => {
     it('with no form open there is no form; with the site form open it renders with its defaults and problems', () => {
