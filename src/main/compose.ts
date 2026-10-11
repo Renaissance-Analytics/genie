@@ -5,6 +5,7 @@ import { deckItemsFrom } from '../core/deck-sources.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { HUMAN, type Resolution } from '../core/inbox.js';
+import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
@@ -50,6 +51,8 @@ export interface ComposedServices {
     readonly supervisor: ProcessSupervisor;
     readonly sites: SiteManager;
     readonly frontDoor: GenRouterServer;
+    /** The gate behind approval-gated tools; its pending requests are Deck items. */
+    readonly approvals: ApprovalQueue;
     readonly frontDoorPort: number;
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
@@ -105,6 +108,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoor = new GenRouterServer(routes);
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
+    const approvals = new ApprovalQueue({ now });
     const agents = new Map<string, { name: string; workspaceId: string }>();
     const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
@@ -119,16 +123,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         supervisor,
         sites,
         frontDoor,
+        approvals,
         frontDoorPort,
         routes,
-        deckItems: () =>
-            deckItemsFrom({
+        deckItems: () => [
+            ...approvals.deckItems(),
+            ...deckItemsFrom({
                 questions: attention.pending(),
                 userList: attention.allUserItems(),
                 unreadDms: inbox.unread(HUMAN),
                 finished: attention.finished(),
                 agents: Object.fromEntries(agents),
             }),
+        ],
         registerAgentName: (agentId, who) => { agents.set(agentId, who); },
         registerAgentAddress: (address, agentId) => { addresses.set(address, agentId); },
         agentAddresses: () => [...addresses].map(([address, agentId]) => ({ address, agentId, name: agents.get(agentId)?.name ?? agentId })),
@@ -144,6 +151,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         },
         shutdown: () => {
             down ??= (async () => {
+                approvals.cancelAll('Genie is shutting down');
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();
