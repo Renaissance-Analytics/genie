@@ -174,7 +174,15 @@ export class InboxStore {
 
     /** Mail for `participant` after their committed cursor. The UI's reminder count. */
     unreadCount(participant: Participant): number {
-        return this.#after(participant, this.#cursorOf(participant)).length;
+        return this.unread(participant).length;
+    }
+
+    /**
+     * The unread mail itself, WITHOUT committing anything — what the Deck's unread-dm source and the
+     * chat flyout read. Only the participant's own `receive` marks it read.
+     */
+    unread(participant: Participant): InboxMessage[] {
+        return this.#after(participant, this.#cursorOf(participant));
     }
 
     /** What `from` sent, newest first, with whether each was read. */

@@ -188,6 +188,11 @@ export class AttentionStore {
         return { ok: true, handoff, checklist };
     }
 
+    /** Every user-list item in every workspace, with its workspace — the Deck's user-list source. */
+    allUserItems(): Array<{ workspaceId: string; item: ListItem }> {
+        return this.#data.lists.filter((r) => r.list === 'user').map((r) => ({ workspaceId: r.workspaceId, item: r.item }));
+    }
+
     /** Every finish, oldest first — the Deck's "Since you looked" band reads the unseen ones. */
     finished(): readonly Finished[] {
         return this.#data.finished;
