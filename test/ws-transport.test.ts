@@ -61,8 +61,8 @@ describe('webSocketTransport', () => {
         expect(closes).toBe(1);
 
         const made: string[] = [];
-        const t2 = webSocketTransport('wss://alphar.tail.ts.net:7421/genie', (url) => { made.push(url); return new FakeSocket(); });
-        expect(made).toEqual(['wss://alphar.tail.ts.net:7421/genie']);
+        const t2 = webSocketTransport('wss://alphar.tailnet.invalid:7421/genie', (url) => { made.push(url); return new FakeSocket(); });
+        expect(made).toEqual(['wss://alphar.tailnet.invalid:7421/genie']);
         expect(typeof t2.send).toBe('function');
     });
 });

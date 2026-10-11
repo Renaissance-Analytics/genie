@@ -10,7 +10,7 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
  * absent — a window that cannot connect (a test, the live check) draws no dead control.
  */
 
-const remote = { host: 'alphar', url: null, locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null };
+const remote = { host: 'alphar', url: null, unavailable: 'not started', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null };
 const render = (connect: Parameters<typeof SettingsSurface>[0]['remoteConnect']) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} group="workstation" remoteConnect={connect} />);
 

@@ -11,7 +11,7 @@ import { remoteUrl, rememberedTokens } from '../src/renderer/remote-session.js';
 
 describe('remoteUrl', () => {
     it('turns what a person types into the host’s socket URL, keeps an explicit ws(s) URL, and refuses nothing-at-all', () => {
-        expect(remoteUrl('alphar.tail1234.ts.net:7421')).toEqual({ ok: true, url: 'wss://alphar.tail1234.ts.net:7421/genie' });
+        expect(remoteUrl('alphar.tailnet.invalid:7421')).toEqual({ ok: true, url: 'wss://alphar.tailnet.invalid:7421/genie' });
         expect(remoteUrl('  studio:7421 ')).toEqual({ ok: true, url: 'wss://studio:7421/genie' });
         expect(remoteUrl('ws://127.0.0.1:7421/genie')).toEqual({ ok: true, url: 'ws://127.0.0.1:7421/genie' });
         expect(remoteUrl('wss://studio:7421/genie')).toEqual({ ok: true, url: 'wss://studio:7421/genie' });

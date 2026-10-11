@@ -28,9 +28,9 @@ describe('fancyWsTransport', () => {
         const attached: Array<{ server: unknown; options: unknown }> = [];
     const emitter = new EventEmitter();
         const attach: AttachWebSocketServer = (server, options) => { attached.push({ server, options }); return emitter as never; };
-        const transport = fancyWsTransport({ attach, server: { kind: 'http' } as never, path: '/genie', address: () => 'ws://alphar.tail1234.ts.net:7421/genie' });
+        const transport = fancyWsTransport({ attach, server: { kind: 'http' } as never, path: '/genie', address: () => 'ws://alphar.tailnet.invalid:7421/genie' });
         expect(attached).toEqual([{ server: { kind: 'http' }, options: expect.objectContaining({ path: '/genie', onPathMismatch: 'ignore' }) }]);
-        expect(transport.address?.()).toBe('ws://alphar.tail1234.ts.net:7421/genie');
+        expect(transport.address?.()).toBe('ws://alphar.tailnet.invalid:7421/genie');
 
         const connections: Array<{ remoteAddress: string; got: string[]; closes: number }> = [];
         transport.onConnection((c) => {

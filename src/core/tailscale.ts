@@ -8,6 +8,8 @@
 export type TailscaleStatus = { ok: true; ip: string; dnsName: string } | { ok: false; reason: string };
 
 export const REMOTE_PATH = '/genie';
+/** The one port the host's socket uses; a device types `<magicdns>:7421`. */
+export const REMOTE_PORT = 7421;
 
 export function parseTailscaleStatus(json: string): TailscaleStatus {
     let raw: unknown;

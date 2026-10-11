@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Badge, Icon, Input, Skeleton, Tabs } from '@particle-academy/react-fancy';
+import { Badge, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, settingGroups, type SettingDef } from '../../core/settings.js';
@@ -505,7 +505,7 @@ function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteCon
         >
             <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Host</span>
-                <Input name="host" list="remote-hosts" placeholder="studio.tail1234.ts.net:7421" defaultValue={remembered[0]?.replace(/^wss?:\/\//, '').replace(/\/genie$/, '') ?? ''} />
+                <Input name="host" list="remote-hosts" placeholder="studio.your-tailnet.ts.net:7421" defaultValue={remembered[0]?.replace(/^wss?:\/\//, '').replace(/\/genie$/, '') ?? ''} />
                 {remembered.length > 0 ? (
                     <datalist id="remote-hosts">
                         {remembered.map((h) => <option key={h} value={h.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')} />)}
@@ -632,7 +632,7 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
             ) : (
                 <>
                     {remote.url === null ? (
-                        <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host} yet, so devices cannot connect yet. The in-app surfaces are unaffected.</p>
+                        <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host}, so devices cannot connect yet: {remote.unavailable ?? 'no reason reported'}. The in-app surfaces are unaffected.</p>
                     ) : (
                         <div className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="font-mono text-xs text-[var(--fg-4)]">{remote.url}</span>
@@ -642,6 +642,14 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
                                     <span data-pin={remote.pin.code} className="font-mono text-lg tracking-[0.3em]">{remote.pin.code}</span>
                                     <span className="text-xs text-[var(--fg-3)]">type this on the device within two minutes</span>
                                 </span>
+                            ) : null}
+                            {remote.pin ? (
+                                // A phone scans the host URL and the PIN together; both stay beside it as text (a code is an image of a value).
+                                <div data-pairing-qr data-qr-value={`${remote.url}#pin=${remote.pin.code}`} className="basis-full">
+                                    <div className="w-fit rounded-xl bg-white p-2">
+                                        <QrCode value={`${remote.url}#pin=${remote.pin.code}`} label="Pair this device" size={128} errorCorrection="M" quietZone={4} foreground="#0b0b0c" background="#ffffff" />
+                                    </div>
+                                </div>
                             ) : null}
                         </div>
                     )}
