@@ -125,6 +125,33 @@ export interface PlanPanel {
 }
 
 /**
+ * THE PLAN'S STEPS (the board: ✓ / ◐ / ○, the current one bold) — from the agent's LATEST plan update, each with the
+ * status the provider gave it (`completed`, `in_progress`, `pending`, or whatever else it said — kept, not mapped to
+ * a guess). An entry Genie cannot read is dropped; a plan with no readable entry is `null`, and the panel keeps its
+ * `step/of` line alone. The same entries the host counts into `step/of`, so the two never disagree.
+ */
+export interface PlanStep {
+    content: string;
+    status: string;
+    current: boolean;
+}
+
+export function planSteps(rows: readonly TimedEvent[]): readonly PlanStep[] | null {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const event = rows[i]?.event;
+        if (event?.kind !== 'plan') continue;
+        const steps = event.entries.flatMap((e): PlanStep[] => {
+            if (typeof e !== 'object' || e === null) return [];
+            const r = e as Record<string, unknown>;
+            if (typeof r['content'] !== 'string' || typeof r['status'] !== 'string') return [];
+            return [{ content: r['content'], status: r['status'], current: r['status'] === 'in_progress' }];
+        });
+        return steps.length === 0 ? null : steps;
+    }
+    return null;
+}
+
+/**
  * The Plan panel, or `null` for "do not draw it".
  *
  * *"Plan and context are not known yet, so they are absent, not empty."* An empty plan panel
