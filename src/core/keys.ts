@@ -19,9 +19,10 @@ import { LANES, type Lane } from './stream-view.js';
  *   ⌘⇧T     Take Over — the ONE chord; Meta on macOS, Ctrl elsewhere, Shift on both
  *
  *   L        the Lanes drawer (the board's `Lanes ▾`) — open or closed
+ *   /        find in stream — focuses the box beside the chips
  *
- * Not bound here: `/` (find in stream — not built), `⌘↵` (the composer's, in the chat flyout).
- * Each is a deliberate addition with its own test when it comes, never a fall-through.
+ * Not bound here: `⌘↵` (the composer's, in the chat flyout). Each addition is deliberate, with
+ * its own test, never a fall-through.
  */
 
 /** The shape of an event target this module cares about. `null` when the event has none. */
@@ -117,7 +118,8 @@ export type AgentViewAction =
     | 'allow'
     | 'deny'
     | 'take-over'
-    | 'toggle-lanes';
+    | 'toggle-lanes'
+    | 'find';
 
 /**
  * What a key means in the Agent view, or `null`.
@@ -166,6 +168,9 @@ export function agentViewAction(press: KeyPress): AgentViewAction | null {
         case 'L':
             // The board's `Lanes ▾` (§4.2 `L`): the drawer with the tracks and the drag.
             return 'toggle-lanes';
+        case '/':
+            // Find in stream (§4.2 `/`): focuses the box beside the chips.
+            return 'find';
         default:
             return null;
     }

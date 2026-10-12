@@ -50,6 +50,8 @@ export interface StreamProps {
     persona?: string | null | undefined;
     onChat?: (() => void) | undefined;
     onEditPersona?: (() => void) | undefined;
+    /** The find query (`/`), already applied to `rows` by the caller; here so an empty result can say which nothing it is. */
+    findQuery?: string | undefined;
 }
 
 /**
@@ -63,7 +65,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '' }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -105,6 +107,15 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
      * The sentence distinguishes the two cases a blank panel would merge: an agent that has
      * not been asked anything yet, and a lane filter that excludes everything.
      */
+    // A find that matches nothing leaves only the structure rows; the reader asked a question and gets its answer.
+    if (findQuery.trim() !== '' && !prepared.some((r) => r.kind !== 'turn' && r.kind !== 'compacted')) {
+        return (
+            <div data-stream="empty" data-find-empty="" className="flex h-full items-center justify-center px-8 text-center text-[13px] text-[var(--fg-3)]">
+                Nothing says “{findQuery.trim()}”. Clear the find to see the whole turn.
+            </div>
+        );
+    }
+
     if (prepared.length === 0) {
         const filtered = rows.length > 0;
         if (filtered) {

@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import type { RefObject } from 'react';
 import type { Lane } from '../../core/lanes.js';
 import type { Chip, SessionTimeline, TickKind, TimelineHead } from '../../core/session-timeline.js';
 import { LANES } from '../../core/stream-view.js';
@@ -78,9 +79,14 @@ export interface ChipsRowProps {
     chips: readonly Chip[];
     selected: readonly Lane[] | null;
     onChange: (lanes: readonly Lane[] | null) => void;
+    /** Find in stream (`/`): the query, its box (focused by the key), and the match count while a query is set. */
+    find?: string | undefined;
+    onFind?: ((query: string) => void) | undefined;
+    findRef?: RefObject<HTMLInputElement | null> | undefined;
+    matches?: number | null | undefined;
 }
 
-export function ChipsRow({ chips, selected, onChange }: ChipsRowProps) {
+export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef, matches = null }: ChipsRowProps) {
     const toggle = (chip: Chip): void => {
         if (chip.id === 'all') { onChange(null); return; }
         const lane = chip.id;
@@ -108,6 +114,20 @@ export function ChipsRow({ chips, selected, onChange }: ChipsRowProps) {
                     <span {...(chip.id === 'all' ? {} : { 'data-lane-count': chip.n })} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{chip.n}</span>
                 </button>
             ))}
+            {/* FIND IN STREAM (the board's `Find in stream  /`): a box at the right; Escape clears it and gives the keys back. */}
+            <label className="ml-auto flex h-6 items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 text-[12px] text-[var(--fg-3)] focus-within:border-[var(--border-2)]">
+                <Icon name="search" size="xs" />
+                <input
+                    ref={findRef}
+                    data-find=""
+                    value={find}
+                    placeholder="Find in stream"
+                    onChange={(e) => onFind?.(e.currentTarget.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onFind?.(''); e.currentTarget.blur(); } }}
+                    className="w-36 bg-transparent text-[12px] text-[var(--fg-1)] outline-none placeholder:text-[var(--fg-4)]"
+                />
+                {matches !== null ? <span data-find-count={matches} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{matches}</span> : <span className="font-mono text-[10px] text-[var(--fg-4)]">/</span>}
+            </label>
         </div>
     );
 }

@@ -23,7 +23,7 @@ import { Lanes } from './Lanes.js';
 import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
 import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
-import { visibleRows } from '../../core/stream-view.js';
+import { findRows, visibleRows } from '../../core/stream-view.js';
 import { agentViewAction, approvalChoice, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 
@@ -123,6 +123,8 @@ export interface AgentViewProps {
     onLanes?: ((lanes: readonly Lane[] | null) => void) | undefined;
     /** The Lanes drawer (tracks + drag) open — controlled, for tests that render server-side; otherwise the view keeps its own (`L`). */
     lanesOpen?: boolean | undefined;
+    /** Find in stream (`/`) — controlled, for tests that render server-side; otherwise the view keeps its own. */
+    find?: string | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -179,7 +181,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp,
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -189,6 +191,10 @@ export function AgentView({
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
     // The Lanes drawer, closed on arrival (the board draws the strip and the chips; the tracks are behind `Lanes ▾` / `L`).
     const [ownLanesOpen, setOwnLanesOpen] = useState(false);
+    // Find in stream: the query is view state the box owns; `/` focuses the box, Escape in it clears.
+    const [ownFind, setOwnFind] = useState('');
+    const findQuery = findProp ?? ownFind;
+    const findRef = useRef<HTMLInputElement | null>(null);
     useEffect(() => {
         if (!files || !workspace) return;
         let live = true;
@@ -227,6 +233,8 @@ export function AgentView({
     // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
     const timeline = active === 'stream' ? sessionTimeline(rows, session) : null;
     const chips = chipRow(rows, lanes);
+    // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
+    const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(rows, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
     const drawerOpen = lanesOpenProp ?? ownLanesOpen;
 
     /**
@@ -254,7 +262,7 @@ export function AgentView({
 
             // The rows a cursor can land on are the ones on screen: inside the range AND the
             // lane selection. Stepping onto a filtered-out row would select something invisible.
-            const inView = visibleRows(rowsInRange(rows, range), lanes).map((r) => r.id);
+            const inView = visibleRows(findRows(rowsInRange(rows, range), findQuery), lanes).map((r) => r.id);
 
             switch (action) {
                 case 'next-edit': {
@@ -297,6 +305,11 @@ export function AgentView({
                     setOwnLanesOpen((open) => !open);
                     return;
                 }
+                case 'find': {
+                    e.preventDefault();
+                    findRef.current?.focus();
+                    return;
+                }
                 case 'toggle-thoughts': {
                     e.preventDefault();
                     onLanes?.(toggleThoughts(lanes));
@@ -328,7 +341,7 @@ export function AgentView({
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval, onTakeOver, agent.id]);
+    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval, onTakeOver, agent.id, findQuery]);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
@@ -553,12 +566,13 @@ export function AgentView({
                                     onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
                                 />
                             ) : null}
-                            <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} />
+                            <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />
                             {drawerOpen ? <Lanes rows={rows} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
                                 <Stream
-                                    rows={rowsInRange(rows, range)}
+                                    rows={findRows(rowsInRange(rows, range), findQuery)}
+                                    findQuery={findQuery}
                                     lanes={lanes}
                                     at={at}
                                     selectedId={selectedId}
