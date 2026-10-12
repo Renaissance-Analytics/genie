@@ -62,6 +62,10 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                         {k}
                     </span>
                 ))}
+                {/* The board's hint for the key (§4.2 `E`): only when there is an edit to jump to — a key that would do nothing gets no hint. */}
+                {timeline.ticks.some((k) => k.kind === 'edit') ? (
+                    <span data-hint="next-edit" className="font-mono text-[10px] text-[var(--fg-4)]">E next edit</span>
+                ) : null}
             </div>
             {layoutDoor ? (
                 <button
