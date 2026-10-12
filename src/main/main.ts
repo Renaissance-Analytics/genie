@@ -1,4 +1,4 @@
-import { BrowserWindow, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
@@ -22,6 +22,12 @@ import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
 import { readV1Settings } from './v1-settings.js';
+import { readV1Catalog } from './v1-import.js';
+import { planV1Import } from '../core/v1-import.js';
+import { v1Leftovers } from '../core/v1-reap.js';
+import { mainWindowOptions } from '../core/window.js';
+import { createTray } from './tray.js';
+import { existsSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate } from './toolchain-prober.js';
@@ -91,6 +97,8 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 let window: BrowserWindow | null = null;
+/** The tray outlives every window; held so it is not garbage-collected into nothing. */
+let tray: Tray | null = null;
 let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
 let filesHost: FilesHost | null = null;
@@ -154,14 +162,60 @@ function broadcast(channel: string, ...args: unknown[]): void {
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, ...args);
 }
 
+/**
+ * Where GENIE 1 keeps its database: Chromium's userData (`%APPDATA%\genie`), not `~/.genie` —
+ * Genie 2's own data root, which v1 never wrote to. The first release read `~/.genie/genie.db`,
+ * found nothing, and reported "nothing to carry over" to an owner with 27 workspaces.
+ */
+function v1DatabaseFile(): string {
+    return join(app.getPath('userData'), 'genie.db');
+}
+
+/**
+ * IMPORT v1's WORKSPACES AND AGENTS, ONCE. The plan is pure (core/v1-import.ts); the marker file
+ * in Genie's data root is what makes "once" true across restarts; what was skipped is written
+ * there too and logged, because a silent partial import is a missing workspace nobody can explain.
+ */
+async function importFromV1(theRegistry: Registry): Promise<void> {
+    const marker = join(genieHome(), 'v1-import.json');
+    if (existsSync(marker)) return;
+    const catalog = readV1Catalog(v1DatabaseFile());
+    const plan = planV1Import(
+        catalog,
+        { workspaceIds: theRegistry.listWorkspaces().map((w) => w.id), agents: theRegistry.listAgents().map((a) => ({ workspaceId: a.workspaceId, name: a.name })) },
+        (p) => existsSync(p),
+    );
+    for (const w of plan.workspaces) await theRegistry.addWorkspace({ id: w.id, path: w.path });
+    for (const a of plan.agents) await theRegistry.register({ workspaceId: a.workspaceId, provider: a.provider, name: a.name, instructions: a.instructions });
+    const result = { at: new Date().toISOString(), sawV1: catalog !== null, workspaces: plan.workspaces.length, agents: plan.agents.length, skipped: plan.skipped };
+    await writeFileText(marker, JSON.stringify(result, null, 2), 'utf8');
+    console.log(`[genie] v1 import: ${catalog === null ? 'no v1 database' : `${plan.workspaces.length} workspaces, ${plan.agents.length} agents`}${plan.skipped.length ? `; skipped ${plan.skipped.length}: ${plan.skipped.join(' | ')}` : ''}`);
+}
+
+/**
+ * REAP v1's RUNTIME. The owner's first real upgrade left 73 of v1's processes running — shells
+ * orphaned by v1's dead pty host, caddy site servers, php, node — because §7.2's teardown stops
+ * what runs from the install directory and v1's runtime lives under userData. The rule is
+ * core/v1-reap.ts; this applies it, pid by pid, and writes what it did to `~/.genie/v1-reap.json`.
+ * Runs at every boot: it matches only v1's binaries and shells nobody is attached to.
+ */
+async function reapV1Runtime(): Promise<void> {
+    const userData = app.getPath('userData');
+    const roots = ['runtime', 'toolchain', 'pty-host'].map((d) => join(userData, d));
+    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid });
+    if (victims.length === 0) return;
+    const killed = victims.filter((v) => killProcess(v.pid));
+    const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
+    await writeFileText(join(genieHome(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
+    console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
+}
+
 function createWindow(): BrowserWindow {
     const win = new BrowserWindow({
-        width: 1440,
-        height: 900,
-        // The board's chrome is Genie's own 36px bar, so the OS frame would be a second title
-        // bar above it. `titleBarStyle: 'hidden'` keeps the real window controls while letting
-        // our bar occupy the top.
-        titleBarStyle: 'hidden',
+        // The frame — hidden OS title bar, the native window buttons drawn over our 36 px bar on
+        // Windows/Linux, a minimum size — is core/window.ts, where a test holds it. The owner's
+        // first run had none of it: a window that could not be moved, resized or closed.
+        ...mainWindowOptions(process.platform),
         backgroundColor: '#0a0a0c',
         show: false,
         webPreferences: {
@@ -297,6 +351,8 @@ async function boot(): Promise<void> {
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    await importFromV1(theRegistry);
+    await reapV1Runtime();
     registry.setProbe((id) => host?.probe(id) ?? null);
 
     /*
@@ -748,7 +804,7 @@ async function boot(): Promise<void> {
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
-        v1Settings: () => readV1Settings(join(genieHome(), 'genie.db')),
+        v1Settings: () => readV1Settings(v1DatabaseFile()),
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,
@@ -990,6 +1046,10 @@ async function boot(): Promise<void> {
     });
 
     window = createWindow();
+    tray = createTray({
+        onOpen: () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } },
+        onQuit: () => app.quit(),
+    });
     browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
 }
 

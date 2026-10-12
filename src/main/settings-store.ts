@@ -25,6 +25,14 @@ export interface CarriedOver {
     readonly at: string;
     readonly applied: number;
     readonly dropped: Array<{ key: string; reason: string }>;
+    /**
+     * Whether a v1 database was actually read. A record made WITHOUT one is provisional: the first
+     * release looked for v1's database in a directory v1 never wrote, recorded "done, nothing to
+     * carry", and would have blocked the real carry-over forever. Absent in records written before
+     * this field existed; such a record with nothing applied and nothing dropped is treated as
+     * provisional too, because that is exactly the record that wrong path produced.
+     */
+    readonly sawV1?: boolean;
 }
 
 export type CarryOverResult = CarryOver & { alreadyDone?: true; noV1?: true };
@@ -150,11 +158,16 @@ export class SettingsStore {
         return this.#carriedOver;
     }
 
-    /** Once. A `null` v1 (no database) is recorded as done with nothing to carry. */
+    /**
+     * Once v1 has been SEEN. A carry-over that saw v1 is done for good; one recorded with no v1
+     * database (`null`) is provisional and runs again the first time a v1 database is there.
+     */
     async carryOverFromV1(v1: Readonly<Record<string, string>> | null): Promise<CarryOverResult> {
-        if (this.#carriedOver) return { applied: {}, dropped: [], alreadyDone: true };
+        const prior = this.#carriedOver;
+        const provisional = prior !== null && prior.sawV1 !== true && prior.applied === 0 && prior.dropped.length === 0;
+        if (prior && !(provisional && v1 !== null)) return { applied: {}, dropped: [], alreadyDone: true };
         if (v1 === null) {
-            this.#carriedOver = { at: this.#now(), applied: 0, dropped: [] };
+            this.#carriedOver = { at: this.#now(), applied: 0, dropped: [], sawV1: false };
             await this.#flush();
             return { applied: {}, dropped: [], noV1: true };
         }
@@ -166,7 +179,7 @@ export class SettingsStore {
             this.#values[key] = value;
             applied[key] = value;
         }
-        this.#carriedOver = { at: this.#now(), applied: Object.keys(result.applied).length, dropped: result.dropped };
+        this.#carriedOver = { at: this.#now(), applied: Object.keys(result.applied).length, dropped: result.dropped, sawV1: true };
         await this.#flush();
         for (const [key, value] of Object.entries(applied)) for (const l of this.#listeners) l(key, value);
         return { applied: result.applied, dropped: result.dropped };
