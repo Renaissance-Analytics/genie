@@ -195,6 +195,18 @@ export function stepRow(visibleIds: readonly string[], currentId: string | null,
 }
 
 /**
+ * `↵` — open or close the Inspector on the CURSOR row (§4.2). The cursor is a focus, not a selection: `j`/`k` move it
+ * without opening anything, and Enter is the one key that opens. On the row already open it closes; on a row that
+ * cannot be inspected (no arguments, not an edit) it does nothing — an empty cell is not a control. With no cursor
+ * yet, it closes whatever is open, or nothing.
+ */
+export function inspectorOnEnter(cursorId: string | null, selectedId: string | null, inspectable: (id: string) => boolean): { open: string } | 'close' | null {
+    if (cursorId === null) return selectedId === null ? null : 'close';
+    if (cursorId === selectedId) return 'close';
+    return inspectable(cursorId) ? { open: cursorId } : null;
+}
+
+/**
  * `t` — toggle the Thought lane, and ONLY that lane.
  *
  * From not filtering (`null`), the common wish is to hide thoughts, so that is what the first

@@ -272,7 +272,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </div>
                 ) : null}
                 {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}>Files</button>
+                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" />Files<kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
                 ) : null}
                 {ops ? (
                     <div className={`${files ? '' : 'ml-auto '}flex items-center gap-1`}>

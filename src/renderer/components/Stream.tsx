@@ -60,6 +60,8 @@ export interface StreamProps {
     live?: boolean | undefined;
     /** The parked divider's words (`turn parked · waiting on you 0:42`) while an approval waits; `null` otherwise. */
     parked?: string | null | undefined;
+    /** The stream cursor (`j`/`k`): the row it is on, or null. A focus, not the selection. */
+    cursorId?: string | null | undefined;
 }
 
 /**
@@ -73,7 +75,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -186,7 +188,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} onSelect={onSelect} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} onSelect={onSelect} />
                 )}
             />
 

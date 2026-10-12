@@ -32,16 +32,19 @@ export interface StreamRowProps {
     selected: boolean;
     /** The thought still arriving while the turn runs (the board's `Thinking…` row). */
     live?: boolean | undefined;
+    /** The stream cursor is on this row (`j`/`k`) — a focus, drawn as a ring; not the Inspector's selection. */
+    cursor?: boolean | undefined;
     onSelect: (id: string) => void;
 }
 
-export function StreamRow({ row, selected, live = false, onSelect }: StreamRowProps) {
+export function StreamRow({ row, selected, live = false, cursor = false, onSelect }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
         <div
             data-stream-row={row.id}
             data-selected={selected ? 'true' : 'false'}
+            {...(cursor ? { 'data-cursor': 'true' } : {})}
             {...(row.inspectable ? { 'data-inspectable': 'true' } : {})}
             // Only an inspectable row is a control. An empty cell is not a control, and a row
             // that highlights on hover and then does nothing on click teaches people that
@@ -49,6 +52,7 @@ export function StreamRow({ row, selected, live = false, onSelect }: StreamRowPr
             {...(row.inspectable ? { role: 'button', tabIndex: 0, onClick: () => onSelect(row.id) } : {})}
             className={[
                 'flex items-start gap-3 px-5 py-1 text-[13px] leading-5',
+                cursor ? 'ring-1 ring-inset ring-[var(--border-2)]' : '',
                 // The edit row is tinted so a file change is findable by scanning rather than
                 // by reading, and a SELECTED edit gets the emerald left border from the board.
                 row.tinted ? 'bg-[var(--bg-1)]' : '',
