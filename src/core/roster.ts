@@ -43,6 +43,8 @@ export interface LiveSession {
      * carrying the options separately would be two copies of one fact.
      */
     pendingApproval: Approval | null;
+    /** When the parked approval was parked, by Genie's clock. Absent = not reported (an older snapshot); `null` = nothing parked. */
+    parkedAt?: number | null | undefined;
     /** A reported failure and the routes out of it. `null` is not a fault — see below. */
     failure: {
         reason: string;
@@ -52,6 +54,8 @@ export interface LiveSession {
          * failure recorded before any exit, or an older snapshot); `null` = the process has not exited.
          */
         exit?: { code: number | null; signal: string | null } | null | undefined;
+        /** When the failure was recorded, by Genie's clock. Absent = not reported (an older snapshot). */
+        at?: number | null | undefined;
     } | null;
     contextUsed: number | null;
     contextSize: number | null;

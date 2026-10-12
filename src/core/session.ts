@@ -176,6 +176,8 @@ export interface AgentSessionOptions {
      * reap happened without killing anything on the machine running the test.
      */
     processTree?: ProcessTree;
+    /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
+    clock?: () => number;
 }
 
 export class AgentSession {
@@ -192,6 +194,10 @@ export class AgentSession {
     #failure: string | null = null;
     /** How the provider process ended, as node reported it. `null` until it exits. */
     #exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    /** When the parked approval was parked, by Genie's clock — the pill's `waiting on you 0:42`. `null` when nothing is parked. */
+    #parkedAt: number | null = null;
+    /** When the failure was recorded, by Genie's clock — the pill's `Broken · stream closed 14:31`. Moves only with the reason. */
+    #failedAt: number | null = null;
     /**
      * The provider's recent output, bounded.
      *
@@ -308,6 +314,20 @@ export class AgentSession {
         return this.#exit;
     }
 
+    /** When the parked approval was parked (Genie's clock); `null` when nothing is parked. */
+    get parkedAt(): number | null {
+        return this.#parkedAt;
+    }
+
+    /** When the failure was recorded (Genie's clock); `null` without a failure. */
+    get failedAt(): number | null {
+        return this.#failedAt;
+    }
+
+    #now(): number {
+        return this.#options.clock?.() ?? Date.now();
+    }
+
     /** The provider's recent output, oldest first. Empty when it has said nothing. */
     get recentStderr(): readonly string[] {
         return this.#stderr;
@@ -333,6 +353,7 @@ export class AgentSession {
         if (!held.approval.options.some((o) => o.id === optionId)) return false;
 
         this.#approval = null;
+        this.#parkedAt = null;
         held.resolve({ outcome: 'selected', optionId });
         this.#changed();
         return true;
@@ -358,7 +379,10 @@ export class AgentSession {
                      * contain thread.id" is the symptom reported over the cause. Same reason a
                      * stack trace is read from the top.
                      */
-                    this.#failure ??= problem;
+                    if (this.#failure === null) {
+                        this.#failure = problem;
+                        this.#failedAt = this.#now();
+                    }
                 },
                 onStderr: (line) => {
                     // Kept, never promoted to a fault. Plenty of providers log here normally,
@@ -383,6 +407,7 @@ export class AgentSession {
                         // first resolver — a provider waiting forever on a promise nobody holds.
                         this.#approval?.resolve({ outcome: 'cancelled' });
                         this.#approval = { approval, resolve };
+                        this.#parkedAt = this.#now();
                         this.#options.onStateChange?.();
                     }),
                 onTurnEnd: (outcome) => {
@@ -405,9 +430,11 @@ export class AgentSession {
                     if (crashed) {
                         this.#turnState = 'failed';
                         this.#failure = outcome.raw;
+                        this.#failedAt = this.#now();
                     } else {
                         this.#turnState = 'idle';
                         this.#failure = null;
+                        this.#failedAt = null;
                     }
                 },
                 onExit: (code, signal) => {
@@ -503,6 +530,7 @@ export class AgentSession {
         // means stop, and that has to include the things stop is waiting ON.
         this.#approval?.resolve({ outcome: 'cancelled' });
         this.#approval = null;
+        this.#parkedAt = null;
 
         const tree = this.#options.processTree ?? systemProcessTree;
         tree.killTree(this.#ownedPids);

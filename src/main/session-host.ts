@@ -291,6 +291,7 @@ export class SessionHost {
             cwd,
             store: openDurableStore(sessionsDir(this.#userData)),
             driverFactory,
+            clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             /*
@@ -498,6 +499,7 @@ export class SessionHost {
                       fixes: ['Restart'],
                       // How the process ended, as node reported it — for the Process ended block.
                       exit: session.exit,
+                      at: session.failedAt,
                   }
                 : null;
 
@@ -514,6 +516,7 @@ export class SessionHost {
              * change: only the driver's capability flips.
              */
             pendingApproval: session.pendingApproval,
+            parkedAt: session.parkedAt,
             failure,
             contextUsed,
             contextSize,

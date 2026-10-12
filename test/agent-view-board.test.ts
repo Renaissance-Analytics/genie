@@ -24,7 +24,7 @@ describe('statePill — the board’s words', () => {
         expect(statePill(session(), now, { turns: 14 })).toEqual({ word: 'Turn 14 · running', elapsed: '2:35', tone: 'ok' });
     });
 
-    it('parked: the turn number and the wait, no clock Genie cannot measure', () => {
+    it('parked: the turn number and the wait; no clock without the stamp (the stamped case is in pill-stamps)', () => {
         const pill = statePill(session({ turnState: 'idle', pendingApproval: { question: 'Allow?', options: [] } as never }), now, { turns: 15 });
         expect(pill).toEqual({ word: 'Turn 15 · parked · waiting on you', elapsed: null, tone: 'warn' });
     });
