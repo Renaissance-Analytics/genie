@@ -1,4 +1,5 @@
 import type { ApprovalOption } from './approval.js';
+import type { Question } from './attention.js';
 
 /**
  * THE DECK — "does anything need me?"
@@ -42,8 +43,11 @@ export type DeckSource = 'agent-question' | 'user-list' | 'unread-dm' | 'finishe
 export type DeckAnswer =
     /** Answering inline is the whole answer. */
     | { kind: 'inline'; options: readonly ApprovalOption[] }
-    /** Multi-part, multi-select or free text: expands into a full form IN PLACE. */
-    | { kind: 'form'; fields: number }
+    /**
+     * Multi-part, multi-select or free text: expands into a full form IN PLACE — so the item carries the questions.
+     * Without them (an item minted before they travelled) the form cannot be drawn and the door opens the agent instead.
+     */
+    | { kind: 'form'; fields: number; questions?: readonly Question[] | undefined }
     /** Raised on another host, and only answerable there. */
     | { kind: 'elsewhere'; host: string };
 

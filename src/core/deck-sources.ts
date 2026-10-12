@@ -53,7 +53,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             at: Date.parse(q.askedAt),
             answer: inline
                 ? { kind: 'inline', options: first.options.map((o) => option(o.label, o.label)) }
-                : { kind: 'form', fields: q.questions.length },
+                : { kind: 'form', fields: q.questions.length, questions: q.questions },
             forwardedFrom: null,
         });
     }
