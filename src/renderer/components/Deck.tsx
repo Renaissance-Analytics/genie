@@ -1,6 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { deckBand, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
+import { deckBand, signalStrip, sinceYouLooked, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
 /**
@@ -45,6 +45,8 @@ export interface DeckProps {
 
 export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, expanded, focusId = null }: DeckProps) {
     const band = deckBand(items);
+    // SINCE YOU LOOKED (§4.5): finished agents with their handoff notes — read here, newest first; never in the count.
+    const looked = sinceYouLooked(items);
     const strip = signalStrip(signals);
     // The reader came to ANSWER the named item: a multi-part question arrives with its form already open.
     const focused = focusId === null ? null : (items.find((i) => i.id === focusId) ?? null);
@@ -130,6 +132,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                     </div>
                 ) : null}
 
+                <div data-deck-band="needs-you">
                 {band.map((item) => (
                     <div
                         key={item.id}
@@ -222,6 +225,26 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                         ) : null}
                     </div>
                 ))}
+                </div>
+
+                {looked.length > 0 ? (
+                    <div data-deck-band="since-you-looked" className="mt-2">
+                        <h2 className="px-7 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Since you looked</h2>
+                        {looked.map((item) => (
+                            <div key={item.id} data-deck-item={item.id} data-priority={item.priority} className="border-b border-[var(--border-1)] px-7 py-3">
+                                <div className="flex items-center gap-2 text-[13px]">
+                                    {item.agentName ? (
+                                        <button type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium hover:underline">{item.agentName}</button>
+                                    ) : null}
+                                    <span className="min-w-0 flex-1 text-[var(--fg-2)]">{item.title}</span>
+                                </div>
+                                {item.answer.kind === 'inline' ? (
+                                    <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
+                                ) : null}
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
             </div>
         </div>
     );
