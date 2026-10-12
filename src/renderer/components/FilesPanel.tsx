@@ -1,4 +1,4 @@
-import { TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
+import { Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { FileViewer } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
 import type { Pause } from '../../core/files-popout.js';
@@ -214,6 +214,13 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         </div>
                     ) : null}
                     <div className="min-h-0 flex-1 overflow-auto">
+                        {/* THE BLIND STATE (the board): a file that changed on disk with NO agent report says so over its body. Genie does not guess the author. */}
+                        {open?.ok && state?.unreported.includes(open.path) ? (
+                            <div data-unreported-banner={open.path} className="flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">
+                                <Icon name="eye-off" size="xs" />
+                                No agent reported this change
+                            </div>
+                        ) : null}
                         {tree === null ? null : open === null ? (
                             <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
                         ) : open.ok ? (
