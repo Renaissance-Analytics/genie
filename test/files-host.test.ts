@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileEvent } from '../src/core/files-panel.js';
 import { FilesHost } from '../src/main/files-host.js';
 
@@ -76,7 +76,13 @@ describe('FilesHost', () => {
         await host.watch('tynn');
         await writeFile(join(root, 'src', 'main', 'ipc.ts'), 'export const a = 2;\n');
         await writeFile(join(root, 'mystery.ts'), 'who wrote this\n');
-        await settle();
+        /*
+         * WAIT ON THE CONDITION, not on a fixed 300 ms: the watcher's event and the stat behind it take longer than
+         * that when the full suite runs 290 files at once, and a fixed sleep then fails a positive claim (the watcher
+         * must fire) for no reason of the code's. Bounded, so a watcher that never fires still fails — with the state
+         * it saw, not a timeout alone.
+         */
+        await vi.waitFor(async () => { expect((await host.state('tynn'))!.unreported).toEqual(['mystery.ts']); }, { timeout: 5_000, interval: 50 });
         const after = await host.state('tynn');
         // ipc.ts was reported by kora; mystery.ts by nobody.
         expect(after!.unreported).toEqual(['mystery.ts']);
