@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { contextNote, headerActions, personaView, processEnded } from '../../core/agent-view.js';
+import { contextNote, headerActions, personaView, planSteps, processEnded } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -228,6 +228,8 @@ export function AgentView({
     };
     const budgetLimit = ops?.budgetUsd ?? null;
     const plan = planFor(session);
+    // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
+    const steps = planSteps(rows);
     const budget = budgetFor(session, cost, turns);
     // The persona path and the context note — both facts, both absent when unknown (§5).
     const persona = agent.instructions ?? null;
@@ -793,7 +795,18 @@ export function AgentView({
                             <p className="font-mono text-[11px] text-[var(--fg-3)]">
                                 {plan.step}/{plan.of}
                             </p>
-                            <p className="mt-1 text-[var(--fg-2)]">{plan.doing}</p>
+                            {steps ? (
+                                <ol className="mt-1.5 flex flex-col gap-1">
+                                    {steps.map((step, i) => (
+                                        <li key={i} data-plan-step={step.status} {...(step.current ? { 'data-current': 'true' } : {})} className={`flex items-start gap-1.5 text-[12px] ${step.current ? 'font-semibold text-[var(--fg-1)]' : step.status === 'completed' ? 'text-[var(--fg-3)]' : 'text-[var(--fg-2)]'}`}>
+                                            <span className={`w-3 shrink-0 ${step.status === 'completed' ? 'text-[var(--success)]' : step.current ? 'text-[var(--sky-400)]' : 'text-[var(--fg-4)]'}`}>{step.status === 'completed' ? '✓' : step.current ? '◐' : '○'}</span>
+                                            <span className="min-w-0">{step.content}</span>
+                                        </li>
+                                    ))}
+                                </ol>
+                            ) : (
+                                <p className="mt-1 text-[var(--fg-2)]">{plan.doing}</p>
+                            )}
                         </section>
                     ) : null}
 
