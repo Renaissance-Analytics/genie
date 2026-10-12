@@ -1,5 +1,5 @@
-import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { addRepo, listRepos, removeRepo, type RepoEntry } from '../core/repo-registry.js';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { addRepo, listRepos, relocateRepo, removeRepo, type RepoEntry } from '../core/repo-registry.js';
 import { branchFromHead, lockState, type LockState } from '../core/repo-status.js';
 
 /**
@@ -91,6 +91,23 @@ export async function listReposOf(ports: RepoOpsPorts, workspaceId: string): Pro
     // Each repo carries its branch and lock when the ports can read them (the header's chips); otherwise neither.
     const repos = await Promise.all(listRepos(m.manifest).map(async (r) => ({ ...r, ...(await statusOf(ports, ws.path, r)) })));
     return { ok: true, repos };
+}
+
+/**
+ * "Locate repo": the folder the user picked (absolute, from the host's dialog) must be inside the envelope and exist;
+ * the manifest's path for that repo moves to it. Nothing is written when any of that fails.
+ */
+export async function relocateRepoIn(ports: RepoOpsPorts, workspaceId: string, slug: string, picked: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
+    const m = await manifestOf(ports, workspaceId);
+    if (!m.ok) return m;
+    const ws = ports.registry.workspace(workspaceId)!;
+    const rel = relative(ws.path, picked).replace(/\\/g, '/');
+    if (rel === '' || rel === '.' || rel.startsWith('..') || isAbsolute(rel)) return { ok: false, reason: `a repo must live inside the envelope; ${picked} is outside it` };
+    if (!(await ports.fs.exists(picked))) return { ok: false, reason: `${picked} does not exist` };
+    const result = relocateRepo(m.manifest, slug, rel);
+    if (!result.ok) return result;
+    await ports.fs.writeJson(m.path, result.manifest);
+    return { ok: true, path: rel };
 }
 
 export async function addRepoTo(ports: RepoOpsPorts, workspaceId: string, input: { name: string; path: string; url?: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }> {

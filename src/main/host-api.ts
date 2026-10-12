@@ -147,6 +147,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 throw new Error('workspaces.previewAddFromGit opens a folder picker on the host; do it there');
             case 'workspaces.confirmAddFromGit':
                 return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
+            case 'workspaces.locateRepo':
+                throw new Error('workspaces.locateRepo opens a folder picker on the host; do it there');
             case 'workspaces.previewAddFromTynn':
                 throw new Error('workspaces.previewAddFromTynn opens a folder picker on the host; do it there');
             case 'workspaces.confirmAddFromTynn':

@@ -38,6 +38,7 @@ export const REMOTE_METHODS = [
     'workspaces.addRepo',
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
+    'workspaces.locateRepo',
     'workspaces.settings',
     'workspaces.setSetting',
     'workspaces.resetSetting',
@@ -103,6 +104,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.addRepo': 'write',
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
+    // The folder picker is the host's; a remote window is told to do it there.
+    'workspaces.locateRepo': 'host-only',
     'workspaces.settings': 'read',
     'workspaces.setSetting': 'write',
     'workspaces.resetSetting': 'write',
