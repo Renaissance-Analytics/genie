@@ -54,6 +54,8 @@ export interface HostApiDeps {
         listRepos(workspaceId: string): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
+        /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
+        removeRepoLock?(workspaceId: string, slug: string): Promise<unknown>;
         settings(workspaceId: string): Promise<unknown> | unknown;
         setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
@@ -165,6 +167,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'workspaces.removeRepo':
                 return deps.workspaceOps.removeRepo(str(args[0]), str(args[1]));
+            case 'workspaces.removeRepoLock':
+                return deps.workspaceOps.removeRepoLock ? deps.workspaceOps.removeRepoLock(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot touch the repo' };
             case 'workspaces.settings':
                 return deps.workspaceOps.settings(str(args[0]));
             case 'workspaces.setSetting':

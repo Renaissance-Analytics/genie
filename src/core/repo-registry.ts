@@ -11,6 +11,10 @@ export interface RepoEntry {
     readonly path: string;
     /** `path: "."` — the envelope itself; protected. */
     readonly host: boolean;
+    /** The checked-out branch (or a detached HEAD's short sha); `null`/absent = Genie could not read it. */
+    readonly branch?: string | null;
+    /** git's `index.lock`, when present; `stale` once it has sat longer than any real command takes. */
+    readonly lock?: { heldSince: number; stale: boolean } | null;
 }
 
 export type RepoResult = { ok: true; manifest: Record<string, unknown>; slug: string } | { ok: false; reason: string };

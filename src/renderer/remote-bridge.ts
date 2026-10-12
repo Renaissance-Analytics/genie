@@ -134,7 +134,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         subscribeAgent: (agentId, onChange) => on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null)),
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
-        prompt: (agentId, text) => fire('prompt', agentId, text),
+        // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
+        // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
+        prompt: (agentId, text) => call('prompt', agentId, text).then((r) => {
+            if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false }; }
+            return { ok: (r.value as { ok?: boolean } | null)?.ok === true };
+        }),
         answerApproval: (agentId, optionId) => fire('answerApproval', agentId, optionId),
         restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
         addAgent: (workspaceId) => fire('addAgent', workspaceId),
@@ -153,6 +158,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             listRepos: (workspaceId) => answer('workspaces.listRepos', workspaceId),
             addRepo: (workspaceId, input) => answer('workspaces.addRepo', workspaceId, input),
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
+            removeRepoLock: (workspaceId, slug) => answer('workspaces.removeRepoLock', workspaceId, slug),
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
             resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),

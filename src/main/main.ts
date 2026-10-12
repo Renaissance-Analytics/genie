@@ -47,7 +47,7 @@ import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
-import { addRepoTo, listReposOf, removeRepoFrom, type RepoOpsPorts } from './repo-ops-host.js';
+import { addRepoTo, listReposOf, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -758,7 +758,17 @@ async function boot(): Promise<void> {
         },
     };
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
-    const repoOps: RepoOpsPorts = { fs: workspaceOps.fs, registry: { workspace: (id) => registry?.workspace(id) ?? null } };
+    const repoOps: RepoOpsPorts = {
+        fs: {
+            ...workspaceOps.fs,
+            // The repo chips read `.git/HEAD` and stat `.git/index.lock`; "Remove stale lock" unlinks it (only when stale).
+            readText: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
+            mtime: async (p) => { try { return (await statPath(p)).mtimeMs; } catch { return null; } },
+            unlink: async (p) => { const { unlink } = await import('node:fs/promises'); await unlink(p); },
+        },
+        registry: { workspace: (id) => registry?.workspace(id) ?? null },
+    };
+    ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
     ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
     ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
         const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
@@ -901,6 +911,7 @@ async function boot(): Promise<void> {
                 listRepos: (id) => listReposOf(repoOps, id),
                 addRepo: (id, input) => addRepoTo(repoOps, id, input),
                 removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
+                removeRepoLock: (id, slug) => removeRepoLockOf(repoOps, id, slug),
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
