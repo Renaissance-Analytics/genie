@@ -85,6 +85,7 @@ const bridge: GenieBridge = {
         addRepo: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-repo-add', workspaceId, input) as never,
         removeRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-remove', workspaceId, slug) as never,
         locateRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-locate', workspaceId, slug) as never,
+        commitsSince: (workspaceId, since) => ipcRenderer.invoke('genie:workspace-commits-since', workspaceId, since) as never,
         removeRepoLock: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-unlock', workspaceId, slug) as never,
         settings: (workspaceId) => ipcRenderer.invoke('genie:workspace-settings', workspaceId) as never,
         setSetting: (workspaceId, key, value) => ipcRenderer.invoke('genie:workspace-setting-set', workspaceId, key, value) as never,

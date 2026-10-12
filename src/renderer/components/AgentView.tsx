@@ -25,6 +25,7 @@ import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
 import { editPathIn, revertEdit } from '../../core/revert-edit.js';
+import type { RepoCommit } from '../../core/commits.js';
 import { agentViewAction, approvalChoice, inspectorOnEnter, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 import { TurnCards } from './TurnCards.js';
@@ -157,6 +158,9 @@ export interface AgentViewProps {
     initialChanges?: readonly string[] | null | undefined;
     /** The disk changes (path, when seen) at mount, for a render without the bridge; afterwards the bridge's state. */
     initialDiskChanges?: readonly { path: string; at: number }[] | null | undefined;
+    /** The commits in the workspace's repos since a moment (git's own account), for an observed agent's Activity tab. */
+    readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
+    initialCommits?: readonly RepoCommit[] | null | undefined;
     /** The live Take Over probe for an OBSERVED agent (§4.2): its terminal, its bursts. `null`/absent = none. */
     takeOver?: TakeOverProbe | null | undefined;
     /** The terminal host, for the Terminal tab's second attach to the TUI's pty; absent = this window has none. */
@@ -199,7 +203,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, initialDiskChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -207,6 +211,18 @@ export function AgentView({
     // the host reports. `null` = absent — the tab says so in a sentence.
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
     const [diskChanges, setDiskChanges] = useState<readonly { path: string; at: number }[] | null>(initialDiskChanges ?? null);
+    // COMMITS since the Take Over window opened (the board's blind index): read when the view mounts and when the
+    // workspace's files change (a commit follows edits); never polled.
+    const [commits, setCommits] = useState<readonly RepoCommit[] | null>(initialCommits ?? null);
+    const windowStart = takeOver?.startedAt ?? null;
+    useEffect(() => {
+        if (!readCommits || !workspace || windowStart === null) return;
+        let live = true;
+        const read = () => { void readCommits(workspace.id, windowStart).then((c) => { if (live) setCommits(c); }); };
+        read();
+        const off = files?.onChange((id) => { if (id === workspace.id) read(); });
+        return () => { live = false; off?.(); };
+    }, [readCommits, workspace, windowStart, files]);
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
     // THE STREAM CURSOR (§4.2 `j`/`k`): a focus, drawn as a ring, that is NOT the Inspector's selection. Enter opens
     // the Inspector on it; a click (a selection) brings the cursor along, so the keys continue from where the reader is.
@@ -814,6 +830,25 @@ export function AgentView({
                                         </section>
                                     );
                                 })() : null}
+                                {/* COMMITS (the board's blind index): git's own account of the workspace's repos since this window opened. */}
+                                {commits ? (
+                                    <section data-observed-commits={agent.id} className="flex flex-col gap-1">
+                                        <h3 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Commits since this window opened</h3>
+                                        {commits.length === 0 ? (
+                                            <p data-observed-commits-none="" className="text-[12px] text-[var(--fg-3)]">None yet.</p>
+                                        ) : (
+                                            <ul className="flex flex-col divide-y divide-[var(--border-1)] text-[12px]">
+                                                {commits.map((c) => (
+                                                    <li key={`${c.repo}:${c.sha}`} data-observed-commit={c.sha} className="flex items-center gap-3 py-1">
+                                                        <span className="font-mono text-[11px] text-[var(--fg-4)]">{c.sha}</span>
+                                                        <span className="min-w-0 flex-1 truncate text-[var(--fg-2)]">{c.subject}</span>
+                                                        <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{c.author} · {c.repo}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </section>
+                                ) : null}
                             </div>
                         ) : (
                             <p data-tab-unavailable="activity" className="p-5 text-[13px] text-[var(--fg-3)]">{agent.name}'s Take Over window is not open, so there is no activity to measure.</p>

@@ -19,6 +19,7 @@ import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './comp
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
+import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
 
@@ -108,6 +109,8 @@ export interface ShellProps {
     terminals?: GenieBridge['terminals'];
     /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
     files?: GenieBridge['files'] | undefined;
+    /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
+    readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** The workspace whose file panel holds the dock when `pinned === 'files'` (§4.3). */
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
@@ -186,6 +189,7 @@ export function Shell({
     filesWorkspaceId,
     onToggleFilesPin,
     filesPopped = [],
+    readCommits,
     onPopOutFiles,
     onBringBackFiles,
     onPauseAgent,
@@ -402,6 +406,7 @@ export function Shell({
                             rows={agentDetail.rows}
                             tab={parsed.tab}
                             lanes={parseLanes(parsed.lane)}
+                            readCommits={readCommits}
                             at={parsed.at}
                             layout={parsed.layout}
                             selectedId={selectedRowId}

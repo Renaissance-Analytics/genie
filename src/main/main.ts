@@ -47,7 +47,7 @@ import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
-import { addRepoTo, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
+import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -774,6 +774,8 @@ async function boot(): Promise<void> {
     };
     ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
     ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
+    // The commits in the workspace's repos since a moment (an observed agent's index): git's own account.
+    ipcMain.handle('genie:workspace-commits-since', (_event, raw: unknown, since: unknown) => (typeof raw === 'string' && typeof since === 'number' ? commitsSinceIn(repoOps, raw, since) : { ok: false, reason: 'name a workspace and a moment' }));
     // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
     ipcMain.handle('genie:workspace-repo-locate', async (_event, raw: unknown, slug: unknown) => {
         if (typeof raw !== 'string' || typeof slug !== 'string') return { ok: false, reason: 'name a workspace and a repo' };
@@ -925,6 +927,7 @@ async function boot(): Promise<void> {
                 addRepo: (id, input) => addRepoTo(repoOps, id, input),
                 removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
                 removeRepoLock: (id, slug) => removeRepoLockOf(repoOps, id, slug),
+                commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },

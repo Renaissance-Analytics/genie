@@ -56,6 +56,8 @@ export interface HostApiDeps {
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
         removeRepoLock?(workspaceId: string, slug: string): Promise<unknown>;
+        /** Optional for the same reason: a host without it answers with a refusal. */
+        commitsSince?(workspaceId: string, sinceMs: number): Promise<unknown>;
         settings(workspaceId: string): Promise<unknown> | unknown;
         setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
@@ -171,6 +173,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.removeRepo(str(args[0]), str(args[1]));
             case 'workspaces.removeRepoLock':
                 return deps.workspaceOps.removeRepoLock ? deps.workspaceOps.removeRepoLock(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot touch the repo' };
+            case 'workspaces.commitsSince':
+                return deps.workspaceOps.commitsSince ? deps.workspaceOps.commitsSince(str(args[0]), Number(args[1])) : { ok: false, reason: 'this host cannot read commits' };
             case 'workspaces.settings':
                 return deps.workspaceOps.settings(str(args[0]));
             case 'workspaces.setSetting':
