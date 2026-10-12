@@ -298,7 +298,12 @@ export function Shell({
                     ) : null}
                     {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p) => onConfirmAddTynn?.(p)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
-                    {canServe && parsed.surface === 'dashboard' ? (
+                    {/*
+                     * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
+                     * steps); the Dashboard's own invitation would stack a second one under it — measured on the
+                     * board audit. The skeleton (`workspaces === null`) still belongs to the Dashboard.
+                     */}
+                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
                         <Dashboard
                             rows={snapshot.agents}
                             workspaces={snapshot.workspaces}
