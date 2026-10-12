@@ -287,3 +287,36 @@ export function summaryChips(rows: readonly AgentRow[]): readonly SummaryChip[] 
         return n > 0 ? [{ label: `${n} ${label[state]}`, state }] : [];
     });
 }
+
+export interface StatusGroup {
+    state: AgentState;
+    /** `Waiting on you` / `Broken` / `Working` / `Idle` / `Unreachable`. */
+    label: string;
+    rows: readonly AgentRow[];
+}
+
+/**
+ * `By status` (the header's segmented control): one group per state in the board's order, and NO group for a
+ * state with no agents — an empty heading would be a count of zero wearing a label.
+ */
+export function groupByStatus(rows: readonly AgentRow[]): readonly StatusGroup[] {
+    const label: Record<AgentState, string> = { waiting: 'Waiting on you', broken: 'Broken', working: 'Working', idle: 'Idle', remote: 'Unreachable' };
+    const order: AgentState[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
+    return order.flatMap((state) => {
+        const mine = rows.filter((r) => r.state === state);
+        return mine.length > 0 ? [{ state, label: label[state], rows: mine }] : [];
+    });
+}
+
+export type FixRoute = { kind: 'restart' | 'takeover' | 'open'; agentId: string };
+
+/**
+ * What a broken row's fix button DOES. The labels come from the session's failure report (`Sign in to kimi`,
+ * `Restart`, `Terminal`); two of them are verbs Genie can perform, and anything else is a route to the agent, whose
+ * header carries the real controls. A button that only looks like a button is the audit finding this replaces.
+ */
+export function fixRoute(agentId: string, fix: string): FixRoute {
+    if (fix === 'Restart') return { kind: 'restart', agentId };
+    if (fix === 'Terminal') return { kind: 'takeover', agentId };
+    return { kind: 'open', agentId };
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_ROUTE, canonicalAgentRoute, parseRoute } from '../core/route.js';
+import { DEFAULT_ROUTE, canonicalAgentRoute, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -528,17 +528,24 @@ function DesktopApp({ bridge }: AppProps) {
         setPinned(outcome.pinned);
         setFilesWorkspaceId(outcome.pinned === 'files' ? id : null);
     };
-    // ⌘B / Ctrl+B toggles the file panel of the workspace on screen (§4.3). A chord, so it works while typing.
+    // ⌘B / Ctrl+B toggles the file panel of the workspace on screen (§4.3); ⌘J / Ctrl+J the chat flyout on genie
+    // (the board's `Chat ⌘J`). Chords, so they work while typing.
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (globalAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) }) !== 'toggle-files') return;
+            const action = globalAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
+            if (action === 'toggle-chat') {
+                e.preventDefault();
+                navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: 'genie' }));
+                return;
+            }
+            if (action !== 'toggle-files') return;
             if (parsed.surface !== 'workspace') return;
             e.preventDefault();
             navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [parsed]);
+    }, [parsed, route]);
     // Esc closes an UNPINNED chat flyout (§4.4) — never a pinned one, never while typing (`core/keys.ts`).
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -705,6 +712,7 @@ function DesktopApp({ bridge }: AppProps) {
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
+            onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

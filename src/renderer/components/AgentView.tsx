@@ -1,5 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
+import { agentChanges } from '../../core/agent-changes.js';
+import type { GenieBridge } from '../bridge.js';
+import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
@@ -116,13 +119,32 @@ export interface AgentViewProps {
     /** Agent operations (§6.2); absent = none offered. */
     ops?: AgentOpsProps | undefined;
     now?: (() => number) | undefined;
+    /** The file host (§4.3) for the Files and Changes tabs; absent = this window has none, and the tabs say so. */
+    files?: GenieBridge['files'] | undefined;
+    /** The agent's workspace — the one file panel is per workspace. Absent = unknown; the tabs say so. */
+    workspace?: { id: string; name?: string | undefined; path: string } | undefined;
+    /** The Changes tab's starting list — for tests that render server-side. Read from the host otherwise. */
+    initialChanges?: readonly string[] | null | undefined;
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
+    files, workspace, initialChanges,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
+    // CHANGES (§4.2): the files THIS agent changed this session, from the file host's groups; re-read on every change
+    // the host reports. `null` = absent — the tab says so in a sentence.
+    const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
+    const [changeOpen, setChangeOpen] = useState<string | null>(null);
+    useEffect(() => {
+        if (!files || !workspace) return;
+        let live = true;
+        const read = () => { void files.state(workspace.id).then((s) => { if (live) setChanges(agentChanges(s, agent.name)); }); };
+        read();
+        const off = files.onChange((id) => { if (id === workspace.id) read(); });
+        return () => { live = false; off(); };
+    }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()));
     const menu = ops ? agentOpsMenu(agent) : [];
     const act = (id: string) => {
@@ -438,6 +460,46 @@ export function AgentView({
 
                             {approval && placement === 'chat' ? <ApprovalMarker where="the chat" /> : null}
                         </>
+                    ) : null}
+
+                    {/* FILES (§4.3): the workspace's ONE file panel, mounted here for the agent's workspace. */}
+                    {active === 'files' ? (
+                        files && workspace ? (
+                            <div className="min-h-0 flex-1">
+                                <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => {}} onClose={() => onNavigate(`genie://agent/${agent.id}?tab=${tabs[0] ?? 'files'}`)} />
+                            </div>
+                        ) : (
+                            <p data-tab-unavailable="files" className="p-5 text-[13px] text-[var(--fg-3)]">
+                                {workspace ? 'This window has no file host, so the files cannot be shown here.' : `Genie does not know which workspace ${agent.name} belongs to, so its files cannot be shown.`}
+                            </p>
+                        )
+                    ) : null}
+
+                    {/* CHANGES: the files this agent changed this session (the host's own groups — never a guess), each opening in the panel. */}
+                    {active === 'changes' ? (
+                        <div className="flex min-h-0 flex-1">
+                            <div data-agent-changes={agent.id} className={`${changeOpen ? 'w-72 shrink-0 border-r border-[var(--border-1)]' : 'flex-1'} min-h-0 overflow-y-auto px-5 py-3`}>
+                                {changes === null ? (
+                                    <p className="text-[13px] text-[var(--fg-3)]">No changes from {agent.name} this session.</p>
+                                ) : (
+                                    <ul className="flex flex-col gap-0.5">
+                                        {changes.map((path) => (
+                                            <li key={path}>
+                                                <button type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                                    <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                                    <span className="truncate">{path}</span>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                            {changeOpen && files && workspace ? (
+                                <div className="min-h-0 min-w-0 flex-1">
+                                    <FilesPanelContainer key={changeOpen} workspace={workspace} files={files} pinned={false} single={changeOpen} onPin={() => {}} onClose={() => setChangeOpen(null)} />
+                                </div>
+                            ) : null}
+                        </div>
                     ) : null}
                 </div>
 
