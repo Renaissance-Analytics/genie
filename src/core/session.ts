@@ -355,6 +355,10 @@ export class AgentSession {
         this.#approval = null;
         this.#parkedAt = null;
         held.resolve({ outcome: 'selected', optionId });
+        // THE DECISION IS A LEDGER ROW: what was decided about which call, kept with the conversation (the chips row's
+        // Approvals, the ledger's history). The request was state until now; the answer is a fact worth a line.
+        const chosen = held.approval.options.find((o) => o.id === optionId);
+        void this.#emitRow({ kind: 'approval', question: held.approval.question, tool: held.approval.tool ?? null, outcome: chosen?.tone === 'ok' ? 'allowed' : chosen?.tone === 'bad' ? 'denied' : 'answered', optionId });
         this.#changed();
         return true;
     }
@@ -528,7 +532,9 @@ export class AgentSession {
          */
         // A promise nobody will ever resolve is a provider process waiting forever. `stop`
         // means stop, and that has to include the things stop is waiting ON.
-        this.#approval?.resolve({ outcome: 'cancelled' });
+        const abandoned = this.#approval;
+        if (abandoned) void this.#emitRow({ kind: 'approval', question: abandoned.approval.question, tool: abandoned.approval.tool ?? null, outcome: 'cancelled', optionId: null });
+        abandoned?.resolve({ outcome: 'cancelled' });
         this.#approval = null;
         this.#parkedAt = null;
 

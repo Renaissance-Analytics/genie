@@ -42,8 +42,8 @@ describe('facets — what Usage and Errors count', () => {
         ]);
     });
 
-    it('the filters are the four lanes then the two facets — no Approvals, because the ledger keeps no approval rows', () => {
-        expect(FACETS).toEqual(['usage', 'errors']);
+    it('the filters are the four lanes then the three facets — Approvals counts the decisions the session mints', () => {
+        expect(FACETS).toEqual(['usage', 'approvals', 'errors']);
         expect(FILTERS).toEqual([...LANES, ...FACETS]);
     });
 
@@ -60,14 +60,14 @@ describe('the route carries a facet like a lane', () => {
     it('round-trips, and drops a name it does not know (the positive control is the facet kept beside it)', () => {
         expect(parseLanes('edits,usage')).toEqual(['edits', 'usage']);
         expect(formatLanes(['edits', 'usage', 'errors'])).toBe('edits,usage,errors');
-        expect(parseLanes('approvals,errors')).toEqual(['errors']);
+        expect(parseLanes('wat,errors')).toEqual(['errors']);
     });
 });
 
 describe('chipRow', () => {
     it('appends Usage and Errors after the lanes with MEASURED counts; a zero is kept', () => {
         const chips = chipRow(rows, null);
-        expect(chips.map((c) => c.id)).toEqual(['all', 'messages', 'thoughts', 'tools', 'edits', 'usage', 'errors']);
+        expect(chips.map((c) => c.id)).toEqual(['all', 'messages', 'thoughts', 'tools', 'edits', 'usage', 'approvals', 'errors']);
         expect(chips.find((c) => c.id === 'usage')).toEqual({ id: 'usage', label: 'Usage', n: 1, on: false });
         expect(chips.find((c) => c.id === 'errors')).toEqual({ id: 'errors', label: 'Errors', n: 2, on: false });
         const calm = chipRow(rows.filter((r) => r.id !== 'f1' && r.id !== 'n1'), null);
@@ -84,8 +84,8 @@ describe('chipRow', () => {
 
 describe('t keeps the facets', () => {
     it('hiding thoughts from not-filtering keeps usage and error rows visible', () => {
-        expect(toggleThoughts(null)).toEqual(['messages', 'tools', 'edits', 'usage', 'errors']);
-        expect(toggleThoughts(['messages', 'tools', 'edits', 'usage', 'errors'])).toBeNull();
+        expect(toggleThoughts(null)).toEqual(['messages', 'tools', 'edits', 'usage', 'approvals', 'errors']);
+        expect(toggleThoughts(['messages', 'tools', 'edits', 'usage', 'approvals', 'errors'])).toBeNull();
     });
 });
 
@@ -101,7 +101,7 @@ describe('the chips row in the Agent view', () => {
         expect(html).toMatch(/data-facet="usage"[\s\S]*?data-facet-count="1"/);
         expect(html).toMatch(/data-facet="errors"[\s\S]*?data-facet-count="2"/);
         expect(html.indexOf('data-lane="edits"')).toBeLessThan(html.indexOf('data-facet="usage"'));
-        expect(html).not.toContain('Approvals');
+        expect(html).toMatch(/data-facet="approvals"[\s\S]*?data-facet-count="0"/);
     });
 
     it('a selected facet: its chip on, All off', () => {
