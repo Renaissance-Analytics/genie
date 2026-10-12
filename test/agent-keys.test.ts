@@ -20,7 +20,7 @@ describe('the bindings', () => {
             const a = press(k);
             if (a) bound[k] = a;
         }
-        expect(bound).toEqual({ a: 'allow', d: 'deny', e: 'next-edit', j: 'next-row', k: 'prev-row', t: 'toggle-thoughts' });
+        expect(bound).toEqual({ a: 'allow', d: 'deny', e: 'next-edit', j: 'next-row', k: 'prev-row', l: 'toggle-lanes', t: 'toggle-thoughts' });
     });
 
     it('binds Enter and Escape', () => {
@@ -34,7 +34,7 @@ describe('the bindings', () => {
     });
 
     it('every binding is dead while typing — COUNTED', () => {
-        const keys = ['a', 'd', 'e', 'j', 'k', 't', 'Enter'];
+        const keys = ['a', 'd', 'e', 'j', 'k', 'l', 't', 'Enter'];
         const alive = keys.filter((key) =>
             agentViewAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: true }) !== null);
         expect(alive).toEqual([]);

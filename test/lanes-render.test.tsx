@@ -19,7 +19,7 @@ const msg = (id: string, at: number | null): TimedEvent => ({
 });
 
 const render = (rows: readonly TimedEvent[], range: { from: number; to: number } | null = null) =>
-    renderToStaticMarkup(<Lanes rows={rows} selected={null} onChange={() => {}} range={range} onRange={() => {}} />);
+    renderToStaticMarkup(<Lanes rows={rows} range={range} onRange={() => {}} />);
 
 describe('ticks', () => {
     it('draws one tick per edit, COUNTED, and none for other rows', () => {

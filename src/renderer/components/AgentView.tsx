@@ -20,6 +20,8 @@ import type { AgentTab } from '../../core/route.js';
 import type { Lane, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
+import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
+import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { visibleRows } from '../../core/stream-view.js';
 import { agentViewAction, approvalChoice, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
@@ -119,6 +121,8 @@ export interface AgentViewProps {
     onSelect: (rowId: string | null) => void;
     /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
     onLanes?: ((lanes: readonly Lane[] | null) => void) | undefined;
+    /** The Lanes drawer (tracks + drag) open — controlled, for tests that render server-side; otherwise the view keeps its own (`L`). */
+    lanesOpen?: boolean | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -175,7 +179,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop,
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -183,6 +187,8 @@ export function AgentView({
     // the host reports. `null` = absent — the tab says so in a sentence.
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
+    // The Lanes drawer, closed on arrival (the board draws the strip and the chips; the tracks are behind `Lanes ▾` / `L`).
+    const [ownLanesOpen, setOwnLanesOpen] = useState(false);
     useEffect(() => {
         if (!files || !workspace) return;
         let live = true;
@@ -218,6 +224,10 @@ export function AgentView({
 
     // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
     const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
+    // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
+    const timeline = active === 'stream' ? sessionTimeline(rows, session) : null;
+    const chips = chipRow(rows, lanes);
+    const drawerOpen = lanesOpenProp ?? ownLanesOpen;
 
     /**
      * Where a parked approval is ACTIONABLE — exactly one place.
@@ -280,6 +290,11 @@ export function AgentView({
                     e.preventDefault();
                     if (selectedId !== null) { onSelect(null); return; }
                     onNavigate('genie://deck');
+                    return;
+                }
+                case 'toggle-lanes': {
+                    e.preventDefault();
+                    setOwnLanesOpen((open) => !open);
                     return;
                 }
                 case 'toggle-thoughts': {
@@ -530,13 +545,16 @@ export function AgentView({
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
-                            <Lanes
-                                rows={rows}
-                                selected={lanes}
-                                onChange={(next) => onLanes?.(next)}
-                                range={range}
-                                onRange={(next) => onRange?.(next)}
-                            />
+                            {timeline ? (
+                                <TimelineStrip
+                                    timeline={timeline}
+                                    lanesOpen={drawerOpen}
+                                    onToggleLanes={() => setOwnLanesOpen((open) => !open)}
+                                    onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
+                                />
+                            ) : null}
+                            <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} />
+                            {drawerOpen ? <Lanes rows={rows} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
                                 <Stream

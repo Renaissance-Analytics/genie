@@ -18,9 +18,10 @@ import { LANES, type Lane } from './stream-view.js';
  *   a / d   allow / deny the parked approval  E   next edit
  *   ⌘⇧T     Take Over — the ONE chord; Meta on macOS, Ctrl elsewhere, Shift on both
  *
- * Not bound here: `L` (the Lanes pulldown — Lanes is always visible in this build), `/` (find
- * in stream — not built), `⌘↵` (the composer's, in the chat flyout). Each is a deliberate
- * addition with its own test when it comes, never a fall-through.
+ *   L        the Lanes drawer (the board's `Lanes ▾`) — open or closed
+ *
+ * Not bound here: `/` (find in stream — not built), `⌘↵` (the composer's, in the chat flyout).
+ * Each is a deliberate addition with its own test when it comes, never a fall-through.
  */
 
 /** The shape of an event target this module cares about. `null` when the event has none. */
@@ -115,7 +116,8 @@ export type AgentViewAction =
     | 'toggle-thoughts'
     | 'allow'
     | 'deny'
-    | 'take-over';
+    | 'take-over'
+    | 'toggle-lanes';
 
 /**
  * What a key means in the Agent view, or `null`.
@@ -160,6 +162,10 @@ export function agentViewAction(press: KeyPress): AgentViewAction | null {
         case 'd':
         case 'D':
             return 'deny';
+        case 'l':
+        case 'L':
+            // The board's `Lanes ▾` (§4.2 `L`): the drawer with the tracks and the drag.
+            return 'toggle-lanes';
         default:
             return null;
     }

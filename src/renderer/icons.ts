@@ -58,6 +58,8 @@ export const ICON_NAMES: readonly string[] = [
     'message-square', 'brain', 'wrench', 'pencil', 'gauge', 'list-checks', 'scissors',
     'rotate-ccw', 'ellipsis',
     'eye-off', 'pause', 'play',
+    // The timeline strip's `Lanes ▾` toggle (the board), open or closed.
+    'chevron-down', 'chevron-up',
     'info', 'circle-help', 'file-text', 'globe', 'check',
 ];
 

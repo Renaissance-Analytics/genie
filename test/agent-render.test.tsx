@@ -394,10 +394,11 @@ describe('the lane bar', () => {
          * The sentence replaces the timeline rather than captioning it — a caption under an
          * empty drawing is read as a note about an accurate drawing.
          */
-        expect(render()).toContain('data-lanes-timeline');
+        // The drag bar and the sentence live in the Lanes DRAWER (the board: `Lanes ▾`, `L`), closed until opened.
+        expect(render({ lanesOpen: true })).toContain('data-lanes-timeline');
 
         const untimed = ROWS.map((r) => ({ ...r, at: null }));
-        const html = render({ rows: untimed });
+        const html = render({ rows: untimed, lanesOpen: true });
 
         expect(html).toContain('data-lanes-reason');
         expect(html).not.toContain('data-lanes-timeline');
@@ -409,24 +410,26 @@ describe('the lane bar', () => {
     it('says something different for an empty turn than for an untimed one', () => {
         // "Nothing has happened yet" and "we have no times for what happened" are different,
         // and a reader needs to know which they are looking at.
-        const empty = render({ rows: [] });
+        const empty = render({ rows: [], lanesOpen: true });
         expect(empty).toContain('Nothing has happened');
         expect(empty).not.toContain('no times');
     });
 
-    it('marks every lane ON when nothing is filtered, and offers no Clear', () => {
-        // `null` is "not filtering". A Clear button there would be a control that does nothing.
+    it('marks All ON and every lane OFF when nothing is filtered — the board\'s chips row', () => {
+        // `null` is "not filtering": the All chip is on, the lane chips are not. No Clear button anywhere — All IS the clear.
         const html = render();
-        expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
+        expect(html).toMatch(/data-chip="all"[^>]*data-on="true"/);
+        expect(html).toMatch(/data-lane="edits"[^>]*data-on="false"/);
         expect(html).not.toContain('data-lanes-clear');
     });
 
-    it('marks only the selected lanes ON, and offers Clear', () => {
+    it('marks only the selected lanes ON, and All OFF', () => {
         const html = render({ lanes: ['edits'] });
 
         expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
         expect(html).toMatch(/data-lane="messages"[^>]*data-on="false"/);
-        expect(html).toContain('data-lanes-clear');
+        expect(html).toMatch(/data-chip="all"[^>]*data-on="false"/);
+        expect(html).not.toContain('data-lanes-clear');
     });
 
     it('filters the STREAM, not just the bar', () => {
