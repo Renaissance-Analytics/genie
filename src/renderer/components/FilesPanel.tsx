@@ -2,6 +2,7 @@ import { Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy'
 import { FileViewer } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
 import { fileCrumb, statusBarFor } from '../../core/files-panel.js';
+import { conflictWords } from '../../core/conflict-words.js';
 import type { Pause } from '../../core/files-popout.js';
 
 /**
@@ -25,7 +26,8 @@ export type OpenFile = { ok: true; path: string; text: string; sha: string } | {
 /** Editing (§4.3): the buffer's state and the choices when a save is refused. Absent = read-only viewer. */
 export interface FilesEdit {
     readonly dirty: boolean;
-    readonly conflict: { path: string; onDisk: string; sha: string } | null;
+    /** `baseline` = the text as it was OPENED (the container's), so the banner can say which lines each side changed. */
+    readonly conflict: { path: string; onDisk: string; sha: string; baseline?: string | undefined } | null;
     readonly onChange: (text: string) => void;
     readonly onSave: () => void;
     readonly onKeepMine: () => void;
@@ -213,7 +215,12 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     </div>
                     {edit?.conflict ? (
                         <div data-conflict={edit.conflict.path} className="m-3 rounded-lg border border-[var(--warning)] p-3 text-sm">
-                            <p className="font-medium">{edit.conflict.path} changed on disk while you were editing it.</p>
+                            {/* THE BOARD'S WORDS: which lines they changed and which you did, from a real diff against the text as opened; the author only when an agent is writing this file. */}
+                            {edit.conflict.baseline !== undefined && open?.ok ? (
+                                <p data-conflict-words="" className="font-medium">{conflictWords(edit.conflict.baseline, open.text, edit.conflict.onDisk, state?.activity.find((a) => a.verb === 'writing' && a.path === edit.conflict!.path)?.agent ?? null)}</p>
+                            ) : (
+                                <p className="font-medium">{edit.conflict.path} changed on disk while you were editing it.</p>
+                            )}
                             <p className="mt-1 text-[var(--fg-3)]">Nothing is discarded: your buffer is still here, and the disk's version is below the choices.</p>
                             <div className="mt-2 flex gap-2">
                                 <button type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">keep mine</button>

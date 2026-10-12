@@ -34,7 +34,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const [filter, setFilter] = useState<'all' | 'changed'>('all');
     // The buffer you are typing into (§4.3): dirty while it differs from what was opened; never auto-reloaded.
     const [buffer, setBuffer] = useState<{ path: string; text: string } | null>(null);
-    const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string } | null>(null);
+    const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string; baseline?: string | undefined } | null>(null);
     // Agents asked to pause (§4.3): one ask per (agent, file) while your buffer is dirty; lifted when it is clean.
     const [paused, setPaused] = useState<readonly Pause[]>([]);
     const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
@@ -94,7 +94,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         if (!open?.ok || !buffer) return;
         void files.write(workspace.id, open.path, buffer.text, expected).then((r) => {
             if (r.ok) { setOpen({ ok: true, path: open.path, text: buffer.text, sha: r.sha }); setBuffer(null); setConflict(null); }
-            else if (r.conflict) setConflict(r.conflict);
+            else if (r.conflict) setConflict({ ...r.conflict, baseline: open.text });
         });
     };
     const edit: FilesEdit | undefined = open?.ok
