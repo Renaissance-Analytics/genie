@@ -17,7 +17,7 @@ import type { Fidelity } from '../../core/dashboard-view.js';
 import { inspectorFor } from '../../core/inspector.js';
 import type { LiveSession } from '../../core/roster.js';
 import type { AgentTab } from '../../core/route.js';
-import type { Lane, TimedEvent } from '../../core/stream-view.js';
+import type { StreamFilter, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
 import { Lanes } from './Lanes.js';
 import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
@@ -109,7 +109,7 @@ export interface AgentViewProps {
     session: LiveSession | null;
     rows: readonly TimedEvent[];
     tab: AgentTab;
-    lanes: readonly Lane[] | null;
+    lanes: readonly StreamFilter[] | null;
     at: string | null;
     selectedId: string | null;
     /** Turn count and cost belong to the session's accounting, not to a single row. */
@@ -123,7 +123,7 @@ export interface AgentViewProps {
     onNavigate: (route: string) => void;
     onSelect: (rowId: string | null) => void;
     /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
-    onLanes?: ((lanes: readonly Lane[] | null) => void) | undefined;
+    onLanes?: ((lanes: readonly StreamFilter[] | null) => void) | undefined;
     /** The Lanes drawer (tracks + drag) open — controlled, for tests that render server-side; otherwise the view keeps its own (`L`). */
     lanesOpen?: boolean | undefined;
     /** Find in stream (`/`) — controlled, for tests that render server-side; otherwise the view keeps its own. */

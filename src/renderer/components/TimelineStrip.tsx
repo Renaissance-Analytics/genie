@@ -1,8 +1,8 @@
 import { Icon } from '@particle-academy/react-fancy';
 import type { RefObject } from 'react';
-import type { Lane } from '../../core/lanes.js';
+import type { StreamFilter } from '../../core/lanes.js';
 import type { Chip, SessionTimeline, TickKind, TimelineHead } from '../../core/session-timeline.js';
-import { LANES } from '../../core/stream-view.js';
+import { FACETS, FILTERS } from '../../core/stream-view.js';
 
 /**
  * THE SESSION TIMELINE STRIP (46px) AND THE CHIPS ROW (44px) — the board's `Agent View`, above the Stream.
@@ -96,8 +96,8 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
 
 export interface ChipsRowProps {
     chips: readonly Chip[];
-    selected: readonly Lane[] | null;
-    onChange: (lanes: readonly Lane[] | null) => void;
+    selected: readonly StreamFilter[] | null;
+    onChange: (lanes: readonly StreamFilter[] | null) => void;
     /** Find in stream (`/`): the query, its box (focused by the key), and the match count while a query is set. */
     find?: string | undefined;
     onFind?: ((query: string) => void) | undefined;
@@ -112,7 +112,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
         // From "not filtering", the first click means "only this lane". Back to every lane is no filter.
         if (selected === null) { onChange([lane]); return; }
         const next = selected.includes(lane) ? selected.filter((l) => l !== lane) : [...selected, lane];
-        onChange(next.length === 0 || next.length === LANES.length ? null : next);
+        onChange(next.length === 0 || next.length === FILTERS.length ? null : next);
     };
     return (
         <div data-chips="" className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-4">
@@ -120,7 +120,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
                 <button
                     key={chip.id}
                     type="button"
-                    {...(chip.id === 'all' ? { 'data-chip': 'all' } : { 'data-lane': chip.id })}
+                    {...(chip.id === 'all' ? { 'data-chip': 'all' } : (FACETS as readonly string[]).includes(chip.id) ? { 'data-facet': chip.id } : { 'data-lane': chip.id })}
                     data-on={chip.on ? 'true' : 'false'}
                     aria-pressed={chip.on}
                     onClick={() => toggle(chip)}
@@ -130,7 +130,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
                 >
                     {chip.label}
                     {/* A MEASURED zero is kept: a turn with no edits genuinely has none. */}
-                    <span {...(chip.id === 'all' ? {} : { 'data-lane-count': chip.n })} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{chip.n}</span>
+                    <span {...(chip.id === 'all' ? {} : (FACETS as readonly string[]).includes(chip.id) ? { 'data-facet-count': chip.n } : { 'data-lane-count': chip.n })} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{chip.n}</span>
                 </button>
             ))}
             {/* FIND IN STREAM (the board's `Find in stream  /`): a box at the right; Escape clears it and gives the keys back. */}

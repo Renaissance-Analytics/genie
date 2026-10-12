@@ -1,5 +1,5 @@
 import type { Approval } from './approval.js';
-import { LANES, type Lane } from './stream-view.js';
+import { FILTERS, type StreamFilter } from './stream-view.js';
 
 /**
  * KEYS — §4.2's single-letter shortcuts, as pure decisions.
@@ -199,13 +199,14 @@ export function stepRow(visibleIds: readonly string[], currentId: string | null,
  *
  * From not filtering (`null`), the common wish is to hide thoughts, so that is what the first
  * press does. Every other transition adds or removes `thoughts` from the selection and leaves
- * the rest alone; a selection that becomes all four lanes is recorded as not filtering, the
- * same one-state-for-one-view rule the lane toggles follow.
+ * the rest alone; a selection that becomes every filter (the four lanes and the chips row's facets) is recorded as
+ * not filtering, the same one-state-for-one-view rule the chip toggles follow. Hiding thoughts keeps the usage and
+ * error rows: the key is about thoughts, not about everything that is not a lane.
  */
-export function toggleThoughts(lanes: readonly Lane[] | null): readonly Lane[] | null {
-    if (lanes === null) return LANES.filter((l) => l !== 'thoughts');
+export function toggleThoughts(lanes: readonly StreamFilter[] | null): readonly StreamFilter[] | null {
+    if (lanes === null) return FILTERS.filter((l) => l !== 'thoughts');
     const next = lanes.includes('thoughts') ? lanes.filter((l) => l !== 'thoughts') : [...lanes, 'thoughts' as const];
-    return next.length === LANES.length ? null : next;
+    return next.length === FILTERS.length ? null : next;
 }
 
 /**

@@ -6,7 +6,7 @@ import {
     resolveThinkTokens,
     resolveToolDurations,
     visibleRows,
-    type Lane,
+    type StreamFilter,
     type TimedEvent,
 } from '../../core/stream-view.js';
 import { StreamRow } from './StreamRow.js';
@@ -37,7 +37,7 @@ import { StreamRow } from './StreamRow.js';
 export interface StreamProps {
     rows: readonly TimedEvent[];
     /** `null` = not filtering, which is a different state from filtering to nothing. */
-    lanes: readonly Lane[] | null;
+    lanes: readonly StreamFilter[] | null;
     /** The `?at=` anchor from the route. */
     at: string | null;
     selectedId: string | null;

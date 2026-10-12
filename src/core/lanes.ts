@@ -1,4 +1,4 @@
-import { LANES, laneOf, type Lane, type TimedEvent } from './stream-view.js';
+import { FILTERS, LANES, laneOf, type Lane, type StreamFilter, type TimedEvent } from './stream-view.js';
 
 /**
  * LANES — four tracks over the current turn, and the sentence that replaces them.
@@ -18,7 +18,7 @@ import { LANES, laneOf, type Lane, type TimedEvent } from './stream-view.js';
  * agent can hand a human a link to the edits of one turn.
  */
 
-export type { Lane };
+export type { Lane, StreamFilter };
 
 /**
  * Parse `?lane=` into a selection.
@@ -30,20 +30,21 @@ export type { Lane };
  * An unrecognised name is **dropped rather than fatal**: a stale link from an older version
  * must still open. A slightly wider stream is recoverable; a blank surface is not.
  */
-export function parseLanes(value: string | null): readonly Lane[] | null {
+export function parseLanes(value: string | null): readonly StreamFilter[] | null {
     if (value === null) return null;
     if (value === '') return [];
 
-    const seen = new Set<Lane>();
+    const seen = new Set<StreamFilter>();
     for (const part of value.split(',')) {
         const lane = part.trim();
-        if ((LANES as readonly string[]).includes(lane)) seen.add(lane as Lane);
+        // A lane or a facet (the chips row's Usage / Errors) — the same parameter carries both.
+        if ((FILTERS as readonly string[]).includes(lane)) seen.add(lane as StreamFilter);
     }
     return [...seen];
 }
 
 /** The inverse. `null` stays absent rather than becoming an empty parameter. */
-export function formatLanes(lanes: readonly Lane[] | null): string | null {
+export function formatLanes(lanes: readonly StreamFilter[] | null): string | null {
     if (lanes === null) return null;
     return lanes.join(',');
 }
