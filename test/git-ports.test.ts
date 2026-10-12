@@ -38,12 +38,12 @@ describe('gitClone / gitInit against a real git', () => {
         // and the Windows run proved it — 'hello from the origin\r\n'. Compare the text, not the EOL.
         expect((await readFile(join(into, 'hello.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('hello from the origin\n');
         expect(await readdir(into)).toContain('.git');
-    });
+    }, 30_000); // seven git spawns and a clone: a cold GitHub Windows runner took more than vitest's 5 s (beta.14's release build)
 
     it('a clone that cannot happen rejects with git’s own words', async () => {
         const into = join(dir, 'nope');
         await expect(gitClone(join(dir, 'does-not-exist.git'), into)).rejects.toThrow(/does not exist|not found|No such file|repository/i);
-    });
+    }, 30_000);
 
     it('gitInit makes a repository where there was a folder', async () => {
         const fresh = join(dir, 'fresh');
@@ -53,5 +53,5 @@ describe('gitClone / gitInit against a real git', () => {
         await mkdir(fresh, { recursive: true });
         await gitInit(fresh);
         expect(await readdir(fresh)).toContain('.git');
-    });
+    }, 30_000);
 });
