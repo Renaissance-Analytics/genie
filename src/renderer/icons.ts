@@ -62,6 +62,8 @@ export const ICON_NAMES: readonly string[] = [
     'chevron-down', 'chevron-up',
     // The turns layout's collapsed card.
     'chevron-right',
+    // The right column's strip below 1100 px: the door to the column.
+    'panel-right',
     'info', 'circle-help', 'file-text', 'globe', 'check',
 ];
 

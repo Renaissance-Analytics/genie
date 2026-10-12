@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, tabNote } from '../../core/agent-view.js';
+import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -132,6 +132,8 @@ export interface AgentViewProps {
     log?: readonly string[] | undefined;
     /** The Stream's layout from the route (the board): the ledger, or one card per turn. */
     layout?: StreamLayout | undefined;
+    /** The content width in px — controlled for tests; otherwise measured by the view (§4.2: the rail collapses below 1100 px). */
+    width?: number | null | undefined;
     /** The persona file's text (the board shows it under the path) — controlled for tests; otherwise read through `files.open`. `null` = read, nothing. */
     personaText?: string | null | undefined;
     /** Why the persona file could not be read, when it could not. */
@@ -192,7 +194,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null,
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -244,6 +246,22 @@ export function AgentView({
     const personaShown = personaView(personaTextProp !== undefined ? personaTextProp : personaRead.text);
     const personaError = personaTextProp !== undefined ? personaErrorProp : personaRead.error;
     const note = contextNote(session, rows, pill.tone);
+    // THE RAIL COLLAPSE (§4.2): the root's width, measured; below 1100 px the column is a strip with a door to a popover.
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const [measured, setMeasured] = useState<number | null>(null);
+    useEffect(() => {
+        const el = rootRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const report = () => setMeasured(el.getBoundingClientRect().width);
+        report();
+        const ro = new ResizeObserver(report);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    const railModeNow = railMode(widthProp !== undefined ? widthProp : measured);
+    const [railOpen, setRailOpen] = useState(false);
+    const railText = railSummary(session, note?.tone ?? null);
+    const showColumn = railModeNow === 'full' || railOpen;
     // THE PROCESS-ENDED BLOCK (the board's error state): only when the session failed; the engine's own words.
     const ended = processEnded(session, rows, log);
 
@@ -377,7 +395,7 @@ export function AgentView({
         selectedRow && selectedRow.event.kind === 'tool' ? inspectorFor(selectedRow.event) : null;
 
     return (
-        <div data-surface="agent" data-agent={agent.id} className="flex h-full min-h-0 flex-col">
+        <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
             {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
             <div className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 {workspace ? <span data-crumb={workspace.id} className="text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
@@ -751,8 +769,19 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
-                {inspector || plan || budget || budgetLimit !== null || ops || persona || ended ? (
-                <aside data-right-column="" className="flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)]">
+                {railModeNow === 'strip' && !railOpen && railText ? (
+                    <div data-right-column="strip" className="flex h-8 w-8 shrink-0 flex-col items-center border-l border-[var(--border-1)] bg-[var(--bg-1)]">
+                        <button type="button" data-action="expand-rail" title={railText} onClick={() => setRailOpen(true)} className="flex h-full w-full items-center justify-center text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
+                            <Icon name="panel-right" size="xs" />
+                        </button>
+                        <span className="sr-only">{railText}</span>
+                    </div>
+                ) : null}
+                {showColumn && (inspector || plan || budget || budgetLimit !== null || ops || persona || ended) ? (
+                <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
+                {railModeNow === 'strip' ? (
+                    <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
+                ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} /> : null}
                 {plan || budget || budgetLimit !== null || ops || persona || ended ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">

@@ -307,6 +307,31 @@ export function contextNote(session: LiveSession | null, rows: readonly TimedEve
 /** The board's context warning threshold — the same 160k the Dashboard's context cell appears at. */
 export const CONTEXT_HIGH_AT = 160_000;
 
+/**
+ * THE RIGHT COLUMN COLLAPSES BELOW ~1100px OF CONTENT WIDTH (§4.2) into a 32px summary strip — `3/6 · 89% ctx · ⚠`
+ * — expandable as a popover. **Width-triggered, never state-triggered:** a rail that collapsed because a number went
+ * missing would move the conversation sideways mid-turn. An unmeasured width (first paint, server-side) is the full
+ * column, so nothing jumps on arrival.
+ */
+export const RAIL_COLLAPSE_BELOW = 1100;
+
+export type RailMode = 'full' | 'strip';
+
+export function railMode(width: number | null): RailMode {
+    return width !== null && width < RAIL_COLLAPSE_BELOW ? 'strip' : 'full';
+}
+
+/** The strip's text: the plan, the context pressure, a warning mark — only the parts that exist; `null` for none. */
+export function railSummary(session: LiveSession | null, noteTone: 'ok' | 'warn' | 'bad' | 'muted' | null): string | null {
+    if (!session) return null;
+    const parts: string[] = [];
+    if (session.plan) parts.push(`${session.plan.step}/${session.plan.of}`);
+    if (session.contextUsed !== null && session.contextSize !== null && session.contextSize > 0) parts.push(`${Math.round((session.contextUsed / session.contextSize) * 100)}% ctx`);
+    if (parts.length === 0) return null;
+    if (noteTone === 'warn' || noteTone === 'bad') parts.push('⚠');
+    return parts.join(' · ');
+}
+
 /** Below this content width the rail becomes a 32px summary strip. */
 export const RAIL_COLLAPSE_AT = 1100;
 
