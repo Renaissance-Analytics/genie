@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { contextNote, headerActions, processEnded } from '../../core/agent-view.js';
+import { contextNote, headerActions, personaView, processEnded } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -132,6 +132,10 @@ export interface AgentViewProps {
     log?: readonly string[] | undefined;
     /** The Stream's layout from the route (the board): the ledger, or one card per turn. */
     layout?: StreamLayout | undefined;
+    /** The persona file's text (the board shows it under the path) — controlled for tests; otherwise read through `files.open`. `null` = read, nothing. */
+    personaText?: string | null | undefined;
+    /** Why the persona file could not be read, when it could not. */
+    personaError?: string | null | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -188,7 +192,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger',
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -227,6 +231,16 @@ export function AgentView({
     const budget = budgetFor(session, cost, turns);
     // The persona path and the context note — both facts, both absent when unknown (§5).
     const persona = agent.instructions ?? null;
+    // THE PERSONA'S TEXT (the board): read once per agent through the files bridge; the path shows regardless.
+    const [personaRead, setPersonaRead] = useState<{ text: string | null; error: string | null }>({ text: null, error: null });
+    useEffect(() => {
+        if (personaTextProp !== undefined || !files || !workspace || !persona) return;
+        let live = true;
+        void files.open(workspace.id, persona).then((r) => { if (live) setPersonaRead(r.ok ? { text: r.text, error: null } : { text: null, error: r.error }); });
+        return () => { live = false; };
+    }, [files, workspace, persona, personaTextProp]);
+    const personaShown = personaView(personaTextProp !== undefined ? personaTextProp : personaRead.text);
+    const personaError = personaTextProp !== undefined ? personaErrorProp : personaRead.error;
     const note = contextNote(session, rows, pill.tone);
     // THE PROCESS-ENDED BLOCK (the board's error state): only when the session failed; the engine's own words.
     const ended = processEnded(session, rows, log);
@@ -759,6 +773,11 @@ export function AgentView({
                         <section data-rail="persona">
                             <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
                             <p className="font-mono text-[11px] text-[var(--fg-2)]">{persona}</p>
+                            {personaShown ? (
+                                <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
+                            ) : null}
+                            {personaShown?.truncated ? <p data-persona-clipped="" className="mt-1 text-[11px] text-[var(--fg-4)]">… more in the file</p> : null}
+                            {personaError ? <p data-persona-error="" className="mt-1 text-[11px] text-[var(--warning)]">could not read it: {personaError}</p> : null}
                         </section>
                     ) : null}
                     {/*
