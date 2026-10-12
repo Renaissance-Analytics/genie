@@ -538,7 +538,8 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || typeof text !== 'string' || text.length === 0) return { ok: false };
-        return { ok: host.prompt(record.id, text) };
+        // The composer: the turn is started by YOU, and the ledger says so.
+        return { ok: host.prompt(record.id, text, 'you') };
     });
 
     ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown) => {
@@ -1047,7 +1048,7 @@ async function boot(): Promise<void> {
     // when one agent is being considered.
     const remind = (only: string) => {
         for (const r of composed.inboxReminders({ now: Date.now(), idle: (id) => id === only && host?.probe(id as AgentId)?.turnState === 'idle' })) {
-            host?.prompt(r.agentId as AgentId, r.text);
+            host?.prompt(r.agentId as AgentId, r.text, 'genie');
         }
     };
     composed.inbox.onSend((to) => { if (to !== 'human') remind(to); });

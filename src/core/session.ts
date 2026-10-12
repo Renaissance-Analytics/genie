@@ -455,8 +455,14 @@ export class AgentSession {
         this.#turnState = 'working';
     }
 
-    prompt(text: string): void {
+    /**
+     * `by` is who started the turn when the caller knows (`you` from the composer, `genie` for a reminder or a
+     * handoff ask, a peer's name) — written into the ledger as the turn's marker, and `null` when nobody said.
+     */
+    prompt(text: string, by: string | null = null): void {
         if (!this.#driver) throw new Error('session is not started');
+        // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn.
+        void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
         this.#driver.prompt(text);
         this.#turnState = 'working';
     }
@@ -619,6 +625,14 @@ export class AgentSession {
          * happened, and the queue is what keeps the tool call from being written before the
          * words that preceded it.
          */
+        await this.#emitRow(event);
+    }
+
+    /**
+     * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
+     * reaches the renderer synchronously, and is written to the thread after the message it closed.
+     */
+    async #emitRow(event: StreamEvent): Promise<void> {
         const closing = this.#openMessage;
         this.#openMessage = null;
 

@@ -72,6 +72,12 @@ export type StreamEvent =
       }
     | { kind: 'plan'; entries: readonly unknown[] }
     | { kind: 'divider'; variant: 'compaction'; before: number | null; after: number | null }
+    /**
+     * A TURN STARTED — written by the session when a prompt goes in, not read off the wire (ACP reports turn ENDS,
+     * and nothing a surface holds says where one began). `by` is whoever started it when the caller said so
+     * (`you`, `genie`, a peer's name) and `null` when nobody reported who — never guessed to be "you".
+     */
+    | { kind: 'turn'; n: number; by: string | null }
     | { kind: 'notice'; level: string; message: string }
     /**
      * A kind Genie does not map yet.
