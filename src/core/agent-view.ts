@@ -110,6 +110,16 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     };
 }
 
+/**
+ * THE PARKED DIVIDER (the board, amber, at the stream's end): `turn parked · waiting on you 0:42` while a permission
+ * request waits — the wait from Genie's own stamp, none without it. `null` when nothing is parked: the divider is
+ * state, not a ledger row, so it is drawn by the Stream after the rows and survives every lane filter.
+ */
+export function parkedDivider(session: LiveSession | null, now: () => number): string | null {
+    if (!session || session.pendingApproval === null) return null;
+    return session.parkedAt == null ? 'turn parked · waiting on you' : `turn parked · waiting on you ${clock(session.parkedAt, now())}`;
+}
+
 export interface HeaderActions {
     /** While a turn runs: stop the agent's work (§6.2 stop — identity, persona, inbox and history kept). */
     stop: boolean;

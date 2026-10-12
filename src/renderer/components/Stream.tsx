@@ -1,4 +1,4 @@
-import { VirtualList } from '@particle-academy/react-fancy';
+import { Icon, VirtualList } from '@particle-academy/react-fancy';
 import { useEffect, useMemo, useState } from 'react';
 import {
     editLineCounts,
@@ -58,6 +58,8 @@ export interface StreamProps {
      * thought is finished, and a bar pulsing on it would claim an agent is thinking that is not.
      */
     live?: boolean | undefined;
+    /** The parked divider's words (`turn parked · waiting on you 0:42`) while an approval waits; `null` otherwise. */
+    parked?: string | null | undefined;
 }
 
 /**
@@ -71,7 +73,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -187,6 +189,14 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                     <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} onSelect={onSelect} />
                 )}
             />
+
+            {/* THE PARKED DIVIDER: amber, at the end, as long as the request waits — state, not a row, so no filter hides it. */}
+            {parked ? (
+                <div data-divider="parked" className="absolute inset-x-0 bottom-0 flex h-7 items-center gap-2 border-t border-[var(--warning)] bg-[var(--surface)] px-5 font-mono text-[11px] text-[var(--warning)]">
+                    <Icon name="pause" size="xs" />
+                    {parked}
+                </div>
+            ) : null}
 
             {/*
              * The `↓ n new` pill is ours to render, from `onUnseenChange`. It appears only
