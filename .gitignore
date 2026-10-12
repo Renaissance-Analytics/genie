@@ -23,3 +23,7 @@ sandbox/
 # Regenerable, and the run that matters is the next one.
 smoke.txt
 v1-installers/
+
+# A row's staged files for the WSL batch's patch script (`.patch/patch-<row>.mjs` copies them into place inside the
+# machine). Scratch: the ship step commits the placed files by path, never this directory.
+.patch/

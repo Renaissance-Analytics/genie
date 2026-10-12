@@ -52,6 +52,12 @@ export interface StreamProps {
     onEditPersona?: (() => void) | undefined;
     /** The find query (`/`), already applied to `rows` by the caller; here so an empty result can say which nothing it is. */
     findQuery?: string | undefined;
+    /**
+     * The turn is RUNNING (the session reports `working`). Then the last row, when it is a thought, is the thought
+     * still arriving — the board's live `Thinking…` row with its pulsing bar. Off by default: a replayed thread's last
+     * thought is finished, and a bar pulsing on it would claim an agent is thinking that is not.
+     */
+    live?: boolean | undefined;
 }
 
 /**
@@ -65,7 +71,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '' }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -83,6 +89,15 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
         const durations = resolveToolDurations(withTokens);
         const visible = visibleRows(withTokens, lanes);
 
+        // The turns each compaction summarised: the highest turn started before it, over the WHOLE stream (a lane
+        // filter that hid the turn markers must not make the divider forget them).
+        const summarised = new Map<string, number>();
+        let turnsSoFar = 0;
+        for (const row of withTokens) {
+            if (row.event.kind === 'turn') turnsSoFar = Math.max(turnsSoFar, row.event.n);
+            else if (row.event.kind === 'divider') summarised.set(row.id, turnsSoFar);
+        }
+
         return visible.map((row) => {
             const context =
                 row.event.kind === 'tool'
@@ -92,10 +107,16 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                           diff: diffs?.get(row.id) ?? (row.event.toolKind === 'edit' ? editLineCounts(row.event.rawInput) ?? undefined : undefined),
                           agentName,
                       }
-                    : { agentName };
+                    : row.event.kind === 'divider'
+                      ? { summarisedTurns: summarised.get(row.id), agentName }
+                      : { agentName };
             return ledgerRow(row, context);
         });
     }, [rows, lanes, diffs, agentName]);
+
+    // The live thought: the LAST row of the whole stream (not of the filtered view) while the turn runs.
+    const last = rows.at(-1);
+    const liveId = live && last && last.event.kind === 'think' ? last.id : null;
 
     /**
      * The empty state.
@@ -163,7 +184,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} onSelect={onSelect} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} onSelect={onSelect} />
                 )}
             />
 
