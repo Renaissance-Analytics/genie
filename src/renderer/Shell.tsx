@@ -358,7 +358,12 @@ export function Shell({
                             terminals={terminals}
                             files={files}
                             panel={parsed.panel}
-                            onTogglePanel={() => onNavigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`)}
+                            view={parsed.view}
+                            rows={snapshot.agents}
+                            onOpenAgent={onOpenAgent}
+                            onAddAgent={() => onAddAgent(parsed.workspaceId)}
+                            onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
+                            onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
                             filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
                             onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
                             filesPopped={filesPopped.includes(parsed.workspaceId)}

@@ -18,12 +18,12 @@ const withCode = codeOpened(terminalOpened(emptyWorkspace(), tab('t1'), ''), 'sr
 
 describe('the Workspace surface with code panes', () => {
     it('offers +code beside +terminal when there is a files bridge; not otherwise', () => {
-        expect(renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} />)).toContain('data-action="add-code"');
-        expect(renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} />)).not.toContain('data-action="add-code"');
+        expect(renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} />)).toContain('data-action="add-code"');
+        expect(renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} />)).not.toContain('data-action="add-code"');
     });
 
     it('a code pane is a tab named by the file and a grid slot holding the file panel in single mode', () => {
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} />);
         expect(html).toContain('data-code-tab="code:src/a.ts"');
         expect(html).toMatch(/data-code-tab="code:src\/a\.ts"[^>]*data-active="true"/);
         expect(html).toContain('data-pane-slot="code:src/a.ts"');
@@ -36,10 +36,10 @@ describe('the Workspace surface with code panes', () => {
     it('two panes shown in columns get one split handle between them and a weighted grid from the stored fractions; one pane gets none', () => {
         const settings = { values: { panel_layout: 'columns', panel_splits: JSON.stringify({ columns: [0.6, 0.4] }) }, overridden: [], onSet: () => {}, onReset: () => {} };
         const ops = { asleep: false, onHibernate: () => {}, onWake: () => {}, onPreviewRemove: () => {}, onConfirmRemove: () => {}, onCancelRemove: () => {}, removePreview: false, lastOutcome: null, settings } as never;
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} ops={ops} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} ops={ops} />);
         expect(html.match(/data-split-handle="0"/g)?.length ?? 0).toBe(1);
         expect(html).toContain('grid-template-columns:minmax(0, 60fr) minmax(0, 40fr)');
-        const single = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} />);
+        const single = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} files={NO_FILES} initialState={withCode} />);
         expect(single).not.toContain('data-split-handle');
     });
 });

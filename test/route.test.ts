@@ -31,6 +31,19 @@ describe('routes are the application’s state, so they parse exactly', () => {
         });
     });
 
+    it('a workspace opens on its AGENTS (the board’s workspace surface); terminals and settings are views you ask for', () => {
+        // The owner, 2026-10-12: "when I select a workspace, I should not see the workspace settings, I should
+        // see the agent lanes and all of the agents". The default view is home; `?view=` names the other two.
+        expect(parseRoute('genie://workspace/tynn')).toMatchObject({ surface: 'workspace', workspaceId: 'tynn', view: 'home' });
+        expect(parseRoute('genie://workspace/tynn?view=terminals')).toMatchObject({ view: 'terminals' });
+        expect(parseRoute('genie://workspace/tynn?view=settings')).toMatchObject({ view: 'settings' });
+        // A view the surface does not have is home, not a mystery tab.
+        expect(parseRoute('genie://workspace/tynn?view=nonsense')).toMatchObject({ view: 'home' });
+        // Home writes NO parameter: the bar's text stays the short route an agent would paste.
+        expect(formatRoute(parseRoute('genie://workspace/tynn'))).toBe('genie://workspace/tynn');
+        expect(formatRoute(parseRoute('genie://workspace/tynn?view=home'))).toBe('genie://workspace/tynn');
+    });
+
     it('round-trips every route it can parse', () => {
         // The rail writes routes and the chrome displays them; a format/parse pair that
         // disagrees means the bar shows one place while the view renders another.
@@ -41,6 +54,8 @@ describe('routes are the application’s state, so they parse exactly', () => {
             'genie://agent/kai?tab=stream',
             'genie://agent/kai?tab=stream&lane=tools&at=ev_8831',
             'genie://workspace/tynn?panel=files',
+            'genie://workspace/tynn?view=settings',
+            'genie://workspace/tynn?panel=files&view=terminals&chat=kai',
         ];
 
         for (const r of routes) expect(formatRoute(parseRoute(r))).toBe(r);
@@ -81,7 +96,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
             { surface: 'deck', chat: null, pin: null },
             { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, chat: null, pin: null },
-            { surface: 'workspace', workspaceId: 'tynn', panel: null, chat: null, pin: null },
+            { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', chat: null, pin: null },
         ];
 
         expect(shapes.map(formatRoute).filter((r) => r.endsWith('?'))).toEqual([]);

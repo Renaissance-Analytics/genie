@@ -27,7 +27,7 @@ const ops: WorkspaceOpsProps = {
     },
 };
 const render = (o: WorkspaceOpsProps | undefined) =>
-    renderToStaticMarkup(<Workspace workspace={{ id: 'tynn', name: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
+    renderToStaticMarkup(<Workspace view="settings" workspace={{ id: 'tynn', name: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
 
 describe('repos on the Workspace surface', () => {
     it('lists each repo with slug and path; the host is marked and cannot be removed; others can; Open is offered for every one', () => {

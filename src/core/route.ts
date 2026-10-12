@@ -46,6 +46,8 @@ interface Common {
 export type DashboardGroup = 'workspace' | 'status';
 export type AgentTab = 'stream' | 'files' | 'changes' | 'terminal' | 'activity';
 export type WorkspacePanel = 'files';
+export type WorkspaceView = 'home' | 'terminals' | 'settings';
+const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings'];
 /** The settings surface's four groups (`core/settings.ts` owns the registry; this is the URL's view of it). */
 export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
@@ -55,7 +57,11 @@ export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
     | ({ surface: 'deck' } & Common)
     | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
-    | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null } & Common)
+    /**
+     * A workspace opens on its AGENTS (`home`, the board's workspace surface); `terminals` (§4.6) and the
+     * workspace's `settings` are the other two views of the same route. Home writes no `view=`.
+     */
+    | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null; view: WorkspaceView } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
     | ({ surface: 'takeover'; terminalId: string } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
@@ -135,6 +141,7 @@ export function parseRoute(input: string): Route {
                 surface: 'workspace',
                 workspaceId: tail,
                 panel: params.get('panel') === 'files' ? 'files' : null,
+                view: WORKSPACE_VIEWS.includes(params.get('view') as WorkspaceView) ? (params.get('view') as WorkspaceView) : 'home',
                 ...common,
             };
         }
@@ -178,6 +185,7 @@ export function formatRoute(route: Route): string {
             break;
         case 'workspace':
             if (route.panel) params.set('panel', route.panel);
+            if (route.view !== 'home') params.set('view', route.view);
             break;
         case 'takeover':
             break;

@@ -40,7 +40,7 @@ describe('Workspace surface', () => {
         governs: { children: ['fancy'], candidates: [{ id: 'fancy' }, { id: 'prism' }], onSet: () => {} },
     };
     const render = (o: WorkspaceOpsProps | null) =>
-        renderToStaticMarkup(<Workspace workspace={{ id: 'ops', path: '/w/ops' }} terminals={NO_TERMINALS} ops={o ?? undefined} />);
+        renderToStaticMarkup(<Workspace view="settings" workspace={{ id: 'ops', path: '/w/ops' }} terminals={NO_TERMINALS} ops={o ?? undefined} />);
 
     it('lists every other workspace with a checkbox, the governed ones checked; absent without the ops', () => {
         const html = render(ops);

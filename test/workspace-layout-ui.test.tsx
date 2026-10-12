@@ -19,7 +19,7 @@ const ops = (layout: string): WorkspaceOpsProps => ({
 });
 // `null` means "no ops at all" — a default parameter would swallow `undefined`, which is how this test once tested nothing.
 const render = (layout: string, o: WorkspaceOpsProps | null = ops(layout)) =>
-    renderToStaticMarkup(<Workspace workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} initialState={state} ops={o ?? undefined} />);
+    renderToStaticMarkup(<Workspace view="terminals" workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} initialState={state} ops={o ?? undefined} />);
 
 describe('layout modes', () => {
     it('grid shows one slot per visible terminal; single shows one; the grid carries its template', () => {

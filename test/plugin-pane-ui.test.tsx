@@ -54,17 +54,17 @@ describe('PluginPane', () => {
 
 describe('the Workspace surface with plugin panes', () => {
     it('+plugin lists the enabled plugins’ panels when there are any; absent otherwise', () => {
-        const withPanels = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} />);
+        const withPanels = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} />);
         expect(withPanels).toContain('data-action="add-plugin-pane"');
         expect(withPanels).toContain('data-plugin-panel="acme.lint/report"');
         expect(withPanels).toContain('data-plugin-panel="acme.lint/config"');
-        expect(renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} pluginPanels={[]} />)).not.toContain('data-action="add-plugin-pane"');
-        expect(renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} />)).not.toContain('data-action="add-plugin-pane"');
+        expect(renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={[]} />)).not.toContain('data-action="add-plugin-pane"');
+        expect(renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} />)).not.toContain('data-action="add-plugin-pane"');
     });
 
     it('an open plugin pane is a tab named by the panel and a grid slot mounting it', () => {
         const state = pluginOpened(terminalOpened(emptyWorkspace(), tab('t1'), ''), 'acme.lint', 'report');
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} initialState={state} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} initialState={state} />);
         expect(html).toContain('data-plugin-tab="plugin:acme.lint/report"');
         expect(html).toContain('data-pane-slot="plugin:acme.lint/report"');
         expect(html).toContain('data-pane-kind="plugin"');
@@ -73,7 +73,7 @@ describe('the Workspace surface with plugin panes', () => {
 
     it('a pane whose plugin is no longer enabled says so instead of a blank slot', () => {
         const state = pluginOpened(terminalOpened(emptyWorkspace(), tab('t1'), ''), 'acme.gone', 'x');
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} initialState={state} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} initialState={state} />);
         expect(html).toContain('data-plugin-pane-missing="acme.gone/x"');
         expect(html).toMatch(/not enabled|no longer/);
     });

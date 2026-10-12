@@ -592,6 +592,20 @@ if (!approvalEnabled) {
     const onWorkspace = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the Workspace surface');
     check(onWorkspace, '35. the rail reaches the Workspace surface');
 
+    // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings, I
+    // should see the agent lanes and all of the agents." The route opens on the agents rail with the seeded agent's
+    // card and NO settings section; the terminals are a labelled tab away.
+    const home = await cdp.evaluate(`(() => ({
+        rail: Boolean(document.querySelector('[data-workspace-home]')),
+        cards: document.querySelectorAll('[data-home-agent]').length,
+        settings: Boolean(document.querySelector('[data-workspace-settings]')),
+        terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
+    }))()`);
+    check(home.rail && home.cards >= 1 && !home.settings && !home.terminals, '48. the workspace opens on its agents — the rail with the seeded agent, no settings, no terminals', JSON.stringify(home));
+    await cdp.evaluate(`document.querySelector('[data-workspace-tab="terminals"]').click(); true`);
+    const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-terminal-add]')) && !document.querySelector('[data-workspace-home]')`, 'the Terminals view');
+    check(terminalsView, '49. the Terminals tab shows the terminal strip (and puts the rail away)');
+
     await cdp.evaluate(`document.querySelector('[data-terminal-add]').click(); true`);
     const paneUp = await waitFor(
         cdp,
