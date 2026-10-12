@@ -11,7 +11,7 @@ import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
-import { approvalPlacement, budgetFor, planFor, statePill, tabsFor } from '../../core/agent-view.js';
+import { approvalPlacement, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { inspectorFor } from '../../core/inspector.js';
@@ -619,7 +619,8 @@ export function AgentView({
                                     onNavigate={onNavigate}
                                 />
                             ) : null}
-                            {layout === 'turns' ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
+                            {/* The board's empty state draws no chips and no strip: counts over nothing are furniture. */}
+                            {layout === 'turns' || rows.length === 0 ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
                             {drawerOpen ? <Lanes rows={rows} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
@@ -635,6 +636,7 @@ export function AgentView({
                                     onSelect={onSelect}
                                     agentName={agent.name}
                                     live={session?.running === true && session.turnState === 'working'}
+                                    parked={parkedDivider(session, now ?? (() => Date.now()))}
                                     persona={persona}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
