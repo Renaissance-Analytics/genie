@@ -347,8 +347,11 @@ if (typeof agentRow === 'string') {
     const changesTab = await waitFor(cdp, `Boolean(document.querySelector('[data-agent-changes]'))`, 'the Changes tab body');
     const changesText = await cdp.evaluate(`(document.querySelector('[data-agent-changes]')?.textContent ?? '').slice(0, 60)`);
     check(filesTab && changesTab, '51. the Files and Changes tabs have bodies (the file panel; this agent\'s changes or a sentence)', changesText);
-    await cdp.evaluate(`document.querySelector('[data-tab="stream"]').click(); true`);
-    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again');
+    // Each tab click is a NAVIGATION (the tab lives in the route), so the two clicks above are two history entries.
+    // Undo exactly those two, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first
+    // CI run of this check did precisely that. `go(-2)`, not a click on Stream, which would be a third entry.
+    await cdp.evaluate('history.go(-2); true');
+    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again, by history');
 
     /*
      * The composer is REACHABLE from here.
