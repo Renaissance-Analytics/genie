@@ -46,7 +46,9 @@ describe('the capability table', () => {
         // 49 since the Tynn source (§6.1): preview on the host, confirm as a write.
         // 50 since `workspaces.removeRepoLock` (the board's "Remove stale lock" on a red repo chip): a write, workspace-scoped.
         // 51 since `workspaces.locateRepo` (the board's "Locate repo" on a Dashboard group fault): host-only — the picker is the host's.
-        expect(REMOTE_METHODS.length).toBe(51);
+        // 52 since `workspaces.commitsSince` (an observed agent's index): a read, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(52);
+        expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
         expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('host-only');
