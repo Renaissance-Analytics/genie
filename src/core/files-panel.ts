@@ -157,6 +157,19 @@ export function activityFrom(events: readonly FileEvent[], root: string): Activi
 }
 
 /** Files that changed on disk with NO agent report — shown neutral with a `?`; Genie does not guess the author. */
+/**
+ * Whether a watcher event is a CHANGE: a write at or after the watch started (`mtimeMs >= since`), or a
+ * deletion (`info === null`). A write that PREDATES the watch is not — macOS FSEvents replays events for
+ * writes made shortly before the watcher attached, and marking those "changed on disk" invented an
+ * unreported change that no one made while Genie was looking. A directory is never a change (Windows
+ * reports the parent directories of a written file).
+ */
+export function countsAsDiskChange(info: { readonly mtimeMs: number; readonly isDirectory: boolean } | null, since: number): boolean {
+    if (info === null) return true;
+    if (info.isDirectory) return false;
+    return info.mtimeMs >= since;
+}
+
 export function unreportedChanges(attribution: ReadonlyMap<string, FileAttribution>, changedOnDisk: readonly string[], root: string): string[] {
     const out: string[] = [];
     for (const raw of changedOnDisk) {
