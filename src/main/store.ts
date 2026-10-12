@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
@@ -58,11 +58,44 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
     }
 }
 
-export async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+/**
+ * Atomic replace, safe under CONCURRENT callers. The Windows VM run of 2026-10-11 passed every test
+ * and still exited 1: two AttentionStore flushes in flight shared ONE temp name, and Windows refused
+ * the second rename with EPERM (a rename onto a file another handle still holds). So:
+ * - writes to the same file are SERIALISED (a per-file promise chain) — the last write wins, whole;
+ * - each write has its own temp name, so two can never trample one another's bytes;
+ * - a rename refused with EPERM/EBUSY/EACCES (Windows: an indexer or scanner holding the target for a
+ *   moment) is retried a few times before it is reported.
+ */
+const inFlight = new Map<string, Promise<void>>();
+let tmpCounter = 0;
+
+export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+    const previous = inFlight.get(file) ?? Promise.resolve();
+    const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value));
+    inFlight.set(file, mine);
+    void mine.finally(() => { if (inFlight.get(file) === mine) inFlight.delete(file); });
+    return mine;
+}
+
+async function writeJsonAtomicNow(file: string, value: unknown): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
+    const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
     await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await rename(tmp, file);
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            await rename(tmp, file);
+            return;
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (attempt < 5 && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+                await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+                continue;
+            }
+            await rm(tmp, { force: true }).catch(() => undefined);
+            throw error;
+        }
+    }
 }
 
 /**
