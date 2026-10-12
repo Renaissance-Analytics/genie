@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
-import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
+import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
@@ -771,6 +771,15 @@ export function AgentView({
                                         ))}
                                     </div>
                                     <span className="font-mono text-[11px] text-[var(--fg-3)]">{lastOutputLabel(takeOver.lastOutputAt, clock())}</span>
+                                </div>
+                                {/* THE OUTPUT TIMELINE (the board's blind state): bytes out across the window's whole life, and the total. */}
+                                <div className="flex items-center gap-4">
+                                    <div data-output-histogram={agent.id} className="flex h-4 items-end gap-0.5 text-[var(--fg-4)]" title="Output over the whole window, start to now">
+                                        {outputHistogram(takeOver.bursts, takeOver.startedAt, clock()).map((b, i) => (
+                                            <span key={i} data-output-bar={i} className="w-[3px] rounded-[1px] bg-current" style={{ height: `${Math.max(1, b)}px` }} />
+                                        ))}
+                                    </div>
+                                    <span data-output-total="" className="font-mono text-[11px] text-[var(--fg-3)]">{outputTotalLabel(takeOver.bursts, takeOver.startedAt, clock())}</span>
                                 </div>
                                 <ul className="flex flex-col divide-y divide-[var(--border-1)] text-[12px]">
                                     {activityLedger(takeOver.bursts).map((r) => (
