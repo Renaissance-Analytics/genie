@@ -180,7 +180,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 >
                     <span
                         aria-hidden="true"
-                        className={`size-1.5 rounded-full ${workstation.healthy ? 'bg-emerald-500' : 'bg-red-500'}`}
+                        className={`size-1.5 rounded-full ${workstation.healthy ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'}`}
                     />
                     {workstation.name}
                 </div>

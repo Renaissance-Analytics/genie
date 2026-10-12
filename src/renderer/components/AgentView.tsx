@@ -56,7 +56,7 @@ import type { StreamLayout } from '../../core/route.js';
  */
 
 /** The index column's live dot — the current turn's state, the Dashboard's colours. */
-const INDEX_LIVE: Record<IndexLive, string> = { ok: 'bg-emerald-500', warn: 'bg-amber-500', bad: 'bg-red-500' };
+const INDEX_LIVE: Record<IndexLive, string> = { ok: 'bg-[var(--success)]', warn: 'bg-[var(--warning)]', bad: 'bg-[var(--danger)]' };
 
 const TAB_LABEL: Record<AgentTab, string> = {
     stream: 'Stream',
@@ -67,9 +67,9 @@ const TAB_LABEL: Record<AgentTab, string> = {
 };
 
 const PILL_TONE = {
-    ok: 'text-emerald-500',
-    warn: 'text-amber-500',
-    bad: 'text-red-500',
+    ok: 'text-[var(--success)]',
+    warn: 'text-[var(--warning)]',
+    bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
 } as const;
 
@@ -454,7 +454,7 @@ export function AgentView({
                                     data-action="restart-graceful"
                                     title="Restart gracefully — same conversation; refuses if it cannot resume"
                                     onClick={() => ops.onRestart('graceful')}
-                                    className="flex items-center gap-1.5 rounded-md border border-blue-600 bg-blue-500 px-2 py-1 text-xs font-medium text-white hover:bg-blue-600"
+                                    className="flex items-center gap-1.5 rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--primary-hover)]"
                                 >
                                     <Icon name="rotate-ccw" size="xs" />
                                     Restart
@@ -622,8 +622,8 @@ export function AgentView({
                              * and nothing after the break was received. Inline, at the end — where the reader is.
                              */}
                             {session?.failure ? (
-                                <div data-stream-error="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-red-500 bg-[var(--bg-1)] px-3 py-2 text-[12px]">
-                                    <div className="flex items-center gap-2 font-mono text-[12px] text-red-500">
+                                <div data-stream-error="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-[var(--danger)] bg-[var(--bg-1)] px-3 py-2 text-[12px]">
+                                    <div className="flex items-center gap-2 font-mono text-[12px] text-[var(--danger)]">
                                         <Icon name="circle-alert" size="xs" />
                                         <span>{session.failure.reason}</span>
                                     </div>
@@ -672,7 +672,7 @@ export function AgentView({
                                         {changes.map((path) => (
                                             <li key={path}>
                                                 <button type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
-                                                    <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                                    <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
                                                     <span className="truncate">{path}</span>
                                                 </button>
                                             </li>
@@ -754,7 +754,7 @@ export function AgentView({
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
                     {ended ? (
                         <section data-rail="process-ended" className="flex flex-col gap-2">
-                            <h2 className="flex items-center gap-2 text-[12px] font-semibold text-red-500">
+                            <h2 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--danger)]">
                                 <Icon name="circle-alert" size="xs" />
                                 Process ended
                             </h2>
@@ -763,7 +763,7 @@ export function AgentView({
                             {ended.log ? <pre data-process-log="" className="max-h-40 overflow-hidden whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-2 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.log}</pre> : null}
                             <div className="flex items-center gap-2">
                                 {ops ? (
-                                    <button type="button" data-action="restart-resume" onClick={() => ops.onRestart('graceful')} className="flex h-[26px] items-center rounded-lg border border-blue-600 bg-blue-500 px-2.5 text-[12px] font-medium text-white hover:bg-blue-600">Restart and resume</button>
+                                    <button type="button" data-action="restart-resume" onClick={() => ops.onRestart('graceful')} className="flex h-[26px] items-center rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart and resume</button>
                                 ) : null}
                                 <button type="button" data-action="copy-log" onClick={() => { void navigator.clipboard?.writeText([ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')); }} className="flex h-[26px] items-center rounded-lg px-2.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Copy log</button>
                             </div>
@@ -837,14 +837,14 @@ export function AgentView({
                             <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
                                 <span
                                     data-budget-bar={budget.pct}
-                                    className={`block h-full ${budget.pct >= 90 ? 'bg-red-500' : budget.pct >= 80 ? 'bg-amber-500' : 'bg-sky-400'}`}
+                                    className={`block h-full ${budget.pct >= 90 ? 'bg-[var(--danger)]' : budget.pct >= 80 ? 'bg-[var(--warning)]' : 'bg-[var(--sky-400)]'}`}
                                     style={{ width: `${budget.pct}%` }}
                                 />
                             </span>
                             ) : null}
                             {/* The note under the bar (the board): compaction expected / compacted at / last reported. Absent when there is nothing to say. */}
                             {note ? (
-                                <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-red-500' : note.tone === 'warn' ? 'text-amber-500' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
+                                <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-[var(--danger)]' : note.tone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
                             ) : null}
                             {/*
                              * No Cost row at all when the provider reports none — codex reports

@@ -11,15 +11,15 @@ import type { LedgerRow, Tone } from '../../core/stream-view.js';
 const TONE: Record<Tone, string> = {
     default: 'text-[var(--fg-1)]',
     muted: 'text-[var(--fg-3)]',
-    violet: 'text-violet-400',
-    emerald: 'text-emerald-500',
-    sky: 'text-sky-400',
-    amber: 'text-amber-500',
-    bad: 'text-red-500',
+    violet: 'text-[var(--violet-400)]',
+    emerald: 'text-[var(--success)]',
+    sky: 'text-[var(--sky-400)]',
+    amber: 'text-[var(--warning)]',
+    bad: 'text-[var(--danger)]',
 };
 
 /** The speaker's colour (the board): you blue, the agent violet, a peer violet too — it is an agent. */
-const WHO_TONE = { you: 'text-blue-500', agent: 'text-violet-400', peer: 'text-violet-400' } as const;
+const WHO_TONE = { you: 'text-[var(--primary)]', agent: 'text-[var(--violet-400)]', peer: 'text-[var(--violet-400)]' } as const;
 
 /** `14:07:12`, in the viewer's own locale. `null` for a row with no recorded time. */
 function timeOf(at: number | null): string | null {
@@ -88,8 +88,8 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
             </span>
 
             {/* An edit's line counts as two cells — only ever from a real diff. */}
-            {row.plus !== null ? <span data-plus={row.plus} className="shrink-0 font-mono text-[11px] text-emerald-500">+{row.plus}</span> : null}
-            {row.minus !== null ? <span data-minus={row.minus} className="shrink-0 font-mono text-[11px] text-red-500">−{row.minus}</span> : null}
+            {row.plus !== null ? <span data-plus={row.plus} className="shrink-0 font-mono text-[11px] text-[var(--success)]">+{row.plus}</span> : null}
+            {row.minus !== null ? <span data-minus={row.minus} className="shrink-0 font-mono text-[11px] text-[var(--danger)]">−{row.minus}</span> : null}
 
             {/*
              * What is MISSING from this row's data, said once and inline — `(kind not
@@ -106,7 +106,7 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
             {row.meta ? (
                 <span
                     data-meta
-                    className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-red-500' : row.metaTone === 'warn' ? 'text-amber-500' : 'text-[var(--fg-4)]'}`}
+                    className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-[var(--danger)]' : row.metaTone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-4)]'}`}
                 >
                     {row.meta}
                 </span>

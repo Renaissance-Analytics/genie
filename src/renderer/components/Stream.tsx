@@ -133,7 +133,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 {onChat || (persona && onEditPersona) ? (
                     <div className="mt-1 flex items-center gap-2">
                         {onChat ? (
-                            <button type="button" data-action="chat" onClick={onChat} className="flex items-center gap-1.5 rounded-lg border border-blue-600 bg-blue-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-blue-600">
+                            <button type="button" data-action="chat" onClick={onChat} className="flex items-center gap-1.5 rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">
                                 Message {agentName ?? 'the agent'}
                                 <span className="font-mono text-[10px] opacity-80">⌘J</span>
                             </button>

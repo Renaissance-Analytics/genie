@@ -10,7 +10,7 @@ import { StreamRow } from './StreamRow.js';
  * Rows are the same `StreamRow` the ledger draws, so a turn reads the same either way.
  */
 
-const CHIP_TONE = { ok: 'text-emerald-500', violet: 'text-violet-400' } as const;
+const CHIP_TONE = { ok: 'text-[var(--success)]', violet: 'text-[var(--violet-400)]' } as const;
 
 /** `14:07`, in the viewer's own locale. */
 function clock(at: number | null): string | null {

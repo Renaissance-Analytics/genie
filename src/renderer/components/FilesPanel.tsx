@@ -145,7 +145,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 {state.changed.map((g) => (
                                     <div key={g.who}>
                                         <div data-changed-group={g.who} className="flex items-center gap-1.5 px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                            <span className={`size-1.5 rounded-full ${g.who === 'you' ? 'bg-blue-500' : g.who === '?' ? 'border border-[var(--fg-4)]' : 'bg-[var(--accent)]'}`} />
+                                            <span className={`size-1.5 rounded-full ${g.who === 'you' ? 'bg-[var(--primary)]' : g.who === '?' ? 'border border-[var(--fg-4)]' : 'bg-[var(--accent)]'}`} />
                                             {g.who === '?' ? 'not attributed' : g.who} · {g.files.length} {g.files.length === 1 ? 'file' : 'files'}
                                         </div>
                                         {g.files.map((f) => (
@@ -222,7 +222,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     ))}
                     {/* ASKED, not stopped: Genie cannot halt a provider's tool call; it told the agent and says so (§4.3). */}
                     {paused.map((p) => (
-                        <span key={`pause:${p.agent}:${p.path}`} data-paused={p.path} className="inline-flex items-center gap-1 text-amber-500">
+                        <span key={`pause:${p.agent}:${p.path}`} data-paused={p.path} className="inline-flex items-center gap-1 text-[var(--warning)]">
                             <span>⏸</span>
                             <span>{`${p.agent} asked to pause on ${p.path} — you have unsaved edits there`}</span>
                         </span>

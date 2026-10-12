@@ -63,17 +63,17 @@ const GRID =
 
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 const STATE_DOT: Record<AgentState, string> = {
-    working: 'text-emerald-500',
-    waiting: 'text-amber-500',
-    broken: 'text-red-500',
-    idle: 'text-zinc-400',
-    remote: 'text-zinc-500',
+    working: 'text-[var(--success)]',
+    waiting: 'text-[var(--warning)]',
+    broken: 'text-[var(--danger)]',
+    idle: 'text-[var(--zinc-400)]',
+    remote: 'text-[var(--fg-4)]',
 };
 
 const STATUS_TONE = {
-    ok: 'text-emerald-500',
-    warn: 'text-amber-500',
-    bad: 'text-red-500',
+    ok: 'text-[var(--success)]',
+    warn: 'text-[var(--warning)]',
+    bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
 } as const;
 
@@ -128,10 +128,10 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
                 <span className="min-w-0 flex-1 truncate text-xs text-[var(--fg-3)]">{delivery.sub}</span>
             ) : null}
             {delivery.plus !== null ? (
-                <span className="shrink-0 font-mono text-[11px] text-emerald-500">+{delivery.plus}</span>
+                <span className="shrink-0 font-mono text-[11px] text-[var(--success)]">+{delivery.plus}</span>
             ) : null}
             {delivery.minus !== null ? (
-                <span className="shrink-0 font-mono text-[11px] text-red-500">−{delivery.minus}</span>
+                <span className="shrink-0 font-mono text-[11px] text-[var(--danger)]">−{delivery.minus}</span>
             ) : null}
             <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{delivery.age}</span>
         </div>
@@ -227,7 +227,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; 
                         <ActivityLight
                             level={comms.level}
                             label={`${row.name} and its collaborators`}
-                            className={comms.level === 'live' ? 'text-violet-400' : ''}
+                            className={comms.level === 'live' ? 'text-[var(--violet-400)]' : ''}
                         />
                     </>
                 ) : null}
@@ -240,12 +240,12 @@ function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; 
                         <span className="block h-1 w-9 overflow-hidden rounded-sm bg-[var(--bg-3)]">
                             <span
                                 data-context-bar={context.tone}
-                                className={`block h-full ${context.tone === 'bad' ? 'bg-red-500' : 'bg-amber-500'}`}
+                                className={`block h-full ${context.tone === 'bad' ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]'}`}
                                 style={{ width: `${context.pct}%` }}
                             />
                         </span>
                         <span
-                            className={`font-mono text-[11px] ${context.tone === 'bad' ? 'text-red-500' : 'text-amber-500'}`}
+                            className={`font-mono text-[11px] ${context.tone === 'bad' ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}
                         >
                             {Math.round(context.used / 1000)}k
                         </span>
@@ -305,11 +305,11 @@ function GroupHeader({
 }
 
 const CHIP_DOT: Record<AgentState, string> = {
-    waiting: 'bg-amber-500',
-    broken: 'bg-red-500',
-    working: 'bg-emerald-500',
-    idle: 'bg-zinc-400',
-    remote: 'bg-zinc-500',
+    waiting: 'bg-[var(--warning)]',
+    broken: 'bg-[var(--danger)]',
+    working: 'bg-[var(--success)]',
+    idle: 'bg-[var(--zinc-400)]',
+    remote: 'bg-[var(--fg-4)]',
 };
 
 export interface DashboardProps {

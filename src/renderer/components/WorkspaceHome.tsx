@@ -15,9 +15,9 @@ import { FidelityDot } from './Dashboard.js';
  */
 
 const TONE = {
-    ok: 'text-emerald-500',
-    warn: 'text-amber-500',
-    bad: 'text-red-500',
+    ok: 'text-[var(--success)]',
+    warn: 'text-[var(--warning)]',
+    bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
 } as const;
 
@@ -78,7 +78,7 @@ export function WorkspaceHome({ name, view, onOpenAgent, onAddAgent, workspaceId
                                 {c.who === '?' ? (
                                     <span className="ml-auto shrink-0 text-[11px] text-[var(--fg-4)]">on disk · not attributed</span>
                                 ) : (
-                                    <span className={`ml-auto shrink-0 text-[11px] ${c.who === 'you' ? 'text-blue-500' : 'text-violet-500'}`}>{c.who}</span>
+                                    <span className={`ml-auto shrink-0 text-[11px] ${c.who === 'you' ? 'text-[var(--primary)]' : 'text-[var(--violet-400)]'}`}>{c.who}</span>
                                 )}
                             </li>
                         ))}
