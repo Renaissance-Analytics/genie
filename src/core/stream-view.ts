@@ -115,8 +115,16 @@ export function editLineCounts(rawInput: unknown): { plus: number; minus: number
         const after = typeof o['new_string'] === 'string' ? (o['new_string'] as string) : null;
         if (before !== null || after !== null) pairs.push({ before: before ?? '', after: after ?? '' });
     };
-    if (Array.isArray(input['edits'])) for (const e of input['edits']) if (typeof e === 'object' && e !== null) take(e as Record<string, unknown>);
-    else take(input);
+    // Braced on purpose: without them the `else` bound to the INNER `if` inside the loop, so a plain `old_string` /
+    // `new_string` pair — what Claude's Edit sends — was never taken, and every such edit counted nothing. The
+    // Stream's tests fed counts through the `diffs` map and never noticed; the index column did.
+    if (Array.isArray(input['edits'])) {
+        for (const e of input['edits']) {
+            if (typeof e === 'object' && e !== null) take(e as Record<string, unknown>);
+        }
+    } else {
+        take(input);
+    }
     if (pairs.length === 0) return null;
     // The kit's diff engine (`fancy-file-commons`), never a hand-rolled one: a line on the `after` side only was added,
     // on the `before` side only removed; `both` is unchanged.
@@ -321,6 +329,12 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             return { ...base, icon: 'scissors', tone: 'amber', kind: 'compacted', main, lane: null };
         }
 
+        case 'turn': {
+            // The board's divider: `Turn 14 · started by you · 14:07:12` (the time is the row's own).
+            const main = row.event.by === null ? `Turn ${row.event.n}` : `Turn ${row.event.n} · started by ${row.event.by}`;
+            return { ...base, icon: 'play', tone: 'muted', kind: 'turn', main, lane: null };
+        }
+
         case 'notice':
             return { ...base, icon: 'info', tone: 'amber', main: row.event.message, lane: null };
 
@@ -360,6 +374,8 @@ export function visibleRows(rows: readonly TimedEvent[], lanes: readonly Lane[] 
 
     return rows.filter((row) => {
         if (row.event.kind === 'divider') return true;
+        // A turn marker is STRUCTURE, not content: a filtered view that lost its turns would read as one long turn.
+        if (row.event.kind === 'turn') return true;
         const lane = laneOf(row.event);
         return lane !== null && lanes.includes(lane);
     });

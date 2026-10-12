@@ -424,10 +424,11 @@ export class SessionHost {
         return answered;
     }
 
-    prompt(agentId: AgentId, text: string): boolean {
+    /** `by` is who started the turn, when the caller knows (`you`, `genie`, a peer's name); it is written into the ledger. */
+    prompt(agentId: AgentId, text: string, by: string | null = null): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
-        entry.session.prompt(text);
+        entry.session.prompt(text, by);
         this.#emit(agentId);
         return true;
     }

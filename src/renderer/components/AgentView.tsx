@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, headerActions } from '../../core/agent-view.js';
+import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
@@ -48,6 +49,9 @@ import { Stream } from './Stream.js';
  *
  * It is closed on arrival and does not remember being open across agents.
  */
+
+/** The index column's live dot — the current turn's state, the Dashboard's colours. */
+const INDEX_LIVE: Record<IndexLive, string> = { ok: 'bg-emerald-500', warn: 'bg-amber-500', bad: 'bg-red-500' };
 
 const TAB_LABEL: Record<AgentTab, string> = {
     stream: 'Stream',
@@ -211,6 +215,9 @@ export function AgentView({
     const active = tabs.includes(tab) ? tab : (tabs[0] ?? 'files');
 
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
+
+    // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
+    const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
 
     /**
      * Where a parked approval is ACTIONABLE — exactly one place.
@@ -491,6 +498,35 @@ export function AgentView({
             </div>
 
             <div className="flex min-h-0 flex-1">
+                {index ? (
+                    <nav data-index-column="" className="flex w-[216px] shrink-0 flex-col gap-0.5 overflow-hidden border-r border-[var(--border-1)] px-2 py-3">
+                        {index.map((section) => (
+                            <div key={section.title} className="mb-3.5 flex flex-col gap-0.5">
+                                <h2 className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{section.title}</h2>
+                                {section.items.map((item) => {
+                                    const door = `genie://agent/${agent.id}?tab=stream&at=${item.rowId}`;
+                                    return (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            data-index-item={item.id}
+                                            {...(item.live ? { 'data-live': item.live } : {})}
+                                            data-nav={door}
+                                            onClick={() => onNavigate(door)}
+                                            className={`flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left ${item.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}
+                                        >
+                                            <span className="flex w-full items-center gap-1.5 text-[12px] text-[var(--fg-1)]">
+                                                {item.live ? <span className={`size-1.5 shrink-0 animate-pulse rounded-full ${INDEX_LIVE[item.live]}`} /> : null}
+                                                <span className={`truncate ${item.mono ? 'font-mono' : ''}`}>{item.label}</span>
+                                            </span>
+                                            {item.meta ? <span className="w-full truncate font-mono text-[10px] text-[var(--fg-4)]">{item.meta}</span> : null}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ))}
+                    </nav>
+                ) : null}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     {active === 'stream' ? (
                         <>
