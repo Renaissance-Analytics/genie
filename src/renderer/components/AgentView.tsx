@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { contextNote, headerActions, personaView, planSteps, processEnded } from '../../core/agent-view.js';
+import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -552,6 +552,8 @@ export function AgentView({
                         {TAB_LABEL[t]}
                     </button>
                 ))}
+                {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
+                {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="ml-auto truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
             </div>
 
             <div className="flex min-h-0 flex-1">
@@ -750,7 +752,7 @@ export function AgentView({
                  */}
                 {inspector || plan || budget || budgetLimit !== null || ops || persona || ended ? (
                 <aside data-right-column="" className="flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)]">
-                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded /> : null}
+                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} /> : null}
                 {plan || budget || budgetLimit !== null || ops || persona || ended ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
