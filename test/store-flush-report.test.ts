@@ -60,7 +60,11 @@ describe('a store whose fire-and-forget flush fails', () => {
         try {
             const item = store.add({ workspaceId: 'tynn', agentName: null, kind: 'bug', text: 'the window cannot be moved' });
             expect(item.text).toBe('the window cannot be moved');
-            await new Promise((r) => setTimeout(r, 150));
+            // Windows refuses the rename with EPERM, which writeJsonAtomic retries for ~300 ms before giving up;
+            // Linux answers EISDIR at once. The test's deadline must exceed the code's retry budget (the Windows
+            // release runner failed a 150 ms wait on 2026-10-12): poll for the report, up to 3 s.
+            const until = Date.now() + 3_000;
+            while (error.mock.calls.length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
             expect(unhandled).toBe(0);
             expect(error).toHaveBeenCalled();
             expect(String(error.mock.calls[0]?.[0])).toMatch(/feedback/);
