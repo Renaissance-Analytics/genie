@@ -37,11 +37,16 @@ async function gitDirOf(ports: RepoOpsPorts, repoRoot: string): Promise<string |
     return isAbsolute(target) ? target : resolve(dirname(dotGit), target);
 }
 
-async function statusOf(ports: RepoOpsPorts, wsPath: string, repo: RepoEntry): Promise<{ branch?: string | null; lock?: LockState | null }> {
-    // Ports that cannot read `.git` add NOTHING to the entry — absent, not null-as-a-claim — so a host without them
-    // lists repos exactly as before.
-    if (!ports.fs.readText || !ports.fs.mtime) return {};
+async function statusOf(ports: RepoOpsPorts, wsPath: string, repo: RepoEntry): Promise<{ branch?: string | null; lock?: LockState | null; missing?: boolean }> {
     const root = repo.path === '.' ? wsPath : join(wsPath, ...repo.path.split('/'));
+    // A registered repo whose folder is not there is a WORKSPACE-LEVEL fault (the board's group-header row), reported
+    // as a flag on the entry; the host repo (`.`) is the envelope itself and cannot be missing.
+    const missing = repo.path !== '.' && !(await ports.fs.exists(root));
+    const flag = missing ? { missing: true } : {};
+    // Ports that cannot read `.git` add NOTHING else to the entry — absent, not null-as-a-claim — so a host without
+    // them lists repos exactly as before.
+    if (!ports.fs.readText || !ports.fs.mtime) return flag;
+    if (missing) return { ...flag, branch: null, lock: null };
     const gitDir = await gitDirOf(ports, root);
     if (!gitDir) return { branch: null, lock: null };
     const [head, lockMtime] = await Promise.all([ports.fs.readText(join(gitDir, 'HEAD')), ports.fs.mtime(join(gitDir, 'index.lock'))]);

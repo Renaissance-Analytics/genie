@@ -16,6 +16,7 @@ import {
     type AgentState,
     type Delivery,
     type Fidelity,
+    type WorkspaceFault,
     type WorkspaceGroup,
 } from '../../core/dashboard-view.js';
 
@@ -262,6 +263,7 @@ function GroupHeader({
     path,
     onAddAgent,
     onOpenWorkspace,
+    onLocateRepo,
 }: {
     group: WorkspaceGroup;
     /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
@@ -269,6 +271,7 @@ function GroupHeader({
     path: string;
     onAddAgent: (workspaceId: string) => void;
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
+    onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
 }) {
     return (
         <>
@@ -277,6 +280,14 @@ function GroupHeader({
                 <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
                 {group.governedBy ? <span data-governed-by={group.governedBy} className="ml-2.5 shrink-0 text-[var(--fg-4)]">governed by {group.governedBy}</span> : null}
+                {/* THE WORKSPACE-LEVEL FAULT (the board): `⚠ repo site not found in moic.agi` and its own fix button. */}
+                {group.fault ? (
+                    <span data-workspace-fault={group.fault.repo} className="ml-2.5 flex shrink-0 items-center gap-1.5 text-[var(--warning)]">
+                        <Icon name="circle-alert" size="xs" />
+                        {group.fault.text}
+                        <button type="button" data-action="locate-repo" onClick={() => onLocateRepo?.(group.workspaceId, group.fault!.repo)} className="rounded border border-[var(--border-1)] px-1.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Locate repo</button>
+                    </span>
+                ) : null}
                 {/* A DOOR, not a label: the board's right-aligned `Open workspace →` opens the workspace's own page. */}
                 <button type="button" data-open-workspace={group.workspaceId} onClick={() => onOpenWorkspace?.(group.workspaceId)} className="ml-auto shrink-0 rounded px-1 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">Open workspace →</button>
             </div>
@@ -333,6 +344,10 @@ export interface DashboardProps {
     onGroup?: ((group: DashboardGroup) => void) | undefined;
     /** `Open workspace →` on a group header. */
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
+    /** Workspace-level faults by workspace id (a missing repo), from the registry each workspace lists; absent = none seen. */
+    faults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
+    /** The fault's fix: the workspace's registry, where the path is edited. */
+    onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
     /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
     onFix?: ((route: FixRoute) => void) | undefined;
     /** `Chat ⌘J` — the composer, on genie, one click from the board. */
@@ -341,11 +356,12 @@ export interface DashboardProps {
     focusedId?: string | null | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, onFix, onChat, focusedId }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
         Object.fromEntries((workspaces ?? []).flatMap((w) => (w.governedBy ? [[w.id, w.governedBy]] : []))),
+        faults ?? {},
     );
     // THE ROW CURSOR (§4.1): `J`/`K` over the rows in document order, `↵` opens, `G` cycles the grouping. `A`/`D` are
     // unbound here — the Dashboard resolves nothing. The keys are decided in `core/keys.ts`; letters never act while typing.
@@ -522,7 +538,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 </div>
             ) : groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} />
+                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} />
                     {group.rows.map((row) => (
                         <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} />
                     ))}

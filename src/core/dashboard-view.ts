@@ -224,6 +224,23 @@ export function targetOf(row: AgentRow): TargetCell {
     return null;
 }
 
+/**
+ * A WORKSPACE-LEVEL fault on the group header (the board: `⚠ repo site not found in moic.agi  [Locate repo]`): a
+ * registered repo whose folder is not where the manifest says. One at a time — the first missing repo; the fix is a
+ * door to the workspace's registry, where the path is edited. `null` when every registered repo is there, and when
+ * the repos have not been read (not a fault Genie has seen).
+ */
+export interface WorkspaceFault {
+    readonly text: string;
+    readonly repo: string;
+}
+
+export function workspaceFault(repos: readonly { slug: string; missing?: boolean | undefined }[] | null, workspaceName: string): WorkspaceFault | null {
+    const gone = repos?.find((r) => r.missing === true);
+    if (!gone) return null;
+    return { text: `repo ${gone.slug} not found in ${workspaceName}.agi`, repo: gone.slug };
+}
+
 export interface WorkspaceGroup {
     workspaceId: string;
     rows: readonly AgentRow[];
@@ -233,12 +250,15 @@ export interface WorkspaceGroup {
     empty: boolean;
     /** Present only when an ops project governs this workspace (§6.1). */
     governedBy?: string;
+    /** Present only when the workspace has a fault of its own (a missing repo). */
+    fault?: WorkspaceFault;
 }
 
 export function groupByWorkspace(
     rows: readonly AgentRow[],
     workspaceIds: readonly string[],
     governedBy: Readonly<Record<string, string>> = {},
+    faults: Readonly<Record<string, WorkspaceFault | null | undefined>> = {},
 ): readonly WorkspaceGroup[] {
     // Governed workspaces follow their governor (§6.1), in the given order.
     const ids = new Set(workspaceIds);
@@ -261,7 +281,7 @@ export function groupByWorkspace(
         if (count('waiting') > 0) parts.push(`${count('waiting')} waiting`);
         if (count('broken') > 0) parts.push(`${count('broken')} broken`);
 
-        return { workspaceId, rows: mine, summary: parts.join(' · '), empty: mine.length === 0, ...(governedBy[workspaceId] ? { governedBy: governedBy[workspaceId]! } : {}) };
+        return { workspaceId, rows: mine, summary: parts.join(' · '), empty: mine.length === 0, ...(governedBy[workspaceId] ? { governedBy: governedBy[workspaceId]! } : {}), ...(faults[workspaceId] ? { fault: faults[workspaceId]! } : {}) };
     });
 }
 

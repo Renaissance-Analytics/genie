@@ -15,6 +15,8 @@ export interface RepoEntry {
     readonly branch?: string | null;
     /** git's `index.lock`, when present; `stale` once it has sat longer than any real command takes. */
     readonly lock?: { heldSince: number; stale: boolean } | null;
+    /** The folder the manifest names is not there (the board's `⚠ repo site not found in moic.agi`). Absent = not checked. */
+    readonly missing?: boolean;
 }
 
 export type RepoResult = { ok: true; manifest: Record<string, unknown>; slug: string } | { ok: false; reason: string };
