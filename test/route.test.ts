@@ -10,7 +10,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
 
     it('parses an agent route with its tab, lane range and event anchor', () => {
         expect(parseRoute('genie://agent/kai?tab=stream&lane=tools&at=ev_8831')).toEqual({
-            surface: 'agent', agentId: 'kai', tab: 'stream', lane: 'tools', at: 'ev_8831', range: null, chat: null, pin: null,
+            surface: 'agent', agentId: 'kai', tab: 'stream', lane: 'tools', at: 'ev_8831', range: null, layout: 'ledger', chat: null, pin: null,
         });
     });
 
@@ -95,7 +95,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
         const shapes: Route[] = [
             { surface: 'deck', item: null, chat: null, pin: null },
             { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
-            { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, chat: null, pin: null },
+            { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, layout: 'ledger', chat: null, pin: null },
             { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', chat: null, pin: null },
         ];
 

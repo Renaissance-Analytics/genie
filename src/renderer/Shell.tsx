@@ -364,6 +364,7 @@ export function Shell({
                             tab={parsed.tab}
                             lanes={parseLanes(parsed.lane)}
                             at={parsed.at}
+                            layout={parsed.layout}
                             selectedId={selectedRowId}
                             turns={agentDetail.turns}
                             cost={agentDetail.cost}

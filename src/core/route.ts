@@ -50,6 +50,8 @@ export type WorkspaceView = 'home' | 'terminals' | 'settings';
 const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings'];
 /** The settings surface's four groups (`core/settings.ts` owns the registry; this is the URL's view of it). */
 export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
+/** The Stream's two layouts (the board): the ledger, or one card per turn. */
+export type StreamLayout = 'ledger' | 'turns';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
 export type PlainFeature = 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox';
 
@@ -57,7 +59,8 @@ export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
     /** The Deck, optionally opened ON one item (`?item=<id>`): where a waiting Dashboard row sends the reader (§4.1). */
     | ({ surface: 'deck'; item: string | null } & Common)
-    | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
+    /** `layout`: the Stream as a ledger (the default, writes nothing) or folded into `turns` cards (the board's `&layout=turns`). */
+    | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null; layout: StreamLayout } & Common)
     /**
      * A workspace opens on its AGENTS (`home`, the board's workspace surface); `terminals` (§4.6) and the
      * workspace's `settings` are the other two views of the same route. Home writes no `view=`.
@@ -121,6 +124,7 @@ export function parseRoute(input: string): Route {
                 at: params.get('at') || null,
                 // Malformed is DROPPED, not fatal: the lane and anchor beside it still open.
                 range: parseRange(params.get('range')),
+                layout: params.get('layout') === 'turns' ? 'turns' : 'ledger',
                 ...common,
             };
         }
@@ -183,6 +187,7 @@ export function formatRoute(route: Route): string {
             if (route.lane) params.set('lane', route.lane);
             if (route.range) params.set('range', formatRange(route.range) as string);
             if (route.at) params.set('at', route.at);
+            if (route.layout === 'turns') params.set('layout', 'turns');
             break;
         case 'workspace':
             if (route.panel) params.set('panel', route.panel);

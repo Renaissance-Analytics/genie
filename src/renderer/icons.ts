@@ -60,6 +60,8 @@ export const ICON_NAMES: readonly string[] = [
     'eye-off', 'pause', 'play',
     // The timeline strip's `Lanes ▾` toggle (the board), open or closed.
     'chevron-down', 'chevron-up',
+    // The turns layout's collapsed card.
+    'chevron-right',
     'info', 'circle-help', 'file-text', 'globe', 'check',
 ];
 
