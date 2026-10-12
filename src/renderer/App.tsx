@@ -731,6 +731,7 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
+            onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

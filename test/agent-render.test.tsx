@@ -93,9 +93,9 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
         expect(html).not.toContain('data-tab="stream"');
         expect(html).toContain('data-tab="terminal"');
         expect(html).not.toContain('disabled');
-        // Asked for a tab it does not have, it falls back to its first rather than rendering an
-        // empty body under a strip that does not contain the selected tab.
-        expect(html).toMatch(/data-tab="terminal"[^>]*data-active="true"/);
+        // Asked for a tab it does not have, it falls back to its first — Activity, per the board — rather than
+        // rendering an empty body under a strip that does not contain the selected tab.
+        expect(html).toMatch(/data-tab="activity"[^>]*data-active="true"/);
     });
 
     it('counts which fidelities render a Stream, rather than spot-checking the one that should', () => {
@@ -123,7 +123,8 @@ describe('the header', () => {
         expect(html).toContain('kai');
         expect(html).toContain('claude');
         expect(html).toContain('repos/genie2');
-        expect(html).toContain('data-pill="thinking"');
+        // The board's words: the pill speaks in turns while one runs, with a clock.
+        expect(html).toMatch(/data-pill="Turn \d+ · running"/);
         expect(html).toContain('0:14');
     });
 
@@ -131,13 +132,13 @@ describe('the header', () => {
         // An elapsed timer on an idle agent counts up forever and reads as work in progress.
         const html = render({ session: session({ running: false, turnState: 'idle' }) });
 
-        expect(html).toContain('data-pill="idle"');
+        expect(html).toContain('data-pill="Idle"');
         expect(html).not.toContain('0:14');
     });
 
     it('reads the parked question as the state', () => {
         const html = render({ session: session({ turnState: 'idle', pendingApproval: { question: 'Allow migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }) });
-        expect(html).toContain('data-pill="waiting on you"');
+        expect(html).toMatch(/data-pill="Turn \d+ · parked · waiting on you"/);
     });
 });
 
@@ -367,7 +368,7 @@ describe('a parked approval renders in exactly ONE place', () => {
     it('reads the agent as WAITING in the header pill', () => {
         // The same fact, through the other reader. A row that is waiting and a pill that says
         // thinking is the kind of disagreement that makes people stop trusting both.
-        expect(render({ session: parked() })).toContain('data-pill="waiting on you"');
+        expect(render({ session: parked() })).toMatch(/data-pill="Turn \d+ · parked · waiting on you"/);
     });
 });
 

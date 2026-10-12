@@ -35,6 +35,8 @@ export const ICON_NAMES: readonly string[] = [
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // the workspace header's repo chips
     'git-branch', 'circle-alert',
+    // the Agent view header's Stop
+    'square',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // dashboard rows

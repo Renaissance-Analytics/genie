@@ -113,6 +113,8 @@ export interface ShellProps {
     onTakeOver?: ((agentId: string) => void) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
     onRestartAgent?: ((agentId: string) => void) | undefined;
+    /** `Stop` in the Agent view's header while a turn runs (§6.2 stop). */
+    onStopAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -169,6 +171,7 @@ export function Shell({
     updates = NO_UPDATES,
     onTakeOver,
     onRestartAgent,
+    onStopAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -362,6 +365,7 @@ export function Shell({
                             files={files}
                             workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
                             takeOver={agentDetail.takeOver ?? null}
+                            onStop={onStopAgent}
                             terminals={terminals}
                         />
                     ) : null}
