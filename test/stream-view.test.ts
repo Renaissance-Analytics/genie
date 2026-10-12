@@ -152,13 +152,19 @@ describe('an edit row', () => {
             timed(tool({ toolKind: 'edit', title: 'x.ts', rawInput: { file_path: 'x.ts' }, status: 'completed' })),
             { diff: { plus: 42, minus: 8, newFile: false } },
         );
-        expect(withDiff.meta).toBe('applied · +42 −8');
+        // The board draws the counts as two cells, so the meta says only what happened to the file.
+        expect(withDiff.meta).toBe('applied');
+        expect(withDiff.plus).toBe(42);
+        expect(withDiff.minus).toBe(8);
 
         const newFile = ledgerRow(
             timed(tool({ toolKind: 'edit', title: 'x.ts', rawInput: { file_path: 'x.ts' }, status: 'completed' })),
             { diff: { plus: 12, minus: 0, newFile: true } },
         );
-        expect(newFile.meta).toBe('new file · +12');
+        expect(newFile.meta).toBe('new file');
+        expect(newFile.plus).toBe(12);
+        // A zero side is ABSENT, not `−0`.
+        expect(newFile.minus).toBeNull();
 
         // No diff computed: the row still says it applied, and claims no numbers. NEVER a
         // `+0 −0`, which asserts an edit that changed nothing.
