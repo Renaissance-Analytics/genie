@@ -13,7 +13,7 @@ import type { AgentId } from '../core/identity.js';
 import { HUMAN } from '../core/inbox.js';
 import type { InboxStore } from './inbox-store.js';
 import { runtimeDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { readJson, reportFlush, writeJsonAtomic } from './store.js';
 
 /**
  * THE ATTENTION PROTOCOL — the durable half (§6.3).
@@ -202,7 +202,7 @@ export class AttentionStore {
 
     markSeen(id: string): void {
         this.#data.finished = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
-        void this.#flush();
+        reportFlush(this.#flush(), 'the attention store');
     }
 
     async ask(input: AskInput, context: { userActive: boolean; dnd?: { on: boolean; reply: string } | undefined }): Promise<AskResult> {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { runtimeDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { readJson, reportFlush, writeJsonAtomic } from './store.js';
 
 /**
  * FEEDBACK (§6.3 `submitFeedback`) — what an agent or the person says about Genie itself, kept durably
@@ -48,7 +48,7 @@ export class FeedbackStore {
         if (!KINDS.includes(input.kind)) throw new Error(`feedback kind must be one of ${KINDS.join(', ')}`);
         const item: FeedbackItem = { id: `fb_${randomUUID()}`, workspaceId: input.workspaceId, agentName: input.agentName, kind: input.kind, text: input.text.trim(), at: new Date(this.#now()).toISOString(), sent: false };
         this.#data.items.unshift(item);
-        void this.#flush();
+        reportFlush(this.#flush(), 'the feedback store');
         return item;
     }
 
@@ -63,7 +63,7 @@ export class FeedbackStore {
     markSent(id: string): boolean {
         if (!this.#data.items.some((i) => i.id === id)) return false;
         this.#data.items = this.#data.items.map((i) => (i.id === id ? { ...i, sent: true } : i));
-        void this.#flush();
+        reportFlush(this.#flush(), 'the feedback store');
         return true;
     }
 

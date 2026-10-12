@@ -70,11 +70,24 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
 const inFlight = new Map<string, Promise<void>>();
 let tmpCounter = 0;
 
+/**
+ * The one way a fire-and-forget flush is written. A synchronous store method (`markSeen`, `add`)
+ * cannot await its write; `void this.#flush()` made a failed write an UNHANDLED REJECTION — on CI a
+ * test directory removed mid-rename turned 1529 green tests into an exit 1, and in the app the same
+ * shape is a lost write that said nothing. Here the failure is reported with the store's name.
+ */
+export function reportFlush(flush: Promise<void>, what: string): void {
+    flush.catch((error: unknown) => {
+        console.error(`[genie] ${what} could not be written: ${error instanceof Error ? error.message : String(error)}`);
+    });
+}
+
 export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
     const previous = inFlight.get(file) ?? Promise.resolve();
     const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value));
     inFlight.set(file, mine);
-    void mine.finally(() => { if (inFlight.get(file) === mine) inFlight.delete(file); });
+    const settle = (): void => { if (inFlight.get(file) === mine) inFlight.delete(file); };
+    void mine.then(settle, settle);
     return mine;
 }
 
