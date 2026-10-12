@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { deckBadge, type RailItem, type RailSurface } from '../../core/rail-view.js';
+import { folderName } from '../../core/workspace-name.js';
 
 export type { RailSurface };
 
@@ -134,6 +135,11 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                 <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} />
             ) : null}
 
+            {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
+            {has('settings') ? (
+                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} />
+            ) : null}
+
             {/*
              * The whole section is gated, heading included. An orphan heading over nothing
              * reads as a list that failed to load, which is a worse lie than no heading.
@@ -167,7 +173,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                         className={`${ROW} ${active ? ROW_ACTIVE : ''}`}
                     >
                         <Icon name="folder" size="sm" className="shrink-0 text-[var(--fg-4)]" />
-                        <span className="truncate">{w.id}</span>
+                        <span className="truncate">{w.name ?? folderName(w.path)}</span>
 
                         <span className="ml-auto flex shrink-0 items-center gap-1.5">
                             {w.alert === true ? (

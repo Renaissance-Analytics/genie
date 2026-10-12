@@ -233,6 +233,8 @@ try {
     # The Store keeps its files under the runtime dir (paths.ts runtimeDir): ~\.genie\runtime\{workspaces,agents}.json.
     $ws = Get-Content "$env:USERPROFILE\.genie\runtime\workspaces.json" -Raw
     if ($ws -notmatch '01seedv1workspace00000000a') { throw "workspaces.json does not carry the seeded workspace: $ws" }
+    # The seeded workspace was HIBERNATED in v1: it must arrive asleep (beta.7 woke every hibernated workspace).
+    if ($ws -notmatch '"asleep":\s*true') { throw "the seeded workspace was hibernated in v1 but is not asleep in Genie 2: $ws" }
     $ag = Get-Content "$env:USERPROFILE\.genie\runtime\agents.json" -Raw
     if ($ag -notmatch '"kai"' -or $ag -notmatch '"kai-slave"' -or $ag -notmatch '\.agents/kai/AGENT\.md') { throw "agents.json does not carry kai + kai-slave with the persona: $ag" }
     Write-Output 'v1 IMPORT PROVEN: the seeded workspace and both agents are in Genie 2 after the upgrade, persona made workspace-relative'

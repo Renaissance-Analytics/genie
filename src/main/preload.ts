@@ -33,6 +33,13 @@ const bridge: GenieBridge = {
 
     agentDetail: (agentId) => ipcRenderer.invoke('genie:agent-detail', agentId) as Promise<AgentDetail | null>,
 
+    // The host asks the window to go somewhere (the tray's Settings…). The renderer owns the route; this only carries the request.
+    onNavigate: (onRoute) => {
+        const listener = (_event: unknown, route: string): void => onRoute(route);
+        ipcRenderer.on('genie:navigate', listener);
+        return () => ipcRenderer.removeListener('genie:navigate', listener);
+    },
+
     subscribeAgent: (agentId, onChange) => {
         // Filtered HERE, in the preload, rather than by broadcasting every agent's ledger to
         // every renderer and letting each one discard what it does not want. A ledger is

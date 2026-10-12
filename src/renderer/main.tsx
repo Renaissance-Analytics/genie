@@ -1,4 +1,4 @@
-import { initTheme, getThemePreference, setThemePreference } from '@particle-academy/react-fancy';
+import { initTheme } from '@particle-academy/react-fancy';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { registerAppIcons } from './icons.js';
@@ -30,9 +30,8 @@ registerAppIcons();
  * `system` gets the OS back (`setThemePreference('system')` removes the stored value rather
  * than storing the word).
  */
-if (getThemePreference() === 'system' && localStorage.getItem('fancy-ui.theme') === null) {
-    setThemePreference('dark');
-}
+// The theme is the `theme` setting (dark / light / system, default system), applied by App once the settings
+// arrive; until then initTheme resolves a stored choice or follows the OS — a light desktop opens light.
 initTheme();
 
 const host = document.getElementById('root');

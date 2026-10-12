@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, parseRoute } from '../core/route.js';
+import { setThemePreference } from '@particle-academy/react-fancy';
+import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { FilesWindow } from './components/FilesWindow.js';
@@ -62,6 +64,20 @@ function useRoute(): [string, (route: string) => void] {
     // Assigning the hash pushes a history entry, which is what makes Back work. Deliberately
     // not `replace`: a navigation a person made is a place they can come back from.
     return [route, (next: string) => { window.location.hash = next; }];
+}
+
+/**
+ * The theme SETTING applied, and the host's navigation requests honoured. The `theme` setting existed and was
+ * never read (the owner's light desktop showed a dark Genie with a white composer); the tray's Settings… needs
+ * a way to move this window. Both are effects of data the renderer already has.
+ */
+function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null): void {
+    const theme = themePreferenceFrom(settings);
+    useEffect(() => { if (theme) setThemePreference(theme); }, [theme]);
+    useEffect(() => {
+        if (!bridge?.onNavigate) return;
+        return bridge.onNavigate((route) => { window.location.hash = `#${route}`; });
+    }, [bridge]);
 }
 
 function useFeatures(bridge: GenieBridge | undefined): [FeatureData, (data: FeatureData) => void] {
@@ -354,6 +370,7 @@ function DesktopApp({ bridge }: AppProps) {
     const snapshot = useSnapshot(resolvedBridge);
     const [features, setFeatures] = useFeatures(resolvedBridge);
     useAlerts(snapshot, features.settings.values);
+    useHostRequests(resolvedBridge, features.settings.values);
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;

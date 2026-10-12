@@ -48,7 +48,7 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'panel_layout', group: 'workstation', scope: 'workspace', label: 'Terminal layout', description: 'How this workspace’s terminals are laid out: one at a time, two columns, two rows, or a 2×2 grid. Remembered per workspace.', type: 'enum', options: ['single', 'columns', 'rows', 'grid'], default: 'single' },
     { key: 'track_cwd', group: 'workstation', scope: 'host', label: 'Track terminal directory', description: 'Let terminals report their working directory so a new one opens where the last was.', type: 'boolean', default: true },
     { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },
-    { key: 'theme', group: 'appearance', scope: 'device', label: 'Theme', description: 'Dark, light, or follow the system.', type: 'enum', options: ['dark', 'light', 'system'], default: 'dark' },
+    { key: 'theme', group: 'appearance', scope: 'device', label: 'Theme', description: 'Dark, light, or follow the system.', type: 'enum', options: ['dark', 'light', 'system'], default: 'system' },
     { key: 'sidebar_width', group: 'appearance', scope: 'device', label: 'Sidebar width', description: 'Pixels.', type: 'string', default: '208' },
     // One row per alert kind, DERIVED from the registry — never a hand-kept list.
     ...alertSoundSettings(),

@@ -672,6 +672,25 @@ if (!approvalEnabled) {
     await cdp.evaluate(`document.querySelector('[data-nav="genie://agent/genie"]').click(); true`);
     const osAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="agent-unknown"]')`, 'the OS agent page');
     check(osAgent, '43. the rail\'s genie row opens the OS agent, not "No agent is registered"');
+
+    // 10c. THE OWNER'S SECOND LOOK (beta.7): ids where names belong, no Settings row, a white composer on a dark app on a
+    // light desktop. The rail row's text is the seeded workspace's NAME (never its id); Settings is a labelled row;
+    // the document's theme class matches what the OS prefers (the VM's Windows is light), and the chat composer's
+    // background is on the same side of mid-grey as the page's — the two must agree whichever side that is.
+    const railText = await cdp.evaluate(`(document.querySelector('[data-workspace]')?.textContent ?? '')`);
+    check(railText.length > 0 && !/^[0-9a-z]{26}$/i.test(railText.trim()) && !railText.includes('tynn\n'), '44. the rail names the workspace, not its id', JSON.stringify(railText.trim().slice(0, 40)));
+    check(Boolean(await cdp.evaluate(`Boolean(document.querySelector('[data-nav="genie://settings"]'))`)), '45. the rail offers a Settings row');
+    const theme = await cdp.evaluate(`(() => {
+        const dark = document.documentElement.classList.contains('dark');
+        const osDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const lum = (el) => { const m = getComputedStyle(el).backgroundColor.match(/\\d+(\\.\\d+)?/g); if (!m || m.length < 3) return null; const [r, g, b] = m.map(Number); return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
+        const page = lum(document.body);
+        const composer = document.querySelector('[data-mobile-composer], [data-composer], textarea[name="text"]');
+        const box = composer ? lum(composer.closest('form') ?? composer.parentElement ?? composer) : null;
+        return { dark, osDark, page, box };
+    })()`);
+    check(theme.dark === theme.osDark, '46. the theme follows the OS preference (no forced dark)', `class dark=${theme.dark}, OS prefers dark=${theme.osDark}`);
+    check(theme.page !== null && (theme.box === null || (theme.page < 0.5) === (theme.box < 0.5)), '47. the chat composer and the page are on the same side of the theme', `page ${theme.page?.toFixed(2)} composer ${theme.box === null ? '(none open)' : theme.box.toFixed(2)}`);
 }
 
 // 11. Nothing threw on the way up.

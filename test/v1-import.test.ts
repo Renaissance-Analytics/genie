@@ -13,15 +13,15 @@ import { readV1Catalog } from '../src/main/v1-import.js';
  * a database built here with v1's REAL `CREATE TABLE` statements (copied from that very file).
  */
 
-const v1Workspaces = `CREATE TABLE "workspaces" ( id TEXT PRIMARY KEY, tynn_project_id TEXT NOT NULL, tynn_project_name TEXT NOT NULL, shape TEXT NOT NULL CHECK (shape IN ('agi','simple')), path TEXT NOT NULL, editor TEXT, editor_cmd TEXT, start_cmd TEXT, env_file TEXT, last_opened_at TEXT, created_by_genie INTEGER NOT NULL DEFAULT 0, backend TEXT NOT NULL DEFAULT 'tynn', project_id TEXT, project_name TEXT, sort_order INTEGER NOT NULL DEFAULT 0, mcp_enabled INTEGER NOT NULL DEFAULT 0 )`;
+const v1Workspaces = `CREATE TABLE "workspaces" ( id TEXT PRIMARY KEY, tynn_project_id TEXT NOT NULL, tynn_project_name TEXT NOT NULL, shape TEXT NOT NULL CHECK (shape IN ('agi','simple')), path TEXT NOT NULL, editor TEXT, editor_cmd TEXT, start_cmd TEXT, env_file TEXT, last_opened_at TEXT, created_by_genie INTEGER NOT NULL DEFAULT 0, backend TEXT NOT NULL DEFAULT 'tynn', project_id TEXT, project_name TEXT, sort_order INTEGER NOT NULL DEFAULT 0, mcp_enabled INTEGER NOT NULL DEFAULT 0, hibernated_at INTEGER )`;
 const v1Agents = `CREATE TABLE workspace_agents ( id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, tui TEXT, name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '', avatar TEXT, boot_cwd TEXT, persona_path TEXT, role TEXT NOT NULL DEFAULT 'specialized', parent_agent_id TEXT, terminal_spec_id TEXT, reachability TEXT NOT NULL DEFAULT 'workspace', wake_on_dm INTEGER NOT NULL DEFAULT 1, ready_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )`;
 
 const catalog: V1Catalog = {
     workspaces: [
-        { id: V1_SYSTEM_WORKSPACE, path: 'C:\\Users\\someone\\.gosa', name: 'System', shape: 'agi' },
-        { id: '01k95ewyzkvkbxtpdt8b3qvyqk', path: 'C:\\_Projects\\tynn.ai', name: 'Tynn.ai', shape: 'agi' },
-        { id: '01kex8dep28vm4awnsv3h8avd3', path: 'C:\\_Projects\\_packages\\fancy.agi', name: 'Fancy', shape: 'agi' },
-        { id: '01gone', path: 'D:\\moved\\away.agi', name: 'Moved', shape: 'simple' },
+        { id: V1_SYSTEM_WORKSPACE, path: 'C:\\Users\\someone\\.gosa', name: 'System', shape: 'agi', hibernated: false },
+        { id: '01k95ewyzkvkbxtpdt8b3qvyqk', path: 'C:\\_Projects\\tynn.ai', name: 'Tynn.ai', shape: 'agi', hibernated: false },
+        { id: '01kex8dep28vm4awnsv3h8avd3', path: 'C:\\_Projects\\_packages\\fancy.agi', name: 'Fancy', shape: 'agi', hibernated: true },
+        { id: '01gone', path: 'D:\\moved\\away.agi', name: 'Moved', shape: 'simple', hibernated: false },
     ],
     agents: [
         { id: 'a1', workspaceId: '01k95ewyzkvkbxtpdt8b3qvyqk', name: 'tynn', tui: 'claude', personaPath: 'C:\\_Projects\\tynn.ai\\.agents\\tynn\\AGENT.md' },
@@ -37,17 +37,18 @@ const exists = (p: string) => !p.startsWith('D:');
 
 describe('planV1Import', () => {
     it('imports every real workspace whose folder exists, keeps v1 ids, skips the system workspace and a missing folder — and says so', () => {
-        const plan = planV1Import(catalog, { workspaceIds: [], agents: [] }, exists);
+        const plan = planV1Import(catalog, { workspaces: [], agents: [] }, exists);
         expect(plan.workspaces).toEqual([
-            { id: '01k95ewyzkvkbxtpdt8b3qvyqk', path: 'C:\\_Projects\\tynn.ai' },
-            { id: '01kex8dep28vm4awnsv3h8avd3', path: 'C:\\_Projects\\_packages\\fancy.agi' },
+            { id: '01k95ewyzkvkbxtpdt8b3qvyqk', path: 'C:\\_Projects\\tynn.ai', asleep: false },
+            { id: '01kex8dep28vm4awnsv3h8avd3', path: 'C:\\_Projects\\_packages\\fancy.agi', asleep: true },
         ]);
+        expect(plan.hibernate).toEqual([]);
         expect(plan.skipped).toContainEqual(expect.stringMatching(/workspace System: v1's system workspace/));
         expect(plan.skipped).toContainEqual(expect.stringMatching(/workspace Moved: its folder D:\\moved\\away\.agi no longer exists/));
     });
 
     it('imports claude and codex agents with a workspace-relative persona; skips other tuis, duplicates, orphans and the system agent, each with its reason', () => {
-        const plan = planV1Import(catalog, { workspaceIds: [], agents: [] }, exists);
+        const plan = planV1Import(catalog, { workspaces: [], agents: [] }, exists);
         expect(plan.agents).toEqual([
             { workspaceId: '01k95ewyzkvkbxtpdt8b3qvyqk', provider: 'claude', name: 'tynn', instructions: '.agents/tynn/AGENT.md' },
             { workspaceId: '01k95ewyzkvkbxtpdt8b3qvyqk', provider: 'codex', name: 'tynn-slave', instructions: null },
@@ -61,13 +62,21 @@ describe('planV1Import', () => {
     });
 
     it('leaves what the registry already has alone — a second boot imports nothing twice', () => {
-        const plan = planV1Import(catalog, { workspaceIds: ['01k95ewyzkvkbxtpdt8b3qvyqk'], agents: [{ workspaceId: '01k95ewyzkvkbxtpdt8b3qvyqk', name: 'tynn' }] }, exists);
+        const plan = planV1Import(catalog, { workspaces: [{ id: '01k95ewyzkvkbxtpdt8b3qvyqk', asleep: false }], agents: [{ workspaceId: '01k95ewyzkvkbxtpdt8b3qvyqk', name: 'tynn' }] }, exists);
         expect(plan.workspaces.map((w) => w.id)).toEqual(['01kex8dep28vm4awnsv3h8avd3']);
         expect(plan.agents.map((a) => a.name)).toEqual(['tynn-slave', 'elsewhere']);
     });
 
+    it('a workspace already in the registry and AWAKE that v1 had hibernated is put to sleep, once; one already asleep is left alone', () => {
+        const plan = planV1Import(catalog, { workspaces: [{ id: '01kex8dep28vm4awnsv3h8avd3', asleep: false }, { id: '01k95ewyzkvkbxtpdt8b3qvyqk', asleep: false }], agents: [] }, exists);
+        expect(plan.hibernate).toEqual(['01kex8dep28vm4awnsv3h8avd3']);
+        expect(plan.workspaces).toEqual([]);
+        const already = planV1Import(catalog, { workspaces: [{ id: '01kex8dep28vm4awnsv3h8avd3', asleep: true }], agents: [] }, exists);
+        expect(already.hibernate).toEqual([]);
+    });
+
     it('a null catalog (cannot see v1) plans nothing and claims nothing', () => {
-        expect(planV1Import(null, { workspaceIds: [], agents: [] }, exists)).toEqual({ workspaces: [], agents: [], skipped: [] });
+        expect(planV1Import(null, { workspaces: [], agents: [] }, exists)).toEqual({ workspaces: [], agents: [], hibernate: [], skipped: [] });
     });
 
     it('relativePersona: inside the workspace → forward-slash relative; outside → null; case-insensitive drive letters', () => {
@@ -89,15 +98,15 @@ describe('readV1Catalog', () => {
         db.exec('PRAGMA journal_mode = WAL');
         db.exec(v1Workspaces);
         db.exec(v1Agents);
-        db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, project_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run('01b', 'p', 'Second', 'agi', 'C:\\w\\second', 'Second', 1);
+        db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, project_name, sort_order, hibernated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run('01b', 'p', 'Second', 'agi', 'C:\\w\\second', 'Second', 1, 1791727695815);
         db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, project_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run('01a', 'p', 'First', 'simple', 'C:\\w\\first', null, 0);
         db.prepare('INSERT INTO workspace_agents (id, workspace_id, tui, name, persona_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('a', '01a', 'claude', 'kai', 'C:\\w\\first\\.agents\\kai\\AGENT.md', 2, 2);
         db.prepare('INSERT INTO workspace_agents (id, workspace_id, tui, name, persona_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('b', '01b', null, 'nameless-tui', null, 1, 1);
         db.close();
         expect(readV1Catalog(file)).toEqual({
             workspaces: [
-                { id: '01a', path: 'C:\\w\\first', name: 'First', shape: 'simple' },
-                { id: '01b', path: 'C:\\w\\second', name: 'Second', shape: 'agi' },
+                { id: '01a', path: 'C:\\w\\first', name: 'First', shape: 'simple', hibernated: false },
+                { id: '01b', path: 'C:\\w\\second', name: 'Second', shape: 'agi', hibernated: true },
             ],
             agents: [
                 { id: 'b', workspaceId: '01b', name: 'nameless-tui', tui: null, personaPath: null },

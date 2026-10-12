@@ -25,6 +25,8 @@ import type { AgentRow } from './dashboard-view.js';
 export interface RailWorkspace {
     id: string;
     path: string;
+    /** The envelope's name (project.json), else the folder — never the id. */
+    name?: string;
     /**
      * Whether Genie has actually read this workspace's agents.
      *
@@ -42,6 +44,8 @@ export interface RailWorkspace {
 export interface RailItem {
     id: string;
     path: string;
+    /** The envelope's name, else the folder — never the id. */
+    name?: string;
     /** `null` = not read yet. Renders nothing — never a `0`, and never a skeleton's leftovers. */
     count: number | null;
     /** `null` = not read yet. `false` = read, and nothing in here wants you. */
@@ -90,12 +94,14 @@ export function railWorkspaces(
     return nestGoverned(workspaces, governorOf).map((w) => {
         const governor = governorOf(w.id);
         const governed = governor !== null ? { governedBy: governor } : {};
-        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...governed };
+        const named = w.name ? { name: w.name } : {};
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...named, ...governed };
 
         const mine = rows.filter((r) => r.workspaceId === w.id);
         return {
             id: w.id,
             path: w.path,
+            ...named,
             count: mine.length,
             alert: mine.some((r) => r.state === 'waiting' || r.state === 'broken'),
             ...governed,
@@ -145,7 +151,7 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace';
+export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace' | 'settings';
 
 /**
  * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
@@ -163,5 +169,7 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     if (servable.includes('dashboard')) rows.push('dashboard');
     if (servable.includes('agent')) rows.push('genie');
     if (servable.includes('workspace')) rows.push('workspace');
+    // Settings is a labelled route in the rail, not a palette-only surface (owner, 2026-10-12: "I have no menu to access my settings").
+    if (servable.includes('settings')) rows.push('settings');
     return rows;
 }

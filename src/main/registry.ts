@@ -5,6 +5,7 @@ import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
+import { folderName } from '../core/workspace-name.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -51,6 +52,8 @@ export class Registry {
     #signals: (() => SignalState) | null = null;
     #runningAtQuit: AgentId[] = [];
     #loaded = false;
+    /** The display name for a workspace path — the envelope's project.json name, supplied by the composition root; the folder until then. */
+    #namer: (path: string) => string = (path) => folderName(path);
 
     constructor(store: Store) {
         this.#store = store;
@@ -94,6 +97,12 @@ export class Registry {
         });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
+    }
+
+    /** How a workspace is NAMED in every surface: project.json's name, else the folder — never the id (beta.7 showed 26 ULIDs). */
+    setWorkspaceNamer(namer: (path: string) => string): void {
+        this.#namer = namer;
+        if (this.#loaded) this.#emit();
     }
 
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
@@ -165,7 +174,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}) }))
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}) }))
                 : null,
             /*
              * The attention band.

@@ -116,6 +116,9 @@ export interface GenieBridge {
     /** Changes to one agent. Separate from `subscribe` so a ledger is not broadcast. */
     subscribeAgent(agentId: string, onChange: (detail: AgentDetail | null) => void): () => void;
 
+    /** The host asking the window to go somewhere (the tray's Settings…). Absent on a remote bridge: a remote window is not this host's tray. */
+    onNavigate?(onRoute: (route: string) => void): () => void;
+
     /** Start or REATTACH a session. Never creates a second for the same agent. */
     openAgent(agentId: string): void;
     /** Stop means stop: the provider tree goes, and the capacity slot frees. */
