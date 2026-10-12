@@ -63,6 +63,8 @@ export interface ShellProps {
     snapshot: GenieSnapshot;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
+    /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
+    onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
     /** Which surfaces this build renders. The rail's rows are DERIVED from it, not parallel. */
     servable: readonly Surface[];
     /** The agent the route names, when it names one. `null` while loading or if unknown. */
@@ -163,6 +165,7 @@ export function Shell({
     route,
     snapshot,
     workspaceFaults,
+    onLocateRepo,
     servable,
     features = EMPTY_FEATURES,
     onFeature = () => {},
@@ -354,8 +357,8 @@ export function Shell({
                             onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
                             faults={workspaceFaults}
-                            // The fix is the workspace's registry (its page), where the repo's path is edited.
-                            onLocateRepo={(id) => onNavigate(`genie://workspace/${id}`)}
+                            // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
+                            onLocateRepo={onLocateRepo ?? ((id) => onNavigate(`genie://workspace/${id}`))}
                             onFix={(fix) => {
                                 // The board's fix buttons act (`fixRoute`): two verbs Genie performs, else the agent's page.
                                 if (fix.kind === 'restart') onRestartAgent?.(fix.agentId);

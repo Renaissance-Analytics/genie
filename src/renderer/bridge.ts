@@ -182,6 +182,8 @@ export interface GenieBridge {
         listRepos(workspaceId: string): Promise<{ ok: true; repos: RepoEntry[] } | { ok: false; reason: string }>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
+        locateRepo(workspaceId: string, slug: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
         removeRepoLock(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This workspace's effective values for the workspace-scoped settings and which keys it overrides (§6.1). */

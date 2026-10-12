@@ -47,7 +47,7 @@ import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
-import { addRepoTo, listReposOf, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
+import { addRepoTo, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
 import type { FileEvent } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -774,6 +774,15 @@ async function boot(): Promise<void> {
     };
     ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
     ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
+    // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
+    ipcMain.handle('genie:workspace-repo-locate', async (_event, raw: unknown, slug: unknown) => {
+        if (typeof raw !== 'string' || typeof slug !== 'string') return { ok: false, reason: 'name a workspace and a repo' };
+        if (!window) return { ok: false, reason: 'no window to ask in' };
+        const picked = await dialog.showOpenDialog(window, { title: `Where is ${slug} now? Pick its folder inside the envelope`, properties: ['openDirectory'] });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return { ok: false, reason: 'no folder picked' };
+        return relocateRepoIn(repoOps, raw, slug, path);
+    });
     ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
         const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
         return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };

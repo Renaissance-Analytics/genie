@@ -67,6 +67,22 @@ export function addRepo(manifest: Record<string, unknown>, input: { name: string
     return { ok: true, slug, manifest: { ...manifest, repos: [...rawRepos(manifest), entry] } };
 }
 
+/**
+ * "Locate repo" (the board's fix on a Dashboard group fault): the registry says where the repo IS. The new path must be
+ * inside the envelope, the slug known, the host repo (the envelope itself) stays where it is, and no other repo may
+ * already hold the path.
+ */
+export function relocateRepo(manifest: Record<string, unknown>, slug: string, newPath: string): RemoveResult {
+    const entry = listRepos(manifest).find((r) => r.slug === slug);
+    if (!entry) return { ok: false, reason: `no repo with slug "${slug}"` };
+    if (entry.host) return { ok: false, reason: `"${slug}" is the host repo (the envelope itself) and cannot move` };
+    const path = envelopePath(newPath);
+    if (path === null) return { ok: false, reason: `a repo must live inside the envelope; ${newPath} is outside it` };
+    const holder = listRepos(manifest).find((r) => r.path === path && r.slug !== slug);
+    if (holder) return { ok: false, reason: `${path} is already registered as "${holder.slug}"` };
+    return { ok: true, manifest: { ...manifest, repos: rawRepos(manifest).map((r) => (r.slug === slug ? { ...r, path } : r)) } };
+}
+
 export function removeRepo(manifest: Record<string, unknown>, slug: string): RemoveResult {
     const entry = listRepos(manifest).find((r) => r.slug === slug);
     if (!entry) return { ok: false, reason: `no repo with slug "${slug}"` };

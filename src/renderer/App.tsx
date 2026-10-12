@@ -410,6 +410,8 @@ function DesktopApp({ bridge }: AppProps) {
     // WORKSPACE-LEVEL FAULTS for the Dashboard's group headers (a registered repo whose folder is gone): every
     // workspace's registry, read once per workspace list. Absent until read — "not seen" is not "none".
     const [workspaceFaults, setWorkspaceFaults] = useState<Record<string, WorkspaceFault | null>>({});
+    // Bumped after a repo is relocated, so the faults are read again without waiting for the workspace list to change.
+    const [faultsTick, setFaultsTick] = useState(0);
     const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}`).join('\n');
     useEffect(() => {
         if (!resolvedBridge || !snapshot.workspaces) return;
@@ -421,7 +423,10 @@ function DesktopApp({ bridge }: AppProps) {
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
-    }, [resolvedBridge, faultKey]);
+    }, [resolvedBridge, faultKey, faultsTick]);
+    const locateRepo = (workspaceId: string, slug: string) => {
+        void resolvedBridge?.workspaces.locateRepo(workspaceId, slug).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+    };
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
     const [wsSettings, setWsSettings] = useState<{ values: Record<string, boolean | string>; overridden: string[] } | null>(null);
     const reloadWsSettings = (bridge: GenieBridge, id: string) => {
@@ -661,6 +666,7 @@ function DesktopApp({ bridge }: AppProps) {
             route={route}
             snapshot={snapshot}
             workspaceFaults={workspaceFaults}
+            onLocateRepo={locateRepo}
             servable={SERVABLE}
             remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
             remoteConnect={{ state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect }}
