@@ -1,4 +1,6 @@
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
+import { useEffect, useState } from 'react';
+import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
     commsOf,
@@ -137,7 +139,7 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
 }
 
 /** The 32px agent row. */
-function AgentRowView({ row, onOpen, onFix }: { row: AgentRow; onOpen: (id: string) => void; onFix?: ((route: FixRoute) => void) | undefined }) {
+function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; onOpen: (id: string) => void; onFix?: ((route: FixRoute) => void) | undefined; focused?: boolean | undefined }) {
     const status = statusOf(row);
     const target = targetOf(row);
     const comms = commsOf(row);
@@ -149,8 +151,9 @@ function AgentRowView({ row, onOpen, onFix }: { row: AgentRow; onOpen: (id: stri
             tabIndex={0}
             data-agent={row.id}
             data-state={row.state}
+            {...(focused ? { 'data-focused': 'true' } : {})}
             onClick={() => onOpen(row.id)}
-            className={`${GRID} h-8 items-center border-b border-[var(--border-1)] text-[13px] hover:bg-[var(--bg-1)]`}
+            className={`${GRID} h-8 items-center border-b border-[var(--border-1)] text-[13px] hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
         >
             <div className="flex min-w-0 items-center gap-2">
                 <FidelityDot fidelity={row.fidelity} state={row.state} />
@@ -334,14 +337,35 @@ export interface DashboardProps {
     onFix?: ((route: FixRoute) => void) | undefined;
     /** `Chat ⌘J` — the composer, on genie, one click from the board. */
     onChat?: (() => void) | undefined;
+    /** The row cursor (`J`/`K`), controlled — for tests that render server-side. Otherwise the board keeps its own. */
+    focusedId?: string | null | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, onFix, onChat }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, onFix, onChat, focusedId }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
         Object.fromEntries((workspaces ?? []).flatMap((w) => (w.governedBy ? [[w.id, w.governedBy]] : []))),
     );
+    // THE ROW CURSOR (§4.1): `J`/`K` over the rows in document order, `↵` opens, `G` cycles the grouping. `A`/`D` are
+    // unbound here — the Dashboard resolves nothing. The keys are decided in `core/keys.ts`; letters never act while typing.
+    const [ownFocus, setOwnFocus] = useState<string | null>(null);
+    const focused = focusedId ?? ownFocus;
+    const statusGroupsForOrder = groupByStatus(rows);
+    const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : groups.flatMap((g) => g.rows.map((r) => r.id));
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            const action = dashboardAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
+            if (action === null) return;
+            e.preventDefault();
+            if (action === 'next-row') setOwnFocus(stepFocus(visibleIds, focused, 1));
+            else if (action === 'prev-row') setOwnFocus(stepFocus(visibleIds, focused, -1));
+            else if (action === 'open') { if (focused !== null && visibleIds.includes(focused)) onOpenAgent(focused); }
+            else if (action === 'cycle-group') onGroup?.(group === 'workspace' ? 'status' : 'workspace');
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [visibleIds, focused, onOpenAgent, onGroup, group]);
     const statusGroups = groupByStatus(rows);
     const chips = summaryChips(rows);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
@@ -430,6 +454,10 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                     ))}
                 </div>
                 <span className="flex-1" />
+                {/* The keys, discoverable: J K move, ↵ opens, G regroups. A/D are not here — the Deck resolves. */}
+                <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent · G cycles the grouping">
+                    {['J', 'K', '↵', 'G'].map((k) => <kbd key={k} className="rounded border border-[var(--border-1)] px-1 font-mono">{k}</kbd>)}
+                </span>
                 {/* The board's segmented control. The grouping lives in the route (`group=`), so it is linkable. */}
                 <div className="flex overflow-hidden rounded-lg border border-[var(--border-1)] text-xs">
                     {(['workspace', 'status'] as const).map((g, i) => (
@@ -487,7 +515,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                                 <span className="ml-2.5 text-[var(--fg-3)]">{g.rows.length} {g.rows.length === 1 ? 'agent' : 'agents'}</span>
                             </div>
                             {g.rows.map((row) => (
-                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} />
+                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} />
                             ))}
                         </div>
                     ))}
@@ -496,7 +524,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
                     <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} />
                     {group.rows.map((row) => (
-                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} />
+                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} />
                     ))}
                 </div>
             ))}

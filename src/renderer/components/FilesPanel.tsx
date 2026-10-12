@@ -55,6 +55,14 @@ export interface FilesPanelProps {
     readonly single?: string | undefined;
     /** Open a file as its own pane in the workspace grid (§4.6); absent where panes cannot be made (the dock, a popped window). */
     readonly onOpenInPane?: ((path: string) => void) | undefined;
+    /** The board's `All | Changed N` filter: Changed shows the files grouped by who changed them, in the tree's place. */
+    readonly filter?: 'all' | 'changed' | undefined;
+    readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;
+}
+
+/** How many files changed this session — the `Changed N` chip's number; `0` reads as plain `Changed`. */
+function changedCount(state: FilesPanelState | null): number {
+    return state?.changed?.reduce((n, g) => n + g.files.length, 0) ?? 0;
 }
 
 type Tone = 'writing' | 'changed' | 'unreported';
@@ -92,18 +100,28 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [], single, onOpenInPane }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
     // Single mode (§4.6): the one file this pane is about, and nothing else to pick from.
     const shownTabs = single ? tabs.filter((t) => t === single) : tabs;
+    const changed = changedCount(state);
     return (
         <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]">
-            <header className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3 text-sm">
-                <span className="rounded-md bg-[var(--bg-2)] px-1.5 py-0.5 text-xs font-medium">{workspace.name ?? workspace.id}</span>
-                <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+            {/* The board's 38px header: Files · All | Changed N · "one per workspace" · the controls. */}
+            <header className="flex h-[38px] shrink-0 items-center gap-2.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 text-sm">
+                <span className="text-xs font-semibold">Files</span>
+                {single ? null : (
+                    <div className="flex overflow-hidden rounded-md border border-[var(--border-1)] text-[11px]">
+                        <button type="button" data-files-filter="all" {...(filter === 'all' ? { 'data-current': 'true' } : {})} onClick={() => onFilter?.('all')} className={`px-2 py-0.5 ${filter === 'all' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>All</button>
+                        {/* `data-changes` while there ARE changes — the chip is the door the footer's fold used to be. */}
+                        <button type="button" data-files-filter="changed" {...(filter === 'changed' ? { 'data-current': 'true' } : {})} {...(changed > 0 ? { 'data-changes': '' } : {})} onClick={() => onFilter?.('changed')} className={`border-l border-[var(--border-1)] px-2 py-0.5 ${filter === 'changed' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>{changed > 0 ? `Changed ${changed}` : 'Changed'}</button>
+                    </div>
+                )}
+                <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.name ?? workspace.id} · {workspace.path}</span>
                 <span className="ml-auto" />
+                {single ? null : <span className="text-[11px] text-[var(--fg-4)]">one per workspace</span>}
                 {popped ? (
                     <button type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</button>
                 ) : (
@@ -118,8 +136,31 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
             </header>
             <div className="flex min-h-0 flex-1">
                 {single ? null : (
-                <aside className="w-[220px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
-                    {tree === null ? (
+                <aside className="w-[264px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
+                    {filter === 'changed' ? (
+                        // THE CHANGED FILTER (§4.3): the files grouped by who changed them — you included, `?` for a change
+                        // nobody reported — in the tree's place. A group header names the count; its dot is the agent's.
+                        state?.changed && state.changed.length > 0 ? (
+                            <div data-changed-groups="" className="flex flex-col">
+                                {state.changed.map((g) => (
+                                    <div key={g.who}>
+                                        <div data-changed-group={g.who} className="flex items-center gap-1.5 px-3 pb-0.5 pt-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                                            <span className={`size-1.5 rounded-full ${g.who === 'you' ? 'bg-blue-500' : g.who === '?' ? 'border border-[var(--fg-4)]' : 'bg-[var(--accent)]'}`} />
+                                            {g.who === '?' ? 'not attributed' : g.who} · {g.files.length} {g.files.length === 1 ? 'file' : 'files'}
+                                        </div>
+                                        {g.files.map((f) => (
+                                            <button key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                                                <span className="truncate">{f}</span>
+                                                {marks.get(f) ? <Marker path={f} count={marks.get(f)!.count} tone={marks.get(f)!.tone} /> : null}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="px-3 py-2 text-xs text-[var(--fg-3)]">Nothing changed in this workspace this session.</p>
+                        )
+                    ) : tree === null ? (
                         <div data-files-skeleton className="flex flex-col gap-2 px-3 py-2">
                             {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-3 animate-pulse rounded bg-[var(--bg-2)]" style={{ width: `${55 + ((i * 17) % 40)}%` }} />)}
                         </div>
@@ -186,19 +227,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             <span>{`${p.agent} asked to pause on ${p.path} — you have unsaved edits there`}</span>
                         </span>
                     ))}
-                    {touched.size > 0 ? <span className="ml-auto">{touched.size} changed in this workspace</span> : null}
-                    {state.changed ? (
-                        <details data-changes className="basis-full">
-                            <summary className="cursor-pointer text-[var(--fg-3)]">Changes ▸</summary>
-                            <ul className="mt-1 flex flex-col gap-1">
-                                {state.changed.map((g) => (
-                                    <li key={g.who} data-changed-by={g.who} className="flex flex-wrap items-baseline gap-2">
-                                        <span className={g.who === '?' ? 'text-[var(--fg-4)]' : 'font-medium'}>{g.who}</span>
-                                        {g.files.map((f) => <button key={f} type="button" onClick={() => onSelect(f)} className="font-mono text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">{f}</button>)}
-                                    </li>
-                                ))}
-                            </ul>
-                        </details>
+                    {/* The count, and the door to the Changed filter (the board's header chip is the other door). */}
+                    {touched.size > 0 ? (
+                        <button type="button" data-action="show-changed" onClick={() => onFilter?.('changed')} className="ml-auto hover:text-[var(--fg-1)]">{touched.size} changed in this workspace ▸</button>
                     ) : null}
                 </footer>
             ) : null}

@@ -60,6 +60,35 @@ export function globalAction(press: KeyPress): GlobalAction | null {
     return null;
 }
 
+export type DashboardAction = 'next-row' | 'prev-row' | 'open' | 'cycle-group';
+
+/**
+ * The Dashboard's keys (§4.1): `J`/`K` move the row cursor, `↵` opens the focused agent, `G` cycles the grouping.
+ * `A`/`D` are deliberately unbound here — the Dashboard resolves nothing. Unmodified letters only, and never while a
+ * human is typing.
+ */
+export function dashboardAction(press: KeyPress): DashboardAction | null {
+    if (press.typing || press.metaKey || press.ctrlKey || press.altKey) return null;
+    switch (press.key) {
+        case 'j': case 'J': return 'next-row';
+        case 'k': case 'K': return 'prev-row';
+        case 'Enter': return 'open';
+        case 'g': case 'G': return 'cycle-group';
+        default: return null;
+    }
+}
+
+/**
+ * The row cursor over the VISIBLE rows: stops at the ends; from nothing, next is the first and prev the last; a cursor
+ * on a row that is no longer shown (regrouped away) starts over rather than pointing at nothing.
+ */
+export function stepFocus(ids: readonly string[], current: string | null, delta: 1 | -1): string | null {
+    if (ids.length === 0) return null;
+    const at = current === null ? -1 : ids.indexOf(current);
+    if (at === -1) return delta === 1 ? ids[0] ?? null : ids[ids.length - 1] ?? null;
+    return ids[Math.min(ids.length - 1, Math.max(0, at + delta))] ?? null;
+}
+
 export type ChatAction = 'close-chat';
 
 /**
