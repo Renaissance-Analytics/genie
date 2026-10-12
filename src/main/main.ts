@@ -422,7 +422,7 @@ async function boot(): Promise<void> {
             const record = registry?.find(agentId as AgentId);
             if (!record || !host) return [];
             return host.rowsFor(record.id).flatMap((row): FileEvent[] =>
-                row.event.kind === 'tool' ? [{ agentId: record.id, agentName: record.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput }] : []);
+                row.event.kind === 'tool' ? [{ agentId: record.id, agentName: record.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput, at: row.at }] : []);
         },
     });
     filesHost.onChange((workspaceId) => broadcast('genie:files-changed', workspaceId));

@@ -67,18 +67,22 @@ function changedCount(state: FilesPanelState | null): number {
 
 type Tone = 'writing' | 'changed' | 'unreported';
 
-function Marker({ path, count, tone }: { path: string; count: number | null; tone: Tone }) {
+/** `14:08`, in the viewer's locale — the changed row's time column. */
+const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+
+function Marker({ path, count, tone, names = [] }: { path: string; count: number | null; tone: Tone; names?: readonly string[] | undefined }) {
     const colour = tone === 'writing' ? 'text-[var(--accent)]' : tone === 'changed' ? 'text-[var(--success)]' : 'text-[var(--fg-4)]';
     return count === null ? (
         <span data-file-marker={path} data-tone={tone} className={`inline-flex items-center gap-0.5 font-mono text-[10px] ${colour}`} title="changed on disk; no agent reported it">?</span>
     ) : (
-        <span data-file-marker={path} data-count={count} data-tone={tone} className={`inline-flex items-center gap-0.5 font-mono text-[10px] ${colour}`}>
+        // ONE dot plus a count, never one dot per agent — hovering names them (the board).
+        <span data-file-marker={path} data-count={count} data-tone={tone} {...(names.length > 0 ? { title: names.join(', ') } : {})} className={`inline-flex items-center gap-0.5 font-mono text-[10px] ${colour}`}>
             ●<span>{count}</span>
         </span>
     );
 }
 
-function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count: number | null; tone: Tone }>): TreeNodeData[] {
+function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count: number | null; tone: Tone; names: readonly string[] }>): TreeNodeData[] {
     return nodes.map((n) => {
         const mark = n.type === 'file' ? marks.get(n.id) : undefined;
         return {
@@ -86,17 +90,17 @@ function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count
             label: n.label,
             type: n.type,
             ...(n.ext ? { ext: n.ext } : {}),
-            ...(mark ? { icon: <Marker path={n.id} count={mark.count} tone={mark.tone} /> } : {}),
+            ...(mark ? { icon: <Marker path={n.id} count={mark.count} tone={mark.tone} names={mark.names} /> } : {}),
             ...(n.children ? { children: decorate(n.children, marks) } : {}),
         };
     });
 }
 
-function marksOf(state: FilesPanelState | null): Map<string, { count: number | null; tone: Tone }> {
-    const marks = new Map<string, { count: number | null; tone: Tone }>();
+function marksOf(state: FilesPanelState | null): Map<string, { count: number | null; tone: Tone; names: readonly string[] }> {
+    const marks = new Map<string, { count: number | null; tone: Tone; names: readonly string[] }>();
     if (!state) return marks;
-    for (const f of state.files) marks.set(f.path, { count: f.count, tone: f.inFlight ? 'writing' : 'changed' });
-    for (const p of state.unreported) if (!marks.has(p)) marks.set(p, { count: null, tone: 'unreported' });
+    for (const f of state.files) marks.set(f.path, { count: f.count, tone: f.inFlight ? 'writing' : 'changed', names: f.agents.map((a) => a.name) });
+    for (const p of state.unreported) if (!marks.has(p)) marks.set(p, { count: null, tone: 'unreported', names: [] });
     return marks;
 }
 
@@ -148,12 +152,23 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                             <span className={`size-1.5 rounded-full ${g.who === 'you' ? 'bg-[var(--primary)]' : g.who === '?' ? 'border border-[var(--fg-4)]' : 'bg-[var(--accent)]'}`} />
                                             {g.who === '?' ? 'not attributed' : g.who} · {g.files.length} {g.files.length === 1 ? 'file' : 'files'}
                                         </div>
-                                        {g.files.map((f) => (
+                                        {g.files.map((f) => {
+                                            // The board's row: the time column (40px, mono), the path, `+n −m` only from a real diff, the marker.
+                                            // The time and counts are the attribution's (the agent's own report); yours and the unreported have none.
+                                            const d = state.files.find((x) => x.path === f);
+                                            const at = d?.changedAt ?? null;
+                                            const plus = d?.plus ?? null;
+                                            const minus = d?.minus ?? null;
+                                            return (
                                             <button key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                                                <span {...(at !== null ? { 'data-changed-at': at } : {})} className="w-10 shrink-0 text-[10px] text-[var(--fg-4)]">{at !== null ? hhmm(at) : ''}</span>
                                                 <span className="truncate">{f}</span>
-                                                {marks.get(f) ? <Marker path={f} count={marks.get(f)!.count} tone={marks.get(f)!.tone} /> : null}
+                                                {plus !== null ? <span data-plus={plus} className="shrink-0 text-[10px] text-[var(--success)]">+{plus}</span> : null}
+                                                {minus !== null ? <span data-minus={minus} className="shrink-0 text-[10px] text-[var(--danger)]">−{minus}</span> : null}
+                                                {marks.get(f) ? <Marker path={f} count={marks.get(f)!.count} tone={marks.get(f)!.tone} names={marks.get(f)!.names} /> : null}
                                             </button>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 ))}
                             </div>
