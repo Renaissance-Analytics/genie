@@ -53,6 +53,11 @@ function clock(from: number, now: number): string {
     return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
+/** `14:31`, in the viewer's locale — a clock time for a stamp. */
+function hhmm(at: number): string {
+    return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 /** `40s ago` / `5m ago` / `2h ago`. */
 function ago(from: number, now: number): string {
     const s = Math.max(0, Math.floor((now - from) / 1000));
@@ -73,8 +78,8 @@ export interface PillContext {
  *
  *  - `Turn 14 · running` + a clock — the clock belongs only to a turn that is actually running; on an idle agent it
  *    counts up forever and reads as work in progress;
- *  - `Turn 15 · parked · waiting on you` — no clock Genie cannot measure;
- *  - `Broken · <reason>`; `Idle` after turns; `No turns yet` for a session that has not taken one; `Not started` for an
+ *  - `Turn 15 · parked · waiting on you 0:42` — the wait since Genie parked it (its own clock), none without the stamp;
+ *  - `Broken · <reason> 14:31` — when Genie recorded the failure, none without the stamp; `Idle` after turns; `No turns yet` for a session that has not taken one; `Not started` for an
  *    agent that is registered and has no session — not "Idle", which would claim a session exists;
  *  - observed: `Active · last output 40s ago` / `Quiet · last output 5m ago` / `Quiet · no output yet` — what was measured.
  */
@@ -86,8 +91,14 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
         return { word: `${state === 'active' ? 'Active' : 'Quiet'} · ${last}`, elapsed: null, tone: state === 'active' ? 'ok' : 'muted' };
     }
     if (!session) return { word: 'Not started', elapsed: null, tone: 'muted' };
-    if (session.pendingApproval !== null) return { word: `Turn ${ctx.turns} · parked · waiting on you`, elapsed: null, tone: 'warn' };
-    if (session.failure !== null) return { word: `Broken · ${session.failure.reason}`, elapsed: null, tone: 'bad' };
+    if (session.pendingApproval !== null) {
+        // The wait is measured from Genie's own stamp — the moment the request parked here — not guessed from the turn.
+        return { word: `Turn ${ctx.turns} · parked · waiting on you`, elapsed: session.parkedAt == null ? null : clock(session.parkedAt, now()), tone: 'warn' };
+    }
+    if (session.failure !== null) {
+        const when = session.failure.at == null ? '' : ` ${hhmm(session.failure.at)}`;
+        return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };
+    }
 
     const running = session.running && session.turnState === 'working';
     if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
