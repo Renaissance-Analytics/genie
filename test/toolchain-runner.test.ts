@@ -41,5 +41,8 @@ describe('probeToolsLive', () => {
         expect(node.installed).toMatch(/^\d+\.\d+\.\d+$/);
         expect(node.tone).toBe('unknown');
         expect(statuses.length).toBeGreaterThanOrEqual(11);
-    });
+        // The probe's own bound is 20 s PER TOOL (execFileRunner's DEFAULT_TIMEOUT_MS); a deadline below that measures the
+        // machine, not the code — the v2.0.0-beta.5 release run timed this test out at 5 s on a cold Windows runner with
+        // php, go, cargo and python all installed, while the same probe passes in 76 ms where nothing but node exists.
+    }, 30_000);
 });

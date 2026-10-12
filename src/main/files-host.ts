@@ -10,6 +10,7 @@ import {
     changedGroups,
     confine,
     openRefusal,
+    countsAsDiskChange,
     unreportedChanges,
     type Activity,
     type ChangedGroup,
@@ -144,15 +145,18 @@ export class FilesHost {
     async watch(workspaceId: string): Promise<void> {
         const ws = this.#ports.workspace(workspaceId);
         if (!ws || this.#watchers.has(workspaceId)) return;
+        // Only what changes AFTER this moment is a change: macOS FSEvents replays writes made just before the
+        // watcher attached (the v2.0.0-beta.5 release run saw a set-up write come back as "unreported").
+        const since = Date.now();
         const watcher = watch(ws.path, { recursive: true }, (_type, filename) => {
             if (typeof filename !== 'string') return;
             const rel = confine(ws.path, filename);
             if (rel === null || rel === '' || rel.split('/').some((seg) => SKIP.has(seg))) return;
             // Windows reports the parent DIRECTORIES of a written file as changed too; only files are "changes" here.
-            // A path that no longer exists is a deletion and still counts.
+            // A path that no longer exists is a deletion and still counts. countsAsDiskChange holds the rule.
             void stat(join(ws.path, ...rel.split('/'))).then(
-                (info) => { if (!info.isDirectory()) this.#recordChange(workspaceId, rel); },
-                () => { this.#recordChange(workspaceId, rel); },
+                (info) => { if (countsAsDiskChange({ mtimeMs: info.mtimeMs, isDirectory: info.isDirectory() }, since)) this.#recordChange(workspaceId, rel); },
+                () => { if (countsAsDiskChange(null, since)) this.#recordChange(workspaceId, rel); },
             );
         });
         watcher.on('error', () => { /* a lost watcher means no new unreported marks; the tree still opens */ });
