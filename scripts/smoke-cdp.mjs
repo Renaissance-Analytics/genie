@@ -356,6 +356,23 @@ if (typeof agentRow === 'string') {
             'the chat flyout and its composer',
         );
         check(composer, '21. clicking it opens the flyout with a real composer');
+
+        // 50. THE FLYOUT IS A CONVERSATION, NOT A SHELL (board audit, 2026-10-12: `messages: []` was hard-coded). With the
+        // agent's detail read, the flyout carries the context line (what the agent is doing, in the board's words) and
+        // the thread chips with this agent active. Messages are counted when there are any; an empty thread says nothing.
+        const conversation = await waitFor(
+            cdp,
+            `Boolean(document.querySelector('[data-chat-context]')) && Boolean(document.querySelector('[data-chat-thread-chip][data-active="true"]'))`,
+            'the chat context line and the active thread chip',
+        );
+        const chatShape = await cdp.evaluate(`JSON.stringify({
+            context: document.querySelector('[data-chat-context]')?.textContent ?? null,
+            chips: document.querySelectorAll('[data-chat-thread-chip]').length,
+            messages: document.querySelectorAll('[data-chat-message]').length,
+            greeting: /How can I help|Hello|Hi there/i.test(document.querySelector('[data-chat]')?.textContent ?? ''),
+        })`);
+        const shape = JSON.parse(chatShape || '{}');
+        check(conversation && shape.chips >= 1 && shape.greeting === false, '50. the flyout shows the agent\'s context line and thread chips, and no fake greeting', chatShape);
     }
 
     // A screenshot of the AGENT VIEW, while we are on it. The Dashboard one is taken at the

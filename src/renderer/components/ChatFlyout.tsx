@@ -3,6 +3,8 @@ import type { Approval } from '../../core/approval.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
+import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
+import { FidelityDot } from './Dashboard.js';
 
 /**
  * THE CHAT FLYOUT — the only place a human types to an agent.
@@ -37,7 +39,20 @@ export interface ChatThread {
     fidelity: Fidelity;
     /** `null` when the count could not be read — never `0`, which claims you are up to date. */
     unread: number | null;
-    messages: readonly { id: string; from: string; text: string; delivered: boolean }[];
+    /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
+    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at'>>)[];
+    /** The line under the chips — what the agent is doing, in the board's words; `null` = not read yet. */
+    context?: ChatContext | null | undefined;
+    /** The agents sharing the subject's workspace, the subject active; absent or empty = no chips row. */
+    chips?: readonly ChatChip[] | undefined;
+}
+
+const CONTEXT_TONE = { ok: 'text-emerald-500', warn: 'text-amber-500', bad: 'text-red-500', muted: 'text-[var(--fg-3)]' } as const;
+
+/** `13:58` from epoch ms, in the local clock — only ever called with a real time. */
+function clock(at: number): string {
+    const d = new Date(at);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 export interface ChatFlyoutProps {
@@ -56,11 +71,13 @@ export interface ChatFlyoutProps {
     onSend: (text: string) => void;
     onTogglePin: () => void;
     onClose: () => void;
+    /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
+    onPickThread?: ((agentId: string) => void) | undefined;
 }
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose,
+    onSend, onTogglePin, onClose, onPickThread,
 }: ChatFlyoutProps) {
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
@@ -129,29 +146,64 @@ export function ChatFlyout({
                 )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+            {/* THREAD CHIPS (the board): the agents sharing this workspace, the subject active; a click switches the thread. */}
+            {thread?.chips && thread.chips.length > 0 ? (
+                <div data-chat-threads="" className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-[var(--border-1)] px-3 py-2">
+                    {thread.chips.map((c) => (
+                        <button
+                            key={c.agentId}
+                            type="button"
+                            data-chat-thread-chip={c.agentId}
+                            {...(c.active ? { 'data-active': 'true' } : {})}
+                            onClick={() => onPickThread?.(c.agentId)}
+                            className={`flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] ${c.active ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                        >
+                            <FidelityDot fidelity={c.fidelity} state={c.state} />
+                            <span>{c.name}</span>
+                            {c.unread !== null && c.unread > 0 ? <span className="rounded-full bg-violet-500 px-1.5 font-mono text-[10px] text-white">{c.unread}</span> : null}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+            {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess. */}
+            {thread?.context ? (
+                <div data-chat-context={thread.context.tone} className={`shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread.context.tone]}`}>{thread.context.text}</div>
+            ) : null}
+
+            <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-auto px-3 py-3">
                 {/*
                  * An empty thread says NOTHING. No fake greeting, no system line, no "how can I
                  * help" — every one of those is a message the agent did not send, attributed to
                  * it, in the one place a person reads what it said.
+                 *
+                 * Three speakers, three shapes (the board): YOU on the right in a bubble; the agent
+                 * BY NAME in violet; a peer as `wren → atlas`. Rendering `role` alone once labelled a
+                 * sibling agent's message `user` — the same word as the owner's.
                  */}
-                {thread?.messages.map((m) => (
-                    <div key={m.id} data-chat-message={m.id} className="mb-2 text-[13px]">
-                        <span className="mr-2 font-medium text-violet-400">{m.from}</span>
-                        <span className="text-[var(--fg-2)]">{m.text}</span>
-                        {/*
-                         * An undelivered message is KEPT and MARKED, with the route to send it:
-                         * the agent is not running. Dropping it loses what someone wrote, and
-                         * showing it as sent is worse — they would wait for an answer that
-                         * cannot come.
-                         */}
-                        {m.delivered ? null : (
-                            <span data-chat-undelivered={m.id} className="ml-2 font-mono text-[11px] text-amber-500">
-                                not delivered · the agent is not running
-                            </span>
-                        )}
-                    </div>
-                ))}
+                {thread?.messages.map((m) => {
+                    const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
+                    const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
+                    return who === 'you' ? (
+                        <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
+                            <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
+                            <div className={`rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-red-500 bg-[var(--bg-2)]'}`}>{m.text}</div>
+                            {/*
+                             * An undelivered message is KEPT and MARKED, with the route to send it:
+                             * the agent is not running. Dropping it loses what someone wrote, and
+                             * showing it as sent is worse — they would wait for an answer that
+                             * cannot come.
+                             */}
+                            {m.delivered ? null : (
+                                <span data-chat-undelivered={m.id} className="text-[12px] text-red-500">not delivered · the agent is not running</span>
+                            )}
+                        </div>
+                    ) : (
+                        <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
+                            <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-violet-400">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
+                            <div className="text-[13px] leading-normal text-[var(--fg-2)]">{m.text}</div>
+                        </div>
+                    );
+                })}
             </div>
 
             {/*

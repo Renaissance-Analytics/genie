@@ -55,6 +55,19 @@ export function globalAction(press: KeyPress): GlobalAction | null {
     return null;
 }
 
+export type ChatAction = 'close-chat';
+
+/**
+ * The chat flyout's keys (§4.4). `Esc` closes an UNPINNED flyout — nothing underneath moved, so nothing has to move
+ * back. **`Esc` does not close a pinned dock**: a pin says this panel stays. Never while typing: an `Esc` in the
+ * composer is the composer's (it blurs), not a command to close the conversation someone is mid-sentence in.
+ */
+export function chatAction(press: KeyPress, chat: { open: boolean; pinned: boolean }): ChatAction | null {
+    if (!chat.open || chat.pinned || press.typing) return null;
+    if (press.key === 'Escape' && !press.metaKey && !press.ctrlKey && !press.altKey && !press.shiftKey) return 'close-chat';
+    return null;
+}
+
 export type AgentViewAction =
     | 'next-edit'
     | 'next-row'

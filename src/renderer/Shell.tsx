@@ -470,6 +470,7 @@ export function Shell({
                         onSend={(text) => onSend(chatThread?.agentId ?? '', text)}
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}
+                        onPickThread={(id) => onNavigate(formatRoute({ ...parsed, chat: id }))}
                     />
                 ) : null}
             </div>
