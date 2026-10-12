@@ -29,6 +29,30 @@ export type Lane = 'messages' | 'thoughts' | 'tools' | 'edits';
 export const LANES: readonly Lane[] = ['messages', 'thoughts', 'tools', 'edits'];
 
 /**
+ * THE CHIPS ROW'S OTHER FILTERS (the board's `Usage · Approvals · Errors`): FACETS over the rows, not tracks in the
+ * drawer. A usage report is a row of its own kind; an error is a tool call the agent reported `failed` or a notice at
+ * level `error` — so one row can sit in a lane AND a facet, and selecting either shows it.
+ *
+ * Approvals are NOT here. The ledger keeps no approval rows: a permission request lives on the session until it is
+ * answered and then nowhere, so a chip counting approvals would read `0` where the truth is "not recorded". It is
+ * drawn when the session records them (§5: absent, not zero).
+ */
+export type Facet = 'usage' | 'errors';
+export const FACETS: readonly Facet[] = ['usage', 'errors'];
+/** What one chip selects. The selection in the route (`?lane=`) is a set of these; `null` is not filtering. */
+export type StreamFilter = Lane | Facet;
+export const FILTERS: readonly StreamFilter[] = [...LANES, ...FACETS];
+
+export function facetsOf(event: StreamEvent): readonly Facet[] {
+    switch (event.kind) {
+        case 'usage': return ['usage'];
+        case 'tool': return event.status === 'failed' ? ['errors'] : [];
+        case 'notice': return event.level === 'error' ? ['errors'] : [];
+        default: return [];
+    }
+}
+
+/**
  * An event with its arrival time and its row id.
  *
  * `at: null` is a real case — a row replayed from a thread that stored no timestamp — and it
@@ -369,7 +393,7 @@ export function laneOf(event: StreamEvent): Lane | null {
  * cause of "why did it get stupid"*, and a reader who filtered to `edits` and so never saw
  * that eleven turns were summarised away has been misled by the filter.
  */
-export function visibleRows(rows: readonly TimedEvent[], lanes: readonly Lane[] | null): readonly TimedEvent[] {
+export function visibleRows(rows: readonly TimedEvent[], lanes: readonly StreamFilter[] | null): readonly TimedEvent[] {
     if (lanes === null) return rows;
 
     return rows.filter((row) => {
@@ -377,7 +401,9 @@ export function visibleRows(rows: readonly TimedEvent[], lanes: readonly Lane[] 
         // A turn marker is STRUCTURE, not content: a filtered view that lost its turns would read as one long turn.
         if (row.event.kind === 'turn') return true;
         const lane = laneOf(row.event);
-        return lane !== null && lanes.includes(lane);
+        if (lane !== null && lanes.includes(lane)) return true;
+        // A row is also shown for any FACET it carries: a failed call under Errors, a report under Usage.
+        return facetsOf(row.event).some((facet) => lanes.includes(facet));
     });
 }
 

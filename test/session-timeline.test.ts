@@ -62,13 +62,15 @@ describe('sessionTimeline', () => {
 });
 
 describe('chipRow', () => {
-    it('All with the row count, then the four lanes with their counts; All is on when nothing is filtered', () => {
+    it('All with the row count, the four lanes with their counts, then Usage and Errors; All is on when nothing is filtered', () => {
         expect(chipRow(rows, null)).toEqual([
             { id: 'all', label: 'All', n: 8, on: true },
             { id: 'messages', label: 'Messages', n: 1, on: false },
             { id: 'thoughts', label: 'Thoughts', n: 1, on: false },
             { id: 'tools', label: 'Tools', n: 1, on: false },
             { id: 'edits', label: 'Edits', n: 2, on: false },
+            { id: 'usage', label: 'Usage', n: 1, on: false },
+            { id: 'errors', label: 'Errors', n: 0, on: false },
         ]);
     });
 

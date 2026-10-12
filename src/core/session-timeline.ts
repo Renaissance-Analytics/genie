@@ -1,6 +1,6 @@
 import { laneSummary, type Lane } from './lanes.js';
 import type { LiveSession } from './roster.js';
-import { LANES, laneOf, type TimedEvent } from './stream-view.js';
+import { FACETS, LANES, facetsOf, laneOf, type Facet, type StreamFilter, type TimedEvent } from './stream-view.js';
 
 /**
  * THE SESSION TIMELINE STRIP AND THE CHIPS ROW (the board's `Agent View`).
@@ -73,7 +73,7 @@ export function sessionTimeline(rows: readonly TimedEvent[], session: LiveSessio
 }
 
 export interface Chip {
-    id: 'all' | Lane;
+    id: 'all' | StreamFilter;
     label: string;
     /** A measured count — a zero is kept. */
     n: number;
@@ -81,11 +81,19 @@ export interface Chip {
 }
 
 const LABEL: Record<Lane, string> = { messages: 'Messages', thoughts: 'Thoughts', tools: 'Tools', edits: 'Edits' };
+const FACET_LABEL: Record<Facet, string> = { usage: 'Usage', errors: 'Errors' };
 
-export function chipRow(rows: readonly TimedEvent[], selected: readonly Lane[] | null): readonly Chip[] {
+/**
+ * `All 412 · Messages 14 · Thoughts 61 · Tools 288 · Edits 17 · Usage 9 · Errors 2`. The facet counts are measured
+ * over the same rows (a zero is a fact: a turn with no failures has none). No Approvals chip — see `FACETS`.
+ */
+export function chipRow(rows: readonly TimedEvent[], selected: readonly StreamFilter[] | null): readonly Chip[] {
     const counts = laneSummary(rows).counts;
+    const facetCounts: Record<Facet, number> = { usage: 0, errors: 0 };
+    for (const row of rows) for (const facet of facetsOf(row.event)) facetCounts[facet] += 1;
     return [
         { id: 'all', label: 'All', n: rows.length, on: selected === null },
         ...LANES.map((lane): Chip => ({ id: lane, label: LABEL[lane], n: counts[lane], on: selected !== null && selected.includes(lane) })),
+        ...FACETS.map((facet): Chip => ({ id: facet, label: FACET_LABEL[facet], n: facetCounts[facet], on: selected !== null && selected.includes(facet) })),
     ];
 }

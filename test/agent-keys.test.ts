@@ -117,11 +117,14 @@ describe('the stream cursor', () => {
 
 describe('t — the Thought lane', () => {
     it('from not filtering, hides thoughts — the common wish', () => {
-        expect(toggleThoughts(null)).toEqual(['messages', 'tools', 'edits']);
+        // The facets (Usage / Errors) stay: the key is about thoughts.
+        expect(toggleThoughts(null)).toEqual(['messages', 'tools', 'edits', 'usage', 'errors']);
     });
 
-    it('from thoughts hidden, shows them again — and all four is recorded as not filtering', () => {
-        expect(toggleThoughts(['messages', 'tools', 'edits'])).toBeNull();
+    it('from thoughts hidden, shows them again — and every filter is recorded as not filtering', () => {
+        expect(toggleThoughts(['messages', 'tools', 'edits', 'usage', 'errors'])).toBeNull();
+        // The four lanes alone are a narrower view (no usage, no error notices), so they stay a selection.
+        expect(toggleThoughts(['messages', 'tools', 'edits'])).toEqual(['messages', 'tools', 'edits', 'thoughts']);
     });
 
     it('from a narrower selection, adds or removes only thoughts', () => {
