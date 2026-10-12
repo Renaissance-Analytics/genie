@@ -1,6 +1,7 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute } from '../core/route.js';
-import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
+import { Icon } from '@particle-academy/react-fancy';
+import { DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
@@ -113,6 +114,11 @@ export interface ShellProps {
     /** An agent is writing a file you have dirty (§4.3): the ask, and its lifting. */
     onPauseAgent?: ((agent: string, path: string) => void) | undefined;
     onResumeAgent?: ((agent: string, path: string) => void) | undefined;
+    /** The dock's notice after a pin (§4.4): a handoff or a refusal, one line under the title bar. */
+    dockNotice?: DockNotice | null | undefined;
+    onDismissDockNotice?: (() => void) | undefined;
+    /** The docked file panel reports its dirty buffers, so the refusal is real. */
+    onFilesDirtyChange?: ((dirty: boolean) => void) | undefined;
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
@@ -147,6 +153,9 @@ export interface ShellProps {
 
 export type ShellRemote = { host: string; driver: string | null; driving: boolean; locked: boolean } | null;
 
+/** The dock's panels, as the notice names them (§4.4). */
+const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel', lists: 'lists' };
+
 export function Shell({
     route,
     snapshot,
@@ -174,6 +183,9 @@ export function Shell({
     onBringBackFiles,
     onPauseAgent,
     onResumeAgent,
+    dockNotice = null,
+    onDismissDockNotice,
+    onFilesDirtyChange,
     updates = NO_UPDATES,
     onTakeOver,
     onRestartAgent,
@@ -261,6 +273,22 @@ export function Shell({
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
             />
+
+            {/* THE DOCK'S NOTICE (§4.4): a second pin replaces the first VISIBLY; a refusal says why and offers pop-out. */}
+            {dockNotice ? (
+                <div data-dock-notice={dockNotice.kind} className="flex h-8 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 text-[12px] text-[var(--fg-2)]">
+                    <Icon name={dockNotice.kind === 'refused' ? 'circle-alert' : 'arrow-right-left'} size="xs" className={dockNotice.kind === 'refused' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'} />
+                    <span className="min-w-0 flex-1 truncate">
+                        {dockNotice.kind === 'replaced'
+                            ? `The ${PANEL_NAME[dockNotice.replaced]} is no longer pinned; the ${dockNotice.pinned ? PANEL_NAME[dockNotice.pinned] : 'dock'} took the dock.`
+                            : dockNotice.reason}
+                    </span>
+                    {dockNotice.kind === 'refused' && dockNotice.workspaceId && onPopOutFiles ? (
+                        <button type="button" data-action="pop-out-files" data-workspace={dockNotice.workspaceId} onClick={() => { onPopOutFiles(dockNotice.workspaceId!); onDismissDockNotice?.(); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[11px] hover:bg-[var(--bg-2)]">Pop the file panel out</button>
+                    ) : null}
+                    <button type="button" data-action="dismiss-dock-notice" aria-label="Dismiss" onClick={() => onDismissDockNotice?.()} className="text-[var(--fg-4)] hover:text-[var(--fg-2)]"><Icon name="x" size="xs" /></button>
+                </div>
+            ) : null}
 
             <div className="relative flex min-h-0 flex-1" style={{ marginRight: reserve }} data-dock-reserve={reserve}>
                 <Sidebar
@@ -487,6 +515,7 @@ export function Shell({
                             onPopOut={onPopOutFiles ? () => onPopOutFiles(filesSlot.workspaceId!) : undefined}
                             onPause={onPauseAgent}
                             onResume={onResumeAgent}
+                            onDirtyChange={onFilesDirtyChange}
                         />
                     </aside>
                 ) : null}
