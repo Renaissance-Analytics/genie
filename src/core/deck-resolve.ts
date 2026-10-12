@@ -26,6 +26,33 @@ export type DeckCommand =
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
 
 /**
+ * THE FORM, filled in place (§4.5): one array of chosen labels per question, in order, plus the free-text note the
+ * modal always offers. Checked here, not guessed: a single-select question takes exactly one label, a multi-select at
+ * least one, every label must be one of that question's options; a forwarded question is never answered here.
+ */
+export function resolveDeckForm(item: DeckItem, selections: readonly (readonly string[])[], note: string): DeckCommand {
+    if (item.forwardedFrom !== null || item.answer.kind === 'elsewhere') {
+        const host = item.answer.kind === 'elsewhere' ? item.answer.host : item.forwardedFrom;
+        return refuse(`this question was raised on ${host} and must be answered there`);
+    }
+    if (item.answer.kind !== 'form') return refuse('this item is not a form; answer it with one of its options');
+    if (!item.id.startsWith('q_')) return refuse(`${item.id} is not a question Genie knows how to answer`);
+    const questions = item.answer.questions;
+    if (!questions) return refuse('this item did not carry its questions; open the agent to answer it');
+    if (selections.length !== questions.length) return refuse(`${questions.length} questions, ${selections.length} answers`);
+    for (let i = 0; i < questions.length; i++) {
+        const q = questions[i]!;
+        const picked = selections[i] ?? [];
+        const labels = q.options.map((o) => o.label);
+        const stray = picked.find((p) => !labels.includes(p));
+        if (stray !== undefined) return refuse(`"${stray}" is not one of the options for ${q.header}`);
+        if (picked.length === 0) return refuse(`${q.header} has no answer yet`);
+        if (q.multiSelect !== true && picked.length > 1) return refuse(`${q.header} takes one answer`);
+    }
+    return { kind: 'answer-question', questionId: item.id, selections: selections.map((s) => [...s]), note };
+}
+
+/**
  * Which channel an answer travels: a PROVIDER approval (`approval:<agent>`) goes back through the
  * session layer with the provider's own option id; everything else is a feature action the main
  * process resolves against the stores. Decided here so the renderer has no judgement in it.

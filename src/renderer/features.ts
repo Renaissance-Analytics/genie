@@ -170,6 +170,8 @@ export type FeatureAction =
     | { kind: 'toolchain.update'; tool: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string }
+    /** A multi-part question answered IN PLACE (§4.5): one array of labels per question, plus the note. */
+    | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; note: string }
     /** The person adds a memory. */
     | { kind: 'knowledge.add'; title: string; body: string; class?: MemoryClass; scope: Scope; tags?: string[] }
     /** Attachments are host paths from the host's own picker; the store keeps BYTE COPIES, never the path. */

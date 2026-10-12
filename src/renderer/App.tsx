@@ -655,6 +655,13 @@ function DesktopApp({ bridge }: AppProps) {
                 setAnswering(optionId);
                 resolvedBridge?.answerApproval(agentId, optionId);
             }}
+            onAnswerDeckForm={(item, selections, note) => {
+                // The filled form goes to main as one feature action; a refusal (an unanswered question, a label that is
+                // not an option) comes back as the reason and is never swallowed.
+                void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answerForm', item, selections, note }).then(setFeatures).catch((error: unknown) => {
+                    console.error('[genie] deck form refused:', (error as Error).message);
+                });
+            }}
             onAnswerDeckItem={(item, optionId) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.

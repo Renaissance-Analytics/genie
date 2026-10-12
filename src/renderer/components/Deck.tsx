@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import { useState, type FormEvent } from 'react';
 import { deckBand, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
@@ -34,11 +35,24 @@ export interface DeckProps {
     onNavigate: (route: string) => void;
     /** The update signal's door is an action (§7): download, then install. */
     onSignalAction?: ((action: SignalAction) => void) | undefined;
+    /** A multi-part question's form, filled IN PLACE: one array of labels per question, plus the note. */
+    onAnswerForm?: ((item: DeckItem, selections: string[][], note: string) => void) | undefined;
+    /** Which form item is expanded — controlled, for tests that render server-side. Otherwise the Deck keeps its own. */
+    expanded?: string | null | undefined;
 }
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, expanded }: DeckProps) {
     const band = deckBand(items);
     const strip = signalStrip(signals);
+    const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
+    const open = expanded ?? ownExpanded;
+    const submitForm = (item: DeckItem, e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (item.answer.kind !== 'form' || !item.answer.questions) return;
+        const data = new FormData(e.currentTarget);
+        const selections = item.answer.questions.map((_, i) => data.getAll(`q${i}`).map(String));
+        onAnswerForm?.(item, selections, String(data.get('note') ?? ''));
+    };
 
     return (
         <div data-surface="deck" className="flex h-full min-h-0 flex-col">
@@ -149,17 +163,42 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             />
                         ) : null}
 
-                        {/* Expands IN PLACE — not a modal, not a navigation. */}
-                        {item.answer.kind === 'form' ? (
+                        {/* Expands IN PLACE — not a modal, not a navigation. The door, then the form where the item is read. */}
+                        {item.answer.kind === 'form' && (open !== item.id || !item.answer.questions) ? (
                             <button
                                 type="button"
                                 data-deck-expand={item.id}
-                                onClick={() => onOpenItem(item)}
+                                // The form needs the questions; an item that did not carry them opens the agent instead.
+                                onClick={() => (item.answer.kind === 'form' && item.answer.questions ? setOwnExpanded(item.id) : onOpenItem(item))}
                                 className="mt-2 flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
                             >
                                 <Icon name="list-checks" size="xs" />
                                 Answer {item.answer.fields} questions
                             </button>
+                        ) : null}
+                        {item.answer.kind === 'form' && item.answer.questions && open === item.id ? (
+                            <form data-deck-form={item.id} onSubmit={(e) => submitForm(item, e)} className="mt-2 flex flex-col gap-3 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-xs">
+                                {item.answer.questions.map((q, i) => (
+                                    <fieldset key={i} data-deck-question={i} className="flex flex-col gap-1.5">
+                                        <legend className="flex items-center gap-2">
+                                            <span className="rounded-sm bg-[var(--bg-3)] px-1.5 py-px font-mono text-[10px] uppercase tracking-wide text-[var(--fg-3)]">{q.header}</span>
+                                            <span className="text-[13px] text-[var(--fg-1)]">{q.question}</span>
+                                        </legend>
+                                        {q.options.map((o) => (
+                                            <label key={o.label} className="flex items-center gap-2 text-[12px] text-[var(--fg-2)]">
+                                                <input type={q.multiSelect ? 'checkbox' : 'radio'} name={`q${i}`} value={o.label} />
+                                                <span>{o.label}</span>
+                                            </label>
+                                        ))}
+                                    </fieldset>
+                                ))}
+                                {/* The free text the modal always offers (§6.3). */}
+                                <textarea name="note" data-deck-note={item.id} rows={2} placeholder="A note for the agent (optional)" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px]" />
+                                <div className="flex items-center gap-2">
+                                    <button type="submit" data-action="deck-submit" disabled={answering === item.id} className="rounded-lg border border-blue-600 bg-blue-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-blue-600 disabled:opacity-60">Answer</button>
+                                    <button type="button" onClick={() => setOwnExpanded(null)} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">Cancel</button>
+                                </div>
+                            </form>
                         ) : null}
 
                         {/*

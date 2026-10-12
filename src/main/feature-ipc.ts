@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { classifyNavigation } from '../core/browser-policy.js';
 import type { SyncResult } from '../core/integrations.js';
-import { resolveDeckAnswer } from '../core/deck-resolve.js';
+import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, siteFormDefaults, validateFlowForm, validateKnowledgeForm, validateServiceForm, validateSiteForm } from '../core/forms.js';
@@ -242,8 +242,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.toolchainCheckedAt = tc.now();
             break;
         }
-        case 'deck.answer': {
-            const command = resolveDeckAnswer(action.item, action.optionId);
+        case 'deck.answer':
+        case 'deck.answerForm': {
+            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId) : resolveDeckForm(action.item, action.selections, action.note);
             switch (command.kind) {
                 case 'refused':
                     throw new Error(command.reason);
