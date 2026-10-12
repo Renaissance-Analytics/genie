@@ -3,7 +3,7 @@ import { formatRoute, parseRoute } from '../core/route.js';
 import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
 import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
-import { deckItemFor, type DeckItem } from '../core/deck.js';
+import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
@@ -265,7 +265,8 @@ export function Shell({
             <div className="relative flex min-h-0 flex-1" style={{ marginRight: reserve }} data-dock-reserve={reserve}>
                 <Sidebar
                     route={route}
-                    deckCount={snapshot.deckItems?.length ?? null}
+                    // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
+                    deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
                     workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}

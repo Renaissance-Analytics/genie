@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ListItem } from '../src/core/attention.js';
 import { deckItemsFrom } from '../src/core/deck-sources.js';
 import { HUMAN } from '../src/core/inbox.js';
-import { deckBand } from '../src/core/deck.js';
+import { deckBand, sinceYouLooked } from '../src/core/deck.js';
 import type { Finished, PendingQuestion } from '../src/main/attention-store.js';
 import type { InboxMessage } from '../src/main/inbox-store.js';
 
@@ -120,7 +120,9 @@ describe('the whole band', () => {
             finished: [finished()],
             agents: names,
         });
-        expect(deckBand(items).map((i) => i.source)).toEqual(['agent-question', 'user-list', 'finished-handoff', 'unread-dm']);
+        // A finished handoff is not waiting on anybody: it is in the Since-you-looked band, not in Needs you (§4.5).
+        expect(deckBand(items).map((i) => i.source)).toEqual(['agent-question', 'user-list', 'unread-dm']);
+        expect(sinceYouLooked(items).map((i) => i.source)).toEqual(['finished-handoff']);
     });
 
     it('an agent the roster no longer knows still shows, with its id as the name — never dropped silently', () => {

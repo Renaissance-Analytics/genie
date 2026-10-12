@@ -79,6 +79,8 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
     const rank = (p: Priority): number => PRIORITIES.indexOf(p);
 
     return items
+        // A finished agent is not waiting on anybody: its handoff belongs to the SECOND band (§4.5 "Since you looked").
+        .filter((item) => item.source !== 'finished-handoff')
         .map((item) =>
             // A forwarded question must be answered on the host that raised it. Answering the
             // local copy marks it done while the real one waits forever — an agent blocked on
@@ -97,6 +99,19 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
             if (byPriority !== 0) return byPriority;
             return a.at - b.at;
         });
+}
+
+/**
+ * **Since you looked** (§4.5): finished agents with their handoff notes, newest first — `Open`, `Restart with this`,
+ * `mark read`. Read, not resolved: nothing here blocks anybody, which is why it is not in the band or its count.
+ */
+export function sinceYouLooked(items: readonly DeckItem[]): readonly DeckItem[] {
+    return items.filter((item) => item.source === 'finished-handoff').slice().sort((a, b) => b.at - a.at);
+}
+
+/** The rail's badge and the header's count: what is WAITING on you — never a finished agent. */
+export function needsYouCount(items: readonly DeckItem[]): number {
+    return deckBand(items).length;
 }
 
 /**
