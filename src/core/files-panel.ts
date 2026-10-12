@@ -1,4 +1,5 @@
 import type { ToolKind } from './stream-event.js';
+import { editLineCounts } from './stream-view.js';
 
 /**
  * THE WORKSPACE FILE PANEL'S MODEL (§4.3) — pure. One panel per workspace. Attribution comes from
@@ -32,6 +33,8 @@ export interface FileEvent {
     readonly toolKind: ToolKind | null;
     readonly status: 'pending' | 'in_progress' | 'completed' | 'failed' | null;
     readonly rawInput: unknown;
+    /** When the row arrived (the ledger's time); absent or null = not timed. */
+    readonly at?: number | null | undefined;
 }
 
 export interface FileAttribution {
@@ -41,6 +44,15 @@ export interface FileAttribution {
     readonly count: number;
     /** Some agent's edit is in progress right now (violet); otherwise changed this session (green). */
     readonly inFlight: boolean;
+    /** The latest reported edit's arrival time (the board's time column); `null` when no edit row was timed. Absent on an older snapshot. */
+    readonly changedAt?: number | null | undefined;
+    /**
+     * Lines added / removed this session, summed over the COMPLETED edit calls that carried a real before-and-after
+     * (`old_string` / `new_string`, or an `edits[]` list). `null` when none did — a `Write` reports only what it
+     * wrote. Never estimated, never `0` from nothing. Absent on an older snapshot.
+     */
+    readonly plus?: number | null | undefined;
+    readonly minus?: number | null | undefined;
 }
 
 export interface Activity {
@@ -145,7 +157,23 @@ export function attributionFrom(events: readonly FileEvent[], root: string): Map
         if (e.status === 'in_progress') a.inFlight = true;
         out.set(e.path, a);
     }
-    return new Map([...out.entries()].map(([k, v]) => [k, { path: v.path, agents: v.agents, count: v.agents.length, inFlight: v.inFlight }]));
+    // The time and the counts, over EVERY edit row on a file this session (not only the latest per agent): the time
+    // is the latest reported edit's; the counts sum the completed calls that carried a real before-and-after.
+    const detail = new Map<string, { changedAt: number | null; plus: number | null; minus: number | null }>();
+    for (const e of events) {
+        if (e.toolKind !== 'edit' || (e.status !== 'in_progress' && e.status !== 'completed')) continue;
+        const path = pathOf(e, root);
+        if (path === null || !out.has(path)) continue;
+        const d = detail.get(path) ?? { changedAt: null, plus: null, minus: null };
+        if (typeof e.at === 'number' && (d.changedAt === null || e.at > d.changedAt)) d.changedAt = e.at;
+        const counts = e.status === 'completed' ? editLineCounts(e.rawInput) : null;
+        if (counts) { d.plus = (d.plus ?? 0) + counts.plus; d.minus = (d.minus ?? 0) + counts.minus; }
+        detail.set(path, d);
+    }
+    return new Map([...out.entries()].map(([k, v]) => {
+        const d = detail.get(k) ?? { changedAt: null, plus: null, minus: null };
+        return [k, { path: v.path, agents: v.agents, count: v.agents.length, inFlight: v.inFlight, changedAt: d.changedAt, plus: d.plus, minus: d.minus }];
+    }));
 }
 
 /** Who is touching what right now, for the footer: edits in progress are `writing`, reads in progress `reading`. */

@@ -66,7 +66,8 @@ describe('FilesHost', () => {
         events.set('agent_kora', [{ agentId: 'agent_kora', agentName: 'kora', toolKind: 'edit', status: 'in_progress', rawInput: { file_path: join(root, 'src/main/ipc.ts') } }]);
         events.set('agent_zane', [{ agentId: 'agent_zane', agentName: 'zane', toolKind: 'read', status: 'in_progress', rawInput: { file_path: join(root, 'README.md') } }]);
         const before = await host.state('tynn');
-        expect(before!.files).toEqual([{ path: 'src/main/ipc.ts', agents: [{ id: 'agent_kora', name: 'kora' }], count: 1, inFlight: true }]);
+        // The attribution also carries the time and the counts — none here: the event is untimed and in flight.
+        expect(before!.files).toEqual([{ path: 'src/main/ipc.ts', agents: [{ id: 'agent_kora', name: 'kora' }], count: 1, inFlight: true, changedAt: null, plus: null, minus: null }]);
         expect(before!.activity).toEqual([{ agent: 'kora', verb: 'writing', path: 'src/main/ipc.ts' }, { agent: 'zane', verb: 'reading', path: 'README.md' }]);
         expect(before!.unreported).toEqual([]);
 
