@@ -99,6 +99,8 @@ if (!app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 /** The tray outlives every window; held so it is not garbage-collected into nothing. */
 let tray: Tray | null = null;
+/** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
+let autoCheckStop: (() => void) | null = null;
 let registry: Registry | null = null;
 let terminals: TerminalHost | null = null;
 let filesHost: FilesHost | null = null;
@@ -419,7 +421,9 @@ async function boot(): Promise<void> {
      * UPDATES (§7). The host drives electron-updater; the renderer asks and shows. The install
      * directory is wherever this executable lives — `%LOCALAPPDATA%\Programs\Genie` when
      * installed, Electron's own dist in a dev run — and §7.2's teardown scans exactly that.
-     * Nothing checks on a timer: the first check is the user's, or the smoke's.
+     * One check soon after boot and one every few hours (AUTO_CHECK) — v1 checked at boot, and
+     * 2.0.0-beta.5, which never did, could not learn that the next build existed (genie2#91).
+     * Nothing downloads by itself.
      */
     updates = new UpdateHost({
         port: realElectronUpdaterPort(),
@@ -452,6 +456,7 @@ async function boot(): Promise<void> {
         }
     });
     ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
+    autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
     ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
     ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
     ipcMain.handle('genie:updates-install', () => {
@@ -1072,6 +1077,8 @@ app.on('second-instance', () => {
 let quitConfirmed = false;
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
 app.on('before-quit', (event) => {
+    autoCheckStop?.();
+    autoCheckStop = null;
     // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds.
     if (!quitConfirmed && host && registry) {
         const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);

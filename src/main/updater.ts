@@ -113,6 +113,14 @@ export interface InstallResult {
 
 const IDLE: UpdateState = { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
 
+/**
+ * When Genie checks BY ITSELF: once shortly after boot, then on a long interval. v1 checked at
+ * boot and opened the sheet; 2.0.0-beta.5 never checked unless a script or a remote call asked,
+ * so an installed Genie 2 could not learn that the next build existed (genie2#91). Nothing
+ * downloads by itself — the check only moves the state to `available`, which the Deck shows.
+ */
+export const AUTO_CHECK = { initialMs: 10_000, intervalMs: 4 * 60 * 60 * 1000 } as const;
+
 export class UpdateHost {
     private current: UpdateState = IDLE;
     private inFlight: Promise<UpdateState> | null = null;
@@ -130,6 +138,29 @@ export class UpdateHost {
 
     state(): UpdateState {
         return this.current;
+    }
+
+    /**
+     * Arm the automatic checks: one after `initialMs`, then one every `intervalMs`, each only
+     * when a check makes sense (idle, none, error or available — never while a download or an
+     * install is in progress). Returns the stop; after it, a timer that still fires does nothing.
+     * The scheduler is injected so a test can count the timers and fire them by hand.
+     */
+    startAutoCheck(schedule: (fn: () => void, ms: number) => () => void, timing: { initialMs: number; intervalMs: number } = AUTO_CHECK): () => void {
+        let stopped = false;
+        let cancel: (() => void) | null = null;
+        const arm = (ms: number): void => {
+            cancel = schedule(() => {
+                cancel = null;
+                if (stopped) return;
+                const phase = this.current.phase;
+                const canCheck = phase === 'idle' || phase === 'none' || phase === 'error' || phase === 'available';
+                if (!canCheck) { arm(timing.intervalMs); return; }
+                void this.check().catch(() => undefined).finally(() => { if (!stopped) arm(timing.intervalMs); });
+            }, ms);
+        };
+        arm(timing.initialMs);
+        return () => { stopped = true; cancel?.(); cancel = null; };
     }
 
     onChange(listener: (state: UpdateState) => void): () => void {
