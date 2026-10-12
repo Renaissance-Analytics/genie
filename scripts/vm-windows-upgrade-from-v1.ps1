@@ -123,7 +123,7 @@ try {
     Copy-Item package.json package.json.orig -Force
     Copy-Item package-lock.json package-lock.json.orig -Force
     try {
-        Run "npm version $Next --no-git-tag-version" 'bump.log'
+        Run "npm version $Next --no-git-tag-version --allow-same-version" 'bump.log'
         Run 'npm run build' 'build-next.log'
         Run 'npx electron-builder --publish never' 'package-next.log'
     } finally {
