@@ -32,20 +32,39 @@ export interface ApprovalCardProps {
     /** `null` while an answer is in flight, so the buttons can stop accepting a second press. */
     answering: string | null;
     onAnswer: (optionId: string) => void;
+    /** The asking agent, for the board's heading `atlas asks to run Bash`; without it the heading names the tool alone. */
+    agentName?: string | undefined;
 }
 
-export function ApprovalCard({ approval, answering, onAnswer }: ApprovalCardProps) {
+/** The board's key hints on the two decisions the keys reach (§4.2 `a` / `d`). */
+const KEY_HINT: Partial<Record<OptionTone, string>> = { ok: 'A', bad: 'D' };
+
+export function ApprovalCard({ approval, answering, onAnswer, agentName }: ApprovalCardProps) {
+    // The board's heading and meta, each only when the request reported the piece; the question itself always.
+    const heading = approval.tool ? `${agentName ? `${agentName} asks` : 'asks'} to run ${approval.tool}` : null;
+    const meta = approval.toolCallId ? `tool_call ${approval.toolCallId.replace(/^toolu_/, '').slice(0, 4)} · 1 of 1 pending` : null;
     return (
         <div
             data-approval
             className="m-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-3 text-[13px]"
         >
+            {heading ? (
+                <div className="mb-1 flex items-center gap-2">
+                    <span data-approval-heading="" className="text-[13px] font-semibold text-[var(--fg-1)]">{heading}</span>
+                    {meta ? <span data-approval-meta="" className="font-mono text-[11px] text-[var(--fg-4)]">{meta}</span> : null}
+                </div>
+            ) : null}
             <div className="mb-2 flex items-start gap-2">
                 <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-[var(--warning)]" />
                 <span data-approval-question className="min-w-0 flex-1 font-mono text-xs text-[var(--fg-1)]">
                     {approval.question}
                 </span>
             </div>
+            {approval.command && approval.command !== approval.question ? (
+                <pre data-approval-command="" className="mb-2 overflow-x-auto rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{approval.command}</pre>
+            ) : approval.command ? (
+                <pre data-approval-command="" className="hidden">{approval.command}</pre>
+            ) : null}
 
             <div className="flex flex-wrap gap-2">
                 {approval.options.map((option) => (
@@ -62,6 +81,7 @@ export function ApprovalCard({ approval, answering, onAnswer }: ApprovalCardProp
                         className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${TONE[option.tone]}`}
                     >
                         {option.label}
+                        {KEY_HINT[option.tone] ? <span data-key-hint={KEY_HINT[option.tone]} className="ml-1.5 rounded-sm border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEY_HINT[option.tone]}</span> : null}
                     </button>
                 ))}
             </div>
