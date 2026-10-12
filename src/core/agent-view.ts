@@ -2,7 +2,7 @@ import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
 import type { AgentTab } from './route.js';
 import type { LiveSession } from './roster.js';
-import type { TimedEvent } from './stream-view.js';
+import { editLineCounts, type TimedEvent } from './stream-view.js';
 
 /**
  * THE AGENT VIEW'S DECISIONS — tabs, the state pill, the right rail.
@@ -223,6 +223,50 @@ export function personaView(text: string | null | undefined): { lines: readonly 
     const all = text.replace(/\r\n?/g, '\n').split('\n');
     while (all.length > 0 && all[all.length - 1]!.trim() === '') all.pop();
     return { lines: all.slice(0, PERSONA_LINES), truncated: all.length > PERSONA_LINES };
+}
+
+/**
+ * THE TAB NOTE, right of the tabs (the board): on Files / Changes, where they open — naming the agent; on the
+ * Stream, a measurement — `61 events in the last 80s` while rows arrive (the last two minutes), `Last event received
+ * 14:31:02` once they stopped. Nothing when no row has a time: a sentence about timing with no times is a guess.
+ */
+export const LIVE_WINDOW_MS = 120_000;
+
+export function tabNote(rows: readonly TimedEvent[], tab: string, agentName: string, now: number): { kind: 'files' | 'live' | 'last'; text: string } | null {
+    if (tab === 'files' || tab === 'changes') return { kind: 'files', text: `Files and Changes open the workspace file panel, filtered to ${agentName}` };
+    if (tab !== 'stream') return null;
+    const timed = rows.map((r) => r.at).filter((t): t is number => t !== null);
+    if (timed.length === 0) return null;
+    const recent = timed.filter((t) => now - t <= LIVE_WINDOW_MS);
+    if (recent.length > 0) {
+        const span = Math.max(1, Math.round((now - Math.min(...recent)) / 1000));
+        return { kind: 'live', text: `${recent.length} event${recent.length === 1 ? '' : 's'} in the last ${span}s` };
+    }
+    const last = new Date(Math.max(...timed)).toLocaleTimeString(undefined, { hour12: false });
+    return { kind: 'last', text: `Last event received ${last}` };
+}
+
+/**
+ * THE DIFF HEADER (the board's Inspector): `+42 −8 · 14:08:31 · edit 3 of 3` — the counts from the edit's own
+ * before-and-after (none for a Write), the row's time, its place among the session's edits. `null` unless the selected
+ * row is an edit.
+ */
+export interface DiffHeader {
+    plus: number | null;
+    minus: number | null;
+    at: number | null;
+    index: number;
+    total: number;
+}
+
+export function diffHeader(rows: readonly TimedEvent[], selectedId: string | null): DiffHeader | null {
+    if (selectedId === null) return null;
+    const edits = rows.filter((r) => r.event.kind === 'tool' && r.event.toolKind === 'edit');
+    const index = edits.findIndex((r) => r.id === selectedId);
+    if (index < 0) return null;
+    const row = edits[index]!;
+    const counts = row.event.kind === 'tool' ? editLineCounts(row.event.rawInput) : null;
+    return { plus: counts?.plus ?? null, minus: counts?.minus ?? null, at: row.at, index: index + 1, total: edits.length };
 }
 
 export interface ProcessEnded {

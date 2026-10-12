@@ -1,6 +1,7 @@
 import { FancyDiff } from '@particle-academy/fancy-diff';
 import { CodeView, Icon, JsonEditor } from '@particle-academy/react-fancy';
 import type { InspectorContent } from '../../core/inspector.js';
+import type { DiffHeader } from '../../core/agent-view.js';
 
 /**
  * THE INSPECTOR — what one tool call actually did.
@@ -24,9 +25,17 @@ export interface InspectorProps {
     onClose: () => void;
     /** Inside the Agent view's ONE right column (the board): no width or border of its own; it fills the top half. */
     embedded?: boolean | undefined;
+    /** The board's diff header: counts from the edit itself, its time, its place among the session's edits. */
+    header?: DiffHeader | null | undefined;
+    /** The footer door `Open in workspace files` — the route it opens; absent = no footer. */
+    filesRoute?: string | null | undefined;
+    onNavigate?: ((route: string) => void) | undefined;
 }
 
-export function Inspector({ content, onClose, embedded = false }: InspectorProps) {
+/** `14:08:31`, in the viewer's own locale. */
+const clock = (at: number | null): string | null => (at === null ? null : new Date(at).toLocaleTimeString(undefined, { hour12: false }));
+
+export function Inspector({ content, onClose, embedded = false, header = null, filesRoute = null, onNavigate }: InspectorProps) {
     return (
         <aside
             data-inspector={content.kind}
@@ -37,6 +46,14 @@ export function Inspector({ content, onClose, embedded = false }: InspectorProps
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--fg-3)]">
                     {'path' in content && content.path ? content.path : ''}
                 </span>
+                {header && content.kind === 'diff' ? (
+                    <span data-diff-header="" className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-[var(--fg-4)]">
+                        {header.plus !== null && header.plus > 0 ? <span className="text-[var(--success)]">+{header.plus}</span> : null}
+                        {header.minus !== null && header.minus > 0 ? <span className="text-[var(--danger)]">−{header.minus}</span> : null}
+                        {clock(header.at) ? <span>· {clock(header.at)}</span> : null}
+                        <span>· edit {header.index} of {header.total}</span>
+                    </span>
+                ) : null}
                 <button
                     type="button"
                     aria-label="Close inspector"
@@ -78,6 +95,13 @@ export function Inspector({ content, onClose, embedded = false }: InspectorProps
                     <p data-inspector-note className="px-3 py-4 text-xs text-[var(--fg-3)]">{content.reason}</p>
                 ) : null}
             </div>
+
+            {/* THE FOOTER (the board): the door to the file where it lives. `Revert this edit` is a write Genie does not make yet, so it is not drawn. */}
+            {content.kind === 'diff' && filesRoute ? (
+                <div className="flex h-8 shrink-0 items-center gap-2 border-t border-[var(--border-1)] px-3">
+                    <button type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)] hover:underline">Open in workspace files</button>
+                </div>
+            ) : null}
         </aside>
     );
 }
