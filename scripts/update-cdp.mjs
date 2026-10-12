@@ -90,8 +90,13 @@ try {
     const idle = await state(cdp);
     check(idle.phase === 'idle' && idle.version === null, '1. the updater starts idle, claiming nothing', JSON.stringify(idle));
 
-    const checked = await cdp.evaluate('window.genie.updates.check()');
-    check(checked.phase === 'available', '2. a check finds the feed\'s update', `phase ${checked.phase}${checked.error ? ` error ${checked.error}` : ''}`);
+    // AUTO_CHECK=1 (genie2#91): nobody calls check() — the installed app must find the feed BY ITSELF,
+    // within the boot delay plus a margin. Otherwise the driver asks, as before.
+    const auto = process.env.AUTO_CHECK === '1';
+    const checked = auto
+        ? await until(cdp, (s) => s.phase === 'available' || s.phase === 'none' || s.phase === 'error', 60_000, 'the app to check the feed on its own')
+        : await cdp.evaluate('window.genie.updates.check()');
+    check(checked.phase === 'available', auto ? '2. the app checked the feed ON ITS OWN and found the update' : '2. a check finds the feed\'s update', `phase ${checked.phase}${checked.error ? ` error ${checked.error}` : ''}`);
     check(checked.version === EXPECT, `3. the offered version is the one the feed serves  — expected ${EXPECT}`, String(checked.version));
     check(typeof checked.checkedAt === 'number', '4. the check is timestamped', String(checked.checkedAt));
 
@@ -106,6 +111,10 @@ try {
     check(shown !== null && shown.action === 'update-download', '6. the Deck shows the update as a signal whose door is download', JSON.stringify(shown));
     check(shown !== null && shown.text.includes(EXPECT), '7. the signal names the version', shown?.text ?? '');
     await cdp.screenshot(`${process.cwd()}/update-available.png`);
+    if (auto) {
+        console.log(failures.length === 0 ? '\nAUTO-CHECK PROVEN — the installed app found the update on the feed without being asked, offered it, and downloaded nothing.' : `\nAUTO-CHECK FAILED — ${failures.length}: ${failures.join(' | ')}`);
+        process.exit(failures.length === 0 ? 0 : 1);
+    }
 
     // Click the door rather than call the bridge: this is the path a person takes.
     await cdp.evaluate('document.querySelector("[data-signal=update]").click(); true');
