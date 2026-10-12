@@ -185,6 +185,19 @@ export const COMPACTION_EXPECTED_AT = 190_000;
  * result. Only facts Genie received: no RSS, no exit code it was not given. `null` unless the session FAILED; a
  * stopped or idle session ended on purpose and gets no block.
  */
+/**
+ * THE PERSONA BLOCK'S CONTENT (the board's empty state): the AGENT.md's first lines as written — clipped, never
+ * summarised — and whether more follow. `null` for no text: the path alone is still a fact, an empty box is not.
+ */
+export const PERSONA_LINES = 12;
+
+export function personaView(text: string | null | undefined): { lines: readonly string[]; truncated: boolean } | null {
+    if (typeof text !== 'string' || text.trim() === '') return null;
+    const all = text.replace(/\r\n?/g, '\n').split('\n');
+    while (all.length > 0 && all[all.length - 1]!.trim() === '') all.pop();
+    return { lines: all.slice(0, PERSONA_LINES), truncated: all.length > PERSONA_LINES };
+}
+
 export interface ProcessEnded {
     reason: string;
     /** `Bash  php artisan test` — the tool and its title, or the tool alone; `null` when no tool was ever called. */
