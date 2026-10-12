@@ -417,6 +417,8 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     <Icon name="external-link" size="xs" />
                     <span>{workspace.name} files are open in their own window.</span>
                     <span data-files-window-route="" className="font-mono text-[11px] text-[var(--fg-4)]">{`genie://files/${workspace.id}`}</span>
+                    {/* A second pop-out of a window already open FOCUSES it (`FilesWindows.popOut` re-opens the route): that is the board's `Focus window`. */}
+                    {onPopOutFiles ? <button type="button" data-action="focus-files-window" onClick={() => onPopOutFiles()} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Focus window</button> : null}
                     <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-0.5 text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]">Bring back</button>
                 </div>
             ) : null}

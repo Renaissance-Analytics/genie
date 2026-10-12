@@ -30,12 +30,16 @@ export interface InspectorProps {
     /** The footer door `Open in workspace files` — the route it opens; absent = no footer. */
     filesRoute?: string | null | undefined;
     onNavigate?: ((route: string) => void) | undefined;
+    /** The footer door `Revert this edit` — puts the call's own before-text back; absent = no door. */
+    onRevert?: (() => void) | undefined;
+    /** What the last revert did (`reverted src/a.ts`) or why not; `null` = nothing attempted. */
+    revertOutcome?: string | null | undefined;
 }
 
 /** `14:08:31`, in the viewer's own locale. */
 const clock = (at: number | null): string | null => (at === null ? null : new Date(at).toLocaleTimeString(undefined, { hour12: false }));
 
-export function Inspector({ content, onClose, embedded = false, header = null, filesRoute = null, onNavigate }: InspectorProps) {
+export function Inspector({ content, onClose, embedded = false, header = null, filesRoute = null, onNavigate, onRevert, revertOutcome = null }: InspectorProps) {
     return (
         <aside
             data-inspector={content.kind}
@@ -96,10 +100,13 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
                 ) : null}
             </div>
 
-            {/* THE FOOTER (the board): the door to the file where it lives. `Revert this edit` is a write Genie does not make yet, so it is not drawn. */}
-            {content.kind === 'diff' && filesRoute ? (
-                <div className="flex h-8 shrink-0 items-center gap-2 border-t border-[var(--border-1)] px-3">
-                    <button type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)] hover:underline">Open in workspace files</button>
+            {/* THE FOOTER (the board): the door to the file where it lives, and `Revert this edit` — the call's own before-text
+                put back through the file panel's write, only where the file still holds exactly what the edit wrote. */}
+            {content.kind === 'diff' && (filesRoute || onRevert) ? (
+                <div className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border-1)] px-3">
+                    {filesRoute ? <button type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)] hover:underline">Open in workspace files</button> : null}
+                    {onRevert ? <button type="button" data-action="revert-edit" onClick={onRevert} className="text-[11px] text-[var(--fg-2)] hover:underline">Revert this edit</button> : null}
+                    {revertOutcome ? <span data-revert-outcome="" className="min-w-0 truncate font-mono text-[10px] text-[var(--fg-4)]">{revertOutcome}</span> : null}
                 </div>
             ) : null}
         </aside>
