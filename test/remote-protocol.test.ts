@@ -44,7 +44,9 @@ describe('the capability table', () => {
         // 46 since `inbox.sendFile` (§6.8): a phone's upload rides the socket as bytes.
         // 47 since `terminals.attach` (§6.5): a second surface JOINS a running terminal instead of opening one.
         // 49 since the Tynn source (§6.1): preview on the host, confirm as a write.
-        expect(REMOTE_METHODS.length).toBe(49);
+        // 50 since `workspaces.removeRepoLock` (the board's "Remove stale lock" on a red repo chip): a write, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(50);
+        expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
         expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('host-only');
         expect(capabilityOf('workspaces.confirmAddFromTynn')).toBe('write');
         expect(capabilityOf('inbox.sendFile')).toBe('write');

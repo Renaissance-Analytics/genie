@@ -129,7 +129,8 @@ export interface GenieBridge {
     openAgent(agentId: string): void;
     /** Stop means stop: the provider tree goes, and the capacity slot frees. */
     stopAgent(agentId: string): void;
-    prompt(agentId: string, text: string): void;
+    /** `ok: false` = the agent is not running; the renderer KEEPS the text as an undelivered draft (§4.4). */
+    prompt(agentId: string, text: string): Promise<{ ok: boolean }>;
     /**
      * Answer a parked approval, with the PROVIDER'S own option id.
      *
@@ -179,6 +180,8 @@ export interface GenieBridge {
         listRepos(workspaceId: string): Promise<{ ok: true; repos: RepoEntry[] } | { ok: false; reason: string }>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
+        removeRepoLock(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This workspace's effective values for the workspace-scoped settings and which keys it overrides (§6.1). */
         settings(workspaceId: string): Promise<{ ok: true; values: Record<string, boolean | string>; overridden: string[] } | { ok: false; reason: string }>;
         setSetting(workspaceId: string, key: string, value: boolean | string): Promise<{ ok: true } | { ok: false; reason: string }>;

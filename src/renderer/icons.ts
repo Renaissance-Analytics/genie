@@ -33,6 +33,8 @@ export const ICON_NAMES: readonly string[] = [
     // chrome
     'search', 'inbox', 'layout-list', 'sparkles',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
+    // the workspace header's repo chips
+    'git-branch', 'circle-alert',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // dashboard rows

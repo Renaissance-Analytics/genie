@@ -221,3 +221,16 @@ export function canonicalAgentRoute(current: string, resolvedId: string): string
     if (parsed.surface !== 'agent' || parsed.agentId === resolvedId) return null;
     return formatRoute({ ...parsed, agentId: resolvedId });
 }
+
+/**
+ * A PINNED chat's subject does not follow the view (§4.4) — it stays. The rail's routes are literals, so without this
+ * every navigation dropped `chat=&pin=` and the pinned flyout vanished. Carries the current pinned chat onto `next`
+ * when `next` names no chat of its own. An unpinned chat is an overlay on the view it was opened over, and does not
+ * follow.
+ */
+export function carryPinnedChat(next: string, current: Route, pinned: boolean): string {
+    if (!pinned || current.chat === null) return next;
+    const parsedNext = parseRoute(next);
+    if (parsedNext.chat !== null) return next;
+    return formatRoute({ ...parsedNext, chat: current.chat, pin: current.pin ?? 'right' });
+}

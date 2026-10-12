@@ -398,7 +398,8 @@ describe('the chat thread', () => {
         });
 
         expect(html).toContain('data-chat-undelivered="m1"');
-        expect(html).toContain('not delivered');
+        // The board's words: "Not delivered. <agent> is not running." — with the route to send it.
+        expect(html).toContain('Not delivered. kai is not running.');
     });
 
     it('gives an OBSERVED agent a different SHAPE of chat, not a disabled one', () => {

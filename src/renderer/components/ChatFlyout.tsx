@@ -71,13 +71,15 @@ export interface ChatFlyoutProps {
     onSend: (text: string) => void;
     onTogglePin: () => void;
     onClose: () => void;
+    /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
+    onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
     onPickThread?: ((agentId: string) => void) | undefined;
 }
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend,
 }: ChatFlyoutProps) {
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
@@ -194,7 +196,10 @@ export function ChatFlyout({
                              * cannot come.
                              */}
                             {m.delivered ? null : (
-                                <span data-chat-undelivered={m.id} className="text-[12px] text-red-500">not delivered · the agent is not running</span>
+                                <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
+                                    <span className="text-[12px] text-red-500">Not delivered. {thread?.name ?? 'the agent'} is not running.</span>
+                                    <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-blue-600 bg-blue-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-blue-600">Restart {thread?.name ?? 'the agent'} and send</button>
+                                </div>
                             )}
                         </div>
                     ) : (

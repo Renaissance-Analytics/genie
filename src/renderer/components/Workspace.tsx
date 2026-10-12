@@ -22,6 +22,7 @@ import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
 import { workspaceHome, type HomeFilesState } from '../../core/workspace-home.js';
 import { FidelityDot } from './Dashboard.js';
+import { repoChip } from '../../core/repo-status.js';
 import { WorkspaceHome } from './WorkspaceHome.js';
 
 /**
@@ -60,6 +61,8 @@ export interface WorkspaceOpsProps {
     /** The repo registry (§6.1); absent = not offered here. `list: null` = not loaded yet. */
     readonly repos?: {
         readonly list: readonly RepoEntry[] | null;
+        /** "Remove stale lock" on a red repo chip (the board's fix). */
+        readonly onRemoveLock?: ((slug: string) => void) | undefined;
         readonly onAdd: (input: { name: string; path: string }) => void;
         readonly onRemove: (slug: string) => void;
         readonly onOpen: (path: string) => void;
@@ -244,6 +247,19 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
             <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+                {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
+                {ops?.repos?.list ? ops.repos.list.map((r) => {
+                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
+                    return (
+                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
+                            <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-red-500 text-red-500' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
+                                <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3" />
+                                {chip.label}
+                            </span>
+                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
+                        </span>
+                    );
+                }) : null}
                 {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
                 {home.agents.length > 0 ? (
                     <div data-agents-strip="" className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">

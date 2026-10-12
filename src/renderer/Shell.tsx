@@ -87,6 +87,8 @@ export interface ShellProps {
     onAnswerDeckItem: (item: DeckItem, optionId: string) => void;
     onTogglePin: () => void;
     onCloseChat: () => void;
+    /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
+    onRestartAndSend?: ((draftId: string) => void) | undefined;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
@@ -172,6 +174,7 @@ export function Shell({
     onSend,
     onTogglePin,
     onCloseChat,
+    onRestartAndSend,
     answeringApproval,
     onAnswerApproval,
     onAnswerDeckItem,
@@ -488,6 +491,7 @@ export function Shell({
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}
                         onPickThread={(id) => onNavigate(formatRoute({ ...parsed, chat: id }))}
+                        onRestartAndSend={onRestartAndSend}
                     />
                 ) : null}
             </div>

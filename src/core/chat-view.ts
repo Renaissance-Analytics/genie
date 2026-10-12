@@ -113,3 +113,26 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         chips: chatChips(rows, subjectId),
     };
 }
+
+/** A message the renderer could not deliver: the agent was not running. Kept, never dropped (§4.4). */
+export interface Draft {
+    id: string;
+    agentId: string;
+    text: string;
+    /** When you sent it — a real time, the renderer's own clock. */
+    at: number;
+}
+
+/**
+ * The thread with THIS agent's undelivered drafts appended after the wire messages, as `you`, not delivered. The
+ * flyout marks them and offers `Restart <agent> and send`; showing them as sent would have someone wait for an answer
+ * that cannot come, and dropping them loses what they wrote.
+ */
+export function withDrafts<T extends { agentId: string; messages: readonly ChatMessage[] }>(thread: T, drafts: readonly Draft[]): T {
+    const mine = drafts.filter((d) => d.agentId === thread.agentId);
+    if (mine.length === 0) return thread;
+    return {
+        ...thread,
+        messages: [...thread.messages, ...mine.map((d): ChatMessage => ({ id: d.id, who: 'you', from: 'you', text: d.text, delivered: false, at: d.at }))],
+    };
+}

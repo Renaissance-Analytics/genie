@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_ROUTE, canonicalAgentRoute, formatRoute, parseRoute } from '../core/route.js';
+import { DEFAULT_ROUTE, canonicalAgentRoute, carryPinnedChat, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -9,7 +9,7 @@ import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
 import { chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatThreadFrom } from '../core/chat-view.js';
+import { chatThreadFrom, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -307,7 +307,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 detail={detail}
                 sending={sending}
                 onBack={() => { window.history.back(); }}
-                onSend={(text) => { setSending(true); bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
+                onSend={(text) => { setSending(true); void bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
                 onStart={() => bridge!.openAgent(agentId)}
             />
         );
@@ -451,6 +451,7 @@ function DesktopApp({ bridge }: AppProps) {
                   list: repos,
                   onAdd: (input) => { void resolvedBridge.workspaces.addRepo(workspaceId, input).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   onRemove: (slug) => { void resolvedBridge.workspaces.removeRepo(workspaceId, slug).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+                  onRemoveLock: (slug) => { void resolvedBridge.workspaces.removeRepoLock(workspaceId, slug).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   // Open: the files panel of this workspace (the repo's folder is in its tree). A per-folder deep link is a later row.
                   onOpen: () => navigate(`genie://workspace/${workspaceId}?panel=files`),
               },
@@ -573,7 +574,23 @@ function DesktopApp({ bridge }: AppProps) {
     const chatSubject = parsed.chat;
     // The thread is DERIVED (`core/chat-view.ts`): the subject's message events with their speakers, the context
     // line, the workspace's chips. `unread` stays `null` — nothing reads it yet, and `0` would claim you are up to date.
-    const chatThread: ChatThread | null = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
+    // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
+    // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
+    const [drafts, setDrafts] = useState<readonly Draft[]>([]);
+    const send = (agentId: string, text: string): void => {
+        void resolvedBridge?.prompt(agentId, text).then((r) => {
+            if (!r.ok) setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now() }]);
+        });
+    };
+    const restartAndSend = (draftId: string): void => {
+        const draft = drafts.find((d) => d.id === draftId);
+        if (!draft || !resolvedBridge) return;
+        void resolvedBridge.agents.restart(draft.agentId, 'graceful').then((r) => {
+            if (!r.ok) return; // the refusal is the agent view's to show; the draft stays
+            return resolvedBridge.prompt(draft.agentId, draft.text).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
+        });
+    };
+    const chatThread: ChatThread | null = chatSubject === null ? null : withDrafts(chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now), drafts);
 
     // A route this build cannot serve goes home rather than leaving a blank body under a
     // stale address — the one state a person cannot get out of without knowing a shortcut.
@@ -620,7 +637,7 @@ function DesktopApp({ bridge }: AppProps) {
             selectedRowId={selectedRowId}
             chatThread={chatThread}
             pinned={pinned}
-            onNavigate={navigate}
+            onNavigate={(r) => navigate(carryPinnedChat(r, parsed, pinned === 'chat'))}
             features={features}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) => {
@@ -630,7 +647,8 @@ function DesktopApp({ bridge }: AppProps) {
                     console.error('[genie] feature action refused:', (error as Error).message);
                 });
             }}
-            onSend={(id, text) => { if (id) resolvedBridge?.prompt(id, text); }}
+            onSend={(id, text) => { if (id) send(id, text); }}
+            onRestartAndSend={restartAndSend}
             answeringApproval={answering}
             onAnswerApproval={(optionId) => {
                 if (!agentId) return;
