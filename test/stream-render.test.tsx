@@ -56,7 +56,7 @@ describe('the empty state', () => {
          */
         const fresh = render({ rows: [] });
         expect(fresh).toContain('data-stream="empty"');
-        expect(fresh).toContain('Nothing yet');
+        expect(fresh).toContain('No events yet');
 
         const filteredOut = render({ lanes: [] });
         expect(filteredOut).toContain('data-stream="empty"');
@@ -64,7 +64,7 @@ describe('the empty state', () => {
 
         // The two messages are genuinely different text, not one string reused.
         expect(fresh).not.toContain('Clear the filter');
-        expect(filteredOut).not.toContain('Nothing yet');
+        expect(filteredOut).not.toContain('No events yet');
     });
 });
 

@@ -296,6 +296,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
             mode: record.mode,
             accessScope: record.accessScope,
+            instructions: record.instructions ?? null,
         },
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),

@@ -4,6 +4,7 @@ import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
 import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
 import type { DeckItem } from '../core/deck.js';
+import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
@@ -67,6 +68,8 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
+    /** The chat subject's session (§4.4): its approval is answered where the composer is; its running turn gets `[Stop]`. */
+    chatSession?: LiveSession | null | undefined;
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
@@ -156,6 +159,7 @@ export function Shell({
     agentResolved,
     selectedRowId,
     chatThread,
+    chatSession = null,
     pinned,
     onNavigate,
     onOpenAgent,
@@ -243,10 +247,10 @@ export function Shell({
      * Hoisted rather than inlined because a JSX expression container cannot sit between
      * attributes, and the reasoning is worth more than the saved line.
      */
-    const chatApproval =
-        chatThread && agentDetail?.agent.id === chatThread.agentId
-            ? agentDetail.session?.pendingApproval ?? null
-            : null;
+    // The chat is the composer for ITS subject wherever the view is, so the approval comes from the subject's own session
+    // (the Agent view shows the marker) — not only when the routed agent happens to be the subject.
+    const chatApproval = chatThread ? chatSession?.pendingApproval ?? (agentDetail?.agent.id === chatThread.agentId ? agentDetail.session?.pendingApproval ?? null : null) : null;
+    const chatRunning = chatThread !== null && chatSession !== null && chatSession !== undefined && chatSession.running && chatSession.turnState === 'working';
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -500,6 +504,8 @@ export function Shell({
                         onClose={onCloseChat}
                         onPickThread={(id) => onNavigate(formatRoute({ ...parsed, chat: id }))}
                         onRestartAndSend={onRestartAndSend}
+                        running={chatRunning}
+                        onStop={() => { if (chatThread) onStopAgent?.(chatThread.agentId); }}
                     />
                 ) : null}
             </div>

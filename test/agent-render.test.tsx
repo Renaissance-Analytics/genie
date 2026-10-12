@@ -81,7 +81,7 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
 
         expect(html).toContain('data-tab="stream"');
         expect(html).toContain('data-stream="empty"');
-        expect(html).toContain('Nothing yet');
+        expect(html).toContain('No events yet');
     });
 
     it('gives an OBSERVED agent no Stream tab at all — absence, not a disabled tab', () => {

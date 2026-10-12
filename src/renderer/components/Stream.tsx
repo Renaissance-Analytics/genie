@@ -46,6 +46,10 @@ export interface StreamProps {
     diffs?: ReadonlyMap<string, { plus: number; minus: number; newFile: boolean }> | undefined;
     /** The agent's name, for its message rows' speaker label. */
     agentName?: string | undefined;
+    /** The empty state's actions (the board): `Message <agent> ⌘J` and `Edit <persona>`; absent = no button. */
+    persona?: string | null | undefined;
+    onChat?: (() => void) | undefined;
+    onEditPersona?: (() => void) | undefined;
 }
 
 /**
@@ -59,7 +63,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -103,11 +107,33 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
      */
     if (prepared.length === 0) {
         const filtered = rows.length > 0;
+        if (filtered) {
+            return (
+                <div data-stream="empty" className="flex h-full items-center justify-center px-8 text-center text-[13px] text-[var(--fg-3)]">
+                    No events in the selected lanes. Clear the filter to see the whole turn.
+                </div>
+            );
+        }
+        // The board's empty state: a heading, the sentence, `Message <agent> ⌘J` as the primary action, `Edit <persona>`.
         return (
-            <div data-stream="empty" className="flex h-full items-center justify-center px-8 text-center text-[13px] text-[var(--fg-3)]">
-                {filtered
-                    ? 'No events in the selected lanes. Clear the filter to see the whole turn.'
-                    : 'Nothing yet. Send a prompt and the ledger fills in, one line per event.'}
+            <div data-stream="empty" className="flex h-full flex-col items-start justify-center gap-2 px-12 text-[13px] text-[var(--fg-3)]">
+                <div className="text-[15px] font-semibold text-[var(--fg-1)]">No events yet</div>
+                <p className="max-w-[420px] leading-normal">Nothing has happened in this session. Send {agentName ?? 'the agent'} a message and the ledger fills in, one line per event.</p>
+                {onChat || (persona && onEditPersona) ? (
+                    <div className="mt-1 flex items-center gap-2">
+                        {onChat ? (
+                            <button type="button" data-action="chat" onClick={onChat} className="flex items-center gap-1.5 rounded-lg border border-blue-600 bg-blue-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-blue-600">
+                                Message {agentName ?? 'the agent'}
+                                <span className="font-mono text-[10px] opacity-80">⌘J</span>
+                            </button>
+                        ) : null}
+                        {persona && onEditPersona ? (
+                            <button type="button" data-action="edit-persona" onClick={onEditPersona} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
+                                Edit <span className="font-mono">{persona}</span>
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
             </div>
         );
     }

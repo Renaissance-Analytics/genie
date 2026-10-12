@@ -2,6 +2,7 @@ import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
 import type { AgentTab } from './route.js';
 import type { LiveSession } from './roster.js';
+import type { TimedEvent } from './stream-view.js';
 
 /**
  * THE AGENT VIEW'S DECISIONS — tabs, the state pill, the right rail.
@@ -163,6 +164,43 @@ export function budgetFor(session: LiveSession | null, cost: number | null, turn
         turns,
     };
 }
+
+export interface ContextNote {
+    text: string;
+    tone: 'warn' | 'bad' | 'muted';
+}
+
+/** Compaction is expected around here (the board's figure, below the 200k limit). */
+export const COMPACTION_EXPECTED_AT = 190_000;
+
+/**
+ * The note under the context bar (the board): `Compaction expected near 190k. Consider a handoff before step 5.`
+ * while the context is high; `Compacted at 14:20 from 189k → 46k` after a compaction; on a broken session, `Last
+ * reported at 14:21. Nothing since the stream closed.` — each from facts on the wire (the usage and compaction rows
+ * carry their times). `null` when nothing applies: absent, not a filler sentence.
+ */
+export function contextNote(session: LiveSession | null, rows: readonly TimedEvent[], pillTone: 'ok' | 'warn' | 'bad' | 'muted'): ContextNote | null {
+    if (!session) return null;
+    const clockOf = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (pillTone === 'bad' || session.failure !== null) {
+        const lastUsage = [...rows].reverse().find((r) => r.event.kind === 'usage' && r.at !== null);
+        return lastUsage && lastUsage.at !== null
+            ? { text: `Last reported at ${clockOf(lastUsage.at)}. Nothing since the stream closed.`, tone: 'bad' }
+            : { text: 'Nothing was reported before the stream closed.', tone: 'bad' };
+    }
+    if (session.contextUsed !== null && session.contextUsed >= CONTEXT_HIGH_AT) {
+        const next = session.plan ? ` Consider a handoff before step ${session.plan.step + 1}.` : '';
+        return { text: `Compaction expected near ${Math.round(COMPACTION_EXPECTED_AT / 1000)}k.${next}`, tone: 'warn' };
+    }
+    const compaction = [...rows].reverse().find((r) => r.event.kind === 'divider' && r.event.variant === 'compaction');
+    if (compaction && compaction.event.kind === 'divider' && compaction.at !== null && compaction.event.before !== null && compaction.event.after !== null) {
+        return { text: `Compacted at ${clockOf(compaction.at)} from ${Math.round(compaction.event.before / 1000)}k → ${Math.round(compaction.event.after / 1000)}k`, tone: 'muted' };
+    }
+    return null;
+}
+
+/** The board's context warning threshold — the same 160k the Dashboard's context cell appears at. */
+export const CONTEXT_HIGH_AT = 160_000;
 
 /** Below this content width the rail becomes a 32px summary strip. */
 export const RAIL_COLLAPSE_AT = 1100;

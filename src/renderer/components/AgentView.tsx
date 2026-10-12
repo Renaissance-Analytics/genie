@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { headerActions } from '../../core/agent-view.js';
+import { contextNote, headerActions } from '../../core/agent-view.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
@@ -96,7 +96,7 @@ const REPAIR_LABEL = (r: Repair): string =>
     : `restart fresh — ${r.reason}`;
 
 export interface AgentViewProps {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined };
     session: LiveSession | null;
     rows: readonly TimedEvent[];
     tab: AgentTab;
@@ -202,6 +202,9 @@ export function AgentView({
     const budgetLimit = ops?.budgetUsd ?? null;
     const plan = planFor(session);
     const budget = budgetFor(session, cost, turns);
+    // The persona path and the context note — both facts, both absent when unknown (§5).
+    const persona = agent.instructions ?? null;
+    const note = contextNote(session, rows, pill.tone);
 
     // A tab the agent does not have falls back to its first one, rather than rendering an empty
     // body under a tab strip that does not contain the selected tab.
@@ -507,6 +510,9 @@ export function AgentView({
                                     selectedId={selectedId}
                                     onSelect={onSelect}
                                     agentName={agent.name}
+                                    persona={persona}
+                                    onChat={() => onNavigate(chatRoute)}
+                                    onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
                                 />
                             </div>
 
@@ -639,11 +645,18 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
-                {inspector || plan || budget || budgetLimit !== null || ops ? (
+                {inspector || plan || budget || budgetLimit !== null || ops || persona ? (
                 <aside data-right-column="" className="flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)]">
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded /> : null}
-                {plan || budget || budgetLimit !== null || ops ? (
+                {plan || budget || budgetLimit !== null || ops || persona ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
+                    {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
+                    {persona ? (
+                        <section data-rail="persona">
+                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
+                            <p className="font-mono text-[11px] text-[var(--fg-2)]">{persona}</p>
+                        </section>
+                    ) : null}
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
                      * panel reads as an agent working without a plan; the truth is that it has
@@ -701,10 +714,14 @@ export function AgentView({
                             <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
                                 <span
                                     data-budget-bar={budget.pct}
-                                    className="block h-full bg-sky-400"
+                                    className={`block h-full ${budget.pct >= 90 ? 'bg-red-500' : budget.pct >= 80 ? 'bg-amber-500' : 'bg-sky-400'}`}
                                     style={{ width: `${budget.pct}%` }}
                                 />
                             </span>
+                            ) : null}
+                            {/* The note under the bar (the board): compaction expected / compacted at / last reported. Absent when there is nothing to say. */}
+                            {note ? (
+                                <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-red-500' : note.tone === 'warn' ? 'text-amber-500' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
                             ) : null}
                             {/*
                              * No Cost row at all when the provider reports none — codex reports
