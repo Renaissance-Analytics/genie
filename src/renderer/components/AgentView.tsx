@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ComponentType } from 'react';
+import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
+import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
 import { agentChanges } from '../../core/agent-changes.js';
 import type { GenieBridge } from '../bridge.js';
@@ -125,14 +127,50 @@ export interface AgentViewProps {
     workspace?: { id: string; name?: string | undefined; path: string } | undefined;
     /** The Changes tab's starting list — for tests that render server-side. Read from the host otherwise. */
     initialChanges?: readonly string[] | null | undefined;
+    /** The live Take Over probe for an OBSERVED agent (§4.2): its terminal, its bursts. `null`/absent = none. */
+    takeOver?: TakeOverProbe | null | undefined;
+    /** The terminal host, for the Terminal tab's second attach to the TUI's pty; absent = this window has none. */
+    terminals?: GenieBridge['terminals'] | undefined;
+}
+
+/**
+ * The observed agent's terminal: a second attach to the TUI's pty (§6.5 multi-attach — the Take Over window keeps
+ * its own). xterm is loaded CLIENT-SIDE ONLY (see `Workspace.tsx`): until it resolves, the mount point stands with
+ * the terminal's id on it, which is what a server render shows.
+ */
+function ObservedTerminal({ terminalId, terminals }: { terminalId: string; terminals: GenieBridge['terminals'] }) {
+    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
+    const [output, setOutput] = useState('');
+    const size = useRef({ cols: 120, rows: 30 });
+    useEffect(() => {
+        let live = true;
+        void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
+        void terminals.attach(null, terminalId).then((joined) => { if (live && joined) setOutput(joined.scrollback); });
+        const off = terminals.onData((id, data) => { if (id === terminalId) setOutput((o) => o + data); });
+        return () => { live = false; off(); };
+    }, [terminals, terminalId]);
+    return (
+        <div data-observed-terminal={terminalId} className="min-h-0 flex-1 bg-[var(--bg-0)]">
+            {Pane ? (
+                <Pane
+                    paneId={`observed-${terminalId}`}
+                    output={output}
+                    readOnly={false}
+                    onData={(data) => terminals.write(terminalId, data)}
+                    onResize={({ cols, rows }) => { size.current = { cols, rows }; terminals.resize(terminalId, cols, rows); }}
+                />
+            ) : null}
+        </div>
+    );
 }
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges,
+    files, workspace, initialChanges, takeOver = null, terminals,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
+    const clock = now ?? (() => Date.now());
     // CHANGES (§4.2): the files THIS agent changed this session, from the file host's groups; re-read on every change
     // the host reports. `null` = absent — the tab says so in a sentence.
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
@@ -500,6 +538,44 @@ export function AgentView({
                                 </div>
                             ) : null}
                         </div>
+                    ) : null}
+
+                    {/* TERMINAL (observed, §4.2): the TUI's own terminal, attached here as a SECOND view of the same pty (§6.5). */}
+                    {active === 'terminal' ? (
+                        takeOver && terminals ? (
+                            <ObservedTerminal key={takeOver.terminalId} terminalId={takeOver.terminalId} terminals={terminals} />
+                        ) : (
+                            <p data-tab-unavailable="terminal" className="p-5 text-[13px] text-[var(--fg-3)]">
+                                {takeOver ? 'This window has no terminal host, so the TUI cannot be shown here.' : `${agent.name}'s Take Over window is not open, so there is no terminal to show.`}
+                            </p>
+                        )
+                    ) : null}
+
+                    {/* ACTIVITY (observed): what Genie measured — bytes and when — and nothing it did not. */}
+                    {active === 'activity' ? (
+                        takeOver ? (
+                            <div data-observed-activity={agent.id} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-5">
+                                <div className="flex items-center gap-4">
+                                    <div className="flex h-4 items-end gap-0.5 text-[var(--fg-4)]" title="Output over the last minute, in 5-second buckets">
+                                        {activityBars(takeOver.bursts, clock()).map((b, i) => (
+                                            <span key={i} data-activity-bar={i} className="w-[3px] rounded-[1px] bg-current" style={{ height: `${Math.max(1, b)}px` }} />
+                                        ))}
+                                    </div>
+                                    <span className="font-mono text-[11px] text-[var(--fg-3)]">{lastOutputLabel(takeOver.lastOutputAt, clock())}</span>
+                                </div>
+                                <ul className="flex flex-col divide-y divide-[var(--border-1)] text-[12px]">
+                                    {activityLedger(takeOver.bursts).map((r) => (
+                                        <li key={r.at} data-activity-burst={r.at} className="flex items-center gap-3 py-1">
+                                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{new Date(r.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                            <Icon name="square-terminal" className="h-3.5 w-3.5 text-[var(--fg-3)]" />
+                                            <span className="font-mono text-[var(--fg-2)]">{r.label}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ) : (
+                            <p data-tab-unavailable="activity" className="p-5 text-[13px] text-[var(--fg-3)]">{agent.name}'s Take Over window is not open, so there is no activity to measure.</p>
+                        )
                     ) : null}
                 </div>
 

@@ -102,3 +102,36 @@ export function observedRowFor(record: AgentRecord, probe: TakeOverProbe, now: n
         contextSize: null,
     };
 }
+
+/** `12.1 kB` / `40 B` — the board's own unit for a burst. */
+export function formatBytes(bytes: number): string {
+    return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
+}
+
+export interface ActivityRow {
+    at: number;
+    bytes: number;
+    /** `output burst · 12.1 kB` — the board's `pty` row. */
+    label: string;
+}
+
+/**
+ * The Activity tab's ledger: one row per burst, NEWEST FIRST — what Genie measured, and nothing it did not. No
+ * bursts is an empty ledger (a measured nothing), never a placeholder row.
+ */
+export function activityLedger(bursts: readonly Burst[]): readonly ActivityRow[] {
+    return bursts
+        .slice()
+        .sort((a, b) => b.at - a.at)
+        .map((b) => ({ at: b.at, bytes: b.bytes, label: `output burst · ${formatBytes(b.bytes)}` }));
+}
+
+/** `last output 40s ago` / `last output 2m ago` / `no output yet` — never a dash. */
+export function lastOutputLabel(lastOutputAt: number | null, now: number): string {
+    if (lastOutputAt === null) return 'no output yet';
+    const s = Math.max(0, Math.floor((now - lastOutputAt) / 1000));
+    if (s < 60) return `last output ${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `last output ${m}m ago`;
+    return `last output ${Math.floor(m / 60)}h ago`;
+}
