@@ -496,6 +496,8 @@ export class SessionHost {
                           lastWords ??
                           'The turn did not finish, and the provider gave no reason.',
                       fixes: ['Restart'],
+                      // How the process ended, as node reported it — for the Process ended block.
+                      exit: session.exit,
                   }
                 : null;
 

@@ -26,11 +26,12 @@ describe('processEnded', () => {
             reason: 'codex: acp: transport closed (EOF)',
             lastTool: 'Bash  php artisan test --parallel',
             log: 'PHP Fatal error: Allowed memory size exhausted\n[worker 6] killed\n[worker 7] killed',
+            exit: null,
         });
     });
 
     it('no stderr → an empty log, not a filler line; no tool rows → no last tool', () => {
-        expect(processEnded(session(), [], [])).toEqual({ reason: 'codex: acp: transport closed (EOF)', lastTool: null, log: '' });
+        expect(processEnded(session(), [], [])).toEqual({ reason: 'codex: acp: transport closed (EOF)', lastTool: null, log: '', exit: null });
     });
 
     it('absent unless the session failed: working, idle, stopped, no session', () => {

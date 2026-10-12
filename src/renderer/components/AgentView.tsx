@@ -813,11 +813,14 @@ export function AgentView({
                             </h2>
                             <p className="font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.reason}</p>
                             {ended.lastTool ? <p data-last-tool="" className="font-mono text-[11px] text-[var(--fg-3)]">last call, no result: {ended.lastTool}</p> : null}
+                            {ended.exit ? <p data-exit={ended.exit} className="font-mono text-[11px] text-[var(--fg-3)]">{ended.exit}</p> : null}
                             {ended.log ? <pre data-process-log="" className="max-h-40 overflow-hidden whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-2 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.log}</pre> : null}
                             <div className="flex items-center gap-2">
                                 {ops ? (
                                     <button type="button" data-action="restart-resume" onClick={() => ops.onRestart('graceful')} className="flex h-[26px] items-center rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart and resume</button>
                                 ) : null}
+                                {/* The board's `Open terminal` in the block: a Take Over window on this agent — the same door the header offers, where the reader is looking. */}
+                                <button type="button" data-action="open-terminal-rail" onClick={() => onTakeOver?.(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</button>
                                 <button type="button" data-action="copy-log" onClick={() => { void navigator.clipboard?.writeText([ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')); }} className="flex h-[26px] items-center rounded-lg px-2.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Copy log</button>
                             </div>
                         </section>

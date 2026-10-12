@@ -190,6 +190,8 @@ export class AgentSession {
     #turns = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
     #failure: string | null = null;
+    /** How the provider process ended, as node reported it. `null` until it exits. */
+    #exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     /**
      * The provider's recent output, bounded.
      *
@@ -301,6 +303,11 @@ export class AgentSession {
         return this.#failure;
     }
 
+    /** The exit code or signal node reported when the provider process ended; `null` while it has not. */
+    get exit(): { code: number | null; signal: NodeJS.Signals | null } | null {
+        return this.#exit;
+    }
+
     /** The provider's recent output, oldest first. Empty when it has said nothing. */
     get recentStderr(): readonly string[] {
         return this.#stderr;
@@ -403,13 +410,15 @@ export class AgentSession {
                         this.#failure = null;
                     }
                 },
-                onExit: () => {
+                onExit: (code, signal) => {
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
                     this.#closeMessage();
 
                     this.#alive = false;
                     this.#exited = true;
+                    // Kept as node reported it — the one fact about the END of the process Genie actually has.
+                    this.#exit = { code, signal };
 
                     /*
                      * **An exit is the end of the story, not an eraser.**

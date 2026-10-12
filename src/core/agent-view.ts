@@ -275,13 +275,17 @@ export interface ProcessEnded {
     lastTool: string | null;
     /** The engine's recent output, oldest first, joined; empty when it said nothing. */
     log: string;
+    /** `exit 1` / `signal SIGKILL`, as node reported it; `null` when the process has not exited or reported neither. */
+    exit: string | null;
 }
 
 export function processEnded(session: LiveSession | null, rows: readonly TimedEvent[], log: readonly string[]): ProcessEnded | null {
     if (!session || session.turnState !== 'failed') return null;
     const tool = [...rows].reverse().find((r) => r.event.kind === 'tool')?.event;
     const lastTool = tool && tool.kind === 'tool' ? [tool.name ?? '(tool not named)', tool.title].filter((s): s is string => typeof s === 'string' && s.length > 0).join('  ') : null;
-    return { reason: session.failure?.reason ?? 'the session ended without a reason Genie received', lastTool, log: log.join('\n') };
+    const e = session.failure?.exit ?? null;
+    const exit = e === null ? null : e.signal !== null ? `signal ${e.signal}` : e.code !== null ? `exit ${e.code}` : null;
+    return { reason: session.failure?.reason ?? 'the session ended without a reason Genie received', lastTool, log: log.join('\n'), exit };
 }
 
 export function contextNote(session: LiveSession | null, rows: readonly TimedEvent[], pillTone: 'ok' | 'warn' | 'bad' | 'muted'): ContextNote | null {

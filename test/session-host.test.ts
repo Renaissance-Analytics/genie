@@ -204,7 +204,8 @@ describe('probing — what the Dashboard reads', () => {
         events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'api error 529' });
 
         const live = host.probe(r.id);
-        expect(live?.failure).toEqual({ reason: 'api error 529', fixes: ['Restart'] });
+        // A failed TURN with the provider still up: no exit yet.
+        expect(live?.failure).toEqual({ reason: 'api error 529', fixes: ['Restart'], exit: null });
 
         // And it reaches the Dashboard as `broken`, which is the join that matters.
         expect(agentRowFor(r, live, () => now)).toMatchObject({ state: 'broken', reason: 'api error 529' });
@@ -230,7 +231,8 @@ describe('probing — what the Dashboard reads', () => {
         events.onExit?.(1, null);
 
         const live = host.probe(r.id);
-        expect(live?.failure).toEqual({ reason: 'failed to spawn Codex (Error)', fixes: ['Restart'] });
+        // And HOW it died, as node reported it — the Process ended block reads `exit 1` from this.
+        expect(live?.failure).toEqual({ reason: 'failed to spawn Codex (Error)', fixes: ['Restart'], exit: { code: 1, signal: null } });
         expect(live?.running).toBe(false);
 
         // And the Dashboard reads it as broken, with the reason on the row — the whole point.
