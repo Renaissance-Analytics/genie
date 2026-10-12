@@ -93,7 +93,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
         // COUNT over every route shape: a trailing `?` is the kind of drift that makes the
         // bar's text differ from the link an agent pasted, for no visible reason.
         const shapes: Route[] = [
-            { surface: 'deck', chat: null, pin: null },
+            { surface: 'deck', item: null, chat: null, pin: null },
             { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, chat: null, pin: null },
             { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', chat: null, pin: null },
