@@ -61,9 +61,9 @@ describe('what a key means in the Agent view', () => {
     it('is null for a key it does not bind — never a guess', () => {
         // COUNTED over keys §4.2 gives to other surfaces or to nothing. Unbound means null, so
         // a future binding is a deliberate addition rather than an accident of fall-through.
-        // (`a`, `d`, `Enter`, `Escape` and `l` left this list when they were bound, on purpose, with
+        // (`a`, `d`, `Enter`, `Escape`, `l` and `/` left this list when they were bound, on purpose, with
         // their own tests — the full map is counted in `agent-keys.test.ts`.)
-        const unbound = ['q', 'z', '/', ' ', '1', 'Tab', 'ArrowDown'];
+        const unbound = ['q', 'z', ' ', '1', 'Tab', 'ArrowDown'];
         const bound = unbound.map((k) => press(k)).filter((a) => a !== null);
         expect(bound).toEqual([]);
     });

@@ -382,6 +382,21 @@ export function visibleRows(rows: readonly TimedEvent[], lanes: readonly Lane[] 
 }
 
 /**
+ * FIND IN STREAM (`/`): the rows that SAY the query — the ledger's main text, the speaker, the kind column —
+ * case-insensitively. Structure rows (turn markers, the compaction divider) always stay, for the reason they survive a
+ * lane filter. A blank query is no find at all and returns the rows untouched.
+ */
+export function findRows(rows: readonly TimedEvent[], query: string): readonly TimedEvent[] {
+    const q = query.trim().toLowerCase();
+    if (q === '') return rows;
+    return rows.filter((row) => {
+        if (row.event.kind === 'divider' || row.event.kind === 'turn') return true;
+        const r = ledgerRow(row);
+        return [r.main, r.who?.label ?? '', r.kind ?? ''].some((s) => s.toLowerCase().includes(q));
+    });
+}
+
+/**
  * Put a token figure on each thought, from the rise in reported usage across its span.
  *
  * ACP carries no per-thought count. This is the only honest number available: the difference
