@@ -35,6 +35,8 @@ export const ICON_NAMES: readonly string[] = [
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.
     'folder-tree',
+    // The workspace's popped-out-files bar (the board).
+    'external-link',
     // the workspace header's repo chips
     'git-branch', 'circle-alert',
     // the Agent view header's Stop
