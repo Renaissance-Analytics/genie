@@ -523,6 +523,11 @@ export class SessionHost {
     }
 
     /** Turn count, for the Budget panel. `0` for an agent that has not run — a measured zero. */
+    /** The provider's recent stderr, oldest first — what the process-ended block shows. Empty for one that is not running. */
+    recentStderrFor(agentId: AgentId): readonly string[] {
+        return this.#running.get(agentId)?.session.recentStderr ?? [];
+    }
+
     turnsFor(agentId: AgentId): number {
         return this.#running.get(agentId)?.session.turns ?? 0;
     }

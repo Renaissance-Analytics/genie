@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
-import { contextNote, headerActions } from '../../core/agent-view.js';
+import { contextNote, headerActions, processEnded } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -125,6 +125,8 @@ export interface AgentViewProps {
     lanesOpen?: boolean | undefined;
     /** Find in stream (`/`) — controlled, for tests that render server-side; otherwise the view keeps its own. */
     find?: string | undefined;
+    /** The provider's recent stderr (the process-ended block's log); empty when it said nothing. */
+    log?: readonly string[] | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -181,7 +183,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp,
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [],
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -221,6 +223,8 @@ export function AgentView({
     // The persona path and the context note — both facts, both absent when unknown (§5).
     const persona = agent.instructions ?? null;
     const note = contextNote(session, rows, pill.tone);
+    // THE PROCESS-ENDED BLOCK (the board's error state): only when the session failed; the engine's own words.
+    const ended = processEnded(session, rows, log);
 
     // A tab the agent does not have falls back to its first one, rather than rendering an empty
     // body under a tab strip that does not contain the selected tab.
@@ -713,12 +717,29 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
-                {inspector || plan || budget || budgetLimit !== null || ops || persona ? (
+                {inspector || plan || budget || budgetLimit !== null || ops || persona || ended ? (
                 <aside data-right-column="" className="flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)]">
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded /> : null}
-                {plan || budget || budgetLimit !== null || ops || persona ? (
+                {plan || budget || budgetLimit !== null || ops || persona || ended ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
+                    {ended ? (
+                        <section data-rail="process-ended" className="flex flex-col gap-2">
+                            <h2 className="flex items-center gap-2 text-[12px] font-semibold text-red-500">
+                                <Icon name="circle-alert" size="xs" />
+                                Process ended
+                            </h2>
+                            <p className="font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.reason}</p>
+                            {ended.lastTool ? <p data-last-tool="" className="font-mono text-[11px] text-[var(--fg-3)]">last call, no result: {ended.lastTool}</p> : null}
+                            {ended.log ? <pre data-process-log="" className="max-h-40 overflow-hidden whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-2 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{ended.log}</pre> : null}
+                            <div className="flex items-center gap-2">
+                                {ops ? (
+                                    <button type="button" data-action="restart-resume" onClick={() => ops.onRestart('graceful')} className="flex h-[26px] items-center rounded-lg border border-blue-600 bg-blue-500 px-2.5 text-[12px] font-medium text-white hover:bg-blue-600">Restart and resume</button>
+                                ) : null}
+                                <button type="button" data-action="copy-log" onClick={() => { void navigator.clipboard?.writeText([ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')); }} className="flex h-[26px] items-center rounded-lg px-2.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Copy log</button>
+                            </div>
+                        </section>
+                    ) : null}
                     {persona ? (
                         <section data-rail="persona">
                             <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>

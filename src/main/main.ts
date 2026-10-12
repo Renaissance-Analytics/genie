@@ -301,6 +301,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),
         turns: host.turnsFor(record.id),
+        // The engine's own recent words, for the process-ended block (the board's error state).
+        log: host.recentStderrFor(record.id),
         // No provider reports a cost over ACP today. `null` means there is no Cost row —
         // never a `$0.00`, which would claim the work was free.
         cost: null,

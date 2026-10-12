@@ -179,6 +179,27 @@ export const COMPACTION_EXPECTED_AT = 190_000;
  * reported at 14:21. Nothing since the stream closed.` — each from facts on the wire (the usage and compaction rows
  * carry their times). `null` when nothing applies: absent, not a filler sentence.
  */
+/**
+ * THE PROCESS-ENDED BLOCK (the board's right column, error state): what the engine said when it died — the reason
+ * the session layer recorded, the provider's recent stderr as it wrote it — and the last tool call, which has no
+ * result. Only facts Genie received: no RSS, no exit code it was not given. `null` unless the session FAILED; a
+ * stopped or idle session ended on purpose and gets no block.
+ */
+export interface ProcessEnded {
+    reason: string;
+    /** `Bash  php artisan test` — the tool and its title, or the tool alone; `null` when no tool was ever called. */
+    lastTool: string | null;
+    /** The engine's recent output, oldest first, joined; empty when it said nothing. */
+    log: string;
+}
+
+export function processEnded(session: LiveSession | null, rows: readonly TimedEvent[], log: readonly string[]): ProcessEnded | null {
+    if (!session || session.turnState !== 'failed') return null;
+    const tool = [...rows].reverse().find((r) => r.event.kind === 'tool')?.event;
+    const lastTool = tool && tool.kind === 'tool' ? [tool.name ?? '(tool not named)', tool.title].filter((s): s is string => typeof s === 'string' && s.length > 0).join('  ') : null;
+    return { reason: session.failure?.reason ?? 'the session ended without a reason Genie received', lastTool, log: log.join('\n') };
+}
+
 export function contextNote(session: LiveSession | null, rows: readonly TimedEvent[], pillTone: 'ok' | 'warn' | 'bad' | 'muted'): ContextNote | null {
     if (!session) return null;
     const clockOf = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
