@@ -1,6 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
-import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
+import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
@@ -34,7 +34,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * `OS_WORKSPACE` is not a workspace anybody has and never appears in the rail: it exists so
  * the one agent that belongs to no workspace still has a well-formed record.
  */
-export const OS_AGENT_NAME = 'genie';
+export { OS_AGENT_NAME };
 export const OS_WORKSPACE = '__genie__';
 
 /** What the registry can see of a running session. Supplied by whatever owns the sessions. */

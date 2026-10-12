@@ -6,7 +6,7 @@ import { FilesWindows } from './files-windows.js';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asAgentId, type AgentId, type AgentRecord } from '../core/identity.js';
+import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
@@ -279,8 +279,9 @@ function pushAgent(agentId: AgentId): void {
 
 /** Narrow an id from the renderer. A refusal, never a repair — see the note in `open-agent`. */
 function agentFromRenderer(raw: unknown): AgentRecord | null {
-    const id = typeof raw === 'string' ? asAgentId(raw) : null;
-    return id ? registry?.find(id) ?? null : null;
+    // A minted id, or the OS agent's name (the rail's `genie://agent/genie`); the registry resolves the name.
+    const id = typeof raw === 'string' ? asAgentRef(raw) : null;
+    return id ? registry?.find(id as AgentId) ?? null : null;
 }
 
 let services: ComposedServices | null = null;

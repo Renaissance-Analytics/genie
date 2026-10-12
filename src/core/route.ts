@@ -202,3 +202,14 @@ export function formatRoute(route: Route): string {
     const query = params.toString();
     return query ? `genie://${path}?${query}` : `genie://${path}`;
 }
+
+/**
+ * An agent route reached by NAME (`genie://agent/genie`) settles on the resolved id: every live channel
+ * and every link the Agent view builds is keyed by the minted id, so a page left at the name would never
+ * update. Returns the canonical route, or `null` when the route is already canonical or not an agent's.
+ */
+export function canonicalAgentRoute(current: string, resolvedId: string): string | null {
+    const parsed = parseRoute(current);
+    if (parsed.surface !== 'agent' || parsed.agentId === resolvedId) return null;
+    return formatRoute({ ...parsed, agentId: resolvedId });
+}

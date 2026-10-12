@@ -32,6 +32,22 @@ export function asAgentId(value: string): AgentId | null {
 }
 
 /**
+ * The OS agent's name — the one agent that belongs to no workspace, and the one name that is also an
+ * ADDRESS: the rail links `genie://agent/genie` because the OS agent's id is minted on first boot and
+ * the rail cannot know it.
+ */
+export const OS_AGENT_NAME = 'genie';
+
+/**
+ * Narrow a reference from the renderer: a minted id, or exactly the OS agent's name. The registry turns
+ * the name into the record; nothing else is accepted (a refusal, never a repair).
+ */
+export function asAgentRef(value: string): AgentId | typeof OS_AGENT_NAME | null {
+    if (value === OS_AGENT_NAME) return OS_AGENT_NAME;
+    return asAgentId(value);
+}
+
+/**
  * The durable-store key for an agent's thread.
  *
  * **This is the only function that turns an agent into a storage key.** Both the writer and
