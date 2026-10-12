@@ -147,7 +147,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             {/* Blocking is the most important bit on the item, so it is the
                                 first thing on the row. An agent has STOPPED. */}
                             {item.blocking ? (
-                                <span data-blocking-dot className="size-2 shrink-0 rounded-full bg-amber-500" />
+                                <span data-blocking-dot className="size-2 shrink-0 rounded-full bg-[var(--warning)]" />
                             ) : null}
 
                             {item.agentName ? (
@@ -206,7 +206,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                                 {/* The free text the modal always offers (§6.3). */}
                                 <textarea name="note" data-deck-note={item.id} rows={2} placeholder="A note for the agent (optional)" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px]" />
                                 <div className="flex items-center gap-2">
-                                    <button type="submit" data-action="deck-submit" disabled={answering === item.id} className="rounded-lg border border-blue-600 bg-blue-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-blue-600 disabled:opacity-60">Answer</button>
+                                    <button type="submit" data-action="deck-submit" disabled={answering === item.id} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-60">Answer</button>
                                     <button type="button" onClick={() => setOwnExpanded(null)} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">Cancel</button>
                                 </div>
                             </form>

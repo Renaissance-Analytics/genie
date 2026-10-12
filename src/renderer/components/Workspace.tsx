@@ -252,7 +252,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
                     return (
                         <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
-                            <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-red-500 text-red-500' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
+                            <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
                                 <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3" />
                                 {chip.label}
                             </span>

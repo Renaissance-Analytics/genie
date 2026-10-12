@@ -47,7 +47,7 @@ export interface ChatThread {
     chips?: readonly ChatChip[] | undefined;
 }
 
-const CONTEXT_TONE = { ok: 'text-emerald-500', warn: 'text-amber-500', bad: 'text-red-500', muted: 'text-[var(--fg-3)]' } as const;
+const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
 
 /** `13:58` from epoch ms, in the local clock — only ever called with a real time. */
 function clock(at: number): string {
@@ -121,7 +121,7 @@ export function ChatFlyout({
                 {/* The unread count, or nothing. `0` would claim you are up to date, which is a
                     different statement from "we could not read the count". */}
                 {thread?.unread !== null && thread?.unread !== undefined && thread.unread > 0 ? (
-                    <span data-chat-unread={thread.unread} className="rounded-sm bg-amber-500/15 px-1.5 font-mono text-[11px] text-amber-500">
+                    <span data-chat-unread={thread.unread} className="rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] text-[var(--warning)]">
                         {thread.unread}
                     </span>
                 ) : null}
@@ -132,7 +132,7 @@ export function ChatFlyout({
                     aria-label={pinned ? 'Unpin chat' : 'Pin chat'}
                     aria-pressed={pinned}
                     onClick={onTogglePin}
-                    className={`flex size-5 items-center justify-center rounded ${pinned ? 'text-violet-400' : 'text-[var(--fg-4)]'} hover:bg-[var(--bg-2)]`}
+                    className={`flex size-5 items-center justify-center rounded ${pinned ? 'text-[var(--violet-400)]' : 'text-[var(--fg-4)]'} hover:bg-[var(--bg-2)]`}
                 >
                     <Icon name="pin" size="xs" />
                 </button>
@@ -165,7 +165,7 @@ export function ChatFlyout({
                         >
                             <FidelityDot fidelity={c.fidelity} state={c.state} />
                             <span>{c.name}</span>
-                            {c.unread !== null && c.unread > 0 ? <span className="rounded-full bg-violet-500 px-1.5 font-mono text-[10px] text-white">{c.unread}</span> : null}
+                            {c.unread !== null && c.unread > 0 ? <span className="rounded-full bg-[var(--violet-400)] px-1.5 font-mono text-[10px] text-white">{c.unread}</span> : null}
                         </button>
                     ))}
                 </div>
@@ -191,7 +191,7 @@ export function ChatFlyout({
                     return who === 'you' ? (
                         <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
-                            <div className={`rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-red-500 bg-[var(--bg-2)]'}`}>{m.text}</div>
+                            <div className={`rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
                             {/*
                              * An undelivered message is KEPT and MARKED, with the route to send it:
                              * the agent is not running. Dropping it loses what someone wrote, and
@@ -200,21 +200,21 @@ export function ChatFlyout({
                              */}
                             {m.delivered ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
-                                    <span className="text-[12px] text-red-500">Not delivered. {thread?.name ?? 'the agent'} is not running.</span>
-                                    <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-blue-600 bg-blue-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-blue-600">Restart {thread?.name ?? 'the agent'} and send</button>
+                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {thread?.name ?? 'the agent'} is not running.</span>
+                                    <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>
                                 </div>
                             )}
                         </div>
                     ) : (
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
-                            <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-violet-400">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
+                            <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
                             <div className="text-[13px] leading-normal text-[var(--fg-2)]">{m.text}</div>
                         </div>
                     );
                 })}
                 {/* The board's error rule: a broken session ends the transcript with the failure, in red. */}
                 {thread?.context?.tone === 'bad' ? (
-                    <div data-chat-error="" className="flex items-center gap-2 border-y border-red-500 py-1.5 font-mono text-[11px] text-red-500">
+                    <div data-chat-error="" className="flex items-center gap-2 border-y border-[var(--danger)] py-1.5 font-mono text-[11px] text-[var(--danger)]">
                         <Icon name="circle-alert" size="xs" />
                         <span>{thread.context.text.replace(/^Broken · /, '')}</span>
                     </div>

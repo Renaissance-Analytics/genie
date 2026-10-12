@@ -691,7 +691,7 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                         ) : (
                             <p data-mcp-status="unverified" className="flex flex-wrap items-center gap-2 text-sm">
                                 <span className="font-mono text-xs">{integrations.mcp.url}</span>
-                                <span className="text-red-500">listening, but the boot probe did not answer: {integrations.mcp.verified ? integrations.mcp.verified.reason : 'not probed yet'}</span>
+                                <span className="text-[var(--danger)]">listening, but the boot probe did not answer: {integrations.mcp.verified ? integrations.mcp.verified.reason : 'not probed yet'}</span>
                             </p>
                         )}
                     </div>

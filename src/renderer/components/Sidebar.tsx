@@ -109,7 +109,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                 {badge !== null ? (
                     <span
                         data-deck-badge={badge}
-                        className="ml-auto rounded-sm bg-amber-500/15 px-1.5 font-mono text-[11px] tabular-nums text-amber-500"
+                        className="ml-auto rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] tabular-nums text-[var(--warning)]"
                     >
                         {badge}
                     </span>
@@ -177,7 +177,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
 
                         <span className="ml-auto flex shrink-0 items-center gap-1.5">
                             {w.alert === true ? (
-                                <span aria-label="needs you" className="size-1.5 rounded-full bg-amber-500" />
+                                <span aria-label="needs you" className="size-1.5 rounded-full bg-[var(--warning)]" />
                             ) : null}
                             {/*
                              * The count, or nothing at all. `null` is "not read yet" and must

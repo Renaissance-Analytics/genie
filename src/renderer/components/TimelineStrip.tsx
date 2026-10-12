@@ -12,9 +12,9 @@ import { LANES } from '../../core/stream-view.js';
  */
 
 /** The board's tick colours: edit emerald, message blue, thought violet, tool grey — the Stream's own tones. */
-const TICK: Record<TickKind, string> = { edit: 'bg-emerald-500', message: 'bg-blue-500', thought: 'bg-violet-400', tool: 'bg-[var(--fg-4)]' };
+const TICK: Record<TickKind, string> = { edit: 'bg-[var(--success)]', message: 'bg-[var(--primary)]', thought: 'bg-[var(--violet-400)]', tool: 'bg-[var(--fg-4)]' };
 const TICK_HEIGHT: Record<TickKind, string> = { edit: 'h-5', message: 'h-3.5', thought: 'h-2', tool: 'h-1.5' };
-const HEAD: Record<TimelineHead, string> = { ok: 'bg-emerald-500', warn: 'bg-amber-500', bad: 'bg-red-500' };
+const HEAD: Record<TimelineHead, string> = { ok: 'bg-[var(--success)]', warn: 'bg-[var(--warning)]', bad: 'bg-[var(--danger)]' };
 const LEGEND: readonly TickKind[] = ['edit', 'message', 'thought', 'tool'];
 
 export interface TimelineStripProps {

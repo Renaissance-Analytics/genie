@@ -20,8 +20,8 @@ import type { Approval, OptionTone } from '../../core/approval.js';
  */
 
 const TONE: Record<OptionTone, string> = {
-    ok: 'border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10',
-    bad: 'border-red-500/40 text-red-400 hover:bg-red-500/10',
+    ok: 'border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10',
+    bad: 'border-[var(--danger)]/40 text-[var(--danger)] hover:bg-[var(--danger)]/10',
     // Deliberately uncoloured. The reader sees the provider's own words and no claim from us
     // about what they mean.
     neutral: 'border-[var(--border-2)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]',
@@ -38,10 +38,10 @@ export function ApprovalCard({ approval, answering, onAnswer }: ApprovalCardProp
     return (
         <div
             data-approval
-            className="m-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[13px]"
+            className="m-3 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-3 text-[13px]"
         >
             <div className="mb-2 flex items-start gap-2">
-                <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-amber-500" />
+                <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-[var(--warning)]" />
                 <span data-approval-question className="min-w-0 flex-1 font-mono text-xs text-[var(--fg-1)]">
                     {approval.question}
                 </span>
@@ -78,7 +78,7 @@ export function ApprovalCard({ approval, answering, onAnswer }: ApprovalCardProp
  */
 export function ApprovalMarker({ where }: { where: string }) {
     return (
-        <div data-approval-marker className="m-3 flex items-center gap-2 rounded-md border border-[var(--border-1)] px-3 py-1.5 text-xs text-amber-500">
+        <div data-approval-marker className="m-3 flex items-center gap-2 rounded-md border border-[var(--border-1)] px-3 py-1.5 text-xs text-[var(--warning)]">
             <Icon name="circle-help" size="xs" className="shrink-0" />
             This agent is waiting on a decision — answer it in {where}.
         </div>

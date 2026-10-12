@@ -54,9 +54,9 @@ export interface MobileShellProps {
 }
 
 const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
-    ok: 'text-emerald-500',
-    warn: 'text-amber-500',
-    bad: 'text-red-500',
+    ok: 'text-[var(--success)]',
+    warn: 'text-[var(--warning)]',
+    bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-4)]',
 };
 
@@ -65,16 +65,16 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
         <div data-mobile="shell" className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
                 <span className="size-5 rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
-                <span data-remote-badge className="rounded-md bg-amber-500/15 px-2 py-0.5 font-mono text-xs font-semibold tracking-wide text-amber-500">● REMOTE — {host}</span>
+                <span data-remote-badge className="rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-xs font-semibold tracking-wide text-[var(--warning)]">● REMOTE — {host}</span>
                 <span className="flex-1" />
                 <button type="button" data-action="disconnect" onClick={onDisconnect} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs">Disconnect</button>
             </header>
 
             {locked ? (
-                <p data-locked className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-amber-500">{host} is locked: every change from here is refused until it is unlocked there. Reading still works.</p>
+                <p data-locked className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--warning)]">{host} is locked: every change from here is refused until it is unlocked there. Reading still works.</p>
             ) : null}
             {refusal ? (
-                <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-red-500">{refusal}</p>
+                <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{refusal}</p>
             ) : null}
 
             <main className="flex flex-1 flex-col gap-3 px-4 py-3">
@@ -91,7 +91,7 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                         {items.map((item) => (
                             <li key={item.id} data-mobile-item={item.id} className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
                                 <div className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
-                                    {item.blocking ? <span className="size-2 rounded-full bg-amber-500" aria-label="blocking" /> : null}
+                                    {item.blocking ? <span className="size-2 rounded-full bg-[var(--warning)]" aria-label="blocking" /> : null}
                                     <span className="font-medium text-[var(--fg-1)]">{item.agentName ?? item.workspaceId}</span>
                                     <span className="font-mono">{item.workspaceId}</span>
                                 </div>
@@ -230,9 +230,9 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart }: Mobile
                 <button type="button" data-action="back" onClick={onBack} className="text-xs text-[var(--fg-3)]">← back</button>
                 <span className="text-sm font-semibold">{detail.agent.name}</span>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{detail.agent.provider}</span>
-                <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-emerald-500' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
+                <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
             </header>
-            {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-red-500">{detail.refusal}</p> : null}
+            {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
             <main data-mobile-activity className="flex flex-1 flex-col gap-1 overflow-auto px-4 py-3">
                 {detail.rows.length === 0 ? (
                     <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
@@ -243,7 +243,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart }: Mobile
                             <div key={row.id} data-mobile-row={row.id} className="flex items-start gap-2 text-[13px]">
                                 <Icon name={row.icon} size="xs" className="mt-0.5 shrink-0 text-[var(--fg-4)]" />
                                 <span className={`min-w-0 flex-1 ${row.mono ? 'font-mono text-xs' : ''} ${row.italic ? 'italic text-[var(--fg-3)]' : ''} ${row.clamp ? 'truncate' : 'break-words'}`}>{row.main}</span>
-                                {row.meta ? <span className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-red-500' : 'text-[var(--fg-4)]'}`}>{row.meta}</span> : null}
+                                {row.meta ? <span className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-[var(--danger)]' : 'text-[var(--fg-4)]'}`}>{row.meta}</span> : null}
                             </div>
                         );
                     })
@@ -285,7 +285,7 @@ export function MobilePair({ host, refusal, connecting, onConnect }: MobilePairP
             <form onSubmit={submit} className="flex w-full max-w-xs flex-col gap-3">
                 <Input name="pin" inputMode="numeric" autoComplete="one-time-code" placeholder="482913" aria-label="PIN" className="text-center font-mono text-lg tracking-[0.3em]" />
                 <Input name="label" defaultValue="phone" aria-label="This device’s name" />
-                {refusal ? <p data-refusal className="text-xs text-red-500">{refusal}</p> : null}
+                {refusal ? <p data-refusal className="text-xs text-[var(--danger)]">{refusal}</p> : null}
                 <button type="submit" disabled={connecting} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{connecting ? 'Connecting…' : 'Connect'}</button>
             </form>
         </div>
