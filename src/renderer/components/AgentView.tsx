@@ -155,6 +155,8 @@ export interface AgentViewProps {
     workspace?: { id: string; name?: string | undefined; path: string } | undefined;
     /** The Changes tab's starting list — for tests that render server-side. Read from the host otherwise. */
     initialChanges?: readonly string[] | null | undefined;
+    /** The disk changes (path, when seen) at mount, for a render without the bridge; afterwards the bridge's state. */
+    initialDiskChanges?: readonly { path: string; at: number }[] | null | undefined;
     /** The live Take Over probe for an OBSERVED agent (§4.2): its terminal, its bursts. `null`/absent = none. */
     takeOver?: TakeOverProbe | null | undefined;
     /** The terminal host, for the Terminal tab's second attach to the TUI's pty; absent = this window has none. */
@@ -197,13 +199,14 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
+    files, workspace, initialChanges, initialDiskChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
     // CHANGES (§4.2): the files THIS agent changed this session, from the file host's groups; re-read on every change
     // the host reports. `null` = absent — the tab says so in a sentence.
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
+    const [diskChanges, setDiskChanges] = useState<readonly { path: string; at: number }[] | null>(initialDiskChanges ?? null);
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
     // THE STREAM CURSOR (§4.2 `j`/`k`): a focus, drawn as a ring, that is NOT the Inspector's selection. Enter opens
     // the Inspector on it; a click (a selection) brings the cursor along, so the keys continue from where the reader is.
@@ -219,7 +222,7 @@ export function AgentView({
     useEffect(() => {
         if (!files || !workspace) return;
         let live = true;
-        const read = () => { void files.state(workspace.id).then((s) => { if (live) setChanges(agentChanges(s, agent.name)); }); };
+        const read = () => { void files.state(workspace.id).then((s) => { if (live) { setChanges(agentChanges(s, agent.name)); setDiskChanges(s?.diskChanges ?? null); } }); };
         read();
         const off = files.onChange((id) => { if (id === workspace.id) read(); });
         return () => { live = false; off(); };
@@ -790,6 +793,27 @@ export function AgentView({
                                         </li>
                                     ))}
                                 </ul>
+                                {/* FILES WRITTEN (the board's blind index): what changed on disk since this window opened. Not attributed — Genie does not guess the author. */}
+                                {diskChanges ? (() => {
+                                    const written = diskChanges.filter((c) => c.at >= takeOver.startedAt);
+                                    return (
+                                        <section data-observed-files-written={agent.id} className="flex flex-col gap-1">
+                                            <h3 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Files written on disk since this window opened · not attributed</h3>
+                                            {written.length === 0 ? (
+                                                <p data-observed-files-none="" className="text-[12px] text-[var(--fg-3)]">None yet.</p>
+                                            ) : (
+                                                <ul className="flex flex-col divide-y divide-[var(--border-1)] text-[12px]">
+                                                    {written.map((c) => (
+                                                        <li key={c.path} data-observed-file={c.path} className="flex items-center gap-3 py-1">
+                                                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{new Date(c.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                                            <span className="font-mono text-[var(--fg-2)]">{c.path}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </section>
+                                    );
+                                })() : null}
                             </div>
                         ) : (
                             <p data-tab-unavailable="activity" className="p-5 text-[13px] text-[var(--fg-3)]">{agent.name}'s Take Over window is not open, so there is no activity to measure.</p>
