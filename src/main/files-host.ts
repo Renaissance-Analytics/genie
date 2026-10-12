@@ -34,6 +34,8 @@ export interface FilesHostPorts {
     readonly agentsOf: (workspaceId: string) => ReadonlyArray<{ id: string; name: string }>;
     readonly eventsOf: (agentId: string) => readonly FileEvent[];
     readonly sizeCap?: number;
+    /** Genie's clock, for when a disk change was seen; injected so a test can read the stamp. */
+    readonly now?: () => number;
 }
 
 export type OpenResult = { ok: true; path: string; text: string; sha: string } | { ok: false; path: string; error: string };
@@ -48,6 +50,11 @@ export interface FilesState {
     readonly activity: readonly Activity[];
     readonly unreported: readonly string[];
     readonly changed: readonly ChangedGroup[] | null;
+    /**
+     * Every change the watcher saw on disk this session, newest first, with WHEN Genie saw it — whoever made it. An
+     * observed agent's Activity tab lists the ones since its window opened, saying they are not attributed.
+     */
+    readonly diskChanges: readonly { path: string; at: number }[];
 }
 
 const SKIP = new Set(['.git', 'node_modules']);
@@ -57,7 +64,7 @@ export class FilesHost {
     readonly #ports: FilesHostPorts;
     readonly #cap: number;
     readonly #watchers = new Map<string, FSWatcher>();
-    readonly #changedOnDisk = new Map<string, Set<string>>();
+    readonly #changedOnDisk = new Map<string, Map<string, number>>();
     /** Files YOU wrote through the panel, per workspace — yours in Changed, never `?`. */
     readonly #mine = new Map<string, Set<string>>();
     readonly #listeners = new Set<(workspaceId: string) => void>();
@@ -132,12 +139,14 @@ export class FilesHost {
         const events = this.#ports.agentsOf(workspaceId).flatMap((a) => this.#ports.eventsOf(a.id));
         const attribution = attributionFrom(events, ws.path);
         const mine = [...(this.#mine.get(workspaceId) ?? [])];
-        const unreported = unreportedChanges(attribution, [...(this.#changedOnDisk.get(workspaceId) ?? [])].filter((p) => !mine.includes(p)), ws.path);
+        const disk = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
+        const unreported = unreportedChanges(attribution, [...disk.keys()].filter((p) => !mine.includes(p)), ws.path);
         return {
             files: [...attribution.values()],
             activity: activityFrom(events, ws.path),
             unreported,
             changed: changedGroups(attribution, { mine, unreported }),
+            diskChanges: [...disk].map(([path, at]) => ({ path, at })).sort((a, b) => b.at - a.at),
         };
     }
 
@@ -145,9 +154,12 @@ export class FilesHost {
     async watch(workspaceId: string): Promise<void> {
         const ws = this.#ports.workspace(workspaceId);
         if (!ws || this.#watchers.has(workspaceId)) return;
-        // Only what changes AFTER this moment is a change: macOS FSEvents replays writes made just before the
-        // watcher attached (the v2.0.0-beta.5 release run saw a set-up write come back as "unreported").
-        const since = Date.now();
+        // Only what changes AFTER this moment is a change — on macOS, where FSEvents replays writes made just before
+        // the watcher attached (the v2.0.0-beta.5 release run saw a set-up write come back as "unreported"). Nowhere
+        // else: Linux stamps file times from a coarse clock that lags Date.now(), so a write made just after watch()
+        // can carry an earlier time and was dropped (the WSL suite timed out on it 2 runs in 5). inotify and Windows
+        // do not replay, so there is nothing for the filter to remove there.
+        const since = process.platform === 'darwin' ? Date.now() : Number.NEGATIVE_INFINITY;
         const watcher = watch(ws.path, { recursive: true }, (_type, filename) => {
             if (typeof filename !== 'string') return;
             const rel = confine(ws.path, filename);
@@ -164,8 +176,8 @@ export class FilesHost {
     }
 
     #recordChange(workspaceId: string, rel: string): void {
-        const set = this.#changedOnDisk.get(workspaceId) ?? new Set<string>();
-        set.add(rel);
+        const set = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
+        set.set(rel, (this.#ports.now ?? Date.now)());
         this.#changedOnDisk.set(workspaceId, set);
         for (const l of this.#listeners) l(workspaceId);
     }

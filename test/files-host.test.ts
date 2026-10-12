@@ -92,6 +92,6 @@ describe('FilesHost', () => {
 
     it('nothing changed → changed is null (absent), activity empty, files empty', async () => {
         const s = await host.state('tynn');
-        expect(s).toEqual({ files: [], activity: [], unreported: [], changed: null });
+        expect(s).toEqual({ files: [], activity: [], unreported: [], changed: null, diskChanges: [] });
     });
 });
