@@ -33,7 +33,10 @@ describe('gitClone / gitInit against a real git', () => {
 
         const into = join(dir, 'clone');
         await gitClone(bare, into);
-        expect(await readFile(join(into, 'hello.txt'), 'utf8')).toBe('hello from the origin\n');
+        // The claim is that the clone CARRIES the committed file, not what line ending the user's git
+        // writes on checkout: a Windows git with core.autocrlf=true (the test VM's) checks out CRLF,
+        // and the Windows run proved it — 'hello from the origin\r\n'. Compare the text, not the EOL.
+        expect((await readFile(join(into, 'hello.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('hello from the origin\n');
         expect(await readdir(into)).toContain('.git');
     });
 

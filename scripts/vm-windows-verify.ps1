@@ -97,6 +97,21 @@ if (-not $SkipSource) {
     Step 'typecheck'
     Run 'npm run typecheck'
 
+    # The unit tests timed out twice on 2026-10-11 (5 s tests, 10 s hooks, vitest transform 73 s instead of ~5)
+    # when run here, right after npm ci + the electron download + typecheck, and passed 1487/1487 in 32 s when run
+    # right after npm ci alone. So the load this VM is under at this moment is PRINTED, not guessed: Defender's
+    # scanner CPU (cumulative) and three 5 s samples of total CPU. A red suite below reads these lines first.
+    Step 'host load before unit tests'
+    $mp = Get-Process MsMpEng -ErrorAction SilentlyContinue
+    if ($mp) { Write-Output ('MsMpEng cpu={0:N1}s ws={1:N0}MB' -f $mp.CPU, ($mp.WorkingSet64/1MB)) } else { Write-Output 'MsMpEng: not running' }
+    # (CIM, not Get-Counter: the counter path needs backslashes that do not survive every editor, and a
+    # measurement that throws must never be what fails the gate.)
+    try {
+        1..3 | ForEach-Object { $c = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; Write-Output ('{0}  cpu total={1:N0}%' -f (Get-Date -Format HH:mm:ss), $c); Start-Sleep 5 }
+        $top = Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 | ForEach-Object { '{0}={1:N0}s' -f $_.ProcessName, $_.CPU }
+        Write-Output ('top cpu since boot: ' + ($top -join ', '))
+    } catch { Write-Output ('host load sample failed: ' + $_.Exception.Message) }
+
     Step 'unit tests'
     Run 'npm test' 'test.log'
     Get-Content test.log -Tail 12
