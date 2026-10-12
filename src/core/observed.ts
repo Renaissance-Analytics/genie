@@ -126,6 +126,36 @@ export function activityLedger(bursts: readonly Burst[]): readonly ActivityRow[]
         .map((b) => ({ at: b.at, bytes: b.bytes, label: `output burst · ${formatBytes(b.bytes)}` }));
 }
 
+/** The board's Output timeline for an observed agent: this many bars across the window's whole life. */
+export const OUTPUT_BARS = 24;
+
+/**
+ * Bytes out over the WHOLE Take Over window (the board's `Output` timeline in the blind state), in `OUTPUT_BARS`
+ * buckets from the window's start to now, scaled to the bar height like the last-minute bars. A window that has
+ * printed nothing is all zeros — a measured nothing.
+ */
+export function outputHistogram(bursts: readonly Burst[], startedAt: number, now: number, bars: number = OUTPUT_BARS): readonly number[] {
+    const buckets = Array.from({ length: bars }, () => 0);
+    const span = Math.max(1, now - startedAt);
+    for (const burst of bursts) {
+        if (burst.at < startedAt || burst.at > now) continue;
+        const index = Math.min(bars - 1, Math.floor(((burst.at - startedAt) / span) * bars));
+        buckets[index] = (buckets[index] ?? 0) + burst.bytes;
+    }
+    const peak = Math.max(...buckets);
+    if (peak === 0) return buckets;
+    return buckets.map((b) => Math.round((b / peak) * BAR_HEIGHT_PX));
+}
+
+/** `12.1 kB over 14m` — the window's total output and its life so far; `no output yet` when nothing was printed. */
+export function outputTotalLabel(bursts: readonly Burst[], startedAt: number, now: number): string {
+    const total = bursts.reduce((n, b) => n + b.bytes, 0);
+    if (total === 0) return 'no output yet';
+    const m = Math.max(0, Math.floor((now - startedAt) / 60_000));
+    const life = m < 1 ? `${Math.max(0, Math.floor((now - startedAt) / 1000))}s` : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+    return `${formatBytes(total)} over ${life}`;
+}
+
 /** `last output 40s ago` / `last output 2m ago` / `no output yet` — never a dash. */
 export function lastOutputLabel(lastOutputAt: number | null, now: number): string {
     if (lastOutputAt === null) return 'no output yet';
