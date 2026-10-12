@@ -158,6 +158,50 @@ export function timelineOf(rows: readonly TimedEvent[]): Timeline | null {
     return { start, end, ticks };
 }
 
+/**
+ * THE FOUR TRACKS (the board's drawer): one block per event in its lane, placed by the fraction of the span. Untimed
+ * rows and structure rows (turn markers, the compaction divider) draw none — a block is a claim about WHEN.
+ */
+export interface LaneTrack {
+    lane: Lane;
+    blocks: readonly { id: string; x: number }[];
+}
+
+export function laneTracks(rows: readonly TimedEvent[], timeline: Timeline): readonly LaneTrack[] {
+    const span = timeline.end - timeline.start;
+    const at = (t: number): number => (span === 0 ? 0.5 : Math.round(((t - timeline.start) / span) * 1000) / 1000);
+    return LANES.map((lane) => ({
+        lane,
+        blocks: rows.filter((r) => r.at !== null && laneOf(r.event) === lane).map((r) => ({ id: r.id, x: at(r.at as number) })),
+    }));
+}
+
+/** Whether the span's end is close enough to now to be called `now` (the board's `14:02 – now`). */
+export const NOW_WITHIN_MS = 60_000;
+
+const clock = (t: number): string => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+const clockS = (t: number): string => new Date(t).toLocaleTimeString(undefined, { hour12: false });
+
+/**
+ * THE DRAWER'S LABELS (the board): the span — `Turn 14 · 14:02 – now` (the latest turn marker, the first time, `now`
+ * while the end is recent, else its clock); the selection — `selected 14:07:40 – 14:09:00 · 31 events` while a range
+ * is set (rows inside it, structure rows excluded); the axis — five clocks across the span, the last `now` when it is.
+ */
+export function drawerLabels(rows: readonly TimedEvent[], timeline: Timeline, range: TimeRange | null, now: number): { span: string; selected: string | null; axis: readonly string[] } {
+    const live = now - timeline.end <= NOW_WITHIN_MS;
+    const end = live ? 'now' : clock(timeline.end);
+    const latestTurn = [...rows].reverse().find((r) => r.event.kind === 'turn');
+    const turn = latestTurn && latestTurn.event.kind === 'turn' ? `Turn ${latestTurn.event.n} · ` : '';
+    const span = `${turn}${clock(timeline.start)} – ${end}`;
+    let selected: string | null = null;
+    if (range) {
+        const inside = rows.filter((r) => r.at !== null && r.at >= range.from && r.at <= range.to && r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
+        selected = `selected ${clockS(range.from)} – ${clockS(range.to)} · ${inside} event${inside === 1 ? '' : 's'}`;
+    }
+    const axis = [0, 0.25, 0.5, 0.75, 1].map((f, i) => (i === 4 && live ? 'now' : clock(timeAt(timeline, f))));
+    return { span, selected, axis };
+}
+
 /** A fraction of the span back to a time, clamped to the span. A pointer released off the bar is the edge. */
 export function timeAt(timeline: Timeline, fraction: number): number {
     const f = Math.min(1, Math.max(0, fraction));
