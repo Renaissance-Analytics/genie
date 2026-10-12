@@ -23,9 +23,12 @@ export interface TimelineStripProps {
     onToggleLanes: () => void;
     /** A segment is a door to its turn's row. */
     onOpenRow: (rowId: string) => void;
+    /** The other layout, as a door: the route that opens it, and its label (`Turns` from the ledger, `Ledger` from the cards). */
+    layoutDoor?: { label: string; route: string } | undefined;
+    onNavigate?: ((route: string) => void) | undefined;
 }
 
-export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow }: TimelineStripProps) {
+export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, layoutDoor, onNavigate }: TimelineStripProps) {
     return (
         <div data-session-timeline="" className="flex h-[46px] shrink-0 items-center gap-3.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-6">
             <span className="w-14 shrink-0 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Session</span>
@@ -60,6 +63,18 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow }:
                     </span>
                 ))}
             </div>
+            {layoutDoor ? (
+                <button
+                    type="button"
+                    data-action="toggle-layout"
+                    data-nav={layoutDoor.route}
+                    title="Switch the Stream's layout"
+                    onClick={() => onNavigate?.(layoutDoor.route)}
+                    className="flex h-[26px] shrink-0 items-center rounded-md border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
+                >
+                    {layoutDoor.label}
+                </button>
+            ) : null}
             <button
                 type="button"
                 data-action="toggle-lanes"

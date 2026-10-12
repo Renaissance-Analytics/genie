@@ -13,6 +13,8 @@ import { editLineCounts, type TimedEvent } from './stream-view.js';
  *
  * `null` when the rows carry no turn markers: a transcript Genie has no boundaries for (a replay from before the
  * marker existed, or a provider's own history) is not drawn as one long turn. Absence, not an empty column.
+ *
+ * The walk over the rows (`turnsOf`) is shared with the `turns` layout, so the index and the cards never disagree.
  */
 
 export type IndexLive = 'ok' | 'warn' | 'bad';
@@ -35,9 +37,21 @@ export interface IndexSection {
     items: readonly IndexItem[];
 }
 
-interface Turn {
+export interface FileTouched {
+    edits: number;
+    plus: number;
+    minus: number;
+    /** Whether any edit carried a real before-and-after; without one the counts are not claims. */
+    counted: boolean;
+    /** The most recent edit row. */
+    rowId: string;
+}
+
+export interface Turn {
     n: number;
     rowId: string;
+    /** The marker row's time, or `null` when it carried none. */
+    at: number | null;
     rowIds: Set<string>;
     tools: number;
     edits: number;
@@ -45,6 +59,20 @@ interface Turn {
     usedAtEnd: number | null;
     /** A compaction inside the turn makes the context delta meaningless. */
     compacted: boolean;
+    /** Files edited inside the workspace root during THIS turn, by relative path. */
+    files: Map<string, FileTouched>;
+    /** Peers who spoke during this turn. */
+    peers: Set<string>;
+}
+
+export interface TurnsWalk {
+    /** Turns in ledger order, with the compactions that followed each. */
+    ordered: ReadonlyArray<{ kind: 'turn'; turn: Turn } | { kind: 'compacted'; rowId: string; meta: string }>;
+    turns: readonly Turn[];
+    /** Context used inside each turn — the delta the usage rows report; `null` without a usage row or across a compaction. */
+    deltas: ReadonlyMap<Turn, number | null>;
+    /** Files edited across the session, most recently touched first. */
+    files: ReadonlyMap<string, FileTouched>;
 }
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -59,18 +87,18 @@ function pathOf(event: Extract<StreamEvent, { kind: 'tool' }>, root: string): st
     return confined === null || confined === '' ? null : confined;
 }
 
-export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | null, root: string | null, selectedRowId: string | null): readonly IndexSection[] | null {
+/** The one walk over the rows. `null` without a turn marker. */
+export function turnsOf(rows: readonly TimedEvent[], root: string | null): TurnsWalk | null {
     if (!rows.some((r) => r.event.kind === 'turn')) return null;
 
-    // Items are collected in ledger order — a turn, then the compaction that followed it — and reversed at the end.
     const ordered: Array<{ kind: 'turn'; turn: Turn } | { kind: 'compacted'; rowId: string; meta: string }> = [];
     let current: Turn | null = null;
-    const files = new Map<string, { edits: number; plus: number; minus: number; counted: boolean; rowId: string }>();
+    const files = new Map<string, FileTouched>();
 
     for (const row of rows) {
         const e = row.event;
         if (e.kind === 'turn') {
-            current = { n: e.n, rowId: row.id, rowIds: new Set([row.id]), tools: 0, edits: 0, usedAtEnd: null, compacted: false };
+            current = { n: e.n, rowId: row.id, at: row.at, rowIds: new Set([row.id]), tools: 0, edits: 0, usedAtEnd: null, compacted: false, files: new Map(), peers: new Set() };
             ordered.push({ kind: 'turn', turn: current });
             continue;
         }
@@ -83,18 +111,23 @@ export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | n
         if (!current) continue; // rows before the first marker belong to no turn Genie can name
         current.rowIds.add(row.id);
         if (e.kind === 'usage') current.usedAtEnd = e.used;
+        if (e.kind === 'message' && e.speaker === 'peer' && e.peerName) current.peers.add(e.peerName);
         if (e.kind === 'tool') {
             if (e.toolKind === 'edit') {
                 current.edits += 1;
                 if (root !== null) {
                     const path = pathOf(e, root);
                     if (path !== null) {
-                        const entry = files.get(path) ?? { edits: 0, plus: 0, minus: 0, counted: false, rowId: row.id };
-                        entry.edits += 1;
-                        entry.rowId = row.id;
                         const counts = editLineCounts(e.rawInput);
-                        if (counts) { entry.plus += counts.plus; entry.minus += counts.minus; entry.counted = true; }
-                        files.set(path, entry);
+                        const bump = (map: Map<string, FileTouched>) => {
+                            const entry = map.get(path) ?? { edits: 0, plus: 0, minus: 0, counted: false, rowId: row.id };
+                            entry.edits += 1;
+                            entry.rowId = row.id;
+                            if (counts) { entry.plus += counts.plus; entry.minus += counts.minus; entry.counted = true; }
+                            map.set(path, entry);
+                        };
+                        bump(files);
+                        bump(current.files);
                     }
                 }
             } else {
@@ -103,9 +136,26 @@ export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | n
         }
     }
 
-    const turns = ordered.filter((o): o is { kind: 'turn'; turn: Turn } => o.kind === 'turn');
-    const latest = turns.at(-1)!.turn;
-    const selectedTurn = selectedRowId === null ? latest : (turns.find((o) => o.turn.rowIds.has(selectedRowId))?.turn ?? latest);
+    const turns = ordered.filter((o): o is { kind: 'turn'; turn: Turn } => o.kind === 'turn').map((o) => o.turn);
+
+    // The session starts with nothing used; each turn's delta is measured from the last usage reported before it.
+    let usedBeforeTurn = 0;
+    const deltas = new Map<Turn, number | null>();
+    for (const t of turns) {
+        deltas.set(t, t.usedAtEnd !== null && !t.compacted ? t.usedAtEnd - usedBeforeTurn : null);
+        usedBeforeTurn = t.usedAtEnd ?? usedBeforeTurn;
+    }
+
+    const sortedFiles = new Map([...files.entries()].sort((a, b) => b[1].rowId.localeCompare(a[1].rowId, 'en', { numeric: true })));
+    return { ordered, turns, deltas, files: sortedFiles };
+}
+
+export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | null, root: string | null, selectedRowId: string | null): readonly IndexSection[] | null {
+    const walked = turnsOf(rows, root);
+    if (walked === null) return null;
+    const { ordered, turns, deltas, files } = walked;
+    const latest = turns.at(-1)!;
+    const selectedTurn = selectedRowId === null ? latest : (turns.find((t) => t.rowIds.has(selectedRowId)) ?? latest);
 
     // The live turn's state, from the session — and no claim without one.
     let suffix = '';
@@ -115,15 +165,6 @@ export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | n
         if (session.pendingApproval) { suffix = ' · parked'; live = 'warn'; }
         else if (session.turnState === 'failed') { suffix = ' · ended'; live = 'bad'; ended = true; }
         else if (session.turnState === 'working') { suffix = ' · now'; live = 'ok'; }
-    }
-
-    // The session starts with nothing used; each turn's delta is measured from the last usage reported before it.
-    let usedBeforeTurn = 0;
-    const deltas = new Map<Turn, number | null>();
-    for (const o of turns) {
-        const t = o.turn;
-        deltas.set(t, t.usedAtEnd !== null && !t.compacted ? t.usedAtEnd - usedBeforeTurn : null);
-        usedBeforeTurn = t.usedAtEnd ?? usedBeforeTurn;
     }
 
     const turnItems: IndexItem[] = ordered.map((o) => {
@@ -148,18 +189,16 @@ export function agentIndex(rows: readonly TimedEvent[], session: LiveSession | n
     const sections: IndexSection[] = [{ title: 'Turns', items: turnItems }];
 
     if (root !== null && files.size > 0) {
-        const items: IndexItem[] = [...files.entries()]
-            .sort((a, b) => b[1].rowId.localeCompare(a[1].rowId, 'en', { numeric: true }))
-            .map(([path, f]) => {
-                const parts = [plural(f.edits, 'edit')];
-                if (f.counted) {
-                    const counts: string[] = [];
-                    if (f.plus > 0) counts.push(`+${f.plus}`);
-                    if (f.minus > 0) counts.push(`−${f.minus}`);
-                    if (counts.length > 0) parts.push(counts.join(' '));
-                }
-                return { id: `file:${path}`, label: path, meta: parts.join(' · '), live: null, selected: false, mono: true, rowId: f.rowId };
-            });
+        const items: IndexItem[] = [...files.entries()].map(([path, f]) => {
+            const parts = [plural(f.edits, 'edit')];
+            if (f.counted) {
+                const counts: string[] = [];
+                if (f.plus > 0) counts.push(`+${f.plus}`);
+                if (f.minus > 0) counts.push(`−${f.minus}`);
+                if (counts.length > 0) parts.push(counts.join(' '));
+            }
+            return { id: `file:${path}`, label: path, meta: parts.join(' · '), live: null, selected: false, mono: true, rowId: f.rowId };
+        });
         sections.push({ title: 'Files touched', items });
     }
 

@@ -26,6 +26,9 @@ import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js'
 import { findRows, visibleRows } from '../../core/stream-view.js';
 import { agentViewAction, approvalChoice, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
+import { TurnCards } from './TurnCards.js';
+import { turnCards } from '../../core/turn-cards.js';
+import type { StreamLayout } from '../../core/route.js';
 
 /**
  * THE AGENT VIEW — the most important screen.
@@ -127,6 +130,8 @@ export interface AgentViewProps {
     find?: string | undefined;
     /** The provider's recent stderr (the process-ended block's log); empty when it said nothing. */
     log?: readonly string[] | undefined;
+    /** The Stream's layout from the route (the board): the ledger, or one card per turn. */
+    layout?: StreamLayout | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -183,7 +188,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [],
+    files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger',
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -240,6 +245,10 @@ export function AgentView({
     // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
     const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(rows, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
     const drawerOpen = lanesOpenProp ?? ownLanesOpen;
+    // THE `turns` LAYOUT (the board): the Stream folded into cards; the chips row goes, the index and the strip stay.
+    const shownRows = findRows(rowsInRange(rows, range), findQuery);
+    const cards = active === 'stream' && layout === 'turns' ? turnCards(shownRows, session, workspace?.path ?? null) : null;
+    const otherLayout = layout === 'turns' ? { label: 'Ledger', route: `genie://agent/${agent.id}?tab=stream` } : { label: 'Turns', route: `genie://agent/${agent.id}?tab=stream&layout=turns` };
 
     /**
      * Where a parked approval is ACTIONABLE — exactly one place.
@@ -568,14 +577,19 @@ export function AgentView({
                                     lanesOpen={drawerOpen}
                                     onToggleLanes={() => setOwnLanesOpen((open) => !open)}
                                     onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
+                                    layoutDoor={otherLayout}
+                                    onNavigate={onNavigate}
                                 />
                             ) : null}
-                            <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />
+                            {layout === 'turns' ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
                             {drawerOpen ? <Lanes rows={rows} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
+                                {cards ? (
+                                    <TurnCards cards={cards} rows={shownRows} agentName={agent.name} selectedId={selectedId} onSelect={onSelect} />
+                                ) : (
                                 <Stream
-                                    rows={findRows(rowsInRange(rows, range), findQuery)}
+                                    rows={shownRows}
                                     findQuery={findQuery}
                                     lanes={lanes}
                                     at={at}
@@ -586,6 +600,7 @@ export function AgentView({
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
                                 />
+                                )}
                             </div>
 
                             {/*
