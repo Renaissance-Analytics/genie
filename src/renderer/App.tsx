@@ -8,7 +8,7 @@ import { FilesWindow } from './components/FilesWindow.js';
 import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
-import { chatAction, globalAction, isTypingTarget } from '../core/keys.js';
+import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatThreadFrom, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
@@ -547,17 +547,24 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [parsed, route]);
-    // Esc closes an UNPINNED chat flyout (§4.4) — never a pinned one, never while typing (`core/keys.ts`).
+    // The chat flyout's keys (§4.4, `core/keys.ts`): Esc closes an UNPINNED flyout; A / D answer the approval parked in
+    // the chat — the letters follow the composer. Never while typing.
+    const chatApprovalHere = parsed.chat !== null ? chatDetail?.session?.pendingApproval ?? null : null;
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
-            if (chatAction(press, { open: parsed.chat !== null, pinned: pinned === 'chat' }) !== 'close-chat') return;
+            const action = chatAction(press, { open: parsed.chat !== null, pinned: pinned === 'chat', approval: chatApprovalHere !== null });
+            if (action === null) return;
+            if (action === 'close-chat') { e.preventDefault(); navigate(route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '')); return; }
+            const optionId = approvalChoice(chatApprovalHere, action);
+            if (!optionId || parsed.chat === null) return;
             e.preventDefault();
-            navigate(route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, ''));
+            setAnswering(optionId);
+            resolvedBridge?.answerApproval(parsed.chat, optionId);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [parsed, pinned, route]);
+    }, [parsed, pinned, route, chatApprovalHere, resolvedBridge]);
 
     /**
      * The option id currently in flight, so the buttons refuse a second press.
@@ -636,6 +643,7 @@ function DesktopApp({ bridge }: AppProps) {
             agentResolved={resolved}
             selectedRowId={selectedRowId}
             chatThread={chatThread}
+            chatSession={chatDetail?.session ?? null}
             pinned={pinned}
             onNavigate={(r) => navigate(carryPinnedChat(r, parsed, pinned === 'chat'))}
             features={features}

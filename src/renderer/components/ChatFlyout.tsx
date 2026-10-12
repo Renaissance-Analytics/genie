@@ -75,11 +75,14 @@ export interface ChatFlyoutProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
     onPickThread?: ((agentId: string) => void) | undefined;
+    /** A turn is running: `[Stop]` sits beside Send (§6.2 stop — everything about the agent kept). */
+    running?: boolean | undefined;
+    onStop?: (() => void) | undefined;
 }
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop,
 }: ChatFlyoutProps) {
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
@@ -209,6 +212,13 @@ export function ChatFlyout({
                         </div>
                     );
                 })}
+                {/* The board's error rule: a broken session ends the transcript with the failure, in red. */}
+                {thread?.context?.tone === 'bad' ? (
+                    <div data-chat-error="" className="flex items-center gap-2 border-y border-red-500 py-1.5 font-mono text-[11px] text-red-500">
+                        <Icon name="circle-alert" size="xs" />
+                        <span>{thread.context.text.replace(/^Broken · /, '')}</span>
+                    </div>
+                ) : null}
             </div>
 
             {/*
@@ -241,6 +251,15 @@ export function ChatFlyout({
                     showHint
                     onSubmit={(text) => onSend(text)}
                 />
+                {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
+                {running ? (
+                    <div className="mt-1.5 flex justify-end">
+                        <button type="button" data-action="chat-stop" onClick={() => onStop?.()} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
+                            <span className="size-2 rounded-[2px] bg-[var(--fg-2)]" />
+                            Stop
+                        </button>
+                    </div>
+                ) : null}
             </div>
         </aside>
     );
