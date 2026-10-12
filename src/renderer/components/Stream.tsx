@@ -172,16 +172,24 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
              * when both are true: the reader has scrolled away AND something arrived. A pill
              * reading `↓ 0 new` would be furniture.
              */}
-            {!following && unseen > 0 ? (
+            {/*
+             * THE FOLLOW PILL (the board, bottom right): `Following live` while the ledger tails its own end;
+             * `Parked` once the reader scrolled away or arrived by a deep link — with `↓ n new` while rows arrive
+             * meanwhile — and the parked pill is the door back to the tail.
+             */}
+            {following ? (
+                <span data-follow="live" className="absolute bottom-3 right-3 rounded-full border border-[var(--border-1)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-4)]">Following live</span>
+            ) : (
                 <button
                     type="button"
-                    data-unseen={unseen}
+                    data-follow="parked"
+                    {...(unseen > 0 ? { 'data-unseen': unseen } : {})}
                     onClick={() => setFollowing(true)}
-                    className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border-2)] bg-[var(--surface-raised)] px-3 py-1 text-xs shadow-md"
+                    className="absolute bottom-3 right-3 rounded-full border border-[var(--border-2)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
                 >
-                    ↓ {unseen} new
+                    Parked{unseen > 0 ? ` · ↓ ${unseen} new` : ''}
                 </button>
-            ) : null}
+            )}
         </div>
     );
 }
