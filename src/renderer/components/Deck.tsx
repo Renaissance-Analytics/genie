@@ -1,5 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { deckBand, signalStrip, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
@@ -39,13 +39,19 @@ export interface DeckProps {
     onAnswerForm?: ((item: DeckItem, selections: string[][], note: string) => void) | undefined;
     /** Which form item is expanded — controlled, for tests that render server-side. Otherwise the Deck keeps its own. */
     expanded?: string | null | undefined;
+    /** The item the reader was SENT to (`genie://deck?item=<id>`, a waiting Dashboard row): marked, scrolled to, a form opened. */
+    focusId?: string | null | undefined;
 }
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, expanded }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, expanded, focusId = null }: DeckProps) {
     const band = deckBand(items);
     const strip = signalStrip(signals);
-    const [ownExpanded, setOwnExpanded] = useState<string | null>(null);
+    // The reader came to ANSWER the named item: a multi-part question arrives with its form already open.
+    const focused = focusId === null ? null : (items.find((i) => i.id === focusId) ?? null);
+    const [ownExpanded, setOwnExpanded] = useState<string | null>(focused && focused.answer.kind === 'form' && focused.answer.questions ? focused.id : null);
     const open = expanded ?? ownExpanded;
+    const focusRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => { focusRef.current?.scrollIntoView({ block: 'center' }); }, [focusId]);
     const submitForm = (item: DeckItem, e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (item.answer.kind !== 'form' || !item.answer.questions) return;
@@ -127,10 +133,12 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                 {band.map((item) => (
                     <div
                         key={item.id}
+                        ref={item.id === focusId ? focusRef : undefined}
                         data-deck-item={item.id}
+                        {...(item.id === focusId ? { 'data-deck-focus': 'true' } : {})}
                         data-blocking={item.blocking ? 'true' : 'false'}
                         data-priority={item.priority}
-                        className="border-b border-[var(--border-1)] px-7 py-3"
+                        className={`border-b border-[var(--border-1)] px-7 py-3 ${item.id === focusId ? 'bg-[var(--bg-1)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
                     >
                         <div className="flex items-center gap-2 text-[13px]">
                             {/* Blocking is the most important bit on the item, so it is the

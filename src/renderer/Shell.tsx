@@ -3,7 +3,7 @@ import { formatRoute, parseRoute } from '../core/route.js';
 import { DOCK_WIDTH, dockReserve, type DockPanel } from '../core/dock.js';
 import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
-import type { DeckItem } from '../core/deck.js';
+import { deckItemFor, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
@@ -307,7 +307,12 @@ export function Shell({
                         <Dashboard
                             rows={snapshot.agents}
                             workspaces={snapshot.workspaces}
-                            onOpenAgent={onOpenAgent}
+                            // A WAITING row is a door to its Deck item (§4.1): the Deck resolves, the Dashboard shows.
+                            onOpenAgent={(id) => {
+                                const item = deckItemFor(id, snapshot.deckItems ?? []);
+                                if (item) onNavigate(`genie://deck?item=${encodeURIComponent(item)}`);
+                                else onOpenAgent(id);
+                            }}
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
@@ -336,6 +341,7 @@ export function Shell({
                     {canServe && parsed.surface === 'deck' ? (
                         <Deck
                             items={snapshot.deckItems ?? []}
+                            focusId={parsed.item}
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
                             onAnswer={(item, optionId) => onAnswerDeckItem(item, optionId)}

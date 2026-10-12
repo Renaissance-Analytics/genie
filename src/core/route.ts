@@ -55,7 +55,8 @@ export type PlainFeature = 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'in
 
 export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
-    | ({ surface: 'deck' } & Common)
+    /** The Deck, optionally opened ON one item (`?item=<id>`): where a waiting Dashboard row sends the reader (§4.1). */
+    | ({ surface: 'deck'; item: string | null } & Common)
     | ({ surface: 'agent'; agentId: string; tab: AgentTab; lane: string | null; at: string | null; range: TimeRange | null } & Common)
     /**
      * A workspace opens on its AGENTS (`home`, the board's workspace surface); `terminals` (§4.6) and the
@@ -101,7 +102,7 @@ export function parseRoute(input: string): Route {
 
     switch (head) {
         case 'deck':
-            return { surface: 'deck', ...common };
+            return { surface: 'deck', item: params.get('item') || null, ...common };
 
         case 'agent': {
             // An empty id is NOT an agent. Falling through to the Dashboard is the honest
@@ -192,6 +193,7 @@ export function formatRoute(route: Route): string {
         case 'files':
             break;
         case 'deck':
+            if (route.item) params.set('item', route.item);
             break;
     }
 
