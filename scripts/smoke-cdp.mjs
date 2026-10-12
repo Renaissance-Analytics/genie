@@ -660,6 +660,20 @@ if (!approvalEnabled) {
     }
 }
 
+// 10b. THE WINDOW A PERSON GETS. The owner's first real run: no window buttons, no drag region, a
+// `genie` row that landed on "No agent is registered". A script never drags, so what CAN be asked
+// of the real window is asked: the overlay is visible (so the native buttons are drawn), the bar
+// is the drag region, and the rail's genie row opens the OS agent.
+{
+    const overlay = await cdp.evaluate('Boolean(navigator.windowControlsOverlay && navigator.windowControlsOverlay.visible)');
+    check(overlay === true || process.platform === 'darwin', '41. the native window buttons are drawn over the bar (titleBarOverlay visible)', String(overlay));
+    const region = await cdp.evaluate(`getComputedStyle(document.querySelector('[data-title-bar]')).getPropertyValue('-webkit-app-region')`);
+    check(region === 'drag', '42. the title bar is the drag region', `-webkit-app-region: ${region || '(none)'}`);
+    await cdp.evaluate(`document.querySelector('[data-nav="genie://agent/genie"]').click(); true`);
+    const osAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="agent-unknown"]')`, 'the OS agent page');
+    check(osAgent, '43. the rail\'s genie row opens the OS agent, not "No agent is registered"');
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');

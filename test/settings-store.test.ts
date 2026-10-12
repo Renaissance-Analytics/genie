@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SETTINGS } from '../src/core/settings.js';
 import { SettingsStore } from '../src/main/settings-store.js';
@@ -79,7 +79,7 @@ describe('the v1 carry-over — once, on first run', () => {
         expect(result.applied).toEqual({ theme: 'light', update_channel: 'beta', track_cwd: false });
         expect(result.dropped.map((d) => d.key)).toEqual(['agent_command']);
         expect(store.get('theme')).toBe('light');
-        expect(store.carriedOver()).toEqual({ at: expect.any(String), applied: 3, dropped: [{ key: 'agent_command', reason: expect.stringMatching(/launch line/) }] });
+        expect(store.carriedOver()).toEqual({ at: expect.any(String), applied: 3, dropped: [{ key: 'agent_command', reason: expect.stringMatching(/launch line/) }], sawV1: true });
 
         // A second call is a no-op that reports the earlier run, even with different input.
         const again = await store.carryOverFromV1({ theme: 'dark' });
@@ -93,9 +93,31 @@ describe('the v1 carry-over — once, on first run', () => {
         expect(store.get('theme')).toBe('system');
     });
 
-    it('with no v1 database (null), the carry-over is recorded as done with nothing to carry', async () => {
+    it('with no v1 database (null), the carry-over is recorded with nothing to carry — and says it saw no v1', async () => {
         const r = await store.carryOverFromV1(null);
         expect(r).toEqual({ applied: {}, dropped: [], noV1: true });
-        expect(store.carriedOver()).toMatchObject({ applied: 0, dropped: [] });
+        expect(store.carriedOver()).toMatchObject({ applied: 0, dropped: [], sawV1: false });
+    });
+
+    it('a carry-over that saw NO v1 does not block a later one that does — the first release looked in the wrong directory', async () => {
+        // 2.0.0-beta.5 read `~/.genie/genie.db` (never written by v1) and recorded "done, nothing to carry"
+        // on the owner's machine while 134 settings sat in `%APPDATA%\genie\genie.db`. A record made
+        // without seeing v1 is provisional: the next boot that sees v1 carries over, once.
+        await store.carryOverFromV1(null);
+        const r = await store.carryOverFromV1({ theme: 'dark', workstation_name: 'alphar' });
+        expect(r.alreadyDone).toBeUndefined();
+        expect(Object.keys(r.applied).length).toBeGreaterThan(0);
+        expect(store.carriedOver()).toMatchObject({ sawV1: true });
+        // Now it IS done: a third call with v1 present changes nothing.
+        expect((await store.carryOverFromV1({ theme: 'light' })).alreadyDone).toBe(true);
+    });
+
+    it('a legacy "nothing to carry" record (no sawV1 field, applied 0) is treated as provisional too — that is the record on the owner\'s machine', async () => {
+        await mkdir(dirname(store.file), { recursive: true });
+        await writeFile(store.file, JSON.stringify({ __carriedOver: { at: '2026-10-11T21:32:00.000Z', applied: 0, dropped: [] } }), 'utf8');
+        const reopened = await SettingsStore.open(dir, () => '2026-10-12T00:00:00.000Z');
+        const r = await reopened.carryOverFromV1({ theme: 'dark' });
+        expect(r.alreadyDone).toBeUndefined();
+        expect(reopened.carriedOver()).toMatchObject({ sawV1: true });
     });
 });

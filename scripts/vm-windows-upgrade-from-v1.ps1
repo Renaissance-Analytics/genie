@@ -84,6 +84,16 @@ function Uninstall-AnyGenie() {
     }
     $left = @(Installed-Genies)
     if ($left.Count -ne 0) { throw "pre-clean left $($left.Count) Genie entries in the uninstall registry" }
+    # BOTH apps' data, so this run starts the way a real first upgrade does. Measured 2026-10-11 23:32: the VM
+    # kept ~\.genie from the verify step's smoke (a seeded 'tynn' workspace) and v1-import.json from an earlier
+    # upgrade run, so Genie 2 correctly imported nothing ("once") and the assertion read the smoke's registry.
+    # v1's %APPDATA%\genie goes too, so "v1 first-run creates its database" is literally true.
+    foreach ($d in @("$env:USERPROFILE\.genie\runtime", "$env:APPDATA\genie")) {
+        if (Test-Path $d) { Write-Output "pre-clean: removing app data $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($f in @("$env:USERPROFILE\.genie\v1-import.json", "$env:USERPROFILE\.genie\v1-reap.json")) {
+        if (Test-Path $f) { Write-Output "pre-clean: removing $f"; Remove-Item $f -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 $installDir = "$env:LOCALAPPDATA\Programs\Genie"
@@ -116,6 +126,31 @@ try {
     }
     $v1Exe = (Get-Item $exe).Length
     Write-Output "v1 Genie.exe: $v1Exe bytes"
+
+    # THE DATA THAT MUST CARRY OVER. The owner's first real upgrade (2026-10-11) lost every workspace:
+    # Genie 2 never read v1's genie.db. So v1 runs once here to create its database the way it really
+    # does, is killed, and the database is seeded with one workspace and two agents through v1's own
+    # schema; after the upgrade Genie 2's import is asserted on exactly those rows.
+    Step 'first-run v1 so it creates its database, then seed it with a workspace and two agents'
+    $v1Db = "$env:APPDATA\genie\genie.db"
+    $first = Start-Process -FilePath $exe -PassThru
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $v1Db)) { Start-Sleep 2 }
+    Start-Sleep 5
+    foreach ($p in (Genie-Processes $installDir)) { Kill-Tree $p.Id }
+    Start-Sleep 2
+    if (-not (Test-Path $v1Db)) { throw "v1 ran and created no $v1Db" }
+    Run "node scripts\seed-v1-db.mjs ""$v1Db"" ""$root"""
+
+    # THE ORPHAN CONTROL. v1's dead pty host left 42 shells behind on the owner's desktop; here one orphaned
+    # cmd.exe (its parent exits at once) with a long ping under it stands in for them. It must exist before
+    # the upgrade (positive control) and be gone after — reaped and REPORTED by Genie 2's first boot.
+    Step 'leave an orphaned shell behind, as v1 did, to be reaped by Genie 2'
+    & cmd /c 'start /b cmd /c "ping -n 3600 127.0.0.1 >nul"'
+    Start-Sleep 3
+    $orphanPings = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'PING.EXE' -and $_.CommandLine -like '*-n 3600*' })
+    Write-Output ("orphan control before the upgrade: " + $orphanPings.Count + " long ping(s) under an orphaned cmd")
+    if ($orphanPings.Count -lt 1) { throw 'the orphan control did not start' }
     Write-Output "v1 app-update.yml as shipped:"; Get-Content (Join-Path $installDir 'resources\app-update.yml')
 
     Step "package Genie 2 as $Next"
@@ -184,6 +219,34 @@ try {
     $v1Data = "$env:APPDATA\genie"
     Write-Output ("v1 data dir still present: " + (Test-Path $v1Data) + " ($v1Data)")
     if (-not (Test-Path $v1Data)) { throw "the upgrade removed v1's data directory $v1Data" }
+
+    # Genie 2's first boot imported v1's rows — the proof the owner's upgrade lacked.
+    $importFile = "$env:USERPROFILE\.genie\v1-import.json"
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $importFile)) { Start-Sleep 2 }
+    if (-not (Test-Path $importFile)) { throw "Genie 2 wrote no $importFile — the v1 import never ran" }
+    $import = Get-Content $importFile -Raw | ConvertFrom-Json
+    Write-Output ("IMPORTED FROM v1: " + (Get-Content $importFile -Raw))
+    if (-not $import.sawV1) { throw 'the import did not see the v1 database' }
+    if ($import.workspaces -ne 1) { throw "expected 1 imported workspace, got $($import.workspaces)" }
+    if ($import.agents -ne 2) { throw "expected 2 imported agents, got $($import.agents)" }
+    # The Store keeps its files under the runtime dir (paths.ts runtimeDir): ~\.genie\runtime\{workspaces,agents}.json.
+    $ws = Get-Content "$env:USERPROFILE\.genie\runtime\workspaces.json" -Raw
+    if ($ws -notmatch '01seedv1workspace00000000a') { throw "workspaces.json does not carry the seeded workspace: $ws" }
+    $ag = Get-Content "$env:USERPROFILE\.genie\runtime\agents.json" -Raw
+    if ($ag -notmatch '"kai"' -or $ag -notmatch '"kai-slave"' -or $ag -notmatch '\.agents/kai/AGENT\.md') { throw "agents.json does not carry kai + kai-slave with the persona: $ag" }
+    Write-Output 'v1 IMPORT PROVEN: the seeded workspace and both agents are in Genie 2 after the upgrade, persona made workspace-relative'
+
+    $reapFile = "$env:USERPROFILE\.genie\v1-reap.json"
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path $reapFile)) { Start-Sleep 2 }
+    if (-not (Test-Path $reapFile)) { throw "Genie 2 wrote no $reapFile — the v1 reap never ran (the orphan control was there)" }
+    $reap = Get-Content $reapFile -Raw | ConvertFrom-Json
+    Write-Output ("REAPED BY GENIE 2: found " + $reap.found + ", killed " + $reap.killed + ": " + (($reap.victims | ForEach-Object { $_.why + ' ' + $_.executable }) -join ' | '))
+    if ($reap.found -lt 1) { throw 'the reap found nothing, but an orphaned shell was left for it' }
+    $pingsAfter = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'PING.EXE' -and $_.CommandLine -like '*-n 3600*' })
+    if ($pingsAfter.Count -ne 0) { throw "the orphan control survived the reap: $($pingsAfter.Count) long ping(s) still running" }
+    Write-Output 'v1 REAP PROVEN: the orphaned shell and its child were found, killed and reported by Genie 2 at first boot'
 
     Step 'tear down the relaunched Genie 2, uninstall'
     foreach ($p in $relaunched) { Kill-Tree $p.Id }

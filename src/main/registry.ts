@@ -1,6 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
-import { agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
+import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
@@ -34,7 +34,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * `OS_WORKSPACE` is not a workspace anybody has and never appears in the rail: it exists so
  * the one agent that belongs to no workspace still has a well-formed record.
  */
-export const OS_AGENT_NAME = 'genie';
+export { OS_AGENT_NAME };
 export const OS_WORKSPACE = '__genie__';
 
 /** What the registry can see of a running session. Supplied by whatever owns the sessions. */
@@ -243,7 +243,7 @@ export class Registry {
      * nameable and persistable without anything running, so that a workspace can be set up
      * before anyone is ready to spend a provider turn on it.
      */
-    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; sidecarOf?: AgentId }): Promise<AgentRecord> {
+    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null; sidecarOf?: AgentId }): Promise<AgentRecord> {
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
@@ -401,8 +401,27 @@ export class Registry {
         return record;
     }
 
+    /**
+     * By id — or by the OS agent's NAME. The rail links to `genie://agent/genie` because the OS
+     * agent's id is minted on first boot and the rail cannot know it; OS_AGENT_NAME is an alias for
+     * the one agent that has no workspace, and for nothing else (a workspace agent named `genie`
+     * is found by its id only).
+     */
     find(id: AgentId): AgentRecord | null {
-        return this.#agents.find((a) => a.id === id) ?? null;
+        const byId = this.#agents.find((a) => a.id === id);
+        if (byId) return byId;
+        if ((id as string) === OS_AGENT_NAME) return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
+        return null;
+    }
+
+    /** Every workspace record, for the one-time v1 import to plan against. */
+    listWorkspaces(): readonly WorkspaceRecord[] {
+        return this.#workspaces;
+    }
+
+    /** Every agent record, for the same. */
+    listAgents(): readonly AgentRecord[] {
+        return this.#agents;
     }
 
     #emit(): void {

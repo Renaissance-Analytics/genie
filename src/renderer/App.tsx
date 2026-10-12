@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_ROUTE, parseRoute } from '../core/route.js';
+import { DEFAULT_ROUTE, canonicalAgentRoute, parseRoute } from '../core/route.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { FilesWindow } from './components/FilesWindow.js';
@@ -123,7 +123,12 @@ function useAgentDetail(
         setState({ detail: null, resolved: false });
 
         void bridge.agentDetail(agentId).then((detail) => {
-            if (live) setState({ detail, resolved: true });
+            if (!live) return;
+            // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
+            // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
+            const canonical = detail ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
+            if (canonical) { window.location.replace(`#${canonical}`); return; }
+            setState({ detail, resolved: true });
         });
         const off = bridge.subscribeAgent(agentId, (detail) => {
             if (live) setState({ detail, resolved: true });

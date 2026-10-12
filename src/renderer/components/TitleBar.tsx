@@ -85,14 +85,21 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
     const hint = modifier === 'Ctrl' ? 'Ctrl K' : `${modifier}K`;
 
     return (
-        <div className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5">
+        <div
+            data-title-bar
+            // The bar is the window's drag region (the OS title bar is hidden); every control inside
+            // opts out below. The right padding is the width of the native window buttons the overlay
+            // draws there on Windows/Linux — zero where there is no overlay.
+            className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 [-webkit-app-region:drag]"
+            style={{ paddingRight: 'calc(100% - env(titlebar-area-width, 100%))' }}
+        >
             {/* The mark is a button, not an ornament: clicking it lands on the Dashboard. */}
             <button
                 type="button"
                 data-nav="genie://dashboard"
                 aria-label="Genie — Dashboard"
                 onClick={() => onNavigate('genie://dashboard')}
-                className="flex shrink-0 items-center gap-2"
+                className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-2"
             >
                 <span
                     data-brand-mark
@@ -118,7 +125,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             data-feature={f.label}
                             aria-label={f.label}
                             onClick={() => onNavigate(f.route)}
-                            className="flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
+                            className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                         >
                             <Icon name={f.icon} size="sm" />
                         </button>
@@ -140,7 +147,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 data-palette
                 aria-label="Search, jump, run"
                 onClick={onOpenPalette}
-                className="mx-auto flex h-6 w-[280px] shrink-0 items-center gap-2 rounded-md border border-[var(--border-1)] px-2 text-[var(--fg-4)] hover:border-[var(--border-2)]"
+                className="[-webkit-app-region:no-drag] mx-auto flex h-6 w-[280px] shrink-0 items-center gap-2 rounded-md border border-[var(--border-1)] px-2 text-[var(--fg-4)] hover:border-[var(--border-2)]"
             >
                 <Icon name="search" size="xs" />
                 <span className="text-xs">Search, jump, run</span>
