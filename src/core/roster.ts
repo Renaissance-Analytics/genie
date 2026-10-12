@@ -44,7 +44,15 @@ export interface LiveSession {
      */
     pendingApproval: Approval | null;
     /** A reported failure and the routes out of it. `null` is not a fault — see below. */
-    failure: { reason: string; fixes: readonly string[] } | null;
+    failure: {
+        reason: string;
+        fixes: readonly string[];
+        /**
+         * How the provider process ended, as node reported it — an exit code or a signal. Absent = not reported (a
+         * failure recorded before any exit, or an older snapshot); `null` = the process has not exited.
+         */
+        exit?: { code: number | null; signal: string | null } | null | undefined;
+    } | null;
     contextUsed: number | null;
     contextSize: number | null;
     lastDelivery: Delivery | null;
