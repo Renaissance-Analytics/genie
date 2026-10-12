@@ -43,8 +43,11 @@ describe('the release workflow', () => {
         expect(workflow()).toMatch(/GITHUB_REF_NAME|github\.ref_name/);
     });
 
-    it('builds every platform the previous Genie shipped — Windows, Linux, macOS', () => {
-        for (const os of ['windows-latest', 'ubuntu-latest', 'macos-latest']) expect(workflow()).toContain(os);
+    it('builds Windows and Linux — and NOT macOS, which is dropped for now (owner, 2026-10-11)', () => {
+        for (const os of ['windows-latest', 'ubuntu-latest']) expect(workflow()).toContain(os);
+        // "we dropped mac support for now. do not include that" — said while approving the v2.0.0-beta.5 tag.
+        // A macOS job would publish an unsigned build nobody supports; the matrix must not name the runner.
+        expect(workflow()).not.toContain('macos-latest');
     });
 
     it('CONTROL: ci.yml still never publishes', () => {

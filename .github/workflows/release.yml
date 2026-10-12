@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]   # no macOS: dropped for now (owner, 2026-10-11)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +66,8 @@ jobs:
       - run: npm run build
       # electron-builder creates (or reuses) the GitHub release for this tag on the repository
       # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
-      # marks it a prerelease (`releaseType: prerelease`). The macOS artifact is UNSIGNED — a
-      # stated limitation, not a surprise at install time.
+      # marks it a prerelease (`releaseType: prerelease`). There is no macOS job: macOS support is
+      # dropped for now (owner, 2026-10-11); the `mac` block in electron-builder.yml stays for when it returns.
       - name: fetch the pinned Caddy runtime
         run: npx tsx scripts/fetch-caddy.ts
 
