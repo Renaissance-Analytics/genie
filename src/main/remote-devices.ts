@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { runtimeDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { readJson, reportFlush, writeJsonAtomic } from './store.js';
 
 /**
  * PAIRED DEVICES (§6.8) — the phones and laptops that read a PIN off this screen once. Each holds a
@@ -52,7 +52,7 @@ export class DeviceStore {
         const at = new Date(this.#now()).toISOString();
         const record: DeviceRecord = { id: `dev_${hash(token).slice(0, 12)}`, label, pairedAt: at, lastSeenAt: at, tokenHash: hash(token) };
         this.#data.devices.push(record);
-        void this.#flush();
+        reportFlush(this.#flush(), 'the remote devices store');
         return { device: publicView(record), token };
     }
 
@@ -62,7 +62,7 @@ export class DeviceStore {
         if (!record) return null;
         const seen = { ...record, lastSeenAt: new Date(this.#now()).toISOString() };
         this.#data.devices = this.#data.devices.map((d) => (d.id === record.id ? seen : d));
-        void this.#flush();
+        reportFlush(this.#flush(), 'the remote devices store');
         return publicView(seen);
     }
 
@@ -74,7 +74,7 @@ export class DeviceStore {
         const before = this.#data.devices.length;
         this.#data.devices = this.#data.devices.filter((d) => d.id !== id);
         if (this.#data.devices.length === before) return false;
-        void this.#flush();
+        reportFlush(this.#flush(), 'the remote devices store');
         return true;
     }
 
