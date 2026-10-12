@@ -264,6 +264,8 @@ export function AgentView({
     const showColumn = railModeNow === 'full' || railOpen;
     // THE PROCESS-ENDED BLOCK (the board's error state): only when the session failed; the engine's own words.
     const ended = processEnded(session, rows, log);
+    // THE TERMINAL BLOCK (the board's blind state): an observed agent's column carries its Take Over window's facts.
+    const termBlock = agent.fidelity === 'observed' && takeOver ? takeOver : null;
 
     // A tab the agent does not have falls back to its first one, rather than rendering an empty
     // body under a tab strip that does not contain the selected tab.
@@ -777,15 +779,31 @@ export function AgentView({
                         <span className="sr-only">{railText}</span>
                     </div>
                 ) : null}
-                {showColumn && (inspector || plan || budget || budgetLimit !== null || ops || persona || ended) ? (
+                {showColumn && (inspector || plan || budget || budgetLimit !== null || ops || persona || ended || termBlock) ? (
                 <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
                 {railModeNow === 'strip' ? (
                     <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
                 ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} /> : null}
-                {plan || budget || budgetLimit !== null || ops || persona || ended ? (
+                {plan || budget || budgetLimit !== null || ops || persona || ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
+                    {termBlock ? (
+                        <section data-rail="terminal" className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2 text-[12px]">
+                                <Icon name="square-terminal" size="xs" className="text-[var(--fg-3)]" />
+                                <span className="font-semibold">Terminal</span>
+                                <span className="text-[11px] text-[var(--fg-4)]">live, read-only here</span>
+                                <span className="flex-1" />
+                                <button type="button" data-action="take-over-rail" onClick={() => onTakeOver?.(agent.id)} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)] hover:underline">
+                                    Take over
+                                    <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
+                                </button>
+                            </div>
+                            <p className="font-mono text-[11px] text-[var(--fg-3)]">{lastOutputLabel(termBlock.lastOutputAt, clock())}</p>
+                            <p className="text-[12px] leading-normal text-[var(--fg-2)]">{agent.provider} runs in a terminal and reports no conversation, plan, context or cost. Genie sees its terminal output.</p>
+                        </section>
+                    ) : null}
                     {ended ? (
                         <section data-rail="process-ended" className="flex flex-col gap-2">
                             <h2 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--danger)]">
