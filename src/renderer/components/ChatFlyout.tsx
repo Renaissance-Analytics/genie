@@ -232,6 +232,7 @@ export function ChatFlyout({
                         approval={approval}
                         answering={answeringApproval ?? null}
                         onAnswer={(id) => onAnswerApproval?.(id)}
+                        agentName={thread?.name}
                     />
                 </div>
             ) : null}

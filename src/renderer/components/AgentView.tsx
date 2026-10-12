@@ -645,6 +645,7 @@ export function AgentView({
                                     approval={approval}
                                     answering={answeringApproval ?? null}
                                     onAnswer={(id) => onAnswerApproval?.(id)}
+                                    agentName={agent.name}
                                 />
                             ) : null}
 

@@ -39,6 +39,15 @@ export interface Approval {
     /** What the agent is asking about, in its own words. */
     question: string;
     options: readonly ApprovalOption[];
+    /**
+     * The board's details, each from the request's own tool call and `null` when the provider did not say: the
+     * call's id (`tool_call 7f3a`), the tool (`asks to run Bash`), ACP's kind, and the command in the arguments.
+     * Optional on the type: an approval minted before these travelled is still an approval.
+     */
+    toolCallId?: string | null;
+    tool?: string | null;
+    kind?: string | null;
+    command?: string | null;
 }
 
 /**
@@ -91,5 +100,14 @@ export function approvalFrom(request: PermissionRequestLike): Approval | null {
     });
 
     if (options.length === 0) return null;
-    return { question, options };
+    const input = request.toolCall['rawInput'];
+    const command = typeof input === 'object' && input !== null ? stringAt(input as Record<string, unknown>, 'command') : null;
+    return {
+        question,
+        options,
+        toolCallId: stringAt(request.toolCall, 'toolCallId'),
+        tool: stringAt(request.toolCall, 'name'),
+        kind: stringAt(request.toolCall, 'kind'),
+        command,
+    };
 }
