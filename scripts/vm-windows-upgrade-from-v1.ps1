@@ -84,6 +84,16 @@ function Uninstall-AnyGenie() {
     }
     $left = @(Installed-Genies)
     if ($left.Count -ne 0) { throw "pre-clean left $($left.Count) Genie entries in the uninstall registry" }
+    # BOTH apps' data, so this run starts the way a real first upgrade does. Measured 2026-10-11 23:32: the VM
+    # kept ~\.genie from the verify step's smoke (a seeded 'tynn' workspace) and v1-import.json from an earlier
+    # upgrade run, so Genie 2 correctly imported nothing ("once") and the assertion read the smoke's registry.
+    # v1's %APPDATA%\genie goes too, so "v1 first-run creates its database" is literally true.
+    foreach ($d in @("$env:USERPROFILE\.genie\runtime", "$env:APPDATA\genie")) {
+        if (Test-Path $d) { Write-Output "pre-clean: removing app data $d"; Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($f in @("$env:USERPROFILE\.genie\v1-import.json", "$env:USERPROFILE\.genie\v1-reap.json")) {
+        if (Test-Path $f) { Write-Output "pre-clean: removing $f"; Remove-Item $f -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 $installDir = "$env:LOCALAPPDATA\Programs\Genie"
