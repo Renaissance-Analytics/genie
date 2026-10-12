@@ -18,6 +18,9 @@ const TONE: Record<Tone, string> = {
     bad: 'text-red-500',
 };
 
+/** The speaker's colour (the board): you blue, the agent violet, a peer violet too — it is an agent. */
+const WHO_TONE = { you: 'text-blue-500', agent: 'text-violet-400', peer: 'text-violet-400' } as const;
+
 /** `14:07:12`, in the viewer's own locale. `null` for a row with no recorded time. */
 function timeOf(at: number | null): string | null {
     if (at === null) return null;
@@ -61,7 +64,10 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
              */}
             <span className="w-[62px] shrink-0 pt-0.5 font-mono text-[11px] text-[var(--fg-4)]">{time}</span>
 
-            <Icon name={row.icon} size="sm" className={`mt-0.5 shrink-0 ${TONE[row.tone]}`} />
+            <Icon name={row.icon} size="sm" className={`mt-0.5 shrink-0 ${row.who ? WHO_TONE[row.who.tone] : TONE[row.tone]}`} />
+
+            {/* The board's kind column, 40px mono — the tool's name, or the row's own kind. Empty for a message. */}
+            <span {...(row.kind ? { 'data-kind': row.kind } : {})} className="w-10 shrink-0 truncate pt-0.5 font-mono text-[11px] text-[var(--fg-4)]">{row.kind ?? ''}</span>
 
             <span
                 className={[
@@ -76,8 +82,14 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
                     .filter(Boolean)
                     .join(' ')}
             >
+                {/* WHO spoke, on a message: a field in its colour, never a role word. */}
+                {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
                 {row.main}
             </span>
+
+            {/* An edit's line counts as two cells — only ever from a real diff. */}
+            {row.plus !== null ? <span data-plus={row.plus} className="shrink-0 font-mono text-[11px] text-emerald-500">+{row.plus}</span> : null}
+            {row.minus !== null ? <span data-minus={row.minus} className="shrink-0 font-mono text-[11px] text-red-500">−{row.minus}</span> : null}
 
             {/*
              * What is MISSING from this row's data, said once and inline — `(kind not
@@ -94,7 +106,7 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
             {row.meta ? (
                 <span
                     data-meta
-                    className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-red-500' : 'text-[var(--fg-4)]'}`}
+                    className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-red-500' : row.metaTone === 'warn' ? 'text-amber-500' : 'text-[var(--fg-4)]'}`}
                 >
                     {row.meta}
                 </span>

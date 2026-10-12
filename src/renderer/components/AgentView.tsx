@@ -506,8 +506,23 @@ export function AgentView({
                                     at={at}
                                     selectedId={selectedId}
                                     onSelect={onSelect}
+                                    agentName={agent.name}
                                 />
                             </div>
+
+                            {/*
+                             * THE ERROR CARD (the board): the turn did not finish. The last tool call has no result,
+                             * and nothing after the break was received. Inline, at the end — where the reader is.
+                             */}
+                            {session?.failure ? (
+                                <div data-stream-error="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-red-500 bg-[var(--bg-1)] px-3 py-2 text-[12px]">
+                                    <div className="flex items-center gap-2 font-mono text-[12px] text-red-500">
+                                        <Icon name="circle-alert" size="xs" />
+                                        <span>{session.failure.reason}</span>
+                                    </div>
+                                    <p className="mt-1 text-[var(--fg-3)]">The turn did not finish. The last tool call has no result.</p>
+                                </div>
+                            ) : null}
 
                             {/*
                              * Inline, at the END of the stream — where the reader already is

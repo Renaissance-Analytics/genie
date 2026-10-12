@@ -1,3 +1,4 @@
+import { computeDiff } from '@particle-academy/fancy-file-commons';
 import type { StreamEvent } from './stream-event.js';
 
 /**
@@ -62,7 +63,21 @@ export interface LedgerRow {
      */
     expandable: boolean;
     meta: string | null;
-    metaTone: 'default' | 'bad';
+    /** `warn` = a tool still running (the board's amber `running`). */
+    metaTone: 'default' | 'bad' | 'warn';
+    /**
+     * The board's `kind` column, 40px mono: the tool's name (`Bash`, `Edit`), or the row's own kind (`think`,
+     * `usage`, `plan`, `compacted`). `null` for a message, and for a tool that reported no name (its note says so).
+     */
+    kind: string | null;
+    /**
+     * WHO spoke, on a message row: `you` (blue), the agent BY NAME (violet), a peer as `wren → atlas`. A field, not a
+     * guess from a role — rendering `role` alone once labelled a sibling agent's message `user`, the owner's word.
+     */
+    who: { label: string; tone: 'you' | 'agent' | 'peer' } | null;
+    /** An edit's line counts as two cells (`+42` green, `−8` red) — ONLY from a real diff; a zero side is absent. */
+    plus: number | null;
+    minus: number | null;
     /** An edit row is tinted, so a file change is findable by scanning rather than reading. */
     tinted: boolean;
     /** Selecting this row opens the diff inspector. Only ever an edit with real arguments. */
@@ -82,6 +97,41 @@ export interface LedgerRow {
 export interface RowContext {
     durationMs?: number | undefined;
     diff?: { plus: number; minus: number; newFile: boolean } | undefined;
+    /** The agent's name, so its message rows are labelled with it rather than "agent". */
+    agentName?: string | undefined;
+}
+
+/**
+ * Line counts from an edit's own `old_string` / `new_string` (one pair, or an `edits[]` list) — a REAL diff of what
+ * the agent sent, not an estimate. `null` when the call carried no before-and-after (a `Write` reports only what it
+ * wrote; `rawInput === null` reported nothing). Counted by line with a plain LCS, which is what a diff is.
+ */
+export function editLineCounts(rawInput: unknown): { plus: number; minus: number; newFile: boolean } | null {
+    if (typeof rawInput !== 'object' || rawInput === null) return null;
+    const input = rawInput as Record<string, unknown>;
+    const pairs: { before: string; after: string }[] = [];
+    const take = (o: Record<string, unknown>) => {
+        const before = typeof o['old_string'] === 'string' ? (o['old_string'] as string) : null;
+        const after = typeof o['new_string'] === 'string' ? (o['new_string'] as string) : null;
+        if (before !== null || after !== null) pairs.push({ before: before ?? '', after: after ?? '' });
+    };
+    if (Array.isArray(input['edits'])) for (const e of input['edits']) if (typeof e === 'object' && e !== null) take(e as Record<string, unknown>);
+    else take(input);
+    if (pairs.length === 0) return null;
+    // The kit's diff engine (`fancy-file-commons`), never a hand-rolled one: a line on the `after` side only was added,
+    // on the `before` side only removed; `both` is unchanged.
+    let plus = 0;
+    let minus = 0;
+    for (const p of pairs) {
+        const diff = computeDiff(p.before === '' ? [] : p.before.split('\n'), p.after === '' ? [] : p.after.split('\n'));
+        for (const hunk of diff.hunks) {
+            for (const line of hunk.lines) {
+                if (line.side === 'after') plus += 1;
+                else if (line.side === 'before') minus += 1;
+            }
+        }
+    }
+    return { plus, minus, newFile: pairs.every((p) => p.before === '') };
 }
 
 /** `8400` → `8.4k`. Thousands only above 1000, because `0.8k` is less readable than `800`. */
@@ -139,7 +189,13 @@ function toolRow(
         clamp: true,
         expandable: false,
         meta: metaFor(event, context, isEdit),
-        metaTone: event.status === 'failed' ? 'bad' : 'default',
+        metaTone: event.status === 'failed' ? 'bad' : event.status === 'in_progress' || event.status === 'pending' ? 'warn' : 'default',
+        // The board's kind column: the tool's name. A nameless tool gets no kind — its note already says so.
+        kind: event.name,
+        who: null,
+        // Two cells, from a REAL diff only; a zero side is absent rather than `+0`.
+        plus: context.diff && context.diff.plus > 0 ? context.diff.plus : null,
+        minus: context.diff && context.diff.minus > 0 ? context.diff.minus : null,
         tinted: isEdit,
         inspectable: isEdit && hasArguments,
         note,
@@ -159,21 +215,17 @@ function metaFor(
         const diff = context.diff;
         if (!diff) return context.durationMs === undefined ? 'applied' : `applied · ${seconds(context.durationMs)}`;
 
-        // Line counts ONLY from a real diff, and a zero side is omitted rather than printed.
-        // `+0 −0` asserts an edit that changed nothing, which is a claim about the file.
-        const parts = [diff.newFile ? 'new file' : 'applied'];
-        const counts = [diff.plus > 0 ? `+${diff.plus}` : null, diff.minus > 0 ? `−${diff.minus}` : null]
-            .filter(Boolean)
-            .join(' ');
-        if (counts) parts.push(counts);
-        return parts.join(' · ');
+        // The line counts are the row's `plus` / `minus` cells (the board draws them as two coloured cells), so the
+        // meta says only what happened to the file.
+        return diff.newFile ? 'new file' : 'applied';
     }
 
     // Never defaulted to `pending`: "the agent has not said" and "the agent said pending" are
     // different claims, and only one of them is in the data.
     if (event.status === null) return null;
 
-    const word = event.status === 'failed' ? 'err' : event.status === 'completed' ? 'ok' : event.status;
+    // `running` (the board, in amber) for a call still in flight — never the protocol's raw `in_progress` / `pending`.
+    const word = event.status === 'failed' ? 'err' : event.status === 'completed' ? 'ok' : 'running';
     return context.durationMs === undefined ? word : `${word} · ${seconds(context.durationMs)}`;
 }
 
@@ -203,6 +255,7 @@ function planRow(row: TimedEvent, entries: readonly unknown[]): LedgerRow {
         id: row.id, at: row.at, icon: 'list-checks', tone: 'sky', main,
         mono: false, italic: false, clamp: true, expandable: false,
         meta: null, metaTone: 'default', tinted: false, inspectable: false, note: null, lane: null,
+        kind: 'plan', who: null, plus: null, minus: null,
     };
 }
 
@@ -211,21 +264,29 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
         id: row.id, at: row.at, mono: false, italic: false, clamp: true, expandable: false,
         meta: null as string | null, metaTone: 'default' as const, tinted: false,
         inspectable: false, note: null as string | null,
+        kind: null as string | null, who: null as LedgerRow['who'], plus: null as number | null, minus: null as number | null,
     };
 
     switch (row.event.kind) {
-        case 'message':
+        case 'message': {
             // Messages are the only thing that is ever expanded. Everything else is one line.
+            const agent = context.agentName ?? 'agent';
+            const who: LedgerRow['who'] =
+                row.event.speaker === 'you' ? { label: 'you', tone: 'you' }
+                : row.event.speaker === 'peer' ? { label: `${row.event.peerName ?? 'peer'} → ${agent}`, tone: 'peer' }
+                : { label: agent, tone: 'agent' };
             return {
                 ...base, icon: 'message-square', tone: 'default', main: row.event.text,
-                clamp: false, expandable: true, lane: 'messages',
+                clamp: false, expandable: true, lane: 'messages', who,
             };
+        }
 
         case 'think':
             return {
                 ...base,
                 icon: 'brain',
                 tone: 'violet',
+                kind: 'think',
                 main: oneLine(row.event.text),
                 italic: true,
                 // `expandable: false` is the design's strongest instruction, and it is about
@@ -245,11 +306,11 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             // `$0.00` would claim the turn was free.
             const parts = [`context ${thousands(row.event.used)} / ${thousands(row.event.size)}`];
             if (row.event.cost !== null) parts.push(`$${row.event.cost.toFixed(2)} this turn`);
-            return { ...base, icon: 'gauge', tone: 'muted', main: parts.join(' · '), mono: true, lane: null };
+            return { ...base, icon: 'gauge', tone: 'muted', kind: 'usage', main: parts.join(' · '), mono: true, lane: null };
         }
 
         case 'plan':
-            return planRow(row, row.event.entries);
+            return { ...planRow(row, row.event.entries), kind: 'plan' };
 
         case 'divider': {
             const { before, after } = row.event;
@@ -257,7 +318,7 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
                 before !== null && after !== null
                     ? `context compacted · ${thousands(before)} → ${thousands(after)}`
                     : 'context compacted';
-            return { ...base, icon: 'scissors', tone: 'amber', main, lane: null };
+            return { ...base, icon: 'scissors', tone: 'amber', kind: 'compacted', main, lane: null };
         }
 
         case 'notice':

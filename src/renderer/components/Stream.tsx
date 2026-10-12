@@ -1,6 +1,7 @@
 import { VirtualList } from '@particle-academy/react-fancy';
 import { useEffect, useMemo, useState } from 'react';
 import {
+    editLineCounts,
     ledgerRow,
     resolveThinkTokens,
     resolveToolDurations,
@@ -41,8 +42,10 @@ export interface StreamProps {
     at: string | null;
     selectedId: string | null;
     onSelect: (id: string) => void;
-    /** Diffs, keyed by row id. Absent means not computed — never a `+0 −0`. */
+    /** Diffs, keyed by row id. Absent = computed here from each edit's own old/new strings (`editLineCounts`); a call that carried none gets no counts — never a `+0 −0`. */
     diffs?: ReadonlyMap<string, { plus: number; minus: number; newFile: boolean }> | undefined;
+    /** The agent's name, for its message rows' speaker label. */
+    agentName?: string | undefined;
 }
 
 /**
@@ -56,7 +59,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
 
@@ -77,11 +80,16 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs }: StreamP
         return visible.map((row) => {
             const context =
                 row.event.kind === 'tool'
-                    ? { durationMs: durations.get(row.event.toolCallId), diff: diffs?.get(row.id) }
-                    : {};
+                    ? {
+                          durationMs: durations.get(row.event.toolCallId),
+                          // A real diff: given, or counted from the edit's own old/new strings. Never estimated.
+                          diff: diffs?.get(row.id) ?? (row.event.toolKind === 'edit' ? editLineCounts(row.event.rawInput) ?? undefined : undefined),
+                          agentName,
+                      }
+                    : { agentName };
             return ledgerRow(row, context);
         });
-    }, [rows, lanes, diffs]);
+    }, [rows, lanes, diffs, agentName]);
 
     /**
      * The empty state.
