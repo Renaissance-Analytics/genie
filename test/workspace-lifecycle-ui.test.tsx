@@ -13,7 +13,7 @@ import { Workspace } from '../src/renderer/components/Workspace.js';
 
 const tab = (id: string) => ({ id, workspaceId: 'tynn', shell: '/bin/bash', pid: 1, exited: null });
 const render = (state: ReturnType<typeof emptyWorkspace>) =>
-    renderToStaticMarkup(<Workspace workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} initialState={state} />);
+    renderToStaticMarkup(<Workspace view="terminals" workspace={{ id: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} initialState={state} />);
 
 describe('tab controls', () => {
     it('each tab has Hide AND Close, and a Suspend toggle; a suspended tab says so and shows the held-back count', () => {

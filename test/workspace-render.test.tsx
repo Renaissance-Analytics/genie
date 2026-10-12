@@ -37,7 +37,7 @@ const workspace = { id: 'tynn', name: 'tynn', path: 'C:\\_Projects\\tynn.ai' };
 describe('the Workspace surface, before any terminal exists', () => {
     it('names itself and its workspace, so the smoke and the route can find it', () => {
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html).toContain('data-surface="workspace"');
         expect(html).toContain('data-workspace="tynn"');
@@ -45,7 +45,7 @@ describe('the Workspace surface, before any terminal exists', () => {
 
     it('shows the workspace name and path in a 56px header, like the Dashboard group header', () => {
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html).toContain('>tynn<');
         expect(html).toContain('C:\\_Projects\\tynn.ai');
@@ -60,7 +60,7 @@ describe('the Workspace surface, before any terminal exists', () => {
          * missing.
          */
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html.match(/data-terminal-add=""/g)?.length ?? 0).toBe(1);
         expect(html.match(/data-terminal-add-empty=""/g)?.length ?? 0).toBe(1);
@@ -70,7 +70,7 @@ describe('the Workspace surface, before any terminal exists', () => {
     it('renders NO terminal pane and NO tab when there is nothing to show', () => {
         // The absence claims, in the same render as the presence claims above.
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html).not.toContain('data-terminal-pane');
         expect(html).not.toContain('data-terminal-tab=');
@@ -78,7 +78,7 @@ describe('the Workspace surface, before any terminal exists', () => {
 
     it('talks to the engine in effects only — a static render makes NO bridge calls', () => {
         const { terminals, calls } = fakeTerminals();
-        renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(calls).toEqual([]);
     });
@@ -88,7 +88,7 @@ describe('the Workspace surface, before any terminal exists', () => {
         // not appear on this one. The positive control is the Dashboard render test, which
         // asserts that attribute IS present there.
         const { terminals } = fakeTerminals();
-        const html = renderToStaticMarkup(<Workspace workspace={workspace} terminals={terminals} />);
+        const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={terminals} />);
 
         expect(html).not.toContain('data-agent');
     });

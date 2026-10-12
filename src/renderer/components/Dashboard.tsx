@@ -79,7 +79,7 @@ const STATUS_TONE = {
  * who cannot tell "Genie is being told this" from "Genie can only see bytes" is reading a
  * board that flatters itself.
  */
-function FidelityDot({ fidelity, state }: { fidelity: Fidelity; state: AgentState }) {
+export function FidelityDot({ fidelity, state }: { fidelity: Fidelity; state: AgentState }) {
     const colour = STATE_DOT[state];
     if (fidelity === 'declared') {
         return <span data-fidelity="declared" className={`size-2 shrink-0 rounded-full bg-current ${colour}`} />;

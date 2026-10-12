@@ -18,6 +18,11 @@ import type { TerminalPaneProps } from './TerminalPane.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachAll } from '../reattach.js';
 import { PluginPane, type PluginPanelView } from './PluginPane.js';
+import type { AgentRow } from '../../core/dashboard-view.js';
+import type { WorkspaceView } from '../../core/route.js';
+import { workspaceHome, type HomeFilesState } from '../../core/workspace-home.js';
+import { FidelityDot } from './Dashboard.js';
+import { WorkspaceHome } from './WorkspaceHome.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -97,15 +102,44 @@ export interface WorkspaceProps {
     onResumeAgent?: ((agent: string, path: string) => void) | undefined;
     /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
     initialState?: WorkspaceState | undefined;
+    /**
+     * Which view of the workspace (`core/route.ts`): `home` — the board's workspace surface, its AGENTS and what
+     * changed — is the default; `terminals` is §4.6; `settings` holds governs, the workspace settings and the repos.
+     * The owner, 2026-10-12: "when I select a workspace, I should not see the workspace settings, I should see the
+     * agent lanes and all of the agents."
+     */
+    view?: WorkspaceView | undefined;
+    /** Every agent Genie knows of; the home view keeps this workspace's. Absent = none known. */
+    rows?: readonly AgentRow[] | undefined;
+    onOpenAgent?: ((agentId: string) => void) | undefined;
+    onAddAgent?: (() => void) | undefined;
+    /** The tabs ask for a view; the shell writes it into the route. */
+    onViewChange?: ((view: WorkspaceView) => void) | undefined;
 }
+
+const VIEW_LABEL: Record<WorkspaceView, string> = { home: 'Agents', terminals: 'Terminals', settings: 'Settings' };
 
 /** `1.2 kB`, `340 B` — how much output a suspended terminal held back. */
 function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [] }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
+    // The file host's state for "Changes this session" (home view): read on mount and on every change the host
+    // reports; `null` until it answers, which the rail renders as an ABSENT section, not an empty one.
+    const [filesState, setFilesState] = useState<HomeFilesState | null>(null);
+    useEffect(() => {
+        if (view !== 'home' || !files) return;
+        let live = true;
+        const read = () => { void files.state(workspace.id).then((s) => { if (live) setFilesState(s); }); };
+        read();
+        const off = files.onChange((id) => { if (id === workspace.id) read(); });
+        return () => { live = false; off(); };
+    }, [view, files, workspace.id]);
+    const home = workspaceHome(rows, workspace.id, filesState);
+    const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
+    const label = workspace.name ?? workspace.id;
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
      * evaluation, so a static import of `fancy-term` anywhere Node can reach — the SSR render
@@ -210,6 +244,17 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
             <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+                {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
+                {home.agents.length > 0 ? (
+                    <div data-agents-strip="" className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">
+                        {home.agents.map((a) => (
+                            <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                                <FidelityDot fidelity={a.fidelity} state={a.state} />
+                                <span>{a.name}</span>
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
                 {files ? (
                     <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}>Files</button>
                 ) : null}
@@ -224,6 +269,16 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </div>
                 ) : null}
             </header>
+            {/* The three views of one route. Labelled tabs, never a shortcut-only door (§4.0). */}
+            <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
+                {(['home', 'terminals', 'settings'] as const)
+                    .filter((v) => v !== 'settings' || ops?.settings || ops?.governs || ops?.repos)
+                    .map((v) => (
+                        <button key={v} type="button" data-workspace-tab={v} {...(v === view ? { 'data-current': 'true' } : {})} onClick={() => onViewChange?.(v)} className={`border-b-2 px-3 text-[12px] ${v === view ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}>
+                            {VIEW_LABEL[v]}
+                        </button>
+                    ))}
+            </nav>
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
@@ -243,7 +298,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
 
-            {ops?.governs ? (
+            {view === 'settings' && ops?.governs ? (
                 <section data-governs className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
                     <div className="flex items-center gap-3">
                         <h2 className="font-semibold">Governs</h2>
@@ -268,7 +323,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     )}
                 </section>
             ) : null}
-            {ops?.settings ? (
+            {view === 'settings' && ops?.settings ? (
                 <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
                     <div className="flex items-center gap-3">
                         <h2 className="font-semibold">Workspace settings</h2>
@@ -308,7 +363,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     )}
                 </section>
             ) : null}
-            {ops?.repos ? (
+            {view === 'settings' && ops?.repos ? (
                 <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
                     <div className="flex items-center gap-3">
                         <h2 className="font-semibold">Repos</h2>
@@ -346,11 +401,23 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Bring it back</button>
                 </div>
             ) : null}
-            {panel === 'files' && files && !filesPinned && !filesPopped ? (
+            {/* HOME — the board's workspace surface: the one file panel (when open) beside the agents rail. */}
+            {view === 'home' ? (
+                <div data-workspace-body="home" className="flex min-h-0 flex-1">
+                    {filesInline && files ? (
+                        <div className="min-h-0 min-w-0 flex-1">
+                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} />
+                        </div>
+                    ) : null}
+                    <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide={!filesInline} onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />
+                </div>
+            ) : null}
+            {view === 'terminals' && filesInline && files ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
                     <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} />
                 </div>
             ) : null}
+            {view === 'terminals' ? (<>
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
             <div data-terminal-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
                 {ops?.settings ? (
@@ -556,6 +623,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </div>
                 )}
             </div>
+            </>) : null}
         </section>
     );
 }

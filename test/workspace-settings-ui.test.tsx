@@ -21,7 +21,7 @@ const ops: WorkspaceOpsProps = {
     },
 };
 const render = (o: WorkspaceOpsProps | undefined) =>
-    renderToStaticMarkup(<Workspace workspace={{ id: 'tynn', name: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
+    renderToStaticMarkup(<Workspace view="settings" workspace={{ id: 'tynn', name: 'tynn', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o} />);
 
 describe('workspace settings section', () => {
     it('lists every workspace-scoped setting with this workspace’s value; an override says so and offers a reset', () => {
