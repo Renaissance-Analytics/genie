@@ -185,6 +185,13 @@ export function ChatFlyout({
                  * BY NAME in violet; a peer as `wren → atlas`. Rendering `role` alone once labelled a
                  * sibling agent's message `user` — the same word as the owner's.
                  */}
+                {/* THE OBSERVED FACT CARD (the board): what this chat IS for a Take Over window, said once at the top — not an
+                    empty transcript, which would read as an agent ignoring you. */}
+                {mailOnly && thread ? (
+                    <div data-chat-fact="observed" className="mx-3 mb-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[12px] leading-normal text-[var(--fg-3)]">
+                        {thread.name} runs in a terminal. What you send here lands in its inbox, which it reads when its TUI asks. Replies are not shown — that TUI does not report them.
+                    </div>
+                ) : null}
                 {thread?.messages.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                     const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
