@@ -81,6 +81,16 @@ export function pinPanel(
 }
 
 /**
+ * THE ROUTE AFTER A PIN (§4.4): `?pin=right` says the CHAT is pinned. When pinning the file panel displaces the chat,
+ * the route stops saying so — a stale `pin=right` would reopen the chat pinned on the next navigation and undo the
+ * handoff the user just watched. Anything that leaves the chat alone leaves the route alone.
+ */
+export function routeAfterPin(route: string, outcome: PinOutcome): string {
+    if (outcome.replaced !== 'chat') return route;
+    return route.replace(/([?&])pin=right(&|$)/, (_m, lead: string, tail: string) => (tail === '&' ? lead : '')).replace(/\?$/, '');
+}
+
+/**
  * Whether chat and files can be pinned side by side. **They cannot.**
  *
  * Both at once means popping the file panel out into its own window: a 170px tree beside a
@@ -88,3 +98,12 @@ export function pinPanel(
  * nobody can use at any width.
  */
 export const DOCK_SLOTS = 1;
+
+/**
+ * THE DOCK'S NOTICE (§4.4): what the shell says under the title bar after a pin — the handoff (which panel moved out,
+ * which took the slot) or the refusal (the file panel's unsaved edits, with the pop-out offer). One line with a door;
+ * never a silent change, never a modal.
+ */
+export type DockNotice =
+    | { kind: 'replaced'; replaced: DockPanel; pinned: DockPanel | null }
+    | { kind: 'refused'; reason: string; workspaceId: string | null };

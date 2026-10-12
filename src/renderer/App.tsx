@@ -7,7 +7,7 @@ import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { FilesWindow } from './components/FilesWindow.js';
 import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
-import { pinPanel } from '../core/dock.js';
+import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatThreadFrom, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
@@ -504,6 +504,15 @@ function DesktopApp({ bridge }: AppProps) {
      * panel" in the URL would let the two disagree.
      */
     const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
+    // The docked file panel's dirty buffers (§4.4): the one thing that makes a pin refuse. Reported by the panel.
+    const [filesDirty, setFilesDirty] = useState(false);
+    // The dock's notice (§4.4): a handoff or a refusal, said under the title bar for a few seconds.
+    const [dockNotice, setDockNotice] = useState<DockNotice | null>(null);
+    useEffect(() => {
+        if (!dockNotice) return;
+        const t = setTimeout(() => setDockNotice(null), 8_000);
+        return () => clearTimeout(t);
+    }, [dockNotice]);
     // Which workspace's file panel holds the dock when files are pinned (§4.3). One panel per workspace.
     const [filesWorkspaceId, setFilesWorkspaceId] = useState<string | null>(null);
     // The panels in their own windows (§4.3): the host's list, pushed; a remote bridge has none.
@@ -524,10 +533,14 @@ function DesktopApp({ bridge }: AppProps) {
     };
     const toggleFilesPin = (id: string) => {
         // Pinning another workspace's panel while one is pinned moves the slot to it; the same one unpins.
-        const outcome = pinPanel(pinned === 'files' && filesWorkspaceId !== id ? null : pinned, 'files', false);
-        if (outcome.refused !== null) return;
+        const outcome = pinPanel(pinned === 'files' && filesWorkspaceId !== id ? null : pinned, 'files', filesDirty);
+        if (outcome.refused !== null) { setDockNotice({ kind: 'refused', reason: outcome.refused, workspaceId: filesWorkspaceId }); return; }
         setPinned(outcome.pinned);
         setFilesWorkspaceId(outcome.pinned === 'files' ? id : null);
+        if (outcome.replaced !== null) setDockNotice({ kind: 'replaced', replaced: outcome.replaced, pinned: outcome.pinned });
+        // A displaced chat must leave the route too, or `pin=right` reopens it pinned on the next navigation.
+        const after = routeAfterPin(route, outcome);
+        if (after !== route) navigate(after);
     };
     // ⌘B / Ctrl+B toggles the file panel of the workspace on screen (§4.3); ⌘J / Ctrl+J the chat flyout on genie
     // (the board's `Chat ⌘J`). Chords, so they work while typing.
@@ -699,11 +712,12 @@ function DesktopApp({ bridge }: AppProps) {
                 }
             }}
             onTogglePin={() => {
-                // The single slot's rule lives in `core/dock.ts`, including the file panel's
-                // refusal. No file panel exists until P5, so `false` is the honest argument
-                // today rather than a placeholder that would silently become wrong.
-                const outcome = pinPanel(pinned, 'chat', false);
-                if (outcome.refused === null) setPinned(outcome.pinned);
+                // The single slot's rule lives in `core/dock.ts`, including the file panel's refusal — real now:
+                // the docked panel reports its dirty buffers (§4.4), and a refusal is said under the title bar.
+                const outcome = pinPanel(pinned, 'chat', filesDirty);
+                if (outcome.refused !== null) { setDockNotice({ kind: 'refused', reason: outcome.refused, workspaceId: filesWorkspaceId }); return; }
+                setPinned(outcome.pinned);
+                if (outcome.replaced !== null) setDockNotice({ kind: 'replaced', replaced: outcome.replaced, pinned: outcome.pinned });
             }}
             onCloseChat={() => {
                 // `Esc` and the close button drop the chat from the ROUTE, which is the one
@@ -738,6 +752,9 @@ function DesktopApp({ bridge }: AppProps) {
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
             filesPopped={filesPopped}
+            dockNotice={dockNotice}
+            onDismissDockNotice={() => setDockNotice(null)}
+            onFilesDirtyChange={setFilesDirty}
             onPopOutFiles={filesWindows ? (id) => { void filesWindows.popOut(id); } : undefined}
             onBringBackFiles={(id) => { void filesWindows?.bringBack(id); }}
             onPauseAgent={(agent, path) => tellAgent(agent, pauseMessage(path))}

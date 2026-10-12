@@ -9,7 +9,7 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from 
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane }: {
+export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
@@ -22,6 +22,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     onResume?: ((agent: string, path: string) => void) | undefined;
     /** SINGLE mode (§4.6): this one file, opened on mount; no tree. */
     single?: string | undefined;
+    /** Whether a buffer here differs from what was opened (§4.4: a panel with unsaved edits refuses to be replaced in the dock). */
+    onDirtyChange?: ((dirty: boolean) => void) | undefined;
     onOpenInPane?: ((path: string) => void) | undefined;
 }) {
     const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
@@ -36,6 +38,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // Agents asked to pause (§4.3): one ask per (agent, file) while your buffer is dirty; lifted when it is clean.
     const [paused, setPaused] = useState<readonly Pause[]>([]);
     const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
+    // The dock's refusal rule needs to know (§4.4); reported on every change, and clean on unmount.
+    useEffect(() => { onDirtyChange?.(dirtyPath !== null); return () => { onDirtyChange?.(false); }; }, [dirtyPath, onDirtyChange]);
     useEffect(() => {
         const dirty = dirtyPath ? [dirtyPath] : [];
         const adds = pauseRequests(state?.activity ?? [], dirty, paused);
