@@ -27,6 +27,7 @@ import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import type { DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
+import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -406,6 +407,21 @@ function DesktopApp({ bridge }: AppProps) {
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
     const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
+    // WORKSPACE-LEVEL FAULTS for the Dashboard's group headers (a registered repo whose folder is gone): every
+    // workspace's registry, read once per workspace list. Absent until read — "not seen" is not "none".
+    const [workspaceFaults, setWorkspaceFaults] = useState<Record<string, WorkspaceFault | null>>({});
+    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}`).join('\n');
+    useEffect(() => {
+        if (!resolvedBridge || !snapshot.workspaces) return;
+        let live = true;
+        const list = snapshot.workspaces;
+        void Promise.all(list.map(async (w) => {
+            const r = await resolvedBridge.workspaces.listRepos(w.id);
+            const name = w.name ?? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? w.id;
+            return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
+        })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
+        return () => { live = false; };
+    }, [resolvedBridge, faultKey]);
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
     const [wsSettings, setWsSettings] = useState<{ values: Record<string, boolean | string>; overridden: string[] } | null>(null);
     const reloadWsSettings = (bridge: GenieBridge, id: string) => {
@@ -644,6 +660,7 @@ function DesktopApp({ bridge }: AppProps) {
         <Shell
             route={route}
             snapshot={snapshot}
+            workspaceFaults={workspaceFaults}
             servable={SERVABLE}
             remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
             remoteConnect={{ state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect }}

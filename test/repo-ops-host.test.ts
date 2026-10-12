@@ -27,7 +27,8 @@ const manifest = { name: 'tynn', type: 'agi', repos: [{ name: 'tynn.ai', slug: '
 
 describe('repo operations', () => {
     it('lists from the manifest; an unknown workspace or a missing manifest is a reason', async () => {
-        const f = fakes({ '/w/tynn/project.json': manifest });
+        // The folder exists, so the entry carries no `missing` flag (the missing case is its own test, workspace-fault).
+        const f = fakes({ '/w/tynn/project.json': manifest }, ['/w/tynn/repos/genie2']);
         expect(await listReposOf(f.ports, 'tynn')).toEqual({ ok: true, repos: [{ name: 'tynn.ai', slug: 'tynn-ai', path: '.', host: true }, { name: 'genie2', slug: 'genie2', path: 'repos/genie2', host: false }] });
         expect(await listReposOf(f.ports, 'nope')).toEqual({ ok: false, reason: 'no workspace "nope"' });
         expect(await listReposOf(fakes({}).ports, 'tynn')).toEqual({ ok: false, reason: 'this workspace has no project.json; convert it to an envelope first' });

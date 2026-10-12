@@ -18,6 +18,7 @@ import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import type { WorkspaceFault } from '../core/dashboard-view.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
 
@@ -60,6 +61,8 @@ function useUpdateState(updates: GenieBridge['updates']): UpdateState | null {
 export interface ShellProps {
     route: string;
     snapshot: GenieSnapshot;
+    /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
+    workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** Which surfaces this build renders. The rail's rows are DERIVED from it, not parallel. */
     servable: readonly Surface[];
     /** The agent the route names, when it names one. `null` while loading or if unknown. */
@@ -159,6 +162,7 @@ const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel
 export function Shell({
     route,
     snapshot,
+    workspaceFaults,
     servable,
     features = EMPTY_FEATURES,
     onFeature = () => {},
@@ -349,6 +353,9 @@ export function Shell({
                             group={parsed.group}
                             onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
+                            faults={workspaceFaults}
+                            // The fix is the workspace's registry (its page), where the repo's path is edited.
+                            onLocateRepo={(id) => onNavigate(`genie://workspace/${id}`)}
                             onFix={(fix) => {
                                 // The board's fix buttons act (`fixRoute`): two verbs Genie performs, else the agent's page.
                                 if (fix.kind === 'restart') onRestartAgent?.(fix.agentId);
