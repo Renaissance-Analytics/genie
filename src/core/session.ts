@@ -245,7 +245,7 @@ export class AgentSession {
      * `persisted` tracks whether the thread already holds this message, so a growing message is
      * written once when it closes rather than once per chunk.
      */
-    #openMessage: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null = null;
+    #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null = null;
     /** Writes in flight, chained so the thread records rows in the order they were emitted. */
     #writes: Promise<void> = Promise.resolve();
     /**
@@ -545,7 +545,7 @@ export class AgentSession {
      * recorded from then on — it is counted instead, so a surface can say this conversation is
      * not being saved.
      */
-    #enqueue(open: { event: Extract<StreamEvent, { kind: 'message' }>; persisted: boolean } | null): void {
+    #enqueue(open: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null): void {
         if (!open || open.persisted || open.event.text.length === 0) return;
         open.persisted = true;
 
@@ -601,9 +601,28 @@ export class AgentSession {
          * surface should see a frame when it arrives; only the ORDER of what reaches the thread
          * has to be preserved, and `#enqueue` is what preserves it.
          */
+        /*
+         * A THOUGHT streams the same way (`agent_thought_chunk`, a few tokens per frame) and is one row for the same
+         * reason: a column of one-line fragments is not "a thought, one line, never expanded" — it is the thought
+         * chopped up, each piece with its own time. Consecutive thought chunks grow one row; anything else closes it.
+         * While it is open and the turn is running, the surface shows it as the live `Thinking…` row.
+         */
+        if (event.kind === 'think') {
+            const open = this.#openMessage;
+            if (open && open.event.kind === 'think') {
+                open.event = { ...open.event, text: open.event.text + event.text };
+                this.#options.onEvent?.(open.event, { replacesLast: true });
+                return; // Written to the thread once, when it closes.
+            }
+            this.#openMessage = { event, persisted: false };
+            this.#options.onEvent?.(event, { replacesLast: false });
+            this.#enqueue(open);
+            return;
+        }
+
         if (event.kind === 'message') {
             const open = this.#openMessage;
-            if (open && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
+            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
                 open.event = { ...open.event, text: open.event.text + event.text };
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.

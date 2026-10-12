@@ -634,6 +634,7 @@ export function AgentView({
                                     selectedId={selectedId}
                                     onSelect={onSelect}
                                     agentName={agent.name}
+                                    live={session?.running === true && session.turnState === 'working'}
                                     persona={persona}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}

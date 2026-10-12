@@ -1,5 +1,5 @@
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 /**
  * The renderer's build.
@@ -26,5 +26,15 @@ export default defineConfig({
         // A desktop app ships its own sources for its own debugging. Nothing here is served
         // to a third party, so there is nothing to withhold.
         sourcemap: true,
+    },
+    test: {
+        /*
+         * The tests are the files under `test/`. Vitest's default is every `*.test.*` anywhere, which on 2026-10-12
+         * picked up a row's STAGED test under `.patch/` (placed there for the batch's patch script to copy in) and
+         * ran it against a tree the row was not applied to yet — a red suite about nothing. The live checks
+         * (`test/live/*.live.ts`) are named so they stay out of the default run.
+         */
+        include: ['test/**/*.test.{ts,tsx}'],
+        exclude: ['**/node_modules/**', '.patch/**'],
     },
 });

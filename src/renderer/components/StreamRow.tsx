@@ -30,10 +30,12 @@ function timeOf(at: number | null): string | null {
 export interface StreamRowProps {
     row: LedgerRow;
     selected: boolean;
+    /** The thought still arriving while the turn runs (the board's `Thinking…` row). */
+    live?: boolean | undefined;
     onSelect: (id: string) => void;
 }
 
-export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
+export function StreamRow({ row, selected, live = false, onSelect }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
@@ -86,6 +88,17 @@ export function StreamRow({ row, selected, onSelect }: StreamRowProps) {
                 {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
                 {row.main}
             </span>
+
+            {/*
+             * THE LIVE THOUGHT: a pulsing bar and the word, while the thought is still arriving. No running token
+             * figure — ACP carries no per-thought count; the Δ appears once a usage report brackets the thought.
+             */}
+            {live ? (
+                <span data-live="thinking" className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-[var(--violet-400)]">
+                    <span aria-hidden="true" className="h-1 w-6 animate-pulse rounded-full bg-[var(--violet-400)]" />
+                    Thinking…
+                </span>
+            ) : null}
 
             {/* An edit's line counts as two cells — only ever from a real diff. */}
             {row.plus !== null ? <span data-plus={row.plus} className="shrink-0 font-mono text-[11px] text-[var(--success)]">+{row.plus}</span> : null}

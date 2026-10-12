@@ -123,6 +123,12 @@ export interface RowContext {
     diff?: { plus: number; minus: number; newFile: boolean } | undefined;
     /** The agent's name, so its message rows are labelled with it rather than "agent". */
     agentName?: string | undefined;
+    /**
+     * For a compaction divider: the highest turn that had STARTED before it (the board's `turns 1–11 summarised`).
+     * Derived from the ledger's turn markers by the caller, not reported — a compaction summarises the whole context
+     * up to then. Absent or 0 = no turn marker before it, and the divider says nothing about turns.
+     */
+    summarisedTurns?: number | undefined;
 }
 
 /**
@@ -346,10 +352,12 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
 
         case 'divider': {
             const { before, after } = row.event;
-            const main =
+            const sizes =
                 before !== null && after !== null
                     ? `context compacted · ${thousands(before)} → ${thousands(after)}`
                     : 'context compacted';
+            const n = context.summarisedTurns ?? 0;
+            const main = n <= 0 ? sizes : n === 1 ? `${sizes} · turn 1 summarised` : `${sizes} · turns 1–${n} summarised`;
             return { ...base, icon: 'scissors', tone: 'amber', kind: 'compacted', main, lane: null };
         }
 
