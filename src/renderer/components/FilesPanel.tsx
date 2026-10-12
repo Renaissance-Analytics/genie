@@ -1,6 +1,7 @@
 import { Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { FileViewer } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
+import { fileCrumb, statusBarFor } from '../../core/files-panel.js';
 import type { Pause } from '../../core/files-popout.js';
 
 /**
@@ -69,6 +70,15 @@ type Tone = 'writing' | 'changed' | 'unreported';
 
 /** `14:08`, in the viewer's locale — the changed row's time column. */
 const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+
+function StatusBar({ path, text, activity }: { path: string; text: string; activity: readonly Activity[] }) {
+    const bar = statusBarFor(path, text, activity);
+    return (
+        <div data-file-status={path} className="flex shrink-0 items-center border-t border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
+            {`${bar.language} · ${bar.eol} · ${bar.encoding} · ${bar.presence}`}
+        </div>
+    );
+}
 
 function Marker({ path, count, tone, names = [] }: { path: string; count: number | null; tone: Tone; names?: readonly string[] | undefined }) {
     const colour = tone === 'writing' ? 'text-[var(--accent)]' : tone === 'changed' ? 'text-[var(--success)]' : 'text-[var(--fg-4)]';
@@ -224,7 +234,19 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         {tree === null ? null : open === null ? (
                             <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
                         ) : open.ok ? (
-                            <FileViewer filename={open.path} value={open.text} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} theme="auto" />
+                            <div className="flex h-full min-h-0 flex-col">
+                                {/* THE CRUMB (the board): the path, segment by segment, over the editor. */}
+                                <div data-file-crumb={open.path} className="flex shrink-0 items-center border-b border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
+                                    {fileCrumb(open.path).map((seg, i) => (
+                                        <span key={`${i}-${seg}`}>{i > 0 ? <span className="mx-1">/</span> : null}{seg}</span>
+                                    ))}
+                                </div>
+                                <div className="min-h-0 flex-1 overflow-auto">
+                                    <FileViewer filename={open.path} value={open.text} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} theme="auto" />
+                                </div>
+                                {/* THE STATUS BAR (the board): language · line ending · encoding · who is in the file. No cursor position — the viewer reports none. */}
+                                <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} />
+                            </div>
                         ) : (
                             <div data-tab-error className="m-4 rounded-lg border border-[var(--danger)] p-3 text-sm">
                                 <p className="font-mono text-xs text-[var(--fg-4)]">{open.path}</p>

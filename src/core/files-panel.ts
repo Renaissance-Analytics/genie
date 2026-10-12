@@ -232,3 +232,39 @@ export function openRefusal(sizeBytes: number, cap: number = FILE_SIZE_CAP): str
     if (sizeBytes < cap) return null;
     return `this file is ${sizeWords(sizeBytes)}; Genie will not open it`;
 }
+
+/** The crumb over the editor (the board): the path, segment by segment. */
+export function fileCrumb(path: string): string[] {
+    return path.split('/').filter((seg) => seg.length > 0);
+}
+
+const LANGUAGES: Readonly<Record<string, string>> = {
+    php: 'PHP', ts: 'TypeScript', tsx: 'TypeScript', js: 'JavaScript', jsx: 'JavaScript', mjs: 'JavaScript', cjs: 'JavaScript',
+    json: 'JSON', md: 'Markdown', css: 'CSS', html: 'HTML', py: 'Python', go: 'Go', rs: 'Rust', yml: 'YAML', yaml: 'YAML',
+    sh: 'Shell', sql: 'SQL', toml: 'TOML', xml: 'XML', svg: 'SVG', txt: 'Plain text',
+};
+
+export interface StatusBar {
+    readonly language: string;
+    readonly eol: 'LF' | 'CRLF';
+    readonly encoding: string;
+    /** `you and atlas in this file` — you, because the file is open here; the agents with an edit or a read in flight on it. */
+    readonly presence: string;
+}
+
+/**
+ * The status bar under the editor (the board: `PHP · LF · UTF-8 · you and atlas in this file`). Each part a fact
+ * Genie holds: the extension, the text's line endings, the encoding it decoded, who is in the file. No cursor
+ * position — the viewer reports none, and a made-up `Ln, Col` would be a lie about where the reader is.
+ */
+export function statusBarFor(path: string, text: string, activity: readonly Activity[]): StatusBar {
+    const name = path.split('/').pop() ?? path;
+    const dot = name.lastIndexOf('.');
+    const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+    const language = ext === '' ? 'Plain text' : (LANGUAGES[ext] ?? ext.toUpperCase());
+    const eol: 'LF' | 'CRLF' = text.includes('\r\n') ? 'CRLF' : 'LF';
+    const others = [...new Set(activity.filter((a) => a.path === path).map((a) => a.agent))];
+    const who = ['you', ...others];
+    const list = who.length <= 2 ? who.join(' and ') : `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}`;
+    return { language, eol, encoding: 'UTF-8', presence: `${list} in this file` };
+}
