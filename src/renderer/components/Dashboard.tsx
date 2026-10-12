@@ -1,9 +1,13 @@
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
+import type { DashboardGroup } from '../../core/route.js';
 import {
     commsOf,
     contextOf,
+    fixRoute,
+    groupByStatus,
     groupByWorkspace,
     statusOf,
+    type FixRoute,
     summaryChips,
     targetOf,
     type AgentRow,
@@ -133,7 +137,7 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
 }
 
 /** The 32px agent row. */
-function AgentRowView({ row, onOpen }: { row: AgentRow; onOpen: (id: string) => void }) {
+function AgentRowView({ row, onOpen, onFix }: { row: AgentRow; onOpen: (id: string) => void; onFix?: ((route: FixRoute) => void) | undefined }) {
     const status = statusOf(row);
     const target = targetOf(row);
     const comms = commsOf(row);
@@ -190,6 +194,8 @@ function AgentRowView({ row, onOpen }: { row: AgentRow; onOpen: (id: string) => 
                                 key={f}
                                 type="button"
                                 data-fix={f}
+                                data-fix-for={row.id}
+                                onClick={(e) => { e.stopPropagation(); (onFix ?? ((r) => onOpen(r.agentId)))(fixRoute(row.id, f)); }}
                                 className="shrink-0 rounded-md border border-[var(--border-2)] px-2 py-px text-xs hover:bg-[var(--bg-2)]"
                             >
                                 {f}
@@ -249,21 +255,27 @@ function AgentRowView({ row, onOpen }: { row: AgentRow; onOpen: (id: string) => 
 
 function GroupHeader({
     group,
+    name,
     path,
     onAddAgent,
+    onOpenWorkspace,
 }: {
     group: WorkspaceGroup;
+    /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
+    name: string;
     path: string;
     onAddAgent: (workspaceId: string) => void;
+    onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
 }) {
     return (
         <>
             <div className="flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
-                <span className="font-semibold">{group.workspaceId}</span>
+                <span className="font-semibold">{name}</span>
                 <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
                 {group.governedBy ? <span data-governed-by={group.governedBy} className="ml-2.5 shrink-0 text-[var(--fg-4)]">governed by {group.governedBy}</span> : null}
-                <span className="ml-auto shrink-0 text-[var(--fg-3)]">Open workspace →</span>
+                {/* A DOOR, not a label: the board's right-aligned `Open workspace →` opens the workspace's own page. */}
+                <button type="button" data-open-workspace={group.workspaceId} onClick={() => onOpenWorkspace?.(group.workspaceId)} className="ml-auto shrink-0 rounded px-1 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">Open workspace →</button>
             </div>
 
             {/*
@@ -306,23 +318,38 @@ export interface DashboardProps {
      * which renders the first-run invitation. Collapsing them puts a confident claim about an
      * empty machine on screen before anybody has looked.
      */
-    workspaces: readonly { id: string; path: string; governedBy?: string | null | undefined }[] | null;
+    workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined }[] | null;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
     onAddWorkspaceFromGit?: (() => void) | undefined;
     /** The third source (§6.1): the envelope from the Tynn project the token belongs to. */
     onAddWorkspaceFromTynn?: (() => void) | undefined;
+    /** `By workspace | By status` — from the route's `group=`; defaults to workspace. */
+    group?: DashboardGroup | undefined;
+    onGroup?: ((group: DashboardGroup) => void) | undefined;
+    /** `Open workspace →` on a group header. */
+    onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
+    /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
+    onFix?: ((route: FixRoute) => void) | undefined;
+    /** `Chat ⌘J` — the composer, on genie, one click from the board. */
+    onChat?: (() => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, onFix, onChat }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
         Object.fromEntries((workspaces ?? []).flatMap((w) => (w.governedBy ? [[w.id, w.governedBy]] : []))),
     );
+    const statusGroups = groupByStatus(rows);
     const chips = summaryChips(rows);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
+    // The rail's rule: the envelope's name, else the folder, never the id when a name is known.
+    const nameOf = (id: string): string => { const w = workspaces?.find((x) => x.id === id); return w?.name ?? (w?.path ? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? id : id); };
+    // The legend belongs to the cannot-see state: it appears when the board holds an agent Genie can only observe or
+    // only see the presence of — the one moment the dot shapes need explaining.
+    const legend = rows.some((r) => r.fidelity !== 'declared');
 
     /**
      * FIRST PAINT, before the bridge has answered.
@@ -402,7 +429,29 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                         </span>
                     ))}
                 </div>
+                <span className="flex-1" />
+                {/* The board's segmented control. The grouping lives in the route (`group=`), so it is linkable. */}
+                <div className="flex overflow-hidden rounded-lg border border-[var(--border-1)] text-xs">
+                    {(['workspace', 'status'] as const).map((g, i) => (
+                        <button key={g} type="button" data-group-toggle={g} {...(g === group ? { 'data-current': 'true' } : {})} onClick={() => onGroup?.(g)} className={`px-2.5 py-1 ${i > 0 ? 'border-l border-[var(--border-1)] ' : ''}${g === group ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}>
+                            {g === 'workspace' ? 'By workspace' : 'By status'}
+                        </button>
+                    ))}
+                </div>
+                {/* `py-1`, not a row-height class: the row-height census counts ` h-7 ` as "28px header rows", and this is a button. */}
+                <button type="button" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board" className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                    <Icon name="message-square" className="h-3.5 w-3.5" />
+                    Chat
+                    <span className="font-mono text-[11px] text-[var(--fg-4)]">⌘J</span>
+                </button>
             </div>
+            {legend ? (
+                <div data-legend="" className="flex shrink-0 items-center gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
+                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
+                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
+                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-dashed border-[var(--fg-3)]" />Remote — presence only</span>
+                </div>
+            ) : null}
 
             {/*
              * `truncate` on every header, and it is not cosmetic.
@@ -428,11 +477,26 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 <span className="truncate">Context</span>
             </div>
 
-            {groups.map((group) => (
+            {group === 'status' ? (
+                <div data-group-by="status">
+                    {statusGroups.map((g) => (
+                        <div key={g.state} data-status-group={g.state}>
+                            <div className="flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                                <span className={`mr-2 size-2 rounded-full ${CHIP_DOT[g.state]}`} />
+                                <span className="font-semibold">{g.label}</span>
+                                <span className="ml-2.5 text-[var(--fg-3)]">{g.rows.length} {g.rows.length === 1 ? 'agent' : 'agents'}</span>
+                            </div>
+                            {g.rows.map((row) => (
+                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} />
+                            ))}
+                        </div>
+                    ))}
+                </div>
+            ) : groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader group={group} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} />
+                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} />
                     {group.rows.map((row) => (
-                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} />
+                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} />
                     ))}
                 </div>
             ))}

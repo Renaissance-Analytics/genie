@@ -338,6 +338,18 @@ if (typeof agentRow === 'string') {
     check(s.tab === true && s.active === true, '18. the Stream tab is present and selected');
     check(s.body !== null, '19. the Stream body renders — an empty state, not nothing', String(s.body));
 
+    // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Files mounts the workspace's one file
+    // panel for the agent's workspace; Changes lists this agent's changed files or says there are none. Then back to
+    // Stream, so the checks that follow see the view they expect.
+    await cdp.evaluate(`document.querySelector('[data-tab="files"]').click(); true`);
+    const filesTab = await waitFor(cdp, `Boolean(document.querySelector('[data-files-panel]'))`, 'the Files tab body');
+    await cdp.evaluate(`document.querySelector('[data-tab="changes"]').click(); true`);
+    const changesTab = await waitFor(cdp, `Boolean(document.querySelector('[data-agent-changes]'))`, 'the Changes tab body');
+    const changesText = await cdp.evaluate(`(document.querySelector('[data-agent-changes]')?.textContent ?? '').slice(0, 60)`);
+    check(filesTab && changesTab, '51. the Files and Changes tabs have bodies (the file panel; this agent\'s changes or a sentence)', changesText);
+    await cdp.evaluate(`document.querySelector('[data-tab="stream"]').click(); true`);
+    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again');
+
     /*
      * The composer is REACHABLE from here.
      *
@@ -415,6 +427,24 @@ if (typeof agentRow === 'string') {
         'the Dashboard after Back',
     );
     check(backHome, '24. Back again returns to the Dashboard');
+
+    // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
+    // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
+    // 26-char id), offers the segmented control and Chat ⌘J, and `Open workspace →` is a button that lands on the
+    // workspace; Back returns to the Dashboard.
+    const doors = await cdp.evaluate(`JSON.stringify({
+        open: document.querySelectorAll('button[data-open-workspace]').length,
+        toggle: Boolean(document.querySelector('[data-group-toggle="status"]')),
+        chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
+        header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
+    })`);
+    const d = JSON.parse(doors || '{}');
+    check(d.open >= 1 && d.toggle && d.chat && d.header.length > 0 && !/^[0-9a-z]{26}$/i.test(d.header), '52. the Dashboard\'s doors are real: Open workspace, By status, Chat ⌘J, and the group header names the workspace', doors);
+    await cdp.evaluate(`document.querySelector('button[data-open-workspace]').click(); true`);
+    const landed = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the workspace after Open workspace →');
+    check(landed, '53. Open workspace → lands on the workspace');
+    await cdp.evaluate('history.back(); true');
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard after Back');
 }
 
 /*

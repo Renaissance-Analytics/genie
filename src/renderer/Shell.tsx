@@ -109,6 +109,8 @@ export interface ShellProps {
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
+    onRestartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -164,6 +166,7 @@ export function Shell({
     onResumeAgent,
     updates = NO_UPDATES,
     onTakeOver,
+    onRestartAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -291,6 +294,16 @@ export function Shell({
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                             onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
+                            group={parsed.group}
+                            onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
+                            onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
+                            onFix={(fix) => {
+                                // The board's fix buttons act (`fixRoute`): two verbs Genie performs, else the agent's page.
+                                if (fix.kind === 'restart') onRestartAgent?.(fix.agentId);
+                                else if (fix.kind === 'takeover') onTakeOver?.(fix.agentId);
+                                else onOpenAgent(fix.agentId);
+                            }}
+                            onChat={() => onNavigate(formatRoute({ ...parsed, chat: 'genie' }))}
                         />
                     ) : null}
 
@@ -343,6 +356,8 @@ export function Shell({
                             answeringApproval={answeringApproval}
                             onAnswerApproval={onAnswerApproval}
                             ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
+                            files={files}
+                            workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
                         />
                     ) : null}
 

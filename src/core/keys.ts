@@ -47,11 +47,16 @@ export interface KeyPress {
     typing: boolean;
 }
 
-/** Keys that work on EVERY surface. ⌘B / Ctrl+B toggles the workspace file panel (§4.3) — a chord, so it works while typing. */
-export type GlobalAction = 'toggle-files';
+/**
+ * Keys that work on EVERY surface — chords, so they work while typing. ⌘B / Ctrl+B toggles the workspace file panel
+ * (§4.3); ⌘J / Ctrl+J toggles the chat flyout on genie (the board's `Chat ⌘J`).
+ */
+export type GlobalAction = 'toggle-files' | 'toggle-chat';
 
 export function globalAction(press: KeyPress): GlobalAction | null {
-    if ((press.key === 'b' || press.key === 'B') && (press.metaKey || press.ctrlKey) && !press.altKey && !press.shiftKey) return 'toggle-files';
+    const chord = (press.metaKey || press.ctrlKey) && !press.altKey && !press.shiftKey;
+    if (chord && (press.key === 'b' || press.key === 'B')) return 'toggle-files';
+    if (chord && (press.key === 'j' || press.key === 'J')) return 'toggle-chat';
     return null;
 }
 
