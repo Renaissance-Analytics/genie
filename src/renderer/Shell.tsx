@@ -358,6 +358,8 @@ export function Shell({
                             ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                             files={files}
                             workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
+                            takeOver={agentDetail.takeOver ?? null}
+                            terminals={terminals}
                         />
                     ) : null}
 

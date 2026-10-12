@@ -6,6 +6,7 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { LiveSession } from '../core/roster.js';
+import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { FilesState, OpenResult, WriteResult } from '../main/files-host.js';
@@ -77,6 +78,11 @@ export interface AgentDetail {
     cost: number | null;
     /** Why a start was refused, if one was. Reported, never swallowed. */
     refusal: string | null;
+    /**
+     * The live Take Over window's probe (§4.2 Observed): the TUI's terminal id, when it started, when it last printed,
+     * its output bursts. `null` or absent = no Take Over — the agent is declared. The same probe the Dashboard row reads.
+     */
+    takeOver?: TakeOverProbe | null;
 }
 
 /** The three feature channels, named ONCE. Preload and main import this; neither retypes a string. */

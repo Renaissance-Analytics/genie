@@ -280,15 +280,18 @@ function cwdFor(record: AgentRecord): string {
 function detailFor(agentId: AgentId): AgentDetail | null {
     const record = registry?.find(agentId);
     if (!record || !host) return null;
+    // A live Take Over window makes this agent OBSERVED here too — the same probe the Dashboard row reads, so the
+    // Agent view and the board cannot disagree about what Genie can see of it (§4.2: tabs by fidelity).
+    const takeOver = takeOvers?.probe(record.id) ?? null;
 
     return {
         agent: {
             id: record.id,
             name: record.name,
             provider: record.provider,
-            // Every registered agent speaks ACP. `observed` belongs to a Take Over window,
-            // which Genie does not register, and `remote` to another workstation.
-            fidelity: 'declared',
+            // Every registered agent speaks ACP; `observed` while its Take Over window is open; `remote` belongs to
+            // another workstation.
+            fidelity: takeOver ? 'observed' : 'declared',
             cwd: cwdFor(record),
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
             mode: record.mode,
@@ -301,6 +304,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         // never a `$0.00`, which would claim the work was free.
         cost: null,
         refusal: host.refusals.get(record.id) ?? null,
+        takeOver,
     };
 }
 
