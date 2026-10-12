@@ -33,6 +33,8 @@ export const ICON_NAMES: readonly string[] = [
     // chrome
     'search', 'inbox', 'layout-list', 'sparkles',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
+    // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.
+    'folder-tree',
     // the workspace header's repo chips
     'git-branch', 'circle-alert',
     // the Agent view header's Stop

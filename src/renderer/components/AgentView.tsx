@@ -23,8 +23,8 @@ import { Lanes } from './Lanes.js';
 import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
 import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
-import { findRows, visibleRows } from '../../core/stream-view.js';
-import { agentViewAction, approvalChoice, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
+import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
+import { agentViewAction, approvalChoice, inspectorOnEnter, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 import { TurnCards } from './TurnCards.js';
 import { turnCards } from '../../core/turn-cards.js';
@@ -112,6 +112,8 @@ export interface AgentViewProps {
     lanes: readonly StreamFilter[] | null;
     at: string | null;
     selectedId: string | null;
+    /** The stream cursor (`j`/`k`): a focus that is not a selection; Enter opens the Inspector on it. Given = its start. */
+    cursor?: string | null | undefined;
     /** Turn count and cost belong to the session's accounting, not to a single row. */
     turns: number;
     cost: number | null;
@@ -192,7 +194,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 }
 
 export function AgentView({
-    agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
+    agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
     files, workspace, initialChanges, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
 }: AgentViewProps) {
@@ -202,6 +204,11 @@ export function AgentView({
     // the host reports. `null` = absent — the tab says so in a sentence.
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
+    // THE STREAM CURSOR (§4.2 `j`/`k`): a focus, drawn as a ring, that is NOT the Inspector's selection. Enter opens
+    // the Inspector on it; a click (a selection) brings the cursor along, so the keys continue from where the reader is.
+    const [cursorId, setCursorId] = useState<string | null>(cursorProp);
+    useEffect(() => { if (cursorProp !== null) setCursorId(cursorProp); }, [cursorProp]);
+    useEffect(() => { if (selectedId !== null) setCursorId(selectedId); }, [selectedId]);
     // The Lanes drawer, closed on arrival (the board draws the strip and the chips; the tracks are behind `Lanes ▾` / `L`).
     const [ownLanesOpen, setOwnLanesOpen] = useState(false);
     // Find in stream: the query is view state the box owns; `/` focuses the box, Escape in it clears.
@@ -315,27 +322,31 @@ export function AgentView({
 
             switch (action) {
                 case 'next-edit': {
+                    // `E` is a search ("find me the next one"): it opens the edit it lands on, and the cursor follows.
                     const next = nextEditAfter(rowsInRange(rows, range), selectedId);
                     if (!next) return;
                     e.preventDefault();
+                    setCursorId(next);
                     onSelect(next);
                     return;
                 }
                 case 'next-row':
                 case 'prev-row': {
-                    const next = stepRow(inView, selectedId, action === 'next-row' ? 'next' : 'prev');
+                    // The cursor steps from itself — or from the open row when it has not moved yet — and opens nothing.
+                    const next = stepRow(inView, cursorId ?? selectedId, action === 'next-row' ? 'next' : 'prev');
                     if (!next) return;
                     e.preventDefault();
-                    onSelect(next);
+                    setCursorId(next);
                     return;
                 }
                 case 'toggle-inspector': {
-                    // Selection IS the Inspector in this build: a selected tool row opens it. So
-                    // Enter closes it when something is selected, and does nothing when nothing
-                    // is — there is nothing to open without a cursor on a row.
-                    if (selectedId === null) return;
+                    // Enter opens the Inspector on the cursor row (an edit with arguments), closes it on the row already
+                    // open, and does nothing on a row that cannot be inspected — an empty cell is not a control.
+                    const inspectable = (id: string): boolean => { const row = rows.find((r) => r.id === id); return row ? ledgerRow(row).inspectable : false; };
+                    const decision = inspectorOnEnter(cursorId, selectedId, inspectable);
+                    if (decision === null) return;
                     e.preventDefault();
-                    onSelect(null);
+                    onSelect(decision === 'close' ? null : decision.open);
                     return;
                 }
                 case 'escape': {
@@ -390,7 +401,7 @@ export function AgentView({
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [rows, range, lanes, selectedId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval, onTakeOver, agent.id, findQuery]);
+    }, [rows, range, lanes, selectedId, cursorId, onSelect, onNavigate, onLanes, approval, placement, onAnswerApproval, onTakeOver, agent.id, findQuery]);
 
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
@@ -633,6 +644,7 @@ export function AgentView({
                                     lanes={lanes}
                                     at={at}
                                     selectedId={selectedId}
+                                    cursorId={cursorId}
                                     onSelect={onSelect}
                                     agentName={agent.name}
                                     live={session?.running === true && session.turnState === 'working'}
