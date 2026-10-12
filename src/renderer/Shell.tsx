@@ -384,6 +384,7 @@ export function Shell({
                             files={files}
                             workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
                             takeOver={agentDetail.takeOver ?? null}
+                            log={agentDetail.log ?? []}
                             onStop={onStopAgent}
                             terminals={terminals}
                         />

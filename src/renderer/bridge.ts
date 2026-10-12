@@ -78,6 +78,8 @@ export interface AgentDetail {
     cost: number | null;
     /** Why a start was refused, if one was. Reported, never swallowed. */
     refusal: string | null;
+    /** The provider's recent stderr, oldest first — the process-ended block's log. Absent from an older host = nothing known. */
+    log?: readonly string[] | undefined;
     /**
      * The live Take Over window's probe (§4.2 Observed): the TUI's terminal id, when it started, when it last printed,
      * its output bursts. `null` or absent = no Take Over — the agent is declared. The same probe the Dashboard row reads.
