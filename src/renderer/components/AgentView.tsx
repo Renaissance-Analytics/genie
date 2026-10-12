@@ -24,6 +24,7 @@ import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
 import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
+import { editPathIn, revertEdit } from '../../core/revert-edit.js';
 import { agentViewAction, approvalChoice, inspectorOnEnter, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
 import { TurnCards } from './TurnCards.js';
@@ -406,6 +407,26 @@ export function AgentView({
     const selectedRow = selectedId === null ? null : rows.find((r) => r.id === selectedId);
     const inspector =
         selectedRow && selectedRow.event.kind === 'tool' ? inspectorFor(selectedRow.event) : null;
+    // REVERT THIS EDIT (the board's footer door): the call's own before-text goes back through the file panel's write,
+    // only where the file still holds exactly what the edit wrote; the footer says what happened. Offered only when
+    // this view has the file panel's bridge and the edit names a file inside the workspace.
+    const [revertOutcome, setRevertOutcome] = useState<string | null>(null);
+    useEffect(() => { setRevertOutcome(null); }, [selectedId]);
+    const revertPath = selectedRow && selectedRow.event.kind === 'tool' && workspace ? editPathIn(selectedRow.event.rawInput, workspace.path) : null;
+    const revertSelected = inspector?.kind === 'diff' && files && workspace && revertPath !== null && selectedRow && selectedRow.event.kind === 'tool'
+        ? () => {
+              const event = selectedRow.event;
+              if (event.kind !== 'tool') return;
+              void (async () => {
+                  const opened = await files.open(workspace.id, revertPath);
+                  if (!opened.ok) { setRevertOutcome(opened.error); return; }
+                  const reverted = revertEdit(opened.text, event.rawInput);
+                  if (!reverted.ok) { setRevertOutcome(reverted.reason); return; }
+                  const written = await files.write(workspace.id, revertPath, reverted.text, opened.sha);
+                  setRevertOutcome(written.ok ? `reverted ${revertPath}` : written.reason);
+              })();
+          }
+        : null;
 
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
@@ -799,7 +820,7 @@ export function AgentView({
                 {railModeNow === 'strip' ? (
                     <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
                 ) : null}
-                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} /> : null}
+                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
                 {plan || budget || budgetLimit !== null || ops || persona || ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
