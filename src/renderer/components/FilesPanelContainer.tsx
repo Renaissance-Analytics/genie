@@ -28,6 +28,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const [state, setState] = useState<FilesPanelState | null>(null);
     const [tabs, setTabs] = useState<readonly string[]>([]);
     const [open, setOpen] = useState<OpenFile | null>(null);
+    // The board's `All | Changed N` filter (§4.3): Changed shows the files grouped by who changed them.
+    const [filter, setFilter] = useState<'all' | 'changed'>('all');
     // The buffer you are typing into (§4.3): dirty while it differs from what was opened; never auto-reloaded.
     const [buffer, setBuffer] = useState<{ path: string; text: string } | null>(null);
     const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string } | null>(null);
@@ -104,5 +106,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
               onMerge: () => { if (conflict) setBuffer({ path: open.path, text: `<<<<<<< mine\n${buffer?.text ?? ''}=======\n${conflict.onDisk}>>>>>>> theirs\n` }); setConflict(null); },
           }
         : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={setFilter} />;
 }
