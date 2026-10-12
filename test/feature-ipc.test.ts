@@ -43,7 +43,7 @@ describe('the snapshot', () => {
         expect(snap.flows).toEqual({ flows: [], adding: null });
         expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } });
         expect(snap.inbox).toEqual({ unread: [], peers: [] });
-        expect(snap.settings.values).toMatchObject({ theme: 'dark', restore_agents_on_launch: false });
+        expect(snap.settings.values).toMatchObject({ theme: 'system', restore_agents_on_launch: false });
         expect(snap.knowledge).toEqual({ hits: null, query: '', adding: null, lastAdd: null });
         // The toolchain is the one section that needs a scan — null until one has run.
         expect(snap.toolchain).toBeNull();
@@ -76,7 +76,7 @@ describe('actions', () => {
         expect(snap.settings.values!.theme).toBe('light');
         await expect(handleFeatureAction(services, { kind: 'settings.set', key: 'theme', value: 'sepia' })).rejects.toThrow(/sepia/);
         snap = await handleFeatureAction(services, { kind: 'settings.reset', key: 'theme' });
-        expect(snap.settings.values!.theme).toBe('dark');
+        expect(snap.settings.values!.theme).toBe('system');
     });
 
     it('inbox.markRead commits the HUMAN’s cursor for that message and nothing else', async () => {

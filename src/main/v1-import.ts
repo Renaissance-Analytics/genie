@@ -19,10 +19,10 @@ export function readV1Catalog(dbFile: string): V1Catalog | null {
         const has = (table: string) => db!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
         if (!has('workspaces')) return null;
         const workspaces: V1Workspace[] = [];
-        for (const row of db.prepare('SELECT id, path, shape, tynn_project_name, project_name FROM workspaces ORDER BY sort_order, rowid').all() as Record<string, unknown>[]) {
+        for (const row of db.prepare('SELECT id, path, shape, tynn_project_name, project_name, hibernated_at FROM workspaces ORDER BY sort_order, rowid').all() as Record<string, unknown>[]) {
             if (typeof row.id !== 'string' || typeof row.path !== 'string') continue;
             const name = typeof row.project_name === 'string' && row.project_name ? row.project_name : typeof row.tynn_project_name === 'string' ? row.tynn_project_name : row.id;
-            workspaces.push({ id: row.id, path: row.path, name, shape: row.shape === 'simple' ? 'simple' : 'agi' });
+            workspaces.push({ id: row.id, path: row.path, name, shape: row.shape === 'simple' ? 'simple' : 'agi', hibernated: row.hibernated_at !== null && row.hibernated_at !== undefined });
         }
         const agents: V1Agent[] = [];
         if (has('workspace_agents')) {

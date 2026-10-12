@@ -29,6 +29,8 @@ export interface V1Workspace {
     readonly path: string;
     readonly name: string;
     readonly shape: 'agi' | 'simple';
+    /** v1's `hibernated_at` is set: nothing may start here, and Genie 2 keeps it asleep (§6.1). */
+    readonly hibernated: boolean;
 }
 
 export interface V1Agent {
@@ -47,6 +49,7 @@ export interface V1Catalog {
 export interface ImportedWorkspace {
     readonly id: string;
     readonly path: string;
+    readonly asleep: boolean;
 }
 
 export interface ImportedAgent {
@@ -59,6 +62,8 @@ export interface ImportedAgent {
 export interface V1ImportPlan {
     readonly workspaces: readonly ImportedWorkspace[];
     readonly agents: readonly ImportedAgent[];
+    /** Workspaces ALREADY in the registry that v1 had hibernated and Genie 2 has awake: put to sleep, once (beta.7 imported them awake). */
+    readonly hibernate: readonly string[];
     /** Every record NOT imported, with the reason — shown, never swallowed. */
     readonly skipped: readonly string[];
 }
@@ -66,7 +71,7 @@ export interface V1ImportPlan {
 export const V1_SYSTEM_WORKSPACE = '__system__';
 
 export interface ExistingRegistry {
-    readonly workspaceIds: readonly string[];
+    readonly workspaces: readonly { readonly id: string; readonly asleep: boolean }[];
     readonly agents: readonly { readonly workspaceId: string; readonly name: string }[];
 }
 
@@ -82,18 +87,20 @@ export function relativePersona(personaPath: string | null, workspacePath: strin
 }
 
 export function planV1Import(catalog: V1Catalog | null, existing: ExistingRegistry, pathExists: (path: string) => boolean): V1ImportPlan {
-    if (catalog === null) return { workspaces: [], agents: [], skipped: [] };
+    if (catalog === null) return { workspaces: [], agents: [], hibernate: [], skipped: [] };
     const skipped: string[] = [];
     const workspaces: ImportedWorkspace[] = [];
-    const known = new Set(existing.workspaceIds);
+    const hibernate: string[] = [];
+    const known = new Set(existing.workspaces.map((w) => w.id));
+    const awake = new Set(existing.workspaces.filter((w) => !w.asleep).map((w) => w.id));
     const byId = new Map<string, V1Workspace>();
 
     for (const w of catalog.workspaces) {
         if (w.id === V1_SYSTEM_WORKSPACE) { skipped.push(`workspace ${w.name}: v1's system workspace, not imported (Genie 2 has its own OS agent)`); continue; }
         byId.set(w.id, w);
-        if (known.has(w.id)) continue;
+        if (known.has(w.id)) { if (w.hibernated && awake.has(w.id)) hibernate.push(w.id); continue; }
         if (!pathExists(w.path)) { skipped.push(`workspace ${w.name}: its folder ${w.path} no longer exists`); continue; }
-        workspaces.push({ id: w.id, path: w.path });
+        workspaces.push({ id: w.id, path: w.path, asleep: w.hibernated });
         known.add(w.id);
     }
 
@@ -111,5 +118,5 @@ export function planV1Import(catalog: V1Catalog | null, existing: ExistingRegist
         if (a.personaPath && instructions === null) skipped.push(`agent ${a.name}: persona ${a.personaPath} is outside its workspace; imported without it`);
         agents.push({ workspaceId: a.workspaceId, provider: a.tui, name: a.name, instructions });
     }
-    return { workspaces, agents, skipped };
+    return { workspaces, agents, hibernate, skipped };
 }

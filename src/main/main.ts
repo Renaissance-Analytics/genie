@@ -25,9 +25,10 @@ import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog } from './v1-import.js';
 import { planV1Import } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
+import { workspaceDisplayName } from '../core/workspace-name.js';
 import { mainWindowOptions } from '../core/window.js';
 import { createTray } from './tray.js';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate } from './toolchain-prober.js';
@@ -169,6 +170,24 @@ function broadcast(channel: string, ...args: unknown[]): void {
  * Genie 2's own data root, which v1 never wrote to. The first release read `~/.genie/genie.db`,
  * found nothing, and reported "nothing to carry over" to an owner with 27 workspaces.
  */
+/** A workspace's display name from its envelope (project.json `name`), else its folder; read once per path. */
+const manifestNames = new Map<string, string>();
+function workspaceNameFor(path: string): string {
+    const cached = manifestNames.get(path);
+    if (cached !== undefined) return cached;
+    let manifest: string | null = null;
+    try { manifest = readFileSync(join(path, 'project.json'), 'utf8'); } catch { manifest = null; }
+    const name = workspaceDisplayName(manifest, path);
+    manifestNames.set(path, name);
+    return name;
+}
+
+/** The tray icon: shipped beside the app as an extra resource; the repo's build/ in a dev run; the embedded mark otherwise. */
+function trayIconPath(): string | null {
+    for (const p of [join(process.resourcesPath, 'tray-icon.png'), join(here, '..', '..', 'build', 'tray-icon.png')]) if (existsSync(p)) return p;
+    return null;
+}
+
 function v1DatabaseFile(): string {
     return join(app.getPath('userData'), 'genie.db');
 }
@@ -180,16 +199,26 @@ function v1DatabaseFile(): string {
  */
 async function importFromV1(theRegistry: Registry): Promise<void> {
     const marker = join(genieHome(), 'v1-import.json');
-    if (existsSync(marker)) return;
+    // Once — but beta.7's import did not carry v1's hibernation, so a marker without `hibernationApplied` gets
+    // ONE amendment pass that puts v1-hibernated workspaces to sleep; after that the marker says so and nothing
+    // here runs again (a person who wakes a workspace in Genie 2 must not find it asleep at the next boot).
+    let prior: { hibernationApplied?: boolean } | null = null;
+    if (existsSync(marker)) {
+        try { prior = JSON.parse(readFileSync(marker, 'utf8')) as { hibernationApplied?: boolean }; } catch { prior = {}; }
+        if (prior?.hibernationApplied === true) return;
+    }
     const catalog = readV1Catalog(v1DatabaseFile());
     const plan = planV1Import(
         catalog,
-        { workspaceIds: theRegistry.listWorkspaces().map((w) => w.id), agents: theRegistry.listAgents().map((a) => ({ workspaceId: a.workspaceId, name: a.name })) },
+        { workspaces: theRegistry.listWorkspaces().map((w) => ({ id: w.id, asleep: w.asleep === true })), agents: theRegistry.listAgents().map((a) => ({ workspaceId: a.workspaceId, name: a.name })) },
         (p) => existsSync(p),
     );
-    for (const w of plan.workspaces) await theRegistry.addWorkspace({ id: w.id, path: w.path });
-    for (const a of plan.agents) await theRegistry.register({ workspaceId: a.workspaceId, provider: a.provider, name: a.name, instructions: a.instructions });
-    const result = { at: new Date().toISOString(), sawV1: catalog !== null, workspaces: plan.workspaces.length, agents: plan.agents.length, skipped: plan.skipped };
+    if (prior === null) {
+        for (const w of plan.workspaces) await theRegistry.addWorkspace({ id: w.id, path: w.path, ...(w.asleep ? { asleep: true } : {}) });
+        for (const a of plan.agents) await theRegistry.register({ workspaceId: a.workspaceId, provider: a.provider, name: a.name, instructions: a.instructions });
+    }
+    for (const id of plan.hibernate) await theRegistry.setAsleep(id, true);
+    const result = { at: new Date().toISOString(), sawV1: catalog !== null, workspaces: prior === null ? plan.workspaces.length : 0, agents: prior === null ? plan.agents.length : 0, hibernated: plan.workspaces.filter((w) => w.asleep).length + plan.hibernate.length, hibernationApplied: true, skipped: prior === null ? plan.skipped : [] };
     await writeFileText(marker, JSON.stringify(result, null, 2), 'utf8');
     console.log(`[genie] v1 import: ${catalog === null ? 'no v1 database' : `${plan.workspaces.length} workspaces, ${plan.agents.length} agents`}${plan.skipped.length ? `; skipped ${plan.skipped.length}: ${plan.skipped.join(' | ')}` : ''}`);
 }
@@ -218,6 +247,8 @@ function createWindow(): BrowserWindow {
         // Windows/Linux, a minimum size — is core/window.ts, where a test holds it. The owner's
         // first run had none of it: a window that could not be moved, resized or closed.
         ...mainWindowOptions(process.platform),
+        // Genie's own icon on the window and the taskbar in a dev run and on Linux; the packaged Windows app carries it in the exe.
+        ...(existsSync(join(here, '..', '..', 'build', 'icon.png')) ? { icon: join(here, '..', '..', 'build', 'icon.png') } : {}),
         backgroundColor: '#0a0a0c',
         show: false,
         webPreferences: {
@@ -328,6 +359,7 @@ async function boot(): Promise<void> {
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
     registry = theRegistry;
+    theRegistry.setWorkspaceNamer(workspaceNameFor);
     host = new SessionHost({
         userData: genieHome(),
         /**
@@ -1054,8 +1086,12 @@ async function boot(): Promise<void> {
     window = createWindow();
     tray = createTray({
         onOpen: () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } },
+        onSettings: () => {
+            if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+            broadcast('genie:navigate', 'genie://settings');
+        },
         onQuit: () => app.quit(),
-    });
+    }, trayIconPath());
     browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
 }
 

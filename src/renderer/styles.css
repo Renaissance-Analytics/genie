@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Fancy's theme sets the `dark` class on <html>; Tailwind v4's `dark:` variant follows the OS by default. One class for
+   Genie's tokens AND Fancy's components, or a light desktop gets a dark Genie with white Fancy components inside it. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 /*
  * Tailwind v4 must scan the component library, or every class Fancy ships gets tree-shaken

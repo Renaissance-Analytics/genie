@@ -8,15 +8,18 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ Menu: { buildFromTemplate: vi.fn() }, Tray: vi.fn(), nativeImage: { createFromBuffer: vi.fn() } }));
 
 describe('tray', () => {
-    it('offers exactly two verbs — open and quit — wired to the handlers', async () => {
+    it('offers exactly three verbs — open, settings, quit — wired to the handlers', async () => {
         const { trayMenuTemplate } = await import('../src/main/tray.js');
         const onOpen = vi.fn();
+        const onSettings = vi.fn();
         const onQuit = vi.fn();
-        const menu = trayMenuTemplate({ onOpen, onQuit });
-        expect(menu.map((m) => m.label)).toEqual(['Open Genie', 'Quit Genie']);
+        const menu = trayMenuTemplate({ onOpen, onSettings, onQuit });
+        expect(menu.map((m) => m.label)).toEqual(['Open Genie', 'Settings…', 'Quit Genie']);
         menu[0]!.click();
         menu[1]!.click();
+        menu[2]!.click();
         expect(onOpen).toHaveBeenCalledTimes(1);
+        expect(onSettings).toHaveBeenCalledTimes(1);
         expect(onQuit).toHaveBeenCalledTimes(1);
     });
 

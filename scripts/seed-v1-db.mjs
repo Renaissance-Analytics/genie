@@ -22,9 +22,10 @@ export const SEED_AGENTS = [
 
 const db = new DatabaseSync(file);
 const now = Date.now();
+// Hibernated in v1 (hibernated_at set): Genie 2 must import it ASLEEP — 13 of the owner's 27 were, and beta.7 woke them all.
 db.prepare(
-    'INSERT OR REPLACE INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, backend, project_id, project_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-).run(SEED_WORKSPACE_ID, 'seed-project', 'Seeded by the upgrade proof', 'agi', folder, 'none', 'seed-project', 'Seeded by the upgrade proof', 0);
+    'INSERT OR REPLACE INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, backend, project_id, project_name, sort_order, hibernated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+).run(SEED_WORKSPACE_ID, 'seed-project', 'Seeded by the upgrade proof', 'agi', folder, 'none', 'seed-project', 'Seeded by the upgrade proof', 0, now);
 for (const a of SEED_AGENTS) {
     db.prepare(
         'INSERT OR REPLACE INTO workspace_agents (id, workspace_id, tui, name, purpose, persona_path, role, reachability, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

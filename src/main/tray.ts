@@ -12,6 +12,8 @@ export const TRAY_ICON_PNG_BASE64 =
 
 export interface TrayHandlers {
     readonly onOpen: () => void;
+    /** Opens the window on the Settings surface — the second way to reach Settings, beside the rail row. */
+    readonly onSettings: () => void;
     readonly onQuit: () => void;
 }
 
@@ -19,12 +21,15 @@ export interface TrayHandlers {
 export function trayMenuTemplate(handlers: TrayHandlers): { label: string; click: () => void }[] {
     return [
         { label: 'Open Genie', click: handlers.onOpen },
+        { label: 'Settings…', click: handlers.onSettings },
         { label: 'Quit Genie', click: handlers.onQuit },
     ];
 }
 
-export function createTray(handlers: TrayHandlers): Tray {
-    const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'));
+export function createTray(handlers: TrayHandlers, iconPath: string | null = null): Tray {
+    // Genie's own mark (build/tray-icon.png, shipped as an extra resource) when it is there; the embedded mark is the fallback, never the default.
+    const fromFile = iconPath ? nativeImage.createFromPath(iconPath) : null;
+    const icon = fromFile && !fromFile.isEmpty() ? fromFile : nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'));
     const tray = new Tray(icon);
     tray.setToolTip('Genie');
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(handlers)));

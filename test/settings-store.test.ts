@@ -26,7 +26,7 @@ afterEach(async () => {
 
 describe('reading and writing', () => {
     it('an untouched setting reads its registry default and is NOT in the file', async () => {
-        expect(store.get('theme')).toBe('dark');
+        expect(store.get('theme')).toBe('system');
         expect(store.get('restore_agents_on_launch')).toBe(false);
         await store.set('theme', 'light');
         const file = JSON.parse((await readFile(store.file)).toString()) as Record<string, unknown>;
@@ -46,7 +46,7 @@ describe('reading and writing', () => {
         await expect(store.set('no_such_setting', true)).rejects.toThrow(/no_such_setting/);
         await expect(store.set('theme', 'sepia')).rejects.toThrow(/sepia/);
         await expect(store.set('restore_agents_on_launch', 'yes')).rejects.toThrow(/boolean/);
-        expect(store.get('theme')).toBe('dark');
+        expect(store.get('theme')).toBe('system');
     });
 
     it('snapshot reports every setting with its effective value — the user’s where set, else the default', async () => {

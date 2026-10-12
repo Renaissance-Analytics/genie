@@ -25,7 +25,7 @@ describe('the registry', () => {
         const byKey = Object.fromEntries(SETTINGS.map((s) => [s.key, s])) as Record<string, SettingDef>;
         expect(byKey.restore_agents_on_launch).toMatchObject({ type: 'boolean', default: false, scope: 'host', group: 'agents' });
         expect(byKey.update_channel).toMatchObject({ type: 'enum', options: ['beta', 'stable'], scope: 'host', group: 'general' });
-        expect(byKey.theme).toMatchObject({ type: 'enum', options: ['dark', 'light', 'system'], default: 'dark', scope: 'device', group: 'appearance' });
+        expect(byKey.theme).toMatchObject({ type: 'enum', options: ['dark', 'light', 'system'], default: 'system', scope: 'device', group: 'appearance' });
         expect(byKey.default_agent).toMatchObject({ scope: 'workspace', group: 'agents' });
         expect(byKey.dnd_reply).toMatchObject({ type: 'string', group: 'general' });
         expect(byKey.notification_sounds).toMatchObject({ type: 'boolean', default: true, scope: 'device', group: 'general' });
