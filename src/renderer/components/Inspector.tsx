@@ -22,13 +22,15 @@ import type { InspectorContent } from '../../core/inspector.js';
 export interface InspectorProps {
     content: InspectorContent;
     onClose: () => void;
+    /** Inside the Agent view's ONE right column (the board): no width or border of its own; it fills the top half. */
+    embedded?: boolean | undefined;
 }
 
-export function Inspector({ content, onClose }: InspectorProps) {
+export function Inspector({ content, onClose, embedded = false }: InspectorProps) {
     return (
         <aside
             data-inspector={content.kind}
-            className="flex min-h-0 w-[420px] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
+            className={embedded ? 'flex min-h-0 flex-1 flex-col border-b border-[var(--border-1)] bg-[var(--surface)]' : 'flex min-h-0 w-[420px] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]'}
         >
             <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3">
                 <Icon name="file-code" size="sm" className="shrink-0 text-[var(--fg-4)]" />

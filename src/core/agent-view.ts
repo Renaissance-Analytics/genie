@@ -1,4 +1,5 @@
 import type { Fidelity } from './dashboard-view.js';
+import { observedState, type TakeOverProbe } from './observed.js';
 import type { AgentTab } from './route.js';
 import type { LiveSession } from './roster.js';
 
@@ -24,8 +25,8 @@ import type { LiveSession } from './roster.js';
 const TABS: Record<Fidelity, readonly AgentTab[]> = {
     /** Stream is first and always present. With no events it shows an empty state, not nothing. */
     declared: ['stream', 'files', 'changes'],
-    /** Terminal first. A Stream tab here would be a tab that cannot populate. */
-    observed: ['terminal', 'activity', 'files', 'changes'],
+    /** Activity first (the board). A Stream tab here would be a tab that cannot populate. */
+    observed: ['activity', 'terminal', 'files', 'changes'],
     /**
      * Presence only.
      *
@@ -51,26 +52,69 @@ function clock(from: number, now: number): string {
     return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
+/** `40s ago` / `5m ago` / `2h ago`. */
+function ago(from: number, now: number): string {
+    const s = Math.max(0, Math.floor((now - from) / 1000));
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
+}
+
+export interface PillContext {
+    /** Turns so far — the pill speaks in turns (`Turn 14 · running`). */
+    turns: number;
+    /** The live Take Over probe for an observed agent; its pill is a measurement (`Active · last output 40s ago`). */
+    takeOver?: TakeOverProbe | null | undefined;
+}
+
 /**
- * The header's state pill — `● thinking 0:14`.
+ * The header's state pill, in the board's words (`Agent View.dc.html`):
  *
- * An elapsed clock belongs only to a turn that is actually running. On an idle agent it counts
- * up forever and reads as work in progress, which is the quietest possible way to misreport
- * what an agent is doing.
+ *  - `Turn 14 · running` + a clock — the clock belongs only to a turn that is actually running; on an idle agent it
+ *    counts up forever and reads as work in progress;
+ *  - `Turn 15 · parked · waiting on you` — no clock Genie cannot measure;
+ *  - `Broken · <reason>`; `Idle` after turns; `No turns yet` for a session that has not taken one; `Not started` for an
+ *    agent that is registered and has no session — not "Idle", which would claim a session exists;
+ *  - observed: `Active · last output 40s ago` / `Quiet · last output 5m ago` / `Quiet · no output yet` — what was measured.
  */
-export function statePill(session: LiveSession | null, now: () => number): StatePill {
-    if (!session) return { word: 'not started', elapsed: null, tone: 'muted' };
-    if (session.pendingApproval !== null) return { word: 'waiting on you', elapsed: null, tone: 'warn' };
-    if (session.failure !== null) return { word: 'broken', elapsed: null, tone: 'bad' };
+export function statePill(session: LiveSession | null, now: () => number, ctx: PillContext = { turns: 0 }): StatePill {
+    if (ctx.takeOver) {
+        const probe = ctx.takeOver;
+        const state = observedState(probe.lastOutputAt, now());
+        const last = probe.lastOutputAt === null ? 'no output yet' : `last output ${ago(probe.lastOutputAt, now())}`;
+        return { word: `${state === 'active' ? 'Active' : 'Quiet'} · ${last}`, elapsed: null, tone: state === 'active' ? 'ok' : 'muted' };
+    }
+    if (!session) return { word: 'Not started', elapsed: null, tone: 'muted' };
+    if (session.pendingApproval !== null) return { word: `Turn ${ctx.turns} · parked · waiting on you`, elapsed: null, tone: 'warn' };
+    if (session.failure !== null) return { word: `Broken · ${session.failure.reason}`, elapsed: null, tone: 'bad' };
 
     const running = session.running && session.turnState === 'working';
-    if (!running) return { word: 'idle', elapsed: null, tone: 'muted' };
+    if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
 
     return {
-        word: 'thinking',
+        word: `Turn ${ctx.turns} · running`,
         elapsed: session.startedAt === null ? null : clock(session.startedAt, now()),
         tone: 'ok',
     };
+}
+
+export interface HeaderActions {
+    /** While a turn runs: stop the agent's work (§6.2 stop — identity, persona, inbox and history kept). */
+    stop: boolean;
+    /** Only when broken (the board): the graceful restart that resumes the same thread. */
+    restart: boolean;
+    /** In the error state: the Take Over window is the terminal. */
+    openTerminal: boolean;
+    takeOver: boolean;
+    chat: boolean;
+}
+
+/** The board's header actions by state. An observed agent is not managed: nothing to stop or restart. */
+export function headerActions(session: LiveSession | null, fidelity: Fidelity): HeaderActions {
+    const managed = fidelity === 'declared' && session !== null;
+    const broken = managed && session.failure !== null;
+    const running = managed && !broken && session.running && session.turnState === 'working';
+    return { stop: running, restart: broken, openTerminal: broken, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

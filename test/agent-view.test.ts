@@ -22,11 +22,11 @@ describe('tabs by fidelity — ABSENCE of a tab, not a disabled tab', () => {
         expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes']);
     });
 
-    it('gives an observed agent Terminal first, and NO Stream at all', () => {
+    it('gives an observed agent Activity first (the board), then Terminal, and NO Stream at all', () => {
         // Genie sees bytes from that TUI and nothing else. A Stream tab there would be a tab
         // that cannot populate — and *"a disabled control is an accusation; a different shape
         // is a fact."*
-        expect(tabsFor('observed')).toEqual(['terminal', 'activity', 'files', 'changes']);
+        expect(tabsFor('observed')).toEqual(['activity', 'terminal', 'files', 'changes']);
         expect(tabsFor('observed')).not.toContain('stream');
     });
 
@@ -56,22 +56,22 @@ describe('tabs by fidelity — ABSENCE of a tab, not a disabled tab', () => {
 });
 
 describe('the state pill', () => {
-    it('reads thinking with an elapsed clock while a turn is running', () => {
+    it('reads the running turn, in the board’s words, with an elapsed clock', () => {
         const now = Date.now();
-        expect(statePill(session({ startedAt: now - 14_000 }), () => now)).toEqual({
-            word: 'thinking', elapsed: '0:14', tone: 'ok',
+        expect(statePill(session({ startedAt: now - 14_000 }), () => now, { turns: 14 })).toEqual({
+            word: 'Turn 14 · running', elapsed: '0:14', tone: 'ok',
         });
     });
 
-    it('reads the question when the turn is parked', () => {
-        const pill = statePill(session({ turnState: 'idle', pendingApproval: { question: 'Allow migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }), () => Date.now());
-        expect(pill).toMatchObject({ word: 'waiting on you', tone: 'warn' });
+    it('reads the parked turn when it waits on you', () => {
+        const pill = statePill(session({ turnState: 'idle', pendingApproval: { question: 'Allow migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }] } }), () => Date.now(), { turns: 15 });
+        expect(pill).toMatchObject({ word: 'Turn 15 · parked · waiting on you', tone: 'warn' });
     });
 
-    it('reads idle with NO clock when nothing is running', () => {
+    it('reads Idle with NO clock when nothing is running', () => {
         // An elapsed timer on an idle agent counts up forever and reads as work in progress.
-        const pill = statePill(session({ running: false, turnState: 'idle', startedAt: Date.now() - 600_000 }), () => Date.now());
-        expect(pill).toMatchObject({ word: 'idle', elapsed: null });
+        const pill = statePill(session({ running: false, turnState: 'idle', startedAt: Date.now() - 600_000 }), () => Date.now(), { turns: 3 });
+        expect(pill).toMatchObject({ word: 'Idle', elapsed: null });
     });
 
     it('does not claim a clock it cannot measure', () => {

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
+import { headerActions } from '../../core/agent-view.js';
+import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
 import { agentChanges } from '../../core/agent-changes.js';
@@ -131,6 +133,8 @@ export interface AgentViewProps {
     takeOver?: TakeOverProbe | null | undefined;
     /** The terminal host, for the Terminal tab's second attach to the TUI's pty; absent = this window has none. */
     terminals?: GenieBridge['terminals'] | undefined;
+    /** `Stop` while a turn runs (the board): stop the agent's work — §6.2 stop, everything about it kept. */
+    onStop?: ((agentId: string) => void) | undefined;
 }
 
 /**
@@ -167,7 +171,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, takeOver = null, terminals,
+    files, workspace, initialChanges, takeOver = null, terminals, onStop,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -183,7 +187,8 @@ export function AgentView({
         const off = files.onChange((id) => { if (id === workspace.id) read(); });
         return () => { live = false; off(); };
     }, [files, workspace, agent.name]);
-    const pill = statePill(session, now ?? (() => Date.now()));
+    const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
+    const actions = headerActions(session, agent.fidelity);
     const menu = ops ? agentOpsMenu(agent) : [];
     const act = (id: string) => {
         if (!ops) return;
@@ -306,11 +311,13 @@ export function AgentView({
 
     return (
         <div data-surface="agent" data-agent={agent.id} className="flex h-full min-h-0 flex-col">
-            {/* Header, with the identity written the way the board writes it. */}
+            {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
             <div className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+                {workspace ? <span data-crumb={workspace.id} className="text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
+                <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span className="font-medium">{agent.name}</span>
-                <span className="font-mono text-[11px] text-[var(--fg-4)]">{agent.provider}</span>
-                <span className="font-mono text-[11px] text-[var(--fg-4)]">{agent.cwd}</span>
+                <span data-provider-chip={agent.provider} className="rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
+                <span className="truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
                 <span data-pill={pill.word} className={`flex items-center gap-1.5 text-xs ${PILL_TONE[pill.tone]}`}>
                     <span className="size-1.5 rounded-full bg-current" />
@@ -321,6 +328,13 @@ export function AgentView({
                 </span>
 
                 <div className="ml-auto flex items-center gap-1">
+                    {/* STOP, while a turn runs (the board). Stop means stop (§6.2): identity, persona, inbox and history kept. */}
+                    {actions.stop ? (
+                        <button type="button" data-action="stop" title="Stop — the agent's work ends; everything about it is kept" onClick={() => onStop?.(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                            <Icon name="square" size="xs" />
+                            Stop
+                        </button>
+                    ) : null}
                     {/*
                      * The way to TALK to this agent.
                      *
@@ -346,6 +360,7 @@ export function AgentView({
                     >
                         <Icon name="message-square" size="xs" />
                         Chat
+                        <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘J</span>
                     </button>
 
                     <button
@@ -356,19 +371,30 @@ export function AgentView({
                     >
                         <Icon name="square-terminal" size="xs" />
                         Take over
+                        <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
                     </button>
+                    {/* In the error state (the board): the Take Over window IS the terminal. */}
+                    {actions.openTerminal ? (
+                        <button type="button" data-action="open-terminal" onClick={() => onTakeOver?.(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                            <Icon name="square-terminal" size="xs" />
+                            Open terminal
+                        </button>
+                    ) : null}
                     {ops && menu.length > 0 ? (
                         <>
-                            <button
-                                type="button"
-                                data-action="restart-graceful"
-                                title="Restart gracefully — same conversation; refuses if it cannot resume"
-                                onClick={() => ops.onRestart('graceful')}
-                                className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
-                            >
-                                <Icon name="rotate-ccw" size="xs" />
-                                Restart
-                            </button>
+                            {/* RESTART only when broken (the board) — primary there; the graceful kind, which refuses if it cannot resume. */}
+                            {actions.restart ? (
+                                <button
+                                    type="button"
+                                    data-action="restart-graceful"
+                                    title="Restart gracefully — same conversation; refuses if it cannot resume"
+                                    onClick={() => ops.onRestart('graceful')}
+                                    className="flex items-center gap-1.5 rounded-md border border-blue-600 bg-blue-500 px-2 py-1 text-xs font-medium text-white hover:bg-blue-600"
+                                >
+                                    <Icon name="rotate-ccw" size="xs" />
+                                    Restart
+                                </button>
+                            ) : null}
                             <Dropdown placement="bottom-end">
                                 <Dropdown.Trigger>
                                     <button type="button" data-action="agent-more" aria-label="More operations" className="flex items-center rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
@@ -579,13 +605,13 @@ export function AgentView({
                     ) : null}
                 </div>
 
-                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} /> : null}
-
                 {/*
-                 * The right rail, 260px, inside the Agent view's own grid — **it is not a
-                 * dock.** The dock slot belongs to chat, files and lists, and at most one of
-                 * those is pinned at a time; the rail is part of this surface and does not
-                 * compete for that slot.
+                 * The right column, ONE 380px panel (the board): the Inspector — a diff, a tool's
+                 * arguments — above Plan / Context / Cost. Inside the Agent view's own grid — **it
+                 * is not a dock.** The dock slot belongs to chat, files and lists, and at most one
+                 * of those is pinned at a time; this column is part of this surface and does not
+                 * compete for that slot. The Inspector competes with the stream's height, never
+                 * with the right edge, and never pushes the stream sideways: the stream shrinks.
                  */}
                 {/*
                  * *"A section that can never populate is not drawn for that agent — absence of
@@ -598,8 +624,11 @@ export function AgentView({
                  * EITHER panel is enough to draw it. Requiring both would hide a context
                  * warning on an agent that never reported a plan, which is most of them.
                  */}
+                {inspector || plan || budget || budgetLimit !== null || ops ? (
+                <aside data-right-column="" className="flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)]">
+                {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded /> : null}
                 {plan || budget || budgetLimit !== null || ops ? (
-                <aside data-rail-column className="flex w-[260px] shrink-0 flex-col gap-4 border-l border-[var(--border-1)] p-4 text-xs">
+                <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
                      * panel reads as an agent working without a plan; the truth is that it has
@@ -676,6 +705,8 @@ export function AgentView({
                             ) : null}
                         </section>
                     ) : null}
+                </div>
+                ) : null}
                 </aside>
                 ) : null}
             </div>
