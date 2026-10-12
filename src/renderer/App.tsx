@@ -8,7 +8,8 @@ import { FilesWindow } from './components/FilesWindow.js';
 import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel } from '../core/dock.js';
-import { globalAction, isTypingTarget } from '../core/keys.js';
+import { chatAction, globalAction, isTypingTarget } from '../core/keys.js';
+import { chatThreadFrom } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -121,6 +122,8 @@ function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
 function useAgentDetail(
     bridge: GenieBridge | undefined,
     agentId: string | null,
+    /** Settle an agent ROUTE reached by name on its id. Off for the chat subject: its id must not rewrite the agent route. */
+    settle = true,
 ): { detail: AgentDetail | null; resolved: boolean } {
     const [state, setState] = useState<{ detail: AgentDetail | null; resolved: boolean }>({
         detail: null,
@@ -142,7 +145,7 @@ function useAgentDetail(
             if (!live) return;
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
-            const canonical = detail ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
+            const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
             if (canonical) { window.location.replace(`#${canonical}`); return; }
             setState({ detail, resolved: true });
         });
@@ -375,6 +378,9 @@ function DesktopApp({ bridge }: AppProps) {
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
     const { detail, resolved } = useAgentDetail(resolvedBridge, agentId);
+    // The chat subject's detail too: the flyout's transcript is derived from the same stream the Agent view reads
+    // (`core/chat-view.ts`), so a chat pinned to one agent while looking at another still shows its conversation.
+    const { detail: chatDetail } = useAgentDetail(resolvedBridge, parsed.chat, false);
 
     // The selected stream row — the Inspector's subject. Deliberately NOT in the URL: the
     // design says the Inspector is closed on arrival and does not remember being open across
@@ -533,6 +539,17 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [parsed]);
+    // Esc closes an UNPINNED chat flyout (§4.4) — never a pinned one, never while typing (`core/keys.ts`).
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
+            if (chatAction(press, { open: parsed.chat !== null, pinned: pinned === 'chat' }) !== 'close-chat') return;
+            e.preventDefault();
+            navigate(route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, ''));
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [parsed, pinned, route]);
 
     /**
      * The option id currently in flight, so the buttons refuse a second press.
@@ -547,18 +564,9 @@ function DesktopApp({ bridge }: AppProps) {
      * pinned chat's subject does not follow the view when you navigate elsewhere.
      */
     const chatSubject = parsed.chat;
-    const chatThread: ChatThread | null =
-        chatSubject === null
-            ? null
-            : {
-                  agentId: chatSubject,
-                  name: snapshot.agents.find((a) => a.id === chatSubject)?.name ?? chatSubject,
-                  fidelity: snapshot.agents.find((a) => a.id === chatSubject)?.fidelity ?? 'declared',
-                  // `null`, not `0`: nothing has read this thread's unread count yet, and a
-                  // zero would claim you are up to date. AgentInbox lands with P4.
-                  unread: null,
-                  messages: [],
-              };
+    // The thread is DERIVED (`core/chat-view.ts`): the subject's message events with their speakers, the context
+    // line, the workspace's chips. `unread` stays `null` — nothing reads it yet, and `0` would claim you are up to date.
+    const chatThread: ChatThread | null = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
 
     // A route this build cannot serve goes home rather than leaving a blank body under a
     // stale address — the one state a person cannot get out of without knowing a shortcut.
