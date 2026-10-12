@@ -70,6 +70,7 @@ describe('chipRow', () => {
             { id: 'tools', label: 'Tools', n: 1, on: false },
             { id: 'edits', label: 'Edits', n: 2, on: false },
             { id: 'usage', label: 'Usage', n: 1, on: false },
+            { id: 'approvals', label: 'Approvals', n: 0, on: false },
             { id: 'errors', label: 'Errors', n: 0, on: false },
         ]);
     });

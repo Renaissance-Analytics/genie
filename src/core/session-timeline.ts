@@ -81,7 +81,7 @@ export interface Chip {
 }
 
 const LABEL: Record<Lane, string> = { messages: 'Messages', thoughts: 'Thoughts', tools: 'Tools', edits: 'Edits' };
-const FACET_LABEL: Record<Facet, string> = { usage: 'Usage', errors: 'Errors' };
+const FACET_LABEL: Record<Facet, string> = { usage: 'Usage', approvals: 'Approvals', errors: 'Errors' };
 
 /**
  * `All 412 · Messages 14 · Thoughts 61 · Tools 288 · Edits 17 · Usage 9 · Errors 2`. The facet counts are measured
@@ -89,7 +89,7 @@ const FACET_LABEL: Record<Facet, string> = { usage: 'Usage', errors: 'Errors' };
  */
 export function chipRow(rows: readonly TimedEvent[], selected: readonly StreamFilter[] | null): readonly Chip[] {
     const counts = laneSummary(rows).counts;
-    const facetCounts: Record<Facet, number> = { usage: 0, errors: 0 };
+    const facetCounts: Record<Facet, number> = { usage: 0, approvals: 0, errors: 0 };
     for (const row of rows) for (const facet of facetsOf(row.event)) facetCounts[facet] += 1;
     return [
         { id: 'all', label: 'All', n: rows.length, on: selected === null },

@@ -33,12 +33,12 @@ export const LANES: readonly Lane[] = ['messages', 'thoughts', 'tools', 'edits']
  * drawer. A usage report is a row of its own kind; an error is a tool call the agent reported `failed` or a notice at
  * level `error` — so one row can sit in a lane AND a facet, and selecting either shows it.
  *
- * Approvals are NOT here. The ledger keeps no approval rows: a permission request lives on the session until it is
- * answered and then nowhere, so a chip counting approvals would read `0` where the truth is "not recorded". It is
- * drawn when the session records them (§5: absent, not zero).
+ * Approvals: the session mints a ledger row for every DECISION on a permission request (allowed, denied, answered,
+ * cancelled by a stop), so the chip counts decisions the ledger actually holds — the parked request itself is state,
+ * shown by the card, until it is answered.
  */
-export type Facet = 'usage' | 'errors';
-export const FACETS: readonly Facet[] = ['usage', 'errors'];
+export type Facet = 'usage' | 'approvals' | 'errors';
+export const FACETS: readonly Facet[] = ['usage', 'approvals', 'errors'];
 /** What one chip selects. The selection in the route (`?lane=`) is a set of these; `null` is not filtering. */
 export type StreamFilter = Lane | Facet;
 export const FILTERS: readonly StreamFilter[] = [...LANES, ...FACETS];
@@ -48,6 +48,7 @@ export function facetsOf(event: StreamEvent): readonly Facet[] {
         case 'usage': return ['usage'];
         case 'tool': return event.status === 'failed' ? ['errors'] : [];
         case 'notice': return event.level === 'error' ? ['errors'] : [];
+        case 'approval': return ['approvals'];
         default: return [];
     }
 }
@@ -369,6 +370,15 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
 
         case 'notice':
             return { ...base, icon: 'info', tone: 'amber', main: row.event.message, lane: null };
+
+        case 'approval': {
+            // The decision, in one line: `allowed · php artisan migrate --force`. The tool, when the request named one.
+            const e = row.event;
+            const icon = e.outcome === 'allowed' ? 'check' : e.outcome === 'answered' ? 'check' : 'x';
+            const tone: Tone = e.outcome === 'allowed' ? 'emerald' : e.outcome === 'denied' ? 'bad' : e.outcome === 'cancelled' ? 'muted' : 'default';
+            const main = `${e.outcome}${e.tool ? ` · ${e.tool}` : ''} · ${e.question}`;
+            return { ...base, icon, tone, main, mono: true, kind: 'approval', lane: null };
+        }
 
         case 'unknown':
             // Retained rather than dropped, matching prism-acp's own policy. A protocol

@@ -80,6 +80,12 @@ export type StreamEvent =
     | { kind: 'turn'; n: number; by: string | null }
     | { kind: 'notice'; level: string; message: string }
     /**
+     * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
+     * one parked), never read off the wire. The request itself is state (the parked card) until then; the decision
+     * is history, and the chips row's Approvals count it. `optionId` is the provider's own, verbatim.
+     */
+    | { kind: 'approval'; question: string; tool: string | null; outcome: 'allowed' | 'denied' | 'answered' | 'cancelled'; optionId: string | null }
+    /**
      * A kind Genie does not map yet.
      *
      * RETAINED rather than dropped, matching prism-acp's own `unmapped` policy. A protocol

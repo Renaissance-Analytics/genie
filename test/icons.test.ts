@@ -101,6 +101,7 @@ describe('the icons the ledger chooses at RUNTIME', () => {
             { kind: 'divider', variant: 'compaction', before: null, after: null },
             { kind: 'notice', level: 'warn', message: 'x' },
             { kind: 'unknown', sessionUpdate: 'future_thing', raw: {} },
+            ...(['allowed', 'denied', 'answered', 'cancelled'] as const).map((outcome): StreamEvent => ({ kind: 'approval', question: 'x', tool: 'Bash', outcome, optionId: null })),
             ...['read', 'edit', 'execute', 'search', 'fetch', 'think', 'other', null].map(tool),
         ];
 
