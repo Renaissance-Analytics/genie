@@ -770,6 +770,41 @@ if (!approvalEnabled) {
     check(theme.page !== null && (theme.box === null || (theme.page < 0.5) === (theme.box < 0.5)), '47. the chat composer and the page are on the same side of the theme', `page ${theme.page?.toFixed(2)} composer ${theme.box === null ? '(none open)' : theme.box.toFixed(2)}`);
 }
 
+// 12. THE HEADER ROW (the owner, 2026-10-13: "content covered and not following color theme"). On Windows and Linux the
+// native minimize / maximize / close buttons are drawn over the bar's right end: the bar must keep that space clear, and
+// the buttons must wear the theme's own bar colours — in BOTH themes.
+const chrome = await cdp.evaluate(`(async () => {
+    const wc = window.genie?.windowChrome;
+    const bar = document.querySelector('[data-title-bar]');
+    const chip = document.querySelector('[data-workstation-health]');
+    const inset = Number(bar?.getAttribute('data-controls-inset') ?? 'NaN');
+    return JSON.stringify({ overlay: wc?.overlay === true, inset, chipRight: chip ? chip.getBoundingClientRect().right : null, width: window.innerWidth });
+})()`);
+const ch = JSON.parse(chrome);
+if (ch.overlay) {
+    check(ch.inset > 0, '48. the bar measures the space the native window buttons take', `inset ${ch.inset}px`);
+    check(ch.chipRight !== null && ch.chipRight <= ch.width - ch.inset + 1, '49. nothing sits under the native window buttons (the workstation chip ends before them)', `chip right ${ch.chipRight?.toFixed?.(0)} / clear from ${ch.width - ch.inset}`);
+    const themed = await cdp.evaluate(`(async () => {
+        const hex = (v) => { const c = document.createElement('canvas'); c.width = c.height = 1; const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillStyle = v.trim(); x.fillRect(0, 0, 1, 1); const [r, g, b] = x.getImageData(0, 0, 1, 1).data; return '#' + [r, g, b].map((n) => n.toString(16).padStart(2, '0')).join(''); };
+        const want = () => hex(getComputedStyle(document.documentElement).getPropertyValue('--bg-1'));
+        const settle = async (expected) => { for (let i = 0; i < 40; i += 1) { const cur = await window.genie.windowChrome.current(); if (cur && cur.color === expected) return cur.color; await new Promise((r) => setTimeout(r, 100)); } const cur = await window.genie.windowChrome.current(); return cur ? cur.color : null; };
+        const html = document.documentElement;
+        const startDark = html.classList.contains('dark');
+        const first = { want: want(), got: await settle(want()) };
+        html.classList.toggle('dark');
+        const flipped = { want: want(), got: await settle(want()) };
+        html.classList.toggle('dark', startDark);
+        const back = { want: want(), got: await settle(want()) };
+        return JSON.stringify({ first, flipped, back });
+    })()`);
+    const t = JSON.parse(themed);
+    check(t.first.got === t.first.want && t.flipped.got === t.flipped.want && t.back.got === t.back.want && t.first.want !== t.flipped.want,
+        '50. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
+        `first ${t.first.got}/${t.first.want} · flipped ${t.flipped.got}/${t.flipped.want} · back ${t.back.got}/${t.back.want}`);
+} else {
+    console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');

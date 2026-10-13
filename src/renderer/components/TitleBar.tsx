@@ -50,6 +50,8 @@ export interface TitleBarProps {
     remote?: { host: string; driver: string | null; driving: boolean; locked: boolean } | null | undefined;
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
+    /** The width the native window buttons take at the right, measured (core/window.ts `controlsInset`); 0 = none. */
+    controlsInset?: number | undefined;
     /** The update, from `available` on (core/update-chip.ts); absent = nothing to act on. */
     update?: UpdateChip | null | undefined;
     /** Its next step: download, or restart to install. */
@@ -61,7 +63,7 @@ export interface TitleBarProps {
     platform?: FancyPlatform | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, update, onUpdateAction }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -97,7 +99,9 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             // opts out below. The right padding is the width of the native window buttons the overlay
             // draws there on Windows/Linux — zero where there is no overlay.
             className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 [-webkit-app-region:drag]"
-            style={{ paddingRight: 'calc(100% - env(titlebar-area-width, 100%))' }}
+            // The measured space the native buttons take, plus the bar's own padding: nothing sits under them.
+            data-controls-inset={controlsInset}
+            style={{ paddingRight: `calc(${controlsInset}px + 10px)` }}
         >
             {/* The mark is a button, not an ornament: clicking it lands on the Dashboard. */}
             <button

@@ -5,6 +5,7 @@ import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNot
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
 import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
+import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
@@ -134,6 +135,8 @@ export interface ShellProps {
     onFilesDirtyChange?: ((dirty: boolean) => void) | undefined;
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
+    /** The native window buttons over the title bar (their space and colours); absent in a browser or on a phone. */
+    windowChrome?: GenieBridge['windowChrome'];
     onTakeOver?: ((agentId: string) => void) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
     onRestartAgent?: ((agentId: string) => void) | undefined;
@@ -214,6 +217,7 @@ export function Shell({
     onDismissDockNotice,
     onFilesDirtyChange,
     updates = NO_UPDATES,
+    windowChrome,
     onTakeOver,
     onRestartAgent,
     onStopAgent,
@@ -245,6 +249,9 @@ export function Shell({
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
+    // The native window buttons: the space they take, and the theme's colours on them (the owner: content covered, wrong colours).
+    const controlsInset = useControlsInset(windowChrome?.overlay === true);
+    useOverlayColors(windowChrome);
     // The AgentInbox composer's picked files (§6.4): held here, cleared after a send.
     const [attachments, setAttachments] = useState<readonly string[]>([]);
     const inboxCompose = pickFiles
@@ -314,6 +321,7 @@ export function Shell({
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <TitleBar
                 route={route}
+                controlsInset={controlsInset}
                 workstation={snapshot.workstation}
                 remote={remote}
                 onNavigate={onNavigate}

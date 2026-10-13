@@ -26,7 +26,9 @@ describe('TitleBar drag region', () => {
         }
     });
 
-    it('leaves room on the right for the native window controls the overlay draws', () => {
-        expect(html).toMatch(/data-title-bar[^>]*style="[^"]*padding-right:\s*calc\(100% - env\(titlebar-area-width,\s*100%\)\)/);
+    it('leaves room on the right for the native window controls the overlay draws — the MEASURED width (window-chrome-theme.test)', () => {
+        // env(titlebar-area-width) resolved to nothing in a real window (the owner's screenshot, 2026-10-13); the bar now
+        // takes the measured inset as pixels. With none given it keeps only its own padding.
+        expect(html).toMatch(/data-title-bar[^>]*style="[^"]*padding-right:\s*calc\(0px \+ 10px\)/);
     });
 });

@@ -186,6 +186,14 @@ const bridge: GenieBridge = {
         pickFiles: () => ipcRenderer.invoke(FEATURE_CHANNELS.pickFiles) as Promise<string[]>,
     },
 
+    // The window's native buttons (Windows / Linux): their space and their colours (the owner: "content covered and
+    // not following color theme").
+    windowChrome: {
+        overlay: process.platform !== 'darwin',
+        setOverlayColors: (color: string, symbolColor: string) => ipcRenderer.invoke('genie:window-overlay-colors', color, symbolColor) as Promise<boolean>,
+        current: () => ipcRenderer.invoke('genie:window-overlay-colors-current') as Promise<{ color: string; symbolColor: string } | null>,
+    },
+
     updates: {
         state: () => ipcRenderer.invoke('genie:updates-state') as Promise<UpdateState>,
         subscribe: (onChange) => {

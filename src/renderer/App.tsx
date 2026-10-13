@@ -834,6 +834,7 @@ function DesktopApp({ bridge }: AppProps) {
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
+            windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
