@@ -58,3 +58,8 @@ export function pauseMessage(path: string): string {
 export function resumeMessage(path: string): string {
     return `Genie: ${path} is saved on the person's side; you may write to it again.`;
 }
+
+/** Sent once to the known writer when your save meets its write (§4.3): the conflict, and to leave the file alone. */
+export function conflictMessage(path: string): string {
+    return `Genie: ${path} is in conflict — a person had unsaved edits there when you wrote it. Their version is kept as a draft. Do not write to ${path} until they say so; your other work can continue.`;
+}

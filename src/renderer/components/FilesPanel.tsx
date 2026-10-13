@@ -2,7 +2,8 @@ import { Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy'
 import { FileViewer } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
 import { fileCrumb, statusBarFor } from '../../core/files-panel.js';
-import { conflictWords } from '../../core/conflict-words.js';
+import { FancyDiff } from '@particle-academy/fancy-diff';
+import { conflictBody, conflictHunks, conflictWords, takeLabel } from '../../core/conflict-words.js';
 import type { Pause } from '../../core/files-popout.js';
 
 /**
@@ -32,7 +33,11 @@ export interface FilesEdit {
     readonly onSave: () => void;
     readonly onKeepMine: () => void;
     readonly onTakeTheirs: () => void;
-    readonly onMerge: () => void;
+    /** The agent Genie TOLD about this conflict (and holds paused), or `null` — the banner says so only then. */
+    readonly told?: string | null | undefined;
+    /** `Compare` is open: your buffer against the disk, in the kit's diff. */
+    readonly comparing?: boolean | undefined;
+    readonly onCompare?: (() => void) | undefined;
 }
 
 export interface FilesPanelProps {
@@ -73,11 +78,13 @@ type Tone = 'writing' | 'changed' | 'unreported';
 /** `14:08`, in the viewer's locale — the changed row's time column. */
 const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
-function StatusBar({ path, text, activity }: { path: string; text: string; activity: readonly Activity[] }) {
+function StatusBar({ path, text, activity, hunks = null }: { path: string; text: string; activity: readonly Activity[]; hunks?: number | null }) {
     const bar = statusBarFor(path, text, activity);
+    // In conflict, the board's last segment: `conflict · 1 hunk`, counted from your buffer against the disk.
+    const conflict = hunks === null ? '' : ` · conflict · ${hunks} ${hunks === 1 ? 'hunk' : 'hunks'}`;
     return (
         <div data-file-status={path} className="flex shrink-0 items-center border-t border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
-            {`${bar.language} · ${bar.eol} · ${bar.encoding} · ${bar.presence}`}
+            {`${bar.language} · ${bar.eol} · ${bar.encoding} · ${bar.presence}${conflict}`}
         </div>
     );
 }
@@ -214,20 +221,30 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         ) : null}
                     </div>
                     {edit?.conflict ? (
-                        <div data-conflict={edit.conflict.path} className="m-3 rounded-lg border border-[var(--warning)] p-3 text-sm">
+                        <div data-conflict={edit.conflict.path} data-tone="bad" className="m-3 rounded-lg border border-[var(--danger)] p-3 text-sm">
+                          <div className="flex items-start gap-2">
+                            <span data-conflict-icon="git-merge" className="mt-0.5 text-[var(--danger)]"><Icon name="git-merge" size="sm" /></span>
+                            <div className="min-w-0 flex-1">
                             {/* THE BOARD'S WORDS: which lines they changed and which you did, from a real diff against the text as opened; the author only when an agent is writing this file. */}
                             {edit.conflict.baseline !== undefined && open?.ok ? (
                                 <p data-conflict-words="" className="font-medium">{conflictWords(edit.conflict.baseline, open.text, edit.conflict.onDisk, state?.activity.find((a) => a.verb === 'writing' && a.path === edit.conflict!.path)?.agent ?? null)}</p>
                             ) : (
                                 <p className="font-medium">{edit.conflict.path} changed on disk while you were editing it.</p>
                             )}
-                            <p className="mt-1 text-[var(--fg-3)]">Nothing is discarded: your buffer is still here, and the disk's version is below the choices.</p>
+                            <p className="mt-1 text-[var(--fg-3)]">{conflictBody(edit.told ?? null)}</p>
                             <div className="mt-2 flex gap-2">
-                                <button type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">keep mine</button>
-                                <button type="button" data-action="take-theirs" onClick={edit.onTakeTheirs} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">take theirs</button>
-                                <button type="button" data-action="merge" onClick={edit.onMerge} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">merge ▾</button>
+                                <button type="button" data-action="compare" aria-pressed={edit.comparing === true} onClick={() => edit.onCompare?.()} className="rounded-md border border-[var(--primary)] bg-[var(--primary)] px-2 py-0.5 text-xs text-white hover:opacity-90">Compare</button>
+                                <button type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Keep mine</button>
+                                <button type="button" data-action="take-theirs" onClick={edit.onTakeTheirs} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{takeLabel(state?.activity.find((a) => a.verb === 'writing' && a.path === edit.conflict!.path)?.agent ?? null)}</button>
                             </div>
-                            <pre className="mt-2 max-h-40 overflow-auto rounded bg-[var(--bg-1)] p-2 font-mono text-[11px]">{edit.conflict.onDisk}</pre>
+                            </div>
+                          </div>
+                            {/* Compare: your buffer (before) against the disk (after), in the kit's diff — read-only, nothing is written. */}
+                            {edit.comparing && open?.ok ? (
+                                <div data-conflict-compare={edit.conflict.path} className="mt-2 max-h-80 overflow-auto rounded border border-[var(--border-1)]">
+                                    <FancyDiff source={{ before: open.text, after: edit.conflict.onDisk }} variant="compare" mode="inline" />
+                                </div>
+                            ) : null}
                         </div>
                     ) : null}
                     <div className="min-h-0 flex-1 overflow-auto">
@@ -252,7 +269,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                     <FileViewer filename={open.path} value={open.text} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} theme="auto" />
                                 </div>
                                 {/* THE STATUS BAR (the board): language · line ending · encoding · who is in the file. No cursor position — the viewer reports none. */}
-                                <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} />
+                                <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} />
                             </div>
                         ) : (
                             <div data-tab-error className="m-4 rounded-lg border border-[var(--danger)] p-3 text-sm">
