@@ -1,3 +1,4 @@
+import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
@@ -140,7 +141,41 @@ function DeliveryCell({ delivery }: { delivery: Delivery | null }) {
 }
 
 /** The 32px agent row. */
-function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; onOpen: (id: string) => void; onFix?: ((route: FixRoute) => void) | undefined; focused?: boolean | undefined }) {
+/**
+ * The collaborator reveal's lanes in a line's left gutter (§4.1): one per peer, solid violet for a live link, dashed
+ * `--fg-4` when quiet; a tick into the row at each end. Purely drawn — nothing here is a control.
+ */
+function Lanes({ segments }: { segments: readonly LaneSegment[] | undefined }) {
+    if (!segments || segments.length === 0) return null;
+    return (
+        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-7">
+            {segments.map((s) => {
+                const x = 5 + s.lane * 5;
+                const stroke = s.live ? '2px solid var(--violet-400)' : '2px dashed var(--fg-4)';
+                return (
+                    <span key={s.lane} data-lane={s.lane} data-part={s.part} data-live={String(s.live)}>
+                        <span className="absolute" style={{ left: x, top: s.part === 'start' ? '50%' : 0, bottom: s.part === 'end' ? '50%' : 0, borderLeft: stroke }} />
+                        {s.part === 'mid' ? null : <span className="absolute" style={{ left: x, right: 2, top: '50%', borderTop: stroke }} />}
+                    </span>
+                );
+            })}
+        </span>
+    );
+}
+
+function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lanes, onReveal }: {
+    row: AgentRow;
+    onOpen: (id: string) => void;
+    onFix?: ((route: FixRoute) => void) | undefined;
+    focused?: boolean | undefined;
+    /** The board's collaborator reveal, when one is shown. */
+    reveal?: Reveal | null | undefined;
+    lanes?: readonly LaneSegment[] | undefined;
+    /** Hovering the comms cell reveals this row's collaborators; leaving it ends the reveal. */
+    onReveal?: ((id: string | null) => void) | undefined;
+}) {
+    const role = reveal ? (reveal.focus === row.id ? 'focus' : reveal.peers[row.id] ? 'peer' : 'dim') : null;
+    const peerLink = role === 'peer' ? reveal!.peers[row.id]! : null;
     const status = statusOf(row);
     const target = targetOf(row);
     const comms = commsOf(row);
@@ -153,9 +188,13 @@ function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; 
             data-agent={row.id}
             data-state={row.state}
             {...(focused ? { 'data-focused': 'true' } : {})}
+            {...(role ? { 'data-reveal': role } : {})}
             onClick={() => onOpen(row.id)}
-            className={`${GRID} h-8 items-center border-b border-[var(--border-1)] text-[13px] hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
+            className={`${GRID} relative h-8 items-center border-b border-[var(--border-1)] text-[13px] transition-opacity hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
+            // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
+            {...(role === 'dim' ? { style: { opacity: 0.32 } } : role ? { style: { boxShadow: 'inset 2px 0 0 var(--violet-400)' } } : {})}
         >
+            <Lanes segments={lanes} />
             <div className="flex min-w-0 items-center gap-2">
                 <FidelityDot fidelity={row.fidelity} state={row.state} />
                 <span className="truncate font-medium">{row.name}</span>
@@ -220,8 +259,14 @@ function AgentRowView({ row, onOpen, onFix, focused = false }: { row: AgentRow; 
              * passed. Violet overrides the component's generic emerald ramp because the board
              * specifies violet for comms, and `tailwind-merge` resolves the later class.
              */}
-            <div className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]">
-                {comms ? (
+            <div
+                className="flex items-center gap-1.5 text-xs text-[var(--fg-2)]"
+                {...(comms && comms.count > 0 && onReveal ? { onMouseEnter: () => onReveal(row.id), onMouseLeave: () => onReveal(null) } : {})}
+            >
+                {peerLink ? (
+                    // A peer in the reveal: its link to the focused row — messages · age of the newest.
+                    <span data-peer-link={row.id} className="font-mono text-[11px] text-[var(--violet-400)]">{`↔ ${peerLink.count} · ${ageLabel(peerLink.ageSeconds)}`}</span>
+                ) : comms ? (
                     <>
                         <Icon name="users" size="sm" className="shrink-0 text-[var(--fg-4)]" />
                         <span className="font-mono tabular-nums">{comms.count}</span>
@@ -264,6 +309,7 @@ function GroupHeader({
     onAddAgent,
     onOpenWorkspace,
     onLocateRepo,
+    lanes,
 }: {
     group: WorkspaceGroup;
     /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
@@ -272,10 +318,12 @@ function GroupHeader({
     onAddAgent: (workspaceId: string) => void;
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    lanes?: readonly LaneSegment[] | undefined;
 }) {
     return (
         <>
-            <div className="flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+            <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                <Lanes segments={lanes} />
                 <span className="font-semibold">{name}</span>
                 <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
@@ -354,9 +402,11 @@ export interface DashboardProps {
     onChat?: (() => void) | undefined;
     /** The row cursor (`J`/`K`), controlled — for tests that render server-side. Otherwise the board keeps its own. */
     focusedId?: string | null | undefined;
+    /** The collaborator reveal's row, controlled — for server-side tests. Otherwise hover and `C` drive the board's own. */
+    revealId?: string | null | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -367,6 +417,9 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
     // unbound here — the Dashboard resolves nothing. The keys are decided in `core/keys.ts`; letters never act while typing.
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;
+    // THE COLLABORATOR REVEAL (§4.1): hover a comms cell, or `C` on the cursor row; in the table, never a popover.
+    const [ownReveal, setOwnReveal] = useState<string | null>(null);
+    const reveal = revealOf(rows, revealId ?? ownReveal);
     const statusGroupsForOrder = groupByStatus(rows);
     const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : groups.flatMap((g) => g.rows.map((r) => r.id));
     useEffect(() => {
@@ -378,11 +431,17 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
             else if (action === 'prev-row') setOwnFocus(stepFocus(visibleIds, focused, -1));
             else if (action === 'open') { if (focused !== null && visibleIds.includes(focused)) onOpenAgent(focused); }
             else if (action === 'cycle-group') onGroup?.(group === 'workspace' ? 'status' : 'workspace');
+            else if (action === 'reveal') setOwnReveal((r) => (r !== null || focused === null ? null : focused));
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [visibleIds, focused, onOpenAgent, onGroup, group]);
     const statusGroups = groupByStatus(rows);
+    // The board's lines in document order (rows and group headers), for the reveal's lanes.
+    const lines = group === 'status'
+        ? statusGroups.flatMap((g) => [`head:${g.state}`, ...g.rows.map((r) => r.id)])
+        : groups.flatMap((g) => [`head:${g.workspaceId}`, ...g.rows.map((r) => r.id)]);
+    const lanes = reveal ? lanesFor(lines, reveal) : null;
     const chips = summaryChips(rows);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
     // The rail's rule: the envelope's name, else the folder, never the id when a name is known.
@@ -525,22 +584,23 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 <div data-group-by="status">
                     {statusGroups.map((g) => (
                         <div key={g.state} data-status-group={g.state}>
-                            <div className="flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                            <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                                <Lanes segments={lanes?.[`head:${g.state}`]} />
                                 <span className={`mr-2 size-2 rounded-full ${CHIP_DOT[g.state]}`} />
                                 <span className="font-semibold">{g.label}</span>
                                 <span className="ml-2.5 text-[var(--fg-3)]">{g.rows.length} {g.rows.length === 1 ? 'agent' : 'agents'}</span>
                             </div>
                             {g.rows.map((row) => (
-                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} />
+                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
                             ))}
                         </div>
                     ))}
                 </div>
             ) : groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} />
+                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
-                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} />
+                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
                     ))}
                 </div>
             ))}
