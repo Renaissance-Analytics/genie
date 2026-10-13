@@ -24,7 +24,8 @@ import type { TimedEvent } from './stream-view.js';
  * marks its OWN undelivered drafts separately (that is the next row).
  */
 
-export type ChatWho = 'you' | 'agent' | 'peer';
+/** `system`: the agent's AgentInbox mail with another agent — one line in its thread, `atlas → wren · <subject>`. */
+export type ChatWho = 'you' | 'agent' | 'peer' | 'system';
 
 export interface ChatMessage {
     id: string;
@@ -73,6 +74,8 @@ export interface ChatDetail {
     agent: { id: string; name: string; provider: string; fidelity: Fidelity };
     session: LiveSession | null;
     rows: readonly TimedEvent[];
+    /** The agent's AgentInbox mail (both directions); absent or `null` = not read, which adds no rows. */
+    comms?: readonly MailLike[] | null | undefined;
 }
 
 export function chatContext(detail: ChatDetail): ChatContext {
@@ -114,7 +117,7 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         name: detail?.agent.name ?? row?.name ?? subjectId,
         fidelity: detail?.agent.fidelity ?? row?.fidelity ?? 'declared',
         unread: null,
-        messages: detail ? chatMessages(detail) : [],
+        messages: detail ? byTime(chatMessages(detail), commsRows(detail, rows)) : [],
         context: detail ? chatContext(detail) : null,
         chips: chatChips(rows, subjectId),
     };
@@ -145,6 +148,42 @@ export function chatThreads(agents: readonly AgentRow[], opened: readonly string
 export function rememberThread(opened: readonly string[], id: string): string[] {
     if (id === GENIE) return [...opened];
     return [id, ...opened.filter((x) => x !== id)].slice(0, KEPT);
+}
+
+/** A line of a message as a row's subject: the first line, trimmed, capped. */
+function subjectOf(text: string): string {
+    const line = text.split('\n')[0]!.trim();
+    return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+
+/**
+ * The agent's mail with ANOTHER agent, as system rows (the board: `atlas → wren · drop challenges table from
+ * migration`). Mail with the person is the conversation itself, not a row about it; mail between two other agents
+ * is not this agent's.
+ */
+function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[] {
+    if (!detail.comms) return [];
+    const self = detail.agent.id;
+    const name = (id: string): string => (id === self ? detail.agent.name : rows.find((r) => r.id === id)?.name ?? id);
+    return detail.comms
+        .filter((m) => m.from !== 'human' && m.to !== 'human' && (m.from === self || m.to === self))
+        .map((m) => {
+            const at = Date.parse(m.sentAt);
+            const line = `${name(m.from)} → ${name(m.to)}`;
+            return { id: m.id, who: 'system' as const, from: line, text: `${line} · ${subjectOf(m.text)}`, delivered: true, at: Number.isNaN(at) ? null : at };
+        });
+}
+
+/** The system rows placed among the messages by when they were sent; a message with no time keeps its place. */
+function byTime(messages: readonly ChatMessage[], system: readonly ChatMessage[]): ChatMessage[] {
+    if (system.length === 0) return [...messages];
+    const pending = [...system].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+    const out: ChatMessage[] = [];
+    for (const m of messages) {
+        if (m.at !== null) while (pending.length > 0 && (pending[0]!.at ?? Infinity) <= m.at) out.push(pending.shift()!);
+        out.push(m);
+    }
+    return [...out, ...pending];
 }
 
 /** The fields of an inbox message the observed thread reads (`main/inbox-store.ts`'s `InboxMessage`). */

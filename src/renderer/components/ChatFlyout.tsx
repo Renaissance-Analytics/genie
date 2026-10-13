@@ -207,6 +207,15 @@ export function ChatFlyout({
                 {thread?.messages.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                     const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
+                    // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
+                    if (who === 'system') {
+                        return (
+                            <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                                <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
+                                <span>{m.text}</span>
+                            </div>
+                        );
+                    }
                     return who === 'you' ? (
                         <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
