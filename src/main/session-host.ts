@@ -1,3 +1,4 @@
+import type { McpServer } from '@particle-academy/prism-acp';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
@@ -51,7 +52,8 @@ import { sessionsDir } from './paths.js';
  */
 
 /** Injected so a test can run this host without spawning a provider CLI. */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null) => SessionDriverFactory | null;
+/** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[] }) => SessionDriverFactory | null;
 
 /**
  * The real factory: one driver per provider, and `null` for anything else.
@@ -127,17 +129,18 @@ export function driverEvents(events: DriverEvents): {
     };
 }
 
-export const realDriverFor: DriverFor = (record, cwd, resumeSessionId) => {
+export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
+    const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     const configured = providerBinary(record.provider);
     const binary = configured ? { binary: configured } : {};
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ cwd, ...resume, ...binary }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ cwd, ...resume, ...binary, ...mcp }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ cwd, ...resume, ...binary }, driverEvents(options.events));
+            return (options) => new CodexDriver({ cwd, ...resume, ...binary, ...mcp }, driverEvents(options.events));
 
         default:
             return null;
@@ -156,6 +159,7 @@ interface Running {
 export class SessionHost {
     readonly #userData: string;
     readonly #driverFor: DriverFor;
+    readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #clock: () => number;
     readonly #running = new Map<AgentId, Running>();
     #listeners = new Set<(agentId: AgentId) => void>();
@@ -206,6 +210,11 @@ export class SessionHost {
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
         /**
+         * The MCP servers an agent's session starts with — Genie's own, carrying that agent's caller key. Late-bound:
+         * the MCP server starts after the host. Absent = none.
+         */
+        mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        /**
          * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
          * cell and the collaborator reveal (core/comms.ts). Late-bound: the inbox exists after the host. Absent or
          * `null` = not measured, and the cell stays blank rather than claiming nobody.
@@ -214,6 +223,7 @@ export class SessionHost {
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
+        this.#mcpServersFor = options.mcpServersFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
         this.#onThreadId = options.onThreadId;
@@ -241,7 +251,7 @@ export class SessionHost {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
 
-        const driverFactory = this.#driverFor(record, cwd, record.threadId);
+        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers: this.#mcpServersFor?.(record) ?? [] });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
