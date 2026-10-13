@@ -233,12 +233,14 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
  * orphaned by v1's dead pty host, caddy site servers, php, node — because §7.2's teardown stops
  * what runs from the install directory and v1's runtime lives under userData. The rule is
  * core/v1-reap.ts; this applies it, pid by pid, and writes what it did to `~/.genie/v1-reap.json`.
- * Runs at every boot: it matches only v1's binaries and shells nobody is attached to.
+ * Runs at every boot for v1's runtime binaries (provable by path). Orphaned INTERACTIVE shells are taken only on the boot
+ * that imports Genie 1 — at any other boot an orphaned shell is somebody's background work: on 2026-10-13 this killed two
+ * of the owner's running scripts.
  */
-async function reapV1Runtime(): Promise<void> {
+async function reapV1Runtime(includeShells: boolean): Promise<void> {
     const userData = app.getPath('userData');
     const roots = ['runtime', 'toolchain', 'pty-host'].map((d) => join(userData, d));
-    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid });
+    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid, includeShells });
     if (victims.length === 0) return;
     const killed = victims.filter((v) => killProcess(v.pid));
     const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
@@ -435,8 +437,10 @@ async function boot(): Promise<void> {
             write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileText(p, text, 'utf8'); },
         },
     }).catch((error: unknown) => { console.error(`[genie] the OSA's home could not be written: ${(error as Error).message}`); });
+    // The boot that imports Genie 1 is the one whose pty host just died — the only boot its orphaned shells are reaped.
+    const importBoot = !existsSync(join(genieHome(), 'v1-import.json'));
     await importFromV1(theRegistry);
-    await reapV1Runtime();
+    await reapV1Runtime(importBoot);
     registry.setProbe((id) => host?.probe(id) ?? null);
 
     /*

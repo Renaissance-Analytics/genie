@@ -7,7 +7,7 @@ import type { RunningProcess } from '../src/main/upgrade.js';
  * running: shells orphaned by v1's dead pty host, caddy site servers, php, node — all from
  * `%APPDATA%\genie\{runtime,toolchain}` or Git's bash. The rule is pure; every claim has a control.
  */
-const p = (pid: number, executable: string, parentPid: number | null): RunningProcess => ({ pid, executable, parentPid });
+const p = (pid: number, executable: string, parentPid: number | null, commandLine: string | null = null): RunningProcess => ({ pid, executable, parentPid, commandLine });
 const roots = ['C:\\Users\\u\\AppData\\Roaming\\genie\\runtime', 'C:\\Users\\u\\AppData\\Roaming\\genie\\toolchain', 'C:\\Users\\u\\AppData\\Roaming\\genie\\pty-host'];
 
 const processes: RunningProcess[] = [
@@ -19,7 +19,7 @@ const processes: RunningProcess[] = [
     // v1's runtime, orphaned (pty host 17280 is dead)
     p(300, 'C:\\Users\\u\\AppData\\Roaming\\genie\\runtime\\20.20.2-win32-x64-caddy2.9.1\\caddy.exe', 17280),
     p(301, 'c:\\users\\u\\appdata\\roaming\\GENIE\\toolchain\\php\\8.4.24\\php.exe', 17281),
-    p(302, 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', 17280), // v1 terminal shell, orphaned
+    p(302, 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', 17280, '\"C:\\Program Files\\Git\\usr\\bin\\bash.exe\" --login -i'), // v1 terminal shell (interactive), orphaned
     p(303, 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', 302), // its child shell
     p(304, 'C:\\Windows\\System32\\conhost.exe', 303), // grandchild
     p(305, 'C:\\Users\\u\\.claude\\claude.exe', 303), // an agent TUI inside the dead terminal
@@ -33,7 +33,8 @@ const processes: RunningProcess[] = [
 ];
 
 describe('v1Leftovers', () => {
-    const victims = v1Leftovers(processes, { roots, selfPid: 200 });
+    // The boot that imports Genie 1 — the only one that takes orphaned shells (v1-reap-scripts.test).
+    const victims = v1Leftovers(processes, { roots, selfPid: 200, includeShells: true });
     const pids = victims.map((v) => v.pid).sort((a, b) => a - b);
 
     it('takes v1 runtime binaries (case-insensitively), orphaned shells, and every descendant — with the reason each', () => {
@@ -52,12 +53,12 @@ describe('v1Leftovers', () => {
 
     it('CONTROL: with nothing of v1 running and no orphans, the list is empty — the rule does not invent victims', () => {
         const clean = processes.filter((x) => x.pid < 300 || x.pid >= 400);
-        expect(v1Leftovers(clean, { roots, selfPid: 200 })).toEqual([]);
+        expect(v1Leftovers(clean, { roots, selfPid: 200, includeShells: true })).toEqual([]);
     });
 
     it("Genie 2's own ancestry is protected even when it is a shell with a dead parent (a crashed launcher)", () => {
         const odd = [...processes, p(500, 'C:\\Program Files\\Git\\usr\\bin\\bash.exe', 99999), p(501, 'C:\\Users\\u\\AppData\\Local\\Programs\\Genie\\Genie.exe', 500)];
-        const v = v1Leftovers(odd, { roots, selfPid: 501 }).map((x) => x.pid);
+        const v = v1Leftovers(odd, { roots, selfPid: 501, includeShells: true }).map((x) => x.pid);
         expect(v).not.toContain(500);
         expect(v).not.toContain(501);
     });

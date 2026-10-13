@@ -28,6 +28,8 @@ export interface RunningProcess {
     executable: string;
     /** The parent's pid, or `null` when the lister could not tell. */
     parentPid: number | null;
+    /** The full command line, or `null` / absent when the lister could not read it — never guessed. */
+    commandLine?: string | null;
 }
 
 /**
