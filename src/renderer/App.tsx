@@ -9,7 +9,7 @@ import { pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatThreadFrom, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatSendFor, chatThreadFrom, observedMail, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -614,11 +614,21 @@ function DesktopApp({ bridge }: AppProps) {
      */
     const chatSubject = parsed.chat;
     // The thread is DERIVED (`core/chat-view.ts`): the subject's message events with their speakers, the context
-    // line, the workspace's chips. `unread` stays `null` — nothing reads it yet, and `0` would claim you are up to date.
+    // line, the workspace's chips. A declared agent's `unread` stays `null` — nothing reads it yet, and `0` would claim
+    // you are up to date. An observed agent's thread IS its inbox thread (`observedMail`), with the inbox's own count.
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
     // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
     const send = (agentId: string, text: string): void => {
+        // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
+        const row = snapshot.agents.find((r) => r.id === agentId);
+        const route = row ? chatSendFor(row) : { kind: 'prompt' as const };
+        if (route.kind === 'inbox') {
+            void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: route.to, text }).then(setFeatures).catch((error: unknown) => {
+                console.error('[genie] mail not sent:', (error as Error).message);
+            });
+            return;
+        }
         void resolvedBridge?.prompt(agentId, text).then((r) => {
             if (!r.ok) setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now() }]);
         });
@@ -631,7 +641,10 @@ function DesktopApp({ bridge }: AppProps) {
             return resolvedBridge.prompt(draft.agentId, draft.text).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
         });
     };
-    const chatThread: ChatThread | null = chatSubject === null ? null : withDrafts(chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now), drafts);
+    const chatBase = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
+    const chatThread: ChatThread | null = chatBase === null
+        ? null
+        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts);
 
     // A route this build cannot serve goes home rather than leaving a blank body under a
     // stale address — the one state a person cannot get out of without knowing a shortcut.

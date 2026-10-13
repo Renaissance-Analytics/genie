@@ -14,7 +14,7 @@ describe('the observed fact card', () => {
     it('names the agent and says what the chat is, above the thread, beside the mail-only chip', () => {
         const html = render({ agentId: 'kora', name: 'kora', fidelity: 'observed', unread: null, messages: [] });
         expect(html).toMatch(/data-chat-fact="observed"[^>]*>kora runs in a terminal\. What you send here lands in its inbox/);
-        expect(html).toContain('Replies are not shown');
+        expect(html).toContain('mail it sends you shows here. Its replies in the terminal are not shown');
         expect(html).toContain('data-chat-chip="mail-only"');
     });
 

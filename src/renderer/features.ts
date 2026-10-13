@@ -108,7 +108,7 @@ export interface FeatureData {
     readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
     readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
-    readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[] } | null;
+    readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     readonly browser: { url: string | null; routes: readonly GenRoute[] };
     readonly remote: RemoteSection | null;

@@ -103,6 +103,7 @@ export class InboxStore {
     #mail: MailFile;
     readonly #waiters = new Set<Waiter>();
     readonly #sendListeners = new Set<(to: Participant) => void>();
+    readonly #readListeners = new Set<(reader: Participant) => void>();
     readonly #now: () => string;
 
     private constructor(dir: string, mail: MailFile, now: () => string) {
@@ -129,6 +130,17 @@ export class InboxStore {
     onSend(listener: (to: Participant) => void): () => void {
         this.#sendListeners.add(listener);
         return () => { this.#sendListeners.delete(listener); };
+    }
+
+    /** A receive acknowledged mail — `reader` read it. What a sender's read receipts change on (nothing polls). */
+    onRead(listener: (reader: Participant) => void): () => void {
+        this.#readListeners.add(listener);
+        return () => { this.#readListeners.delete(listener); };
+    }
+
+    /** Mail to or from `participant`, oldest first, the newest `limit` — a conversation's raw material. */
+    involving(participant: Participant, limit = 200): InboxMessage[] {
+        return this.#mail.messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
     }
 
     async send(input: SendInput): Promise<InboxMessage> {
@@ -175,6 +187,7 @@ export class InboxStore {
             );
             await this.#flush();
             page = page.map((m) => this.#mail.messages.find((x) => x.seq === m.seq)!);
+            for (const l of this.#readListeners) l(participant);
         }
 
         return { messages: page, cursor: this.#cursorOf(participant) };

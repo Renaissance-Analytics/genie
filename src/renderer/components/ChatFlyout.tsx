@@ -40,7 +40,7 @@ export interface ChatThread {
     /** `null` when the count could not be read — never `0`, which claims you are up to date. */
     unread: number | null;
     /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
-    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at'>>)[];
+    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read'>>)[];
     /** The line under the chips — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
     /** The agents sharing the subject's workspace, the subject active; absent or empty = no chips row. */
@@ -189,7 +189,7 @@ export function ChatFlyout({
                     empty transcript, which would read as an agent ignoring you. */}
                 {mailOnly && thread ? (
                     <div data-chat-fact="observed" className="mx-3 mb-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[12px] leading-normal text-[var(--fg-3)]">
-                        {thread.name} runs in a terminal. What you send here lands in its inbox, which it reads when its TUI asks. Replies are not shown — that TUI does not report them.
+                        {thread.name} runs in a terminal. What you send here lands in its inbox, which it reads when its TUI asks, and mail it sends you shows here. Its replies in the terminal are not shown — that TUI does not report them.
                     </div>
                 ) : null}
                 {thread?.messages.map((m) => {
@@ -205,6 +205,10 @@ export function ChatFlyout({
                              * showing it as sent is worse — they would wait for an answer that
                              * cannot come.
                              */}
+                            {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
+                            {mailOnly && m.read !== undefined ? (
+                                <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
+                            ) : null}
                             {m.delivered ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     <span className="text-[12px] text-[var(--danger)]">Not delivered. {thread?.name ?? 'the agent'} is not running.</span>

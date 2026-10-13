@@ -12,6 +12,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 const inbox: NonNullable<FeatureData['inbox']> = {
     unread: [{ seq: 1, id: 'msg_1', from: 'agent_a', to: 'human', text: 'done, see the diff', sentAt: 't', readAt: null, attachments: [{ id: 'att_1', name: 'diff.patch', size: 2048, sha256: 'abc' }] }] as never,
     peers: [{ address: 'claude:atlas', name: 'atlas', reachable: true }, { address: 'codex:bolt', name: 'bolt', reachable: false }],
+    recent: [],
 };
 const render = (compose?: { attachments: readonly string[]; onPick: () => void; onRemove: (path: string) => void }) =>
     renderToStaticMarkup(<InboxSurface data={{ ...EMPTY_FEATURES, inbox }} onAction={() => {}} onNavigate={() => {}} {...(compose ? { compose } : {})} />);

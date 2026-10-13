@@ -1070,6 +1070,10 @@ async function boot(): Promise<void> {
         }
     };
     composed.inbox.onSend((to) => { if (to !== 'human') remind(to); });
+    // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
+    // push it, so a reply or a "read 14:07" lands without anyone polling.
+    composed.inbox.onSend(() => { pushFeatures(); });
+    composed.inbox.onRead(() => { pushFeatures(); });
     host.subscribe((agentId) => remind(agentId));
     const featurePorts: FeaturePorts = {
         toolchain: {
