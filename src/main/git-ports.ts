@@ -24,6 +24,19 @@ export interface GitCommit { sha: string; subject: string; author: string; at: n
 export type GitFileState = 'committed' | 'modified' | 'untracked';
 
 /**
+ * A file's text as of the last commit of its OWN repository (`git show HEAD:./<name>` in its folder), or `null` —
+ * not committed, not a repository, no commits yet. The baseline git keeps for a change nobody reported.
+ */
+export function gitShowHead(root: string, rel: string): Promise<string | null> {
+    const parts = rel.split('/');
+    const name = parts.pop() ?? rel;
+    const cwd = join(root, ...parts);
+    return new Promise<string | null>((resolve) => {
+        execFile('git', ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
+    });
+}
+
+/**
  * One file's state in its OWN repository (git walks up from the file's folder, so a file inside a submodule answers
  * for the submodule): `committed` (tracked, unchanged), `modified` (tracked, uncommitted changes), `untracked`.
  * `null` when git says nothing — not a repository, or an ignored file. Never a guess.

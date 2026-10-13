@@ -39,6 +39,8 @@ export interface FilesHostPorts {
     readonly now?: () => number;
     /** A file's git state (`git-ports.ts` `gitFileStatus`); absent = opened files carry none. */
     readonly gitStatus?: (root: string, rel: string) => Promise<GitFileState | null>;
+    /** A file's last committed text (`git-ports.ts` `gitShowHead`); absent = no `Show diff` baseline. */
+    readonly gitShowHead?: (root: string, rel: string) => Promise<string | null>;
 }
 
 /** `git` — the file's state in its repository (`git-ports.ts`), present only when the host has a git port. */
@@ -111,6 +113,15 @@ export class FilesHost {
         } catch (error) {
             return { ok: false, path: rel, error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /** The file as of the last commit — the baseline for a change nobody reported. `null` outside the workspace or uncommitted. */
+    async lastCommitted(workspaceId: string, path: string): Promise<string | null> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws || !this.#ports.gitShowHead) return null;
+        const rel = confine(ws.path, path);
+        if (rel === null || rel === '') return null;
+        return this.#ports.gitShowHead(ws.path, rel);
     }
 
     /** Write only against what was read (§4.3): a changed file is a CONFLICT answered with the disk's text, never an overwrite. */

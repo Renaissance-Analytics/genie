@@ -55,6 +55,10 @@ export interface FilesPanelProps {
     readonly edit?: FilesEdit | undefined;
     /** Pop the panel into its own window (§4.3); absent on a bridge that cannot open host windows. */
     readonly onPopOut?: (() => void) | undefined;
+    /** `Show diff` on the blind banner: ask for the last committed text. Absent = no baseline to offer, no button. */
+    readonly onShowDiff?: (() => void) | undefined;
+    /** The last commit's text for the open file (`null` = not in the last commit), once asked. */
+    readonly blindDiff?: { path: string; before: string | null } | null | undefined;
     /** In its own window: no pin, no pop-out — one control docks it back (`onClose`). */
     readonly popped?: boolean | undefined;
     /** Agents ASKED to pause on a file you have dirty (§4.3) — named in the footer, marked on the tab. */
@@ -123,7 +127,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -253,7 +257,19 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             <div data-unreported-banner={open.path} className="flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">
                                 <Icon name="eye-off" size="xs" />
                                 No agent reported this change
+                                {onShowDiff ? <button type="button" data-action="show-diff" onClick={onShowDiff} className="ml-auto rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Show diff</button> : null}
                             </div>
+                        ) : null}
+                        {/* Show diff: git's last commit against the open text — captioned as that, never as anyone's change. */}
+                        {open?.ok && blindDiff && blindDiff.path === open.path ? (
+                            blindDiff.before === null ? (
+                                <p data-blind-diff-none={open.path} className="border-b border-[var(--border-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">Not in the last commit, so there is nothing to compare it with.</p>
+                            ) : (
+                                <div data-blind-diff={open.path} className="max-h-80 overflow-auto border-b border-[var(--border-1)]">
+                                    <p className="px-4 py-1 text-[11px] text-[var(--fg-4)]">Against the last commit</p>
+                                    <FancyDiff source={{ before: blindDiff.before, after: open.text }} variant="compare" mode="inline" />
+                                </div>
+                            )
                         ) : null}
                         {tree === null ? null : open === null ? (
                             <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>

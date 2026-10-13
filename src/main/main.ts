@@ -56,7 +56,7 @@ import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { tynnClient } from './tynn-client.js';
-import { gitClone, gitFileStatus, gitInit } from './git-ports.js';
+import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
@@ -424,6 +424,7 @@ async function boot(): Promise<void> {
     filesHost = new FilesHost({
         // Each opened file carries its git state (the persona's `· committed`).
         gitStatus: gitFileStatus,
+        gitShowHead,
         workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {
@@ -715,6 +716,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:terminal-previous', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? snapshots?.take(workspaceId) ?? null : null));
 
     // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
+    ipcMain.handle('genie:files-last-committed', (_event, workspaceId: unknown, path: unknown) => (typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.lastCommitted(workspaceId, path) ?? null : null));
     ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
