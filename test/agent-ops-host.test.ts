@@ -28,6 +28,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             setMode: async (id, mode) => { if (!current || current.id !== id) return null; current = { ...current, mode }; return current; },
             setAccessScope: async (id, accessScope) => { if (!current || current.id !== id) return null; current = { ...current, accessScope }; return current; },
             setPermissions: async (id, permissions) => { if (!current || current.id !== id) return null; current = { ...current, permissions }; return current; },
+            setModel: async (id, model) => { if (!current || current.id !== id) return null; const { model: _previous, ...rest } = current; current = model === null ? rest : { ...rest, model }; return current; },
         },
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${r.threadId}:${cwd}`); return { ok: true }; },

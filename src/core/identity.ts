@@ -100,6 +100,12 @@ export interface AgentRecord {
      * shell refused. Absent = `all`, so every agent registered before this field existed can still run its tools.
      */
     readonly permissions?: 'all' | 'edits';
+    /**
+     * The model this agent's provider is started with — a name the provider accepts: Claude's `sonnet` / `opus` /
+     * `haiku` or a full model id, Codex's model id. Absent = the provider's own default. Read when its session starts.
+     * What the provider actually RUNS is reported separately (`LiveSession.model`) and may differ.
+     */
+    readonly model?: string;
     /** Who may discover and message this agent. */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     /**

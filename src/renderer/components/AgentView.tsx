@@ -96,6 +96,9 @@ export interface AgentOpsProps {
     /** A Claude agent's tools: all, or edits only (shell refused). Absent = no control (a window that cannot set it). */
     readonly permissions?: 'all' | 'edits';
     readonly onSetPermissions?: (permissions: 'all' | 'edits') => void;
+    /** The model CHOSEN for the agent (`null` = the provider's default); the one IN USE is `session.model`. Absent `onSetModel` = no control. */
+    readonly model?: string | null;
+    readonly onSetModel?: (model: string | null) => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
@@ -104,6 +107,9 @@ export interface AgentOpsProps {
     readonly onCancelDelete: () => void;
     readonly onSetBudget: (dailyLimitUsd: number | null) => void;
 }
+
+/** Claude Code's model aliases, offered by name; a full id the agent already has is kept as its own option. */
+const CLAUDE_MODELS: readonly string[] = ['sonnet', 'opus', 'haiku'];
 
 const REPAIR_LABEL = (r: Repair): string =>
     r.action === 'install-provider' ? 'install the provider'
@@ -1023,6 +1029,44 @@ export function AgentView({
                                     </select>
                                     <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>
                                 </label>
+                            ) : null}
+                            {/* The model: what the provider REPORTED it runs, and what the agent starts with. Never one Genie made up. */}
+                            {agent.fidelity === 'declared' && ops.onSetModel ? (
+                                <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
+                                    <p data-model-reported={session?.model ? 'yes' : 'no'}>
+                                        Model{' '}
+                                        {session?.model ? (
+                                            <span className="font-mono text-[var(--fg-2)]">{session.model}</span>
+                                        ) : ops.model ? (
+                                            <span className="text-[var(--fg-4)]">not reported yet</span>
+                                        ) : (
+                                            <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
+                                        )}
+                                    </p>
+                                    <label className="mt-1 block">
+                                        Start {agent.name} with
+                                        {agent.provider === 'claude' ? (
+                                            <select data-model-select={ops.model ?? ''} value={ops.model ?? ''} onChange={(e) => ops.onSetModel?.(e.target.value === '' ? null : e.target.value)} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                <option value="">default</option>
+                                                {CLAUDE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+                                                {ops.model && !CLAUDE_MODELS.includes(ops.model) ? <option value={ops.model}>{ops.model}</option> : null}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                key={ops.model ?? ''}
+                                                data-model-input={ops.model ?? ''}
+                                                type="text"
+                                                defaultValue={ops.model ?? ''}
+                                                placeholder="provider default"
+                                                spellCheck={false}
+                                                onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
+                                            />
+                                        )}
+                                    </label>
+                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>
+                                </div>
                             ) : null}
                             <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
                                 Who may message {agent.name}

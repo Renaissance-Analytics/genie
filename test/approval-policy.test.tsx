@@ -28,7 +28,7 @@ describe('the capability', () => {
 });
 
 describe('the rail', () => {
-    const session = { running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null };
+    const session = { running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null };
     const render = (raises: boolean | null) => renderToStaticMarkup(
         <AgentView agent={{ id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared', cwd: 'repos/genie2', raisesApprovals: raises }} session={session} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} />,
     );

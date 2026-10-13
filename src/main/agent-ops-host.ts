@@ -28,6 +28,7 @@ export interface AgentOpsPorts {
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: 'all' | 'edits'): Promise<AgentRecord | null>;
+        setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
     host: {
         start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
@@ -137,6 +138,21 @@ export async function setPermissions(ports: AgentOpsPorts, agentId: string, perm
     if (!record) return UNKNOWN;
     if (record.provider !== 'claude') return { ok: false, reason: `${record.name} runs on ${record.provider}; Codex asks in the chat for each approval, so it has no tool setting` };
     const updated = await ports.registry.setPermissions(record.id, permissions);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/**
+ * The model an agent's provider starts with — any provider; `null` clears it (back to the provider's default). Which
+ * names a provider accepts is the provider's call: Genie refuses only what cannot be a model name — empty, or a
+ * leading `-` that would read as a flag on the command line. Applies when the session next starts.
+ */
+export async function setModel(ports: AgentOpsPorts, agentId: string, model: string | null): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const name = model === null ? null : model.trim();
+    if (name !== null && name.length === 0) return { ok: false, reason: 'a model needs a name — choose the default to clear it' };
+    if (name !== null && name.startsWith('-')) return { ok: false, reason: `"${name}" is not a model name — it would read as a command-line flag` };
+    const updated = await ports.registry.setModel(record.id, name);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

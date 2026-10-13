@@ -48,7 +48,8 @@ describe('the capability table', () => {
         // 52 since `workspaces.commitsSince` (an observed agent's index): a read, workspace-scoped.
         // 51 since `updates.cancel` left with the upgrade drain (no agent is asked for a handoff any more).
         // 52 since `agents.setPermissions` (a Claude agent's tools, chosen on its Agent view): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(52);
+        // 53 since `agents.setModel` (an agent's model, chosen on its Agent view): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(53);
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');

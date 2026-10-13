@@ -27,7 +27,7 @@ const timed = (event: StreamEvent, id: string): TimedEvent => ({ id, event, at }
 const session = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: at - 14_000,
     pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
-    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
+    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null,
     ...over,
 });
 

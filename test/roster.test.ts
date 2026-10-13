@@ -25,7 +25,7 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}) =>
 const session = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: Date.now() - 12 * 60_000,
     pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
-    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
+    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null,
     ...over,
 });
 

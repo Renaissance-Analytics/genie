@@ -28,7 +28,7 @@ afterEach(async () => {
 const live = (over: Partial<LiveSession> = {}): LiveSession => ({
     running: true, turnState: 'working', startedAt: Date.now() - 120_000,
     pendingApproval: null, failure: null, contextUsed: null, contextSize: null,
-    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null,
+    lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null,
     ...over,
 });
 

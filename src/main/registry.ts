@@ -390,6 +390,14 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }
 
+    /** The model the agent's provider starts with; `null` clears it — back to the provider's default. Read when its session starts. */
+    async setModel(agentId: AgentId, model: string | null): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => {
+            const { model: _previous, ...rest } = a;
+            return model === null ? rest : { ...rest, model };
+        });
+    }
+
     /** The agent's own half of who may message it (§6.4). */
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }));

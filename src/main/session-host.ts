@@ -133,10 +133,11 @@ export function driverEvents(events: DriverEvents): {
  * A Claude agent's driver options: its cwd, its resume, and the PERMISSION MODE it starts with. Claude's driver cannot
  * ask a person (CLAUDE_DRIVER_CAPABILITIES.permissionRequests is false), and with no mode Claude Code refused every tool
  * that needs approval — the owner's agent could not run git, artisan or its tests. `all` (the default) →
- * `bypassPermissions`; `edits` → `acceptEdits`, where file edits go through and shell is refused.
+ * `bypassPermissions`; `edits` → `acceptEdits`, where file edits go through and shell is refused. The agent's chosen
+ * MODEL rides along (`--model`) when it has one; none = no key, and Claude Code picks its own default.
  */
-export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits' } {
-    return { cwd, ...(resumeSessionId ? { resumeSessionId } : {}), permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions' };
+export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits'; model?: string } {
+    return { cwd, ...(resumeSessionId ? { resumeSessionId } : {}), permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions', ...(record.model ? { model: record.model } : {}) };
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
@@ -150,7 +151,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
             return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ cwd, ...resume, ...binary, ...mcp }, driverEvents(options.events));
+            // The chosen model goes on thread/start and thread/resume; none = no key, Codex's own default.
+            return (options) => new CodexDriver({ cwd, ...resume, ...(record.model ? { model: record.model } : {}), ...binary, ...mcp }, driverEvents(options.events));
 
         default:
             return null;
@@ -567,6 +569,7 @@ export class SessionHost {
             lastDelivery: null,
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: planFrom(rows),
+            model: modelFrom(rows),
         };
     }
 
@@ -608,6 +611,18 @@ function planFrom(rows: readonly TimedEvent[]): LiveSession['plan'] {
         const done = steps.filter((s) => s.status === 'completed').length;
         const doing = steps.find((s) => s.status === 'in_progress');
         return { step: done, of: steps.length, doing: doing?.content ?? '' };
+    }
+    return null;
+}
+
+/**
+ * The model the provider last REPORTED running (a notice carrying it), or `null`. The latest report wins — Codex
+ * reroutes mid-session — and it is never the model Genie asked for: that is the agent's setting, not a reading.
+ */
+function modelFrom(rows: readonly TimedEvent[]): string | null {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const event = rows[i]?.event;
+        if (event?.kind === 'notice' && typeof event.model === 'string' && event.model.length > 0) return event.model;
     }
     return null;
 }
