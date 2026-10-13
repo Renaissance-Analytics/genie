@@ -1,5 +1,5 @@
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { openAgentThread } from './thread-store.js';
+import { lastTurnOf, openAgentThread, readHistory } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { toStreamEvent, type StreamEvent } from './stream-event.js';
 import type { AgentId } from './identity.js';
@@ -500,6 +500,12 @@ export class AgentSession {
         this.#driver.start();
         this.#ownedPids = tree.descendantsOf(process.pid).filter((pid) => !before.has(pid));
         this.#alive = true;
+        // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
+        // turns it already had.
+        const startedAt = Date.now();
+        void readHistory(this.#options.store, this.agentId, { before: startedAt })
+            .then((h) => { this.#turns += lastTurnOf(h.rows); })
+            .catch(() => { /* no record yet: turns start at 1 */ });
         this.#turnState = 'working';
     }
 

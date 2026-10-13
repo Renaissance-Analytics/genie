@@ -51,6 +51,8 @@ export const ICON_NAMES: readonly string[] = [
     'git-merge',
     // A file sent with your message (the chat's attachment chips).
     'paperclip',
+    // Where an agent's run began in its recorded history, and the rows left out of it.
+    'history',
     // The Dashboard's "From Tynn" door (§6.1).
     'link',
 

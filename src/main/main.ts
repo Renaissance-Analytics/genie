@@ -311,7 +311,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             raisesApprovals: takeOver ? null : raisesApprovals(record.provider, record.permissions),
         },
         session: host.probe(record.id),
-        rows: host.rowsFor(record.id),
+        // The agent's recorded history, then this run (Claude does not replay a resumed conversation).
+        rows: host.ledgerFor(record.id),
         turns: host.turnsFor(record.id),
         // The engine's own recent words, for the process-ended block (the board's error state).
         log: host.recentStderrFor(record.id),

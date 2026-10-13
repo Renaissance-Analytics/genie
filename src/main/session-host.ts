@@ -19,6 +19,9 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
     return { image: blocks.includes('image'), textResource: blocks.includes('resource-text') };
 }
 
+/** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
+export const HISTORY_LIMIT = 3000;
+
 export function raisesApprovals(provider: string, permissions?: AgentPermissions): boolean | null {
     if (provider === 'claude') return permissions === 'ask' ? true : CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
@@ -38,7 +41,7 @@ import {
 } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { openDurableStore } from '../core/thread-store.js';
+import { openDurableStore, readHistory } from '../core/thread-store.js';
 import { sessionsDir } from './paths.js';
 
 /**
@@ -193,6 +196,8 @@ interface Running {
     mcp: readonly string[];
     /** What its provider takes in a prompt beyond text. */
     accepts: PromptAccepts;
+    /** Whether this run resumed a conversation (the record's thread id) — what its run marker says. */
+    resumed: boolean;
 }
 
 export class SessionHost {
@@ -201,6 +206,8 @@ export class SessionHost {
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #clock: () => number;
     readonly #running = new Map<AgentId, Running>();
+    /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
+    readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] } | 'loading'>();
     #listeners = new Set<(agentId: AgentId) => void>();
 
     /** Why a start was refused, by agent. Reported, never swallowed. */
@@ -354,7 +361,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider) };
+        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId) };
 
         const session = new AgentSession({
             agentId: record.id,
@@ -537,7 +544,38 @@ export class SessionHost {
         return true;
     }
 
-    /** The ledger for one agent. Empty for one that has never run — which is not an error. */
+    /**
+     * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
+     * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
+     * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
+     * once per run, and announced when it lands; until then this run's rows stand alone.
+     */
+    ledgerFor(agentId: AgentId): readonly TimedEvent[] {
+        const entry = this.#running.get(agentId);
+        const before = entry ? entry.startedAt : null;
+        const cached = this.#histories.get(agentId);
+        if (cached === undefined || (cached !== 'loading' && cached.before !== before)) {
+            this.#histories.set(agentId, 'loading');
+            void readHistory(openDurableStore(sessionsDir(this.#userData)), agentId, { ...(before !== null ? { before } : {}), limit: HISTORY_LIMIT })
+                .then((h) => {
+                    const rows: TimedEvent[] = [
+                        ...(h.earlier > 0 ? [{ id: `${agentId}:earlier`, event: { kind: 'earlier' as const, count: h.earlier }, at: null }] : []),
+                        ...h.rows.map((r) => ({ id: `${agentId}:h${r.position}`, event: r.event, at: r.at })),
+                    ];
+                    this.#histories.set(agentId, { before, rows });
+                    this.#emit(agentId);
+                })
+                .catch(() => { this.#histories.set(agentId, { before, rows: [] }); });
+        }
+        const history = cached !== undefined && cached !== 'loading' && cached.before === before ? cached.rows : [];
+        if (!entry) return history;
+        // Where this run begins: said once, when there is something before it to tell it from — recorded rows, or a
+        // conversation the provider resumed (which it remembers even when Genie recorded none of it).
+        const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [{ id: `${agentId}:run`, event: { kind: 'run', resumed: entry.resumed }, at: entry.startedAt }] : [];
+        return [...history, ...marker, ...entry.rows];
+    }
+
+    /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */
     rowsFor(agentId: AgentId): readonly TimedEvent[] {
         return this.#running.get(agentId)?.rows ?? [];
     }
