@@ -13,7 +13,14 @@ import type { SyncTarget } from '../core/integrations.js';
 export interface SyncFs {
     read(path: string): Promise<string | null>;
     write(path: string, text: string): Promise<void>;
+    /** Delete a file Genie owns (Genie 1's channel bridge); absent = nothing is deleted. A missing file is not an error. */
+    remove?(path: string): Promise<void>;
 }
+
+/** Genie 1's channel server entry: Genie 2 runs no channel bridge, so the entry would point a harness at nothing. */
+const V1_CHANNEL_KEY = 'genie-agentinbox-channel';
+/** Genie 1's Codex blocks — its own `genie` server table (a second one beside Genie 2's is invalid TOML) and its SessionStart hook. */
+const V1_CODEX_BLOCKS = [/# BEGIN GENIE MCP: genie\r?\n[\s\S]*?# END GENIE MCP: genie[^\n]*\n?/g, /# BEGIN GENIE CODEX SESSION HOOK[^\n]*\n[\s\S]*?# END GENIE CODEX SESSION HOOK[^\n]*\n?/g];
 
 export interface SyncFlags {
     readonly mcp_sync_claude: boolean;
@@ -40,7 +47,9 @@ async function readJson(fs: SyncFs, path: string): Promise<Record<string, unknow
 }
 
 function mergeMcpServers(current: Record<string, unknown>, payload: Payload): Record<string, unknown> {
-    const servers = typeof current.mcpServers === 'object' && current.mcpServers !== null ? (current.mcpServers as Record<string, unknown>) : {};
+    const servers = typeof current.mcpServers === 'object' && current.mcpServers !== null ? { ...(current.mcpServers as Record<string, unknown>) } : {};
+    // UPGRADE: Genie 1's channel entry goes; every other server a person or tool wrote stays.
+    delete servers[V1_CHANNEL_KEY];
     return { ...current, mcpServers: { ...servers, [SERVER_KEY]: serverEntry(payload) } };
 }
 
@@ -55,7 +64,12 @@ function isGenieStopHook(hook: unknown): boolean {
     // Match on the command text itself: a re-stringified object escapes the inner quotes and never matches.
     if (typeof hook !== 'object' || hook === null) return false;
     const inner = (hook as { hooks?: unknown }).hooks;
-    return Array.isArray(inner) && inner.some((h) => typeof (h as { command?: unknown }).command === 'string' && ((h as { command: string }).command.includes('"name":"imDone"')));
+    // Genie's own: it calls imDone AND names Genie's endpoint or terminal header. Genie 1 escaped the JSON in its command
+    // (backslash-escaped quotes), so matching the unescaped text alone missed it and a second hook was added.
+    return Array.isArray(inner) && inner.some((h) => {
+        const c = (h as { command?: unknown }).command;
+        return typeof c === 'string' && c.includes('imDone') && (c.includes('GENIE_MCP_URL') || c.includes('Mcp-Param-TerminalId') || c.includes('"name":"imDone"'));
+    });
 }
 
 export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; flags: SyncFlags }): SyncTarget[] {
@@ -70,7 +84,15 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
         },
     });
     return [
-        jsonTarget('claude', 'Claude Code (.mcp.json)', path('.mcp.json'), flags.mcp_sync_claude),
+        {
+            ...jsonTarget('claude', 'Claude Code (.mcp.json)', path('.mcp.json'), flags.mcp_sync_claude),
+            write: async (payload) => {
+                if (!flags.mcp_sync_claude) return;
+                await jsonTarget('claude', '', path('.mcp.json'), true).write(payload);
+                // UPGRADE: Genie 1's channel bridge script — Genie-owned, under `.agents/_genie/` — goes with its entry.
+                await fs.remove?.(path('.agents', '_genie', 'agentinbox-claude-channel.cjs'));
+            },
+        },
         jsonTarget('cursor', 'Cursor (.cursor/mcp.json)', path('.cursor', 'mcp.json'), flags.mcp_sync_cursor),
         {
             id: 'codex',
@@ -78,7 +100,8 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
             write: async (payload) => {
                 if (!flags.mcp_sync_codex) return;
                 const file = path('.codex', 'config.toml');
-                const current = (await fs.read(file)) ?? '';
+                // UPGRADE: Genie 1's own genie table and SessionStart hook go; a person's lines and other blocks stay.
+                const current = V1_CODEX_BLOCKS.reduce((text, block) => text.replace(block, ''), (await fs.read(file)) ?? '');
                 const block = `${TOML_BEGIN}\n[mcp_servers.${SERVER_KEY}]\nurl = ${JSON.stringify(payload.GENIE_MCP_URL)}\n${payload.GENIE_MCP_TOKEN ? `http_headers = { Authorization = ${JSON.stringify(`Bearer ${payload.GENIE_MCP_TOKEN}`)} }\n` : ''}${TOML_END}`;
                 const begin = current.indexOf(TOML_BEGIN);
                 const end = current.indexOf(TOML_END);
