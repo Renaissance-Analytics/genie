@@ -1,6 +1,7 @@
+import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -160,6 +161,43 @@ function Lanes({ segments }: { segments: readonly LaneSegment[] | undefined }) {
                 );
             })}
         </span>
+    );
+}
+
+/**
+ * THE ROW TRAY (§4.1 `Space`): under its row, read-only plus three doors. Sections the row did not measure are not
+ * drawn. Nothing here approves, denies or composes — the Deck resolves; the Dashboard shows.
+ */
+function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: string) => void }) {
+    const tray = trayOf(row);
+    const k = (n: number) => `${Math.round(n / 1000)}k`;
+    return (
+        <div data-row-tray={row.id} className="flex flex-col gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] py-3 pl-7 pr-5 text-[12px]">
+            {tray.target ? (
+                <div data-tray-section="target" className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Target</span>
+                    <span className="flex items-center gap-2">{tray.target.step ? <span className="font-mono text-[11px] text-[var(--fg-4)]">{tray.target.step}</span> : null}<span className="text-[var(--fg-2)]">{tray.target.text}</span></span>
+                </div>
+            ) : null}
+            {tray.delivered ? (
+                <div data-tray-section="delivered" className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Delivered</span>
+                    <DeliveryCell delivery={row.delivery} />
+                </div>
+            ) : null}
+            {tray.context ? (
+                <div data-tray-section="context" className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Context</span>
+                    <span className="block h-1 w-24 overflow-hidden rounded-sm bg-[var(--bg-3)]"><span className="block h-full bg-[var(--fg-3)]" style={{ width: `${Math.min(100, Math.round((tray.context.used / tray.context.size) * 100))}%` }} /></span>
+                    <span className="font-mono text-[11px] text-[var(--fg-3)]">{`${k(tray.context.used)} / ${k(tray.context.size)}`}</span>
+                </div>
+            ) : null}
+            <div className="flex gap-2">
+                {tray.doors.map((d) => (
+                    <button key={d.door} type="button" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{d.label}</button>
+                ))}
+            </div>
+        </div>
     );
 }
 
@@ -404,9 +442,13 @@ export interface DashboardProps {
     focusedId?: string | null | undefined;
     /** The collaborator reveal's row, controlled — for server-side tests. Otherwise hover and `C` drive the board's own. */
     revealId?: string | null | undefined;
+    /** The open row tray, controlled — for server-side tests. Otherwise `Space` on the cursor row drives the board's own. */
+    trayId?: string | null | undefined;
+    /** The tray's doors navigate; absent = `Open agent →` still opens the agent and the others do nothing. */
+    onNavigate?: ((route: string) => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId }: DashboardProps) {
+export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -420,6 +462,10 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
     // THE COLLABORATOR REVEAL (§4.1): hover a comms cell, or `C` on the cursor row; in the table, never a popover.
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
     const reveal = revealOf(rows, revealId ?? ownReveal);
+    // THE ROW TRAY (§4.1): `Space` on the cursor row; one open at a time.
+    const [ownTray, setOwnTray] = useState<string | null>(null);
+    const openTray = trayId ?? ownTray;
+    const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
     const statusGroupsForOrder = groupByStatus(rows);
     const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : groups.flatMap((g) => g.rows.map((r) => r.id));
     useEffect(() => {
@@ -432,6 +478,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
             else if (action === 'open') { if (focused !== null && visibleIds.includes(focused)) onOpenAgent(focused); }
             else if (action === 'cycle-group') onGroup?.(group === 'workspace' ? 'status' : 'workspace');
             else if (action === 'reveal') setOwnReveal((r) => (r !== null || focused === null ? null : focused));
+            else if (action === 'tray') setOwnTray((t) => (focused === null || t === focused ? null : focused));
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -591,7 +638,10 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                                 <span className="ml-2.5 text-[var(--fg-3)]">{g.rows.length} {g.rows.length === 1 ? 'agent' : 'agents'}</span>
                             </div>
                             {g.rows.map((row) => (
-                                <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                                <Fragment key={row.id}>
+                                    <AgentRowView row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                                    {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                                </Fragment>
                             ))}
                         </div>
                     ))}
@@ -600,7 +650,10 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
                     <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
-                        <AgentRowView key={row.id} row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                        <Fragment key={row.id}>
+                            <AgentRowView row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                            {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                        </Fragment>
                     ))}
                 </div>
             ))}

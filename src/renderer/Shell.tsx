@@ -379,6 +379,8 @@ export function Shell({
                             onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
                             group={parsed.group}
                             onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
+                            // The row tray's doors (Open agent / Terminal / Files).
+                            onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
                             faults={workspaceFaults}
                             // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
