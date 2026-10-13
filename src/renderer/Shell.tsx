@@ -8,6 +8,7 @@ import { Deck } from './components/Deck.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
+import { workspaceLabel } from '../core/workspace-label.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import { ChatFlyout, GenieMark, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard, FidelityDot } from './components/Dashboard.js';
@@ -574,7 +575,7 @@ export function Shell({
                         <button
                             type="button"
                             data-action="bring-back-files"
-                            title={`The ${filesSlot.workspaceId} file panel is in its own window — bring it back`}
+                            title={`The ${workspaceLabel(snapshot.workspaces, filesSlot.workspaceId!)} file panel is in its own window — bring it back`}
                             onClick={() => onBringBackFiles?.(filesSlot.workspaceId!)}
                             className="rounded-md border border-[var(--border-1)] px-1 py-1 text-[10px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]"
                             style={{ writingMode: 'vertical-rl' }}

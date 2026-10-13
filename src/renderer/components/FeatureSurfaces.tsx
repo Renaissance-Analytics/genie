@@ -10,6 +10,7 @@ import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { workspaceLabel } from '../../core/workspace-label.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -33,7 +34,7 @@ interface SurfaceProps {
     /** The browser surface reports its box here so main can place the view. */
     readonly onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
     /** The workspaces a form can add into. The route names none, so the surface offers them. */
-    readonly workspaces?: readonly { id: string; path: string }[] | undefined;
+    readonly workspaces?: readonly { id: string; path: string; name?: string | undefined }[] | undefined;
     readonly adding?: AddingForm | undefined;
     readonly onCloseForm?: (() => void) | undefined;
     /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
@@ -53,17 +54,17 @@ function Header({ title, children }: { title: string; children?: React.ReactNode
 }
 
 /** Which workspace an Add goes into: a select when there are several, nothing when there is one, a reason when none. */
-function WorkspacePick({ workspaces, name }: { workspaces: readonly { id: string; path: string }[]; name: string }) {
+function WorkspacePick({ workspaces, name }: { workspaces: readonly { id: string; path: string; name?: string | undefined }[]; name: string }) {
     if (workspaces.length === 0) return <span className="text-xs text-[var(--fg-3)]">Add a workspace first</span>;
     if (workspaces.length === 1) return <input type="hidden" name={name} value={workspaces[0]!.id} />;
     return (
         <select name={name} defaultValue={workspaces[0]!.id} aria-label="Workspace" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-            {workspaces.map((w) => <option key={w.id} value={w.id}>{w.id}</option>)}
+            {workspaces.map((w) => <option key={w.id} value={w.id}>{workspaceLabel(workspaces, w.id)}</option>)}
         </select>
     );
 }
 
-function pickedWorkspace(form: HTMLFormElement, workspaces: readonly { id: string; path: string }[], name: string): { id: string; path: string } | null {
+function pickedWorkspace(form: HTMLFormElement, workspaces: readonly { id: string; path: string; name?: string | undefined }[], name: string): { id: string; path: string; name?: string | undefined } | null {
     const id = String(new FormData(form).get(name) ?? '');
     return workspaces.find((w) => w.id === id) ?? workspaces[0] ?? null;
 }
@@ -160,7 +161,7 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                         <li key={f.id} data-flow={f.id} className="flex items-center gap-3 px-5 py-2">
                             <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
                             <span className="font-medium">{f.name}</span>
-                            <span className="font-mono text-xs text-[var(--fg-4)]">{f.workspaceId}</span>
+                            <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
                             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
                             <span className="ml-auto flex gap-2">
                                 {f.armed ? (
@@ -216,7 +217,7 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                 />
             ) : null}
             {adding?.kind === 'service' ? (
-                <AddServiceForm defaults={adding.defaults} problems={adding.problems} consent={adding.consent} onSubmit={(form, consent) => onAction({ kind: 'services.create', form, consent })} onCancel={() => onCloseForm?.()} />
+                <AddServiceForm defaults={adding.defaults} problems={adding.problems} consent={adding.consent} workspaceName={workspaceLabel(workspaces, adding.workspaceId)} onSubmit={(form, consent) => onAction({ kind: 'services.create', form, consent })} onCancel={() => onCloseForm?.()} />
             ) : null}
             {hosting === null ? (
                 <Skeletons />
@@ -314,7 +315,7 @@ function sameScope(a: ServiceInstance, b: ServiceInstance): boolean {
  * loopback port. The active version is marked; another version offers "Make active" with the data
  * warning ON THE ROW, before the click — a switch is never a surprise. Remove keeps the data volume.
  */
-function ServicesPanel({ services, workspaces, onAction }: { services: FeatureData['services']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction'] }) {
+function ServicesPanel({ services, workspaces, onAction }: { services: FeatureData['services']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
     if (services === null) return <Skeletons />;
     return (
         <div className="flex flex-col">
@@ -339,7 +340,7 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
                             <li key={i.id} data-service={i.id} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
                                     <span className="font-mono">{i.engine} {i.version}</span>
-                                    <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : scope.workspaceId}</Badge>
+                                    <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
                                     <Badge variant="soft" size="sm">{status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
@@ -704,7 +705,7 @@ export function mcpToolsList(tools: readonly { name: string; description: string
     );
 }
 
-function Integrations({ integrations, workspaces, onAction }: { integrations: FeatureData['integrations']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction'] }) {
+function Integrations({ integrations, workspaces, onAction }: { integrations: FeatureData['integrations']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
         <section data-integrations className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
@@ -817,7 +818,7 @@ const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
  * a link is a credential you cannot unsend, so you see who already holds one before minting another.
  * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
  */
-function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
+function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
     const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
@@ -881,7 +882,7 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
                                 {remote.connections.map((c) => (
                                     <li key={c.id} data-connection={c.id} className="flex items-center gap-3 py-1.5 text-sm">
                                         <span className="font-medium">{c.label}</span>
-                                        <Badge variant="soft" size="sm">{c.isOwner ? 'owner' : `shared: ${c.workspaceId}`}</Badge>
+                                        <Badge variant="soft" size="sm">{c.isOwner ? 'owner' : `shared: ${c.workspaceId === null ? c.workspaceId : workspaceLabel(workspaces, c.workspaceId)}`}</Badge>
                                         {c.driving ? <Badge variant="soft" size="sm">driving</Badge> : null}
                                     </li>
                                 ))}
@@ -895,7 +896,7 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
                                 {remote.shares.map((s) => (
                                     <li key={s.id} data-share={s.id} className="flex items-center gap-3 py-1.5 text-sm">
                                         <span className="font-medium">{s.grantedTo}</span>
-                                        <span className="font-mono text-xs text-[var(--fg-4)]">{s.workspaceId}</span>
+                                        <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, s.workspaceId)}</span>
                                         <Badge variant="soft" size="sm">{s.revoked ? 'revoked' : s.served ? 'served' : 'not shown yet'}</Badge>
                                         {!s.revoked ? <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeShare', shareId: s.id })}>Revoke</button> : null}
                                     </li>
