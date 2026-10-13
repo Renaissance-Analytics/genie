@@ -50,7 +50,7 @@ import { genieHome, installDir, osaHomeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
-import { restoreSchedule } from '../core/upgrade-drain.js';
+import { RESUME_AFTER_RESTART, midTurnAgents, relaunchPlan } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
@@ -518,10 +518,9 @@ async function boot(): Promise<void> {
         agents: {
             live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
             stopAll: () => {
-                // Record who was running BEFORE the sessions end, so a restore after the upgrade knows (§7.6).
-                const running = (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
+                // Record who was running and who was MID-TURN BEFORE the sessions end (§7.6; the owner, 2026-10-13).
                 runningRecorded = true;
-                void registry?.markRunningAtQuit(running);
+                void recordShutdown();
                 host?.stopAll();
             },
         },
@@ -1147,10 +1146,17 @@ async function boot(): Promise<void> {
     }
     // RESTORE AFTER A RELAUNCH OR UPGRADE (§7.6): only with the ONE setting on; starts spaced three seconds apart; what the
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
-    void registry.takeRunningAtQuit().then((ids) => {
-        if (composed.settings.snapshot().restore_agents_on_launch !== true) return;
-        for (const { agentId, at } of restoreSchedule(ids)) {
-            setTimeout(() => { const record = registry?.find(agentId as AgentId); if (record && host) host.start(record, cwdFor(record)); }, at);
+    // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
+    // told to continue; the rest only with the setting on, unprompted.
+    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
+        const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted, restoreAll: composed.settings.snapshot().restore_agents_on_launch === true });
+        for (const { agentId, at, resume } of plan) {
+            setTimeout(() => {
+                const record = registry?.find(agentId as AgentId);
+                if (!record || !host) return;
+                host.start(record, cwdFor(record));
+                if (resume) host.prompt(record.id, RESUME_AFTER_RESTART, 'genie');
+            }, at);
         }
     });
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
@@ -1250,6 +1256,20 @@ app.on('second-instance', () => {
  * window went away" — that branch, in the previous build, resurrected eleven agents the owner
  * had deliberately stopped.
  */
+/**
+ * EVERY SHUTDOWN — a quit or an upgrade — records who was running and, separately, who was MID-TURN, before any session
+ * ends. Ending the sessions is what cancels those turns; the next launch resumes exactly those agents and tells them to
+ * continue (the owner, 2026-10-13: "ONLY active agents in the middle of turning, not any idle ones … on shutdown of
+ * genie, not just an upgrade").
+ */
+function recordShutdown(): Promise<unknown> {
+    if (!registry || !host) return Promise.resolve();
+    const live = registry.snapshot().agents.map((a) => ({ id: a.id as AgentId, probe: host!.probe(a.id as AgentId) }));
+    const running = live.filter((a) => a.probe?.running === true).map((a) => a.id);
+    const midTurn = midTurnAgents(live.map((a) => ({ id: a.id, turnState: a.probe?.turnState ?? null }))) as AgentId[];
+    return Promise.all([registry.markRunningAtQuit(running), registry.markInterruptedAtQuit(midTurn)]);
+}
+
 let quitConfirmed = false;
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
 app.on('before-quit', (event) => {
@@ -1268,11 +1288,10 @@ app.on('before-quit', (event) => {
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (!runningRecorded && registry && host) {
         runningRecorded = true;
-        const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
         event.preventDefault();
         // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
         const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
-        void Promise.all([registry.markRunningAtQuit(running), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        void Promise.all([recordShutdown(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
     host?.stopAll();

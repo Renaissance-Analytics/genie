@@ -51,6 +51,7 @@ export class Registry {
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
     #runningAtQuit: AgentId[] = [];
+    #interruptedAtQuit: AgentId[] = [];
     #loaded = false;
     /** The display name for a workspace path — the envelope's project.json name, supplied by the composition root; the folder until then. */
     #namer: (path: string) => string = (path) => folderName(path);
@@ -66,6 +67,7 @@ export class Registry {
         this.#workspaces = await this.#store.readWorkspaces();
         this.#agents = await this.#store.readAgents();
         this.#runningAtQuit = (await this.#store.readRunningAtQuit()).filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
+        this.#interruptedAtQuit = (await this.#store.readInterruptedAtQuit()).filter((id): id is AgentId => this.#agents.some((a) => a.id === id));
         this.faults.push(...this.#store.dropped);
         this.#workstation = workstation;
         this.#loaded = true;
@@ -118,6 +120,20 @@ export class Registry {
     async markRunningAtQuit(ids: readonly AgentId[]): Promise<void> {
         this.#runningAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
         await this.#store.writeRunningAtQuit(this.#runningAtQuit);
+    }
+
+    /** The agents a shutdown cut off mid-turn (written at quit or upgrade, before the sessions end). */
+    async markInterruptedAtQuit(ids: readonly AgentId[]): Promise<void> {
+        this.#interruptedAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
+        await this.#store.writeInterruptedAtQuit(this.#interruptedAtQuit);
+    }
+
+    /** Read once and cleared, like the running set: a crash mid-resume prompts nobody twice. */
+    async takeInterruptedAtQuit(): Promise<readonly AgentId[]> {
+        const ids = this.#interruptedAtQuit;
+        this.#interruptedAtQuit = [];
+        await this.#store.writeInterruptedAtQuit([]);
+        return ids;
     }
 
     /** Read once and cleared, so a crash mid-restore does not start anyone twice. */
