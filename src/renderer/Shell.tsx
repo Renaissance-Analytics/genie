@@ -285,6 +285,10 @@ export function Shell({
         const h = header ? Math.round(header.getBoundingClientRect().height) : 0;
         if (h !== headerHeight) setHeaderHeight(h);
     });
+    // `?files=detached` (the board's key): a link to the panel in its own window pops it out, once per arrival.
+    useEffect(() => {
+        if (parsed.surface === 'workspace' && parsed.detached && onPopOutFiles && !filesPopped.includes(parsed.workspaceId)) onPopOutFiles(parsed.workspaceId);
+    }, [route]);
     const dockFrame: CSSProperties = { position: 'absolute', right: 0, bottom: 0, top: 'var(--view-header-h)', display: 'flex' };
 
     /**
@@ -480,6 +484,9 @@ export function Shell({
                             onAddAgent={() => onAddAgent(parsed.workspaceId)}
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
+                            filesFile={parsed.file}
+                            filesFilter={parsed.filter}
+                            onFilesRoute={(file, filter) => onNavigate(formatRoute({ ...parsed, panel: 'files', file, filter, detached: false }))}
                             filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
                             onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
                             filesPopped={filesPopped.includes(parsed.workspaceId)}

@@ -6,7 +6,7 @@ import { formatRange, parseRange, type TimeRange } from './lanes.js';
  * genie://dashboard?group=workspace
  * genie://deck
  * genie://agent/<id>?tab=stream&lane=tools&at=ev_8831
- * genie://workspace/<id>?panel=files
+ * genie://workspace/<id>?files=<path>&filter=changed     (the file panel; `files=` open with no file, `files=detached` popped out)
  * …&chat=<agent>&pin=right              on ANY surface
  * ```
  *
@@ -65,7 +65,18 @@ export type Route =
      * A workspace opens on its AGENTS (`home`, the board's workspace surface); `terminals` (§4.6) and the
      * workspace's `settings` are the other two views of the same route. Home writes no `view=`.
      */
-    | ({ surface: 'workspace'; workspaceId: string; panel: WorkspacePanel | null; view: WorkspaceView } & Common)
+    | ({
+          surface: 'workspace';
+          workspaceId: string;
+          panel: WorkspacePanel | null;
+          view: WorkspaceView;
+          /** The file open in the panel (the board's `?files=<path>`); `null` = the panel shows no file. */
+          file: string | null;
+          /** The panel's Changed filter (`&filter=changed`); `null` = All. */
+          filter: 'changed' | null;
+          /** The panel in its own window (`?files=detached`). */
+          detached: boolean;
+      } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
     | ({ surface: 'takeover'; terminalId: string } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
@@ -142,10 +153,17 @@ export function parseRoute(input: string): Route {
         }
         case 'workspace': {
             if (!tail) return dashboard('workspace', common);
+            // The board's keys: `files=<path>` (empty = open, no file; `detached` = in its own window). An old
+            // `panel=files` link still opens the panel.
+            const files = params.get('files');
+            const detached = files === 'detached';
             return {
                 surface: 'workspace',
                 workspaceId: tail,
-                panel: params.get('panel') === 'files' ? 'files' : null,
+                panel: files !== null || params.get('panel') === 'files' ? 'files' : null,
+                file: files !== null && files !== '' && !detached ? files : null,
+                filter: files !== null && params.get('filter') === 'changed' ? 'changed' : null,
+                detached,
                 view: WORKSPACE_VIEWS.includes(params.get('view') as WorkspaceView) ? (params.get('view') as WorkspaceView) : 'home',
                 ...common,
             };
@@ -190,7 +208,10 @@ export function formatRoute(route: Route): string {
             if (route.layout === 'turns') params.set('layout', 'turns');
             break;
         case 'workspace':
-            if (route.panel) params.set('panel', route.panel);
+            if (route.panel === 'files') {
+                params.set('files', route.detached ? 'detached' : route.file ?? '');
+                if (route.filter === 'changed' && !route.detached) params.set('filter', 'changed');
+            }
             if (route.view !== 'home') params.set('view', route.view);
             break;
         case 'takeover':

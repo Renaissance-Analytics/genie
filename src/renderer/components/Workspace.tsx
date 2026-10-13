@@ -94,6 +94,10 @@ export interface WorkspaceProps {
     pluginPanels?: readonly PluginPanelView[] | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
+    /** The file panel's route keys (`?files=<path>&filter=changed`) and their write-back. */
+    filesFile?: string | null | undefined;
+    filesFilter?: 'changed' | null | undefined;
+    onFilesRoute?: ((file: string | null, filter: 'changed' | null) => void) | undefined;
     /** The file panel is in the dock (§4.4): do not draw it inline too. */
     filesPinned?: boolean | undefined;
     onPinFiles?: (() => void) | undefined;
@@ -127,7 +131,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // The file host's state for "Changes this session" (home view): read on mount and on every change the host
     // reports; `null` until it answers, which the rail renders as an ABSENT section, not an empty one.
@@ -427,7 +431,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
                     {filesInline && files ? (
                         <div className="min-h-0 min-w-0 flex-1">
-                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} />
+                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
                         </div>
                     ) : null}
                     <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide={!filesInline} onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />
@@ -435,7 +439,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
             ) : null}
             {view === 'terminals' && filesInline && files ? (
                 <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} />
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
                 </div>
             ) : null}
             {view === 'terminals' ? (<>

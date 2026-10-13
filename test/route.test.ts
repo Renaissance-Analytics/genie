@@ -53,9 +53,11 @@ describe('routes are the application’s state, so they parse exactly', () => {
             'genie://deck',
             'genie://agent/kai?tab=stream',
             'genie://agent/kai?tab=stream&lane=tools&at=ev_8831',
-            'genie://workspace/tynn?panel=files',
+            'genie://workspace/tynn?files=',
+            'genie://workspace/tynn?files=src%2Fa.ts&filter=changed',
+            'genie://workspace/tynn?files=detached',
             'genie://workspace/tynn?view=settings',
-            'genie://workspace/tynn?panel=files&view=terminals&chat=kai',
+            'genie://workspace/tynn?files=&view=terminals&chat=kai',
         ];
 
         for (const r of routes) expect(formatRoute(parseRoute(r))).toBe(r);
@@ -96,7 +98,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
             { surface: 'deck', item: null, chat: null, pin: null },
             { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, layout: 'ledger', chat: null, pin: null },
-            { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', chat: null, pin: null },
+            { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', file: null, filter: null, detached: false, chat: null, pin: null },
         ];
 
         expect(shapes.map(formatRoute).filter((r) => r.endsWith('?'))).toEqual([]);

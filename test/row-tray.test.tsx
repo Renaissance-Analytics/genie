@@ -28,7 +28,7 @@ const full = row({
 const doors = [
     { door: 'agent', label: 'Open agent →', route: 'genie://agent/kai' },
     { door: 'terminal', label: 'Terminal →', route: 'genie://workspace/tynn' },
-    { door: 'files', label: 'Files →', route: 'genie://workspace/tynn?panel=files' },
+    { door: 'files', label: 'Files →', route: 'genie://workspace/tynn?files=' },
 ];
 
 describe('trayOf', () => {
