@@ -8,7 +8,8 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
-import { HUMAN, type Resolution } from '../core/inbox.js';
+import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
+import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { configSyncTargets } from './config-sync-targets.js';
@@ -75,6 +76,11 @@ export interface ComposeInput {
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
+    /**
+     * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
+     * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
+     */
+    readonly roster?: () => readonly AgentRecord[];
 }
 
 /** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
@@ -126,11 +132,7 @@ export interface ComposedServices {
     routes(): GenRoute[];
     /** The Deck's items from the stores, now. */
     deckItems(): DeckItem[];
-    /** Who an agent id is, for the Deck and the inbox listings. */
-    registerAgentName(agentId: string, who: { name: string; workspaceId: string }): void;
-    /** An inbox address (`{provider}:{name}` or `{workspace}:{provider}:{name}`) for an agent id. */
-    registerAgentAddress(address: string, agentId: string): void;
-    /** Every registered address with the agent's name — the human's peer list. */
+    /** Every roster agent's full address with its name — the human's peer list. */
     agentAddresses(): Array<{ address: string; agentId: string; name: string }>;
     /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
     resolveAddress(text: string): Resolution;
@@ -298,9 +300,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         hostsPath: hostsFilePath(process.platform),
         runElevated: input.runElevated ?? ((step) => runElevatedViaOs(process.platform, step, elevationRun)),
     });
-    const agents = new Map<string, { name: string; workspaceId: string }>();
+    const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
+    // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
+    const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
     const reminders = new ReminderBook();
-    const addresses = new Map<string, string>();
     let down: Promise<void> | null = null;
 
     return {
@@ -330,18 +333,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 userList: attention.allUserItems(),
                 unreadDms: inbox.unread(HUMAN),
                 finished: attention.finished(),
-                agents: Object.fromEntries(agents),
+                agents: Object.fromEntries(agents()),
             }),
         ],
         inboxReminders: ({ now, idle }) =>
-            [...agents.keys()].flatMap((id) => {
+            [...agents().keys()].flatMap((id) => {
                 const text = reminders.due({ agentId: id, unread: inbox.unread(id as never).length, idle: idle(id), now });
                 return text ? [{ agentId: id, text }] : [];
             }),
         signals: ({ osAgentWorking }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
             // Mail agents have not collected: unread for every registered agent, the human excluded.
-            uncollectedMail: [...agents.keys()].reduce((n, id) => n + inbox.unread(id as never).length, 0),
+            uncollectedMail: [...agents().keys()].reduce((n, id) => n + inbox.unread(id as never).length, 0),
             githubBlocked: githubAppStatus({ authorized: settings.snapshot().github_authorized === true, installedRepos: settings.snapshot().github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }).blocking,
             osAgentWorking,
         }),
@@ -372,19 +375,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             });
             return configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
         },
-        registerAgentName: (agentId, who) => { agents.set(agentId, who); },
-        registerAgentAddress: (address, agentId) => { addresses.set(address, agentId); },
-        agentAddresses: () => [...addresses].map(([address, agentId]) => ({ address, agentId, name: agents.get(agentId)?.name ?? agentId })),
-        resolveAddress: (text) => {
-            if (text === HUMAN || text === 'you') return { kind: 'human' };
-            const exact = addresses.get(text);
-            if (exact !== undefined) return { kind: 'one', id: exact as never };
-            // A short form that several full forms end with is ambiguous; name both.
-            const matches = [...addresses.keys()].filter((a) => a.endsWith(`:${text}`) && a.split(':').length === 3);
-            if (matches.length === 1) return { kind: 'one', id: addresses.get(matches[0]!)! as never };
-            if (matches.length > 1) return { kind: 'ambiguous', forms: matches };
-            return { kind: 'none' };
-        },
+        agentAddresses: () => roster().map((r) => ({ address: addressOf(r, 'full'), agentId: r.id as string, name: r.name })),
+        // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
+        resolveAddress: (text) => resolveOnRoster(text, roster()),
         shutdown: () => {
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');

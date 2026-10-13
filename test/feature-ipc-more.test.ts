@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
 import type { ToolStatus } from '../src/core/toolchain.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeaturePorts, type FeatureState } from '../src/main/feature-ipc.js';
@@ -21,6 +22,11 @@ const pty: PtyPort = {
 
 let dir: string;
 let services: ComposedServices;
+let roster: AgentRecord[] = [];
+/** An agent on the roster — what the registry hands the composed services. */
+const onRoster = (id: string, name: string, workspaceId: string): void => {
+    roster.push({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null } as never);
+};
 let probes = 0;
 let updates: string[] = [];
 let clock = 100 * 3_600_000;
@@ -37,7 +43,8 @@ const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-more-'));
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    roster = [];
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
     probes = 0; updates = []; installed = '22.23.2'; clock = 100 * 3_600_000;
 });
 
@@ -90,7 +97,7 @@ describe('the Deck’s inline answers reach the stores', () => {
 
     it('a user-list Done marks it done; an unread-dm Mark read commits the cursor; a finish mark read marks it seen', async () => {
         const a = 'agent_' + 'b'.repeat(32);
-        services.registerAgentName(a, { name: 'atlas', workspaceId: 'tynn' });
+        onRoster(a, 'atlas', 'tynn');
         const added = await services.attention.lists.add({ list: 'user', workspaceId: 'tynn', agentId: a as never, text: 'rotate the token' });
         await services.inbox.send({ from: a as never, to: 'human', text: 'hi' });
         await services.attention.imDone({ agentId: a as never, agentName: 'atlas', workspacePath: dir, handoff: 'done' });

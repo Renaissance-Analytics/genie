@@ -879,6 +879,8 @@ async function boot(): Promise<void> {
         remoteTransport: remoteSocket.transport,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
         mcpVerification: () => mcpVerified,
+        // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
+        roster: () => (registry ? (registry.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) : []),
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
