@@ -62,21 +62,38 @@ export interface OsaHostLike {
     rowsFor(agentId: AgentId): readonly TimedEvent[];
     probe(agentId: AgentId): LiveSession | null;
     subscribe(listener: (agentId: AgentId) => void): () => void;
+    /** Turns finished in this session — counted at each turn's end. */
+    turnsFor(agentId: AgentId): number;
 }
 
-/** Prompt the OSA and resolve with ITS words from that turn once the turn ends (or the reason it could not). */
+/**
+ * Prompt the OSA and resolve with ITS words from ITS turn once that turn ends (or the reason it could not).
+ *
+ * Not "once genie is idle": a prompt sent while genie is mid-turn queues, and the earlier turn's end reads as idle —
+ * measured in doctor trial 4, where each `ask` returned the answer to the question before it. Every prompt lays a
+ * `turn` marker and the session counts finished turns, so this question is the N-th turn, N being the number of markers
+ * once it is sent; it is done when N turns have finished. Its reply starts where turn N−1 FINISHED (an earlier turn still
+ * running when this was sent speaks after this question's marker): the rows from the moment the count reached N−1.
+ */
 export function askAndWait(host: OsaHostLike, agentId: AgentId | string, text: string, timeoutMs: number): Promise<{ ok: true; reply: string } | { ok: false; reason: string }> {
     const id = agentId as AgentId;
-    const before = host.rowsFor(id).length;
     if (!host.prompt(id, text, 'doctor')) return Promise.resolve({ ok: false, reason: 'genie is not running' });
+    const sent = host.rowsFor(id);
+    const turnN = sent.filter((r) => r.event.kind === 'turn').length;
+    let mine = -1;
+    for (let i = sent.length - 1; i >= 0; i -= 1) if (sent[i]!.event.kind === 'turn') { mine = i; break; }
+    // Where this turn's words begin: after its own marker if nothing was running, else where the turn before it ended.
+    let from: number | null = host.turnsFor(id) >= turnN - 1 ? mine + 1 : null;
     return new Promise((resolve) => {
         let done = false;
         const finish = (r: { ok: true; reply: string } | { ok: false; reason: string }) => { if (done) return; done = true; clearTimeout(timer); off(); resolve(r); };
         const check = () => {
             const s = host.probe(id);
             if (!s || !s.running) return finish({ ok: false, reason: 'genie stopped before it answered' });
-            if (s.turnState !== 'idle') return;
-            const reply = host.rowsFor(id).slice(before).flatMap((r) => (r.event.kind === 'message' && r.event.speaker === 'agent' ? [r.event.text] : [])).join('\n\n');
+            const finished = host.turnsFor(id);
+            if (from === null && finished >= turnN - 1) from = Math.max(mine + 1, host.rowsFor(id).length);
+            if (finished < turnN || from === null) return;
+            const reply = host.rowsFor(id).slice(from).flatMap((r) => (r.event.kind === 'message' && r.event.speaker === 'agent' ? [r.event.text] : [])).join('\n\n');
             finish({ ok: true, reply });
         };
         const off = host.subscribe((changed) => { if (changed === id) check(); });

@@ -111,14 +111,17 @@ describe('ask, over a session host', () => {
     it('prompts, waits for the turn to end, and returns only the agent\u2019s words from that turn', async () => {
         const rows: Array<{ id: string; event: { kind: string; speaker?: string; text?: string }; at: number | null }> = [{ id: 'old', event: { kind: 'message', speaker: 'agent', text: 'earlier' }, at: 1 }];
         let turn: 'idle' | 'working' = 'idle';
+        let finished = 0;
         const listeners = new Set<(id: AgentId) => void>();
         const host: OsaHostLike = {
             prompt: (_id, text) => {
+                rows.push({ id: 't', event: { kind: 'turn' }, at: 2 });
                 rows.push({ id: 'p', event: { kind: 'message', speaker: 'you', text }, at: 2 });
                 turn = 'working';
                 queueMicrotask(() => {
                     rows.push({ id: 'r', event: { kind: 'message', speaker: 'agent', text: 'the MCP port is taken' }, at: 3 });
                     turn = 'idle';
+                    finished += 1;
                     for (const l of listeners) l('osa' as AgentId);
                 });
                 return true;
@@ -126,12 +129,13 @@ describe('ask, over a session host', () => {
             rowsFor: () => rows as never,
             probe: () => ({ running: true, turnState: turn }) as never,
             subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
+            turnsFor: () => finished,
         };
         expect(await askAndWait(host, 'osa', 'what is broken?', 1_000)).toEqual({ ok: true, reply: 'the MCP port is taken' });
     });
 
     it('a stopped OSA is a reason, not a hang', async () => {
-        const host: OsaHostLike = { prompt: () => false, rowsFor: () => [], probe: () => null, subscribe: () => () => {} };
+        const host: OsaHostLike = { prompt: () => false, rowsFor: () => [], probe: () => null, subscribe: () => () => {}, turnsFor: () => 0 };
         expect(await askAndWait(host, 'osa', 'hi', 1_000)).toMatchObject({ ok: false });
     });
 });
