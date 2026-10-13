@@ -43,6 +43,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // The agent TOLD about the open conflict (the banner says so only then), and whether Compare is open.
     const [told, setTold] = useState<string | null>(null);
     const [comparing, setComparing] = useState(false);
+    // `Show diff` on a change nobody reported: git's last commit for the open file, asked for on demand.
+    const [blindDiff, setBlindDiff] = useState<{ path: string; before: string | null } | null>(null);
     useEffect(() => { if (conflict === null) { setTold(null); setComparing(false); } }, [conflict]);
     const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
     // The dock's refusal rule needs to know (§4.4); reported on every change, and clean on unmount.
@@ -129,5 +131,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
               onCompare: () => setComparing((c) => !c),
           }
         : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={setFilter} />;
+    const lastCommitted = files.lastCommitted;
+    const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={setFilter} />;
 }

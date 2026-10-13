@@ -251,6 +251,8 @@ export interface GenieBridge {
         /** The workspace tree without .git or node_modules; `null` for an unknown workspace. */
         tree(workspaceId: string): Promise<readonly TreeNode[] | null>;
         open(workspaceId: string, path: string): Promise<OpenResult>;
+        /** The file as of the last commit — `Show diff` on a change nobody reported. Absent on a bridge with no host files. */
+        lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
         state(workspaceId: string): Promise<FilesState | null>;
         watch(workspaceId: string): Promise<void>;
         onChange(listener: (workspaceId: string) => void): () => void;
