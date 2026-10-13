@@ -305,8 +305,9 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             // The model CHOSEN (null = the provider's default); the one IN USE is the session's, as reported.
             model: record.model ?? null,
             instructions: record.instructions ?? null,
-            // Whether this provider can ask for approval at all (the driver's own claim); a Take Over window says nothing.
-            raisesApprovals: takeOver ? null : raisesApprovals(record.provider),
+            // Whether this agent can ask for approval at all (the driver's own claim, or a Claude agent set to ask before
+            // shell commands); a Take Over window says nothing.
+            raisesApprovals: takeOver ? null : raisesApprovals(record.provider, record.permissions),
         },
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),
@@ -678,7 +679,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:agent-set-mode', (_event, raw: unknown, mode: unknown) =>
         (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
     ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
-        (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all or edits' }));
+        (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
     ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
         (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
     ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>

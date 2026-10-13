@@ -1,4 +1,5 @@
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { AgentPermissions } from '../core/identity.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
@@ -70,7 +71,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; permissions?: 'all' | 'edits'; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -213,8 +214,8 @@ export interface GenieBridge {
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
-        /** What a Claude agent may do without asking: all tools, or edits only. Refused for a Codex agent. */
-        setPermissions(agentId: string, permissions: 'all' | 'edits'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */
+        setPermissions(agentId: string, permissions: AgentPermissions): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The model the agent starts with (any provider); `null` = the provider's default. Applies when it next starts. */
         setModel(agentId: string, model: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
     };

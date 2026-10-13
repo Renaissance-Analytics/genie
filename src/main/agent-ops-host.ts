@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
 import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
-import type { AgentRecord } from '../core/identity.js';
+import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
 
@@ -27,7 +27,7 @@ export interface AgentOpsPorts {
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
-        setPermissions(id: AgentRecord['id'], permissions: 'all' | 'edits'): Promise<AgentRecord | null>;
+        setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
     host: {
@@ -130,10 +130,10 @@ export async function setMode(ports: AgentOpsPorts, agentId: string, mode: Agent
 }
 
 /**
- * What a CLAUDE agent may do without asking (its session cannot ask a person mid-turn): all tools, or edits only.
- * Codex asks in the chat, so it has no such setting. Applies when the session next starts.
+ * What a CLAUDE agent may do: all tools, ask the person before shell commands, or edits only (shell refused).
+ * Codex asks in the chat for each approval, so it has no such setting. Applies when the session next starts.
  */
-export async function setPermissions(ports: AgentOpsPorts, agentId: string, permissions: 'all' | 'edits'): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+export async function setPermissions(ports: AgentOpsPorts, agentId: string, permissions: AgentPermissions): Promise<{ ok: true; record: AgentRecord } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (record.provider !== 'claude') return { ok: false, reason: `${record.name} runs on ${record.provider}; Codex asks in the chat for each approval, so it has no tool setting` };

@@ -1,6 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
-import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, threadIdIsResumable } from '../core/identity.js';
+import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, threadIdIsResumable } from '../core/identity.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
@@ -385,8 +385,8 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, mode }));
     }
 
-    /** What a Claude agent may do without asking: all tools, or edits only (shell refused). Read when its session starts. */
-    async setPermissions(agentId: AgentId, permissions: 'all' | 'edits'): Promise<AgentRecord | null> {
+    /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
+    async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }
 
