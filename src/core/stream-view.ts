@@ -208,7 +208,8 @@ function toolRow(
     const icon = event.toolKind === null ? 'circle-help' : (TOOL_ICONS[event.toolKind] ?? 'wrench');
 
     const label = event.title ?? event.name ?? '(tool call)';
-    const main = isEdit ? label : [event.name, event.title].filter(Boolean).join('  ') || label;
+    // A title that only repeats the tool's name (`Grep Grep`) is said once.
+    const main = isEdit ? label : [event.name, event.title !== event.name ? event.title : null].filter(Boolean).join('  ') || label;
 
     // `rawInput === null` means the agent did not send this call's arguments — never `{}`. An
     // inspector opened on nothing is a panel that appears and says nothing, which reads as a
@@ -493,6 +494,26 @@ export function activityRows(rows: readonly TimedEvent[]): TimedEvent[] {
             continue;
         }
         out.push(r);
+    }
+    return joinToolCalls(out);
+}
+
+/**
+ * ONE ROW PER TOOL CALL. A call arrives as a `tool_call` and then its `tool_call_update`s — same toolCallId, usually no
+ * name, title or kind. Each update is folded into the call's own row, where the call was: name, title, kind and input
+ * from the first frame that said them, status from the latest. An update whose call never arrived keeps its own row.
+ */
+export function joinToolCalls(rows: readonly TimedEvent[]): TimedEvent[] {
+    const out: TimedEvent[] = [];
+    const at = new Map<string, number>();
+    for (const r of rows) {
+        const e = r.event;
+        if (e.kind !== 'tool' || e.toolCallId === '') { out.push(r); continue; }
+        const i = at.get(e.toolCallId);
+        if (i === undefined) { at.set(e.toolCallId, out.length); out.push(r); continue; }
+        const prev = out[i]!;
+        const p = prev.event as typeof e;
+        out[i] = { ...prev, event: { ...p, name: p.name ?? e.name, title: p.title ?? e.title, toolKind: p.toolKind ?? e.toolKind, rawInput: p.rawInput ?? e.rawInput, status: e.status } };
     }
     return out;
 }
