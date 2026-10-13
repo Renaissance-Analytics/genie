@@ -165,6 +165,20 @@ if (-not $SkipInstaller) {
     $unpacked = Join-Path $installDir 'resources\app.asar.unpacked\node_modules\node-pty'
     Write-Output ("node-pty unpacked: " + (Test-Path $unpacked))
 
+    # Two Start-menu shortcuts (the owner, 2026-10-13): electron-builder's own, and build/installer.nsh's doctor one —
+    # the same executable with --doctor. The normal one is the positive control: it must be there too.
+    Step 'both Start-menu shortcuts: Genie, and Genie (doctor mode) with --doctor'
+    $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    $normalLink = Join-Path $menu 'Genie.lnk'
+    $doctorLink = Join-Path $menu 'Genie (doctor mode).lnk'
+    if (-not (Test-Path $normalLink)) { throw "no Start-menu shortcut at $normalLink" }
+    if (-not (Test-Path $doctorLink)) { throw "no doctor-mode shortcut at $doctorLink" }
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($doctorLink)
+    if ($lnk.TargetPath -ne $exe) { throw "the doctor shortcut targets '$($lnk.TargetPath)', not $exe" }
+    if ($lnk.Arguments -ne '--doctor') { throw "the doctor shortcut's arguments are '$($lnk.Arguments)', not --doctor" }
+    Write-Output "shortcuts: $normalLink; $doctorLink -> $($lnk.TargetPath) $($lnk.Arguments)"
+
     Step 'a real window, from the INSTALLED app'
     Run 'node scripts\smoke-seed.mjs'
     Drive $exe @('--remote-debugging-port=9222') 'installed'
@@ -180,6 +194,9 @@ if (-not $SkipInstaller) {
     Start-Process $uninst -ArgumentList '/S' -Wait
     Start-Sleep 2
     Write-Output ("install dir gone: " + (-not (Test-Path $exe)))
+    if (Test-Path $doctorLink) { throw "uninstall left the doctor-mode shortcut at $doctorLink" }
+    if (Test-Path $normalLink) { throw "uninstall left the Start-menu shortcut at $normalLink" }
+    Write-Output "shortcuts removed: both"
 }
 
 Write-Output ""
