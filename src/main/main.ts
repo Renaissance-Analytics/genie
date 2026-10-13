@@ -19,7 +19,7 @@ import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTy
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
-import { SessionHost, providerBinary } from './session-host.js';
+import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
@@ -299,6 +299,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             mode: record.mode,
             accessScope: record.accessScope,
             instructions: record.instructions ?? null,
+            // Whether this provider can ask for approval at all (the driver's own claim); a Take Over window says nothing.
+            raisesApprovals: takeOver ? null : raisesApprovals(record.provider),
         },
         session: host.probe(record.id),
         rows: host.rowsFor(record.id),

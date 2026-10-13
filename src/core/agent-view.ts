@@ -200,6 +200,15 @@ export interface BudgetPanel {
  * reports none, so there is no Cost row at all** — not a zero, which claims the work was free,
  * and not a dash, which reads as zero.
  */
+/**
+ * THE APPROVAL POLICY SENTENCE (`genie-2-dashboard-design.md` §8.3): for a provider whose driver raises no approvals,
+ * say so — an empty approvals history otherwise reads as "nothing needed approval" when the truth is "nothing could
+ * ask". `null` for a provider that asks, and for one Genie knows nothing about.
+ */
+export function approvalPolicySentence(name: string, provider: string, raises: boolean | null | undefined): string | null {
+    return raises === false ? `${name} proceeds without asking — ${provider} raises no approvals, so its edits are not gated by you.` : null;
+}
+
 export function budgetFor(session: LiveSession | null, cost: number | null, turns: number): BudgetPanel | null {
     if (!session) return null;
     if (session.contextUsed === null || session.contextSize === null || session.contextSize <= 0) return null;
