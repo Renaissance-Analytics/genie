@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, readdir as readdirP, readFile as readFileP, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { lstat, mkdir, readdir as readdirP, readFile as readFileP, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
@@ -12,6 +12,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { writeAgentRouters } from './agent-routers.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
@@ -116,7 +117,7 @@ export interface ComposedServices {
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] } };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
     syncConfig(workspacePath: string): Promise<SyncResult[]>;
-    /** The Genie 2 protocol files under `.agents/_genie/` (separate from the four config-sync targets). */
+    /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md (separate from the four config-sync targets). */
     syncAgentDocs(workspacePath: string): Promise<void>;
     /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
     readonly plugins: PluginHost;
@@ -391,6 +392,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                     read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
                     write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
                     list: async (d) => { try { return await readdirP(d); } catch { return []; } },
+                },
+            });
+            // The routers and RULES.md, after the protocol they import; Genie 1's routers and RULES.md repaired.
+            if (settings.snapshot().mcp_sync_agents === false) return;
+            await writeAgentRouters({
+                workspacePath,
+                stamp: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+                fs: {
+                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
+                    isSymlink: async (p) => { try { return (await lstat(p)).isSymbolicLink(); } catch { return false; } },
+                    unlink: async (p) => { await unlinkP(p); },
+                    exists: async (p) => { try { await lstat(p); return true; } catch { return false; } },
                 },
             });
         },
