@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" class="dark">
+    <head>
+        <meta charset="utf-8" />
+        <!--
+          Genie is dark-first and must also work light. `dark` is on <html> from the start so
+          the first paint is not a flash of the wrong theme; `initTheme` then takes over and
+          follows the stored choice, or the OS when there isn't one.
+        -->
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:"
+        />
+        <title>Genie — doctor mode</title>
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="/src/renderer/doctor-main.tsx"></script>
+    </body>
+</html>

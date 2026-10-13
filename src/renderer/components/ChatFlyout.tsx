@@ -74,7 +74,8 @@ export interface ChatFlyoutProps {
     answeringApproval?: string | null | undefined;
     onAnswerApproval?: ((optionId: string) => void) | undefined;
     onSend: (text: string) => void;
-    onTogglePin: () => void;
+    /** Absent = no pin control (the doctor window: the chat is the page, not a panel). */
+    onTogglePin?: (() => void) | undefined;
     onClose: () => void;
     /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
@@ -131,6 +132,7 @@ export function ChatFlyout({
                     </span>
                 ) : null}
 
+                {onTogglePin ? (
                 <button
                     type="button"
                     data-chat-pin={pinned ? 'on' : 'off'}
@@ -141,6 +143,7 @@ export function ChatFlyout({
                 >
                     <Icon name="pin" size="xs" />
                 </button>
+                ) : null}
 
                 {/* No close button on a pinned dock: a pin says this panel stays, and `Esc`
                     does not close it either. Unpin first — which is one click and reversible. */}

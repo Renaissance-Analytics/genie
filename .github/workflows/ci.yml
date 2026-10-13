@@ -70,6 +70,8 @@ jobs:
           test -f dist/main/main.js
           test -f dist/main/doctor.js
           test -f dist/main/preload.cjs
+          test -f dist/main/doctor-preload.cjs
+          test -f dist/renderer/doctor.html
 
           # CommonJS, not ESM. `require`/`exports` present and no bare `import ... from`.
           grep -q "require(" dist/main/preload.cjs
@@ -77,10 +79,13 @@ jobs:
 
           # Relative asset paths, or the window is white.
           ! grep -qE '(src|href)="/' dist/renderer/index.html
+          ! grep -qE '(src|href)="/' dist/renderer/doctor.html
 
           # Tailwind actually scanned our sources: the board's exact column template, the
           # 280px palette box and the rail's 30px rows all have to be in the stylesheet.
-          css=$(ls dist/renderer/assets/*.css)
+          # Two pages now (Genie and the doctor window), so two stylesheets: read the one index.html links.
+          css="dist/renderer/$(grep -m1 -oE 'assets/[^"]+\.css' dist/renderer/index.html)"
+          test -f "$css"
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
           grep -q "30px" "$css"
