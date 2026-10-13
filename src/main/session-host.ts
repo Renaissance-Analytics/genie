@@ -154,6 +154,8 @@ interface Running {
     rows: TimedEvent[];
     startedAt: number;
     nextRowId: number;
+    /** The MCP servers this session was STARTED with, by name — what the Agent view says it has. */
+    mcp: readonly string[];
 }
 
 export class SessionHost {
@@ -251,7 +253,8 @@ export class SessionHost {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
 
-        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers: this.#mcpServersFor?.(record) ?? [] });
+        const mcpServers = this.#mcpServersFor?.(record) ?? [];
+        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
@@ -314,7 +317,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0 };
+        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name) };
 
         const session = new AgentSession({
             agentId: record.id,
@@ -498,7 +501,7 @@ export class SessionHost {
         const entry = this.#running.get(agentId);
         if (!entry) return null;
 
-        const { session, rows, startedAt } = entry;
+        const { session, rows, startedAt, mcp } = entry;
 
         // The last usage report, if any. Not a running total we maintain — the provider's own
         // figure, or nothing.
@@ -537,6 +540,7 @@ export class SessionHost {
             running: session.running,
             turnState: session.turnState,
             startedAt,
+            mcpServers: mcp,
             /*
              * The parked approval, straight from the session.
              *

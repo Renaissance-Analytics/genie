@@ -669,6 +669,18 @@ const GITHUB_APP_URL = 'https://github.com/apps/genie-aos';
  * each confirmed by the person after doing it in the browser (the app's own URL is plain text to
  * open). Config sync is a button per workspace; the last run's four results each get their own line.
  */
+/** Every tool Genie's MCP serves, with what it does — what every agent session is given (the owner: "no way to check"). */
+export function mcpToolsList(tools: readonly { name: string; description: string }[]) {
+    if (tools.length === 0) return <p data-mcp-tools="0" className="text-sm text-[var(--fg-3)]">No tools are registered.</p>;
+    return (
+        <ul data-mcp-tools={tools.length} className="mt-1 flex flex-col gap-1">
+            {tools.map((t) => (
+                <li key={t.name} data-mcp-tool={t.name} className="text-sm"><span className="font-mono text-xs">{t.name}</span>{t.description ? <span className="text-[var(--fg-3)]"> — {t.description}</span> : null}</li>
+            ))}
+        </ul>
+    );
+}
+
 function Integrations({ integrations, workspaces, onAction }: { integrations: FeatureData['integrations']; workspaces: readonly { id: string; path: string }[]; onAction: SurfaceProps['onAction'] }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
@@ -695,6 +707,13 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                             </p>
                         )}
                     </div>
+                    {/* What every agent gets from it: the tools, each with what it does. */}
+                    {integrations.mcp.url !== null && integrations.mcp.tools ? (
+                        <div data-mcp-tool-list="">
+                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tools every agent session is given</h3>
+                            {mcpToolsList(integrations.mcp.tools)}
+                        </div>
+                    ) : null}
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
                         {integrations.tynnSignedIn ? (

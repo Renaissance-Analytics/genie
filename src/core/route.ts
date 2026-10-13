@@ -82,7 +82,7 @@ const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'terminal
 const SETTINGS_GROUPS: readonly SettingsGroup[] = ['general', 'agents', 'workstation', 'appearance'];
 const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox'];
 /** The sub-routes lines and signals point at (`genie://settings/github`) → the group that holds them. */
-const SETTINGS_ALIASES: Readonly<Record<string, SettingsGroup>> = { github: 'workstation', tynn: 'general', agents: 'agents', updates: 'general' };
+const SETTINGS_ALIASES: Readonly<Record<string, SettingsGroup>> = { github: 'workstation', tynn: 'general', agents: 'agents', updates: 'general', mcp: 'workstation' };
 
 function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };

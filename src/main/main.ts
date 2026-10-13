@@ -334,6 +334,8 @@ let services: ComposedServices | null = null;
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
 /** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
+/** Every tool Genie's MCP serves (name and description), set once the registrations exist. */
+let mcpToolList: readonly { name: string; description: string }[] = [];
 /** The agents' MCP caller keys (one per agent, for the run). */
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
@@ -902,6 +904,7 @@ async function boot(): Promise<void> {
         remoteTransport: remoteSocket.transport,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
         mcpVerification: () => mcpVerified,
+        mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
         // A plain list, never `registry.snapshot()`: the snapshot builds the Deck's items, which ask this roster for
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
@@ -1065,6 +1068,7 @@ async function boot(): Promise<void> {
         });
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
+        mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         const endpointFile = join(genieHome(), 'mcp-endpoint.json');
         mcp = genieMcpServer({
             registrations,
