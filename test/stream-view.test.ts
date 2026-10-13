@@ -176,7 +176,7 @@ describe('an edit row', () => {
 
 describe('usage and plan rows', () => {
     it('reads a usage row in mono with the figures the wire actually carried', () => {
-        const row = ledgerRow(timed({ kind: 'usage', used: 182_000, size: 200_000, cost: 0.61 }));
+        const row = ledgerRow(timed({ kind: 'usage', used: 182_000, size: 200_000, cost: 4.12, turnCost: 0.61 }));
         expect(row).toMatchObject({ icon: 'gauge', mono: true });
         expect(row.main).toBe('context 182k / 200k · $0.61 this turn');
     });

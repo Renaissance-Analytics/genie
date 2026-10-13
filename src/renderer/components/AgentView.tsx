@@ -1023,7 +1023,7 @@ export function AgentView({
                              */}
                             {budget && budget.cost !== null ? (
                                 <p data-rail-cost className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">
-                                    ${budget.cost.toFixed(2)} · {budget.turns} turns
+                                    {`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}
                                 </p>
                             ) : budget ? (
                                 <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>

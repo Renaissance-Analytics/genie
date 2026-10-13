@@ -345,7 +345,8 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             // No cost field AT ALL when the provider reports none — codex reports none. A
             // `$0.00` would claim the turn was free.
             const parts = [`context ${thousands(row.event.used)} / ${thousands(row.event.size)}`];
-            if (row.event.cost !== null) parts.push(`$${row.event.cost.toFixed(2)} this turn`);
+            // The TURN's cost, resolved from the running totals — never the running total under this name.
+            if (typeof row.event.turnCost === 'number') parts.push(`$${row.event.turnCost.toFixed(2)} this turn`);
             return { ...base, icon: 'gauge', tone: 'muted', kind: 'usage', main: parts.join(' · '), mono: true, lane: null };
         }
 
@@ -458,6 +459,32 @@ export function findRows(rows: readonly TimedEvent[], query: string): readonly T
  *  - **a drop in usage** — which is what a compaction looks like. A naive difference would
  *    report a thought that gave tokens back.
  */
+/**
+ * What each turn cost, from the session's running totals: a usage report's cost minus the previous report's. The
+ * first report in the thread is its own rise (nothing ran before it). A FALL — a `/clear`, or an older CLI that
+ * restarted its totals on resume — says nothing about that turn, so it gets none; the next rise is measured from it.
+ */
+export function resolveTurnCosts(rows: readonly TimedEvent[]): readonly TimedEvent[] {
+    let previous: number | null = null;
+    return rows.map((r) => {
+        if (r.event.kind !== 'usage') return r;
+        const cost = r.event.cost;
+        if (cost === null) return { ...r, event: { ...r.event, turnCost: null } };
+        const rise = previous === null ? cost : cost - previous;
+        previous = cost;
+        return { ...r, event: { ...r.event, turnCost: rise >= 0 ? Math.round(rise * 1e6) / 1e6 : null } };
+    });
+}
+
+/** The session's cost: the latest report's running total, or `null` when the provider reported none. */
+export function sessionCostOf(rows: readonly TimedEvent[]): number | null {
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const e = rows[i]!.event;
+        if (e.kind === 'usage' && e.cost !== null) return e.cost;
+    }
+    return null;
+}
+
 export function resolveThinkTokens(rows: readonly TimedEvent[]): readonly TimedEvent[] {
     const out = rows.map((r) => ({ ...r }));
 
