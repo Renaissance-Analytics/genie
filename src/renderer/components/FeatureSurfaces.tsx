@@ -497,7 +497,7 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, group, workspaces = [], remoteConnect, query }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, group, workspaces = [], remoteConnect, query }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined }) {
     const values = data.settings.values;
     const active = group ?? 'general';
     // SEARCH across the four groups (§6.9). Transient view state: a query is not a place, so it is not in the route.
@@ -526,7 +526,8 @@ export function SettingsSurface({ data, onAction, group, workspaces = [], remote
                     </ul>
                 )
             ) : (
-            <Tabs activeTab={active} variant="underline" className="flex min-h-0 flex-1 flex-col">
+            // The tab IS the route's group: a click navigates there (Fancy's controlled Tabs changes only through onTabChange).
+            <Tabs activeTab={active} onTabChange={(g) => onNavigate(`genie://settings?group=${g}`)} variant="underline" className="flex min-h-0 flex-1 flex-col">
                 <Tabs.List className="px-5">
                     {settingGroups().map((g) => <Tabs.Tab key={g} value={g}>{GROUP_LABEL[g]}</Tabs.Tab>)}
                 </Tabs.List>
