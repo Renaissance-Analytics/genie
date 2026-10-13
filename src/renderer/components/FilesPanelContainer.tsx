@@ -17,8 +17,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     onClose: () => void;
     popped?: boolean | undefined;
     onPopOut?: (() => void) | undefined;
-    /** An agent is writing a file you have dirty (§4.3): ask it to pause; lifted when the buffer is clean again. */
-    onPause?: ((agent: string, path: string) => void) | undefined;
+    /**
+     * An agent is writing a file you have dirty (§4.3): ask it to pause; lifted when the buffer is clean again.
+     * `why === 'conflict'`: your save met its write — the notice says so (`conflictMessage`), and it stays paused.
+     */
+    onPause?: ((agent: string, path: string, why?: 'conflict') => void) | undefined;
     onResume?: ((agent: string, path: string) => void) | undefined;
     /** SINGLE mode (§4.6): this one file, opened on mount; no tree. */
     single?: string | undefined;
@@ -37,6 +40,10 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string; baseline?: string | undefined } | null>(null);
     // Agents asked to pause (§4.3): one ask per (agent, file) while your buffer is dirty; lifted when it is clean.
     const [paused, setPaused] = useState<readonly Pause[]>([]);
+    // The agent TOLD about the open conflict (the banner says so only then), and whether Compare is open.
+    const [told, setTold] = useState<string | null>(null);
+    const [comparing, setComparing] = useState(false);
+    useEffect(() => { if (conflict === null) { setTold(null); setComparing(false); } }, [conflict]);
     const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
     // The dock's refusal rule needs to know (§4.4); reported on every change, and clean on unmount.
     useEffect(() => { onDirtyChange?.(dirtyPath !== null); return () => { onDirtyChange?.(false); }; }, [dirtyPath, onDirtyChange]);
@@ -94,7 +101,17 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         if (!open?.ok || !buffer) return;
         void files.write(workspace.id, open.path, buffer.text, expected).then((r) => {
             if (r.ok) { setOpen({ ok: true, path: open.path, text: buffer.text, sha: r.sha }); setBuffer(null); setConflict(null); }
-            else if (r.conflict) setConflict({ ...r.conflict, baseline: open.text });
+            else if (r.conflict) {
+                setConflict({ ...r.conflict, baseline: open.text });
+                // The known writer is TOLD, once, and held paused until your buffer is clean (then `resumeMessage`).
+                // Without a known writer nobody is told, and the banner does not say anyone was.
+                const writer = state?.activity.find((a) => a.verb === 'writing' && a.path === open.path)?.agent ?? null;
+                if (writer !== null && onPause) {
+                    onPause(writer, open.path, 'conflict');
+                    setPaused((p) => (p.some((x) => x.agent === writer && x.path === open.path) ? p : [...p, { agent: writer, path: open.path }]));
+                    setTold(writer);
+                }
+            }
         });
     };
     const edit: FilesEdit | undefined = open?.ok
@@ -106,8 +123,10 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
               // keep mine: write against the CURRENT sha — an explicit choice, never implicit.
               onKeepMine: () => { if (conflict) save(conflict.sha); },
               onTakeTheirs: () => { if (conflict) { setOpen({ ok: true, path: open.path, text: conflict.onDisk, sha: conflict.sha }); setBuffer(null); setConflict(null); } },
-              // merge: show both — the disk's text is already on screen under the choices; your buffer stays. A real three-way merge is a later row.
-              onMerge: () => { if (conflict) setBuffer({ path: open.path, text: `<<<<<<< mine\n${buffer?.text ?? ''}=======\n${conflict.onDisk}>>>>>>> theirs\n` }); setConflict(null); },
+              // Compare (the board's primary): your buffer against the disk, read-only. Nothing is written by looking.
+              told,
+              comparing,
+              onCompare: () => setComparing((c) => !c),
           }
         : undefined;
     return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={setFilter} />;

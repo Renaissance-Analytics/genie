@@ -47,6 +47,8 @@ export const ICON_NAMES: readonly string[] = [
     'users', 'plus',
     // delivery kinds
     'git-commit-horizontal', 'file-code', 'arrow-right-left', 'message-square-reply',
+    // The file panel's conflict banner (the board's `git-merge`).
+    'git-merge',
     // The Dashboard's "From Tynn" door (§6.1).
     'link',
 

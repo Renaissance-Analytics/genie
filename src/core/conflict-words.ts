@@ -49,3 +49,26 @@ export function conflictWords(baseline: string, mine: string, theirs: string, wh
         ? `${who} changed ${theirPart} while you had ${myPart}`
         : `The file changed on disk at ${theirPart} while you had ${myPart}`;
 }
+
+/**
+ * The banner's body (the board). Your buffer is never touched by a conflict, so the first sentence is always true.
+ * The second is said only for an agent Genie actually told (`told`) — a known writer sent `conflictMessage` and
+ * held paused until your buffer is clean — never as a description of what might have happened.
+ */
+export function conflictBody(told: string | null): string {
+    const draft = 'Your version is kept as a draft and nothing is lost.';
+    return told ? `${draft} ${told} has been told the file is in conflict and is paused on it.` : draft;
+}
+
+/** The take button: the board's `Take atlas’s` when the writer is known, `Take theirs` when Genie does not know who. */
+export function takeLabel(writer: string | null): string {
+    return writer ? `Take ${writer}’s` : 'Take theirs';
+}
+
+/**
+ * How many hunks separate your buffer from the disk — the status bar's `conflict · 1 hunk`. The engine returns the
+ * unchanged stretches as hunks too; a hunk counts only when it holds a changed line.
+ */
+export function conflictHunks(mine: string, theirs: string): number {
+    return computeDiff(lines(mine), lines(theirs)).hunks.filter((h) => h.lines.some((l) => l.side === 'before' || l.side === 'after')).length;
+}

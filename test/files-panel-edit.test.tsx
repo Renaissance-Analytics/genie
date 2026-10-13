@@ -4,8 +4,8 @@ import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/Fil
 
 /**
  * EDITING ON SCREEN (§4.3). The viewer is editable; a dirty buffer shows Save and is NEVER auto-reloaded;
- * when a save is refused because the file changed underneath, the panel offers `keep mine` / `take theirs`
- * / `merge` in place — nothing is discarded, and the tab says so. A clean buffer offers no Save.
+ * when a save is refused because the file changed underneath, the panel offers the board's `Compare` /
+ * `Keep mine` / `Take theirs` in place — nothing is discarded, and the banner says so. A clean buffer offers no Save.
  */
 
 const base: FilesPanelProps = {
@@ -16,7 +16,7 @@ const base: FilesPanelProps = {
     open: { ok: true, path: 'src/a.ts', text: 'one\n', sha: 'abc' },
     pinned: false,
     onSelect: () => {}, onCloseTab: () => {}, onPin: () => {}, onClose: () => {},
-    edit: { dirty: false, conflict: null, onChange: () => {}, onSave: () => {}, onKeepMine: () => {}, onTakeTheirs: () => {}, onMerge: () => {} },
+    edit: { dirty: false, conflict: null, onChange: () => {}, onSave: () => {}, onKeepMine: () => {}, onTakeTheirs: () => {}, onCompare: () => {} },
 };
 const render = (p: Partial<FilesPanelProps>) => renderToStaticMarkup(<FilesPanel {...base} {...p} />);
 
@@ -33,8 +33,9 @@ describe('editing', () => {
         expect(html).toContain('data-conflict="src/a.ts"');
         expect(html).toContain('data-action="keep-mine"');
         expect(html).toContain('data-action="take-theirs"');
-        expect(html).toContain('data-action="merge"');
-        expect(html).toMatch(/Nothing is discarded/);
+        expect(html).toContain('data-action="compare"');
+        expect(html).not.toContain('data-action="merge"');
+        expect(html).toContain('Your version is kept as a draft and nothing is lost.');
         expect(html).not.toContain('data-action="save-file"');
     });
 

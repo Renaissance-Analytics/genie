@@ -5,7 +5,7 @@ import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { FilesWindow } from './components/FilesWindow.js';
-import { pauseMessage, resumeMessage } from '../core/files-popout.js';
+import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
@@ -668,7 +668,7 @@ function DesktopApp({ bridge }: AppProps) {
                 loading={snapshot.workspaces === null}
                 files={resolvedBridge?.files ?? NO_FILES}
                 onBringBack={() => window.close()}
-                onPause={(agent, path) => tellAgent(agent, pauseMessage(path))}
+                onPause={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
                 onResume={(agent, path) => tellAgent(agent, resumeMessage(path))}
             />
         );
@@ -794,7 +794,7 @@ function DesktopApp({ bridge }: AppProps) {
             onFilesDirtyChange={setFilesDirty}
             onPopOutFiles={filesWindows ? (id) => { void filesWindows.popOut(id); } : undefined}
             onBringBackFiles={(id) => { void filesWindows?.bringBack(id); }}
-            onPauseAgent={(agent, path) => tellAgent(agent, pauseMessage(path))}
+            onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}

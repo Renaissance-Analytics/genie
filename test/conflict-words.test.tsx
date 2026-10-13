@@ -56,13 +56,13 @@ describe('the banner', () => {
         open: { ok: true, path: 'src/a.ts', text: mine, sha: 'abc' },
         pinned: false,
         onSelect: () => {}, onCloseTab: () => {}, onPin: () => {}, onClose: () => {},
-        edit: { dirty: true, conflict, onChange: () => {}, onSave: () => {}, onKeepMine: () => {}, onTakeTheirs: () => {}, onMerge: () => {} },
+        edit: { dirty: true, conflict, onChange: () => {}, onSave: () => {}, onKeepMine: () => {}, onTakeTheirs: () => {}, onCompare: () => {} },
     });
 
     it('says the board’s sentence when the baseline rides the conflict and an agent is writing the file', () => {
         const html = renderToStaticMarkup(<FilesPanel {...props({ path: 'src/a.ts', onDisk: theirs, sha: 'def', baseline: base }, true)} />);
         expect(html).toMatch(/data-conflict-words=""[^>]*>atlas changed lines 13–16 while you had unsaved edits to line 13</);
-        expect(html).toMatch(/Nothing is discarded/);
+        expect(html).toContain('Your version is kept as a draft and nothing is lost.');
     });
 
     it('does not name an author nobody is known to be; without a baseline it keeps the plain sentence (positive controls)', () => {
