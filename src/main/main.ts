@@ -880,7 +880,9 @@ async function boot(): Promise<void> {
         mcpEndpoint: () => mcp?.endpoint() ?? null,
         mcpVerification: () => mcpVerified,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
-        roster: () => (registry ? (registry.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) : []),
+        // A plain list, never `registry.snapshot()`: the snapshot builds the Deck's items, which ask this roster for
+        // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
+        roster: () => registry?.listAgents() ?? [],
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
