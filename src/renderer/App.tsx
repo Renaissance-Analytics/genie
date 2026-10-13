@@ -10,7 +10,7 @@ import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popo
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatSendFor, chatThreadFrom, chatThreads, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -657,10 +657,15 @@ function DesktopApp({ bridge }: AppProps) {
     const restartAndSend = (draftId: string): void => {
         const draft = drafts.find((d) => d.id === draftId);
         if (!draft || !resolvedBridge) return;
-        void resolvedBridge.agents.restart(draft.agentId, 'graceful').then((r) => {
-            if (!r.ok) return; // the refusal is the agent view's to show; the draft stays
-            return resolvedBridge.prompt(draft.agentId, draft.text).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
-        });
+        const send = () => resolvedBridge.prompt(draft.agentId, draft.text).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
+        // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
+        // one with no thread yet — a fresh install's genie).
+        const session = chatDetail?.agent.id === draft.agentId || parsed.chat === draft.agentId ? chatDetail?.session ?? null : null;
+        if (draftSendVia(session) === 'restart') {
+            void resolvedBridge.agents.restart(draft.agentId, 'graceful').then((r) => (r.ok ? send() : undefined));
+        } else {
+            void Promise.resolve(resolvedBridge.openAgent(draft.agentId)).then(send);
+        }
     };
     const chatBase = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
     const chatThread: ChatThread | null = chatBase === null
@@ -830,6 +835,7 @@ function DesktopApp({ bridge }: AppProps) {
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
+            onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {
                 // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because

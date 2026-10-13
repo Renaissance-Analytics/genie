@@ -186,6 +186,15 @@ function byTime(messages: readonly ChatMessage[], system: readonly ChatMessage[]
     return [...out, ...pending];
 }
 
+/**
+ * How an undelivered message reaches its agent: a session that BROKE restarts on its thread; an agent that is not running
+ * (never started, or stopped) is STARTED — a graceful restart would refuse it when there is no thread yet, which is how a
+ * fresh install's genie could never be reached.
+ */
+export function draftSendVia(session: { failure: unknown } | null): 'start' | 'restart' {
+    return session !== null && session.failure !== null && session.failure !== undefined ? 'restart' : 'start';
+}
+
 /** The fields of an inbox message the observed thread reads (`main/inbox-store.ts`'s `InboxMessage`). */
 export interface MailLike {
     readonly id: string;

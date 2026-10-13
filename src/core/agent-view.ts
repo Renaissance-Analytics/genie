@@ -127,6 +127,8 @@ export interface HeaderActions {
     restart: boolean;
     /** In the error state: the Take Over window is the terminal. */
     openTerminal: boolean;
+    /** A declared agent that is not running, and not broken (broken has its restart): start it. */
+    start: boolean;
     takeOver: boolean;
     chat: boolean;
 }
@@ -136,7 +138,8 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity): 
     const managed = fidelity === 'declared' && session !== null;
     const broken = managed && session.failure !== null;
     const running = managed && !broken && session.running && session.turnState === 'working';
-    return { stop: running, restart: broken, openTerminal: broken, takeOver: true, chat: true };
+    const start = fidelity === 'declared' && !broken && (session === null || !session.running);
+    return { stop: running, restart: broken, openTerminal: broken, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

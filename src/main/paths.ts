@@ -42,6 +42,14 @@ export function genieHome(home: string = homedir()): string {
     return join(home, '.genie');
 }
 
+/**
+ * The Genie OSA's home: `~/.genie/osa`. The OSA belongs to the whole workstation, not a workspace; Genie writes its
+ * baked-in instructions and skills here (core/osa-home.ts) and runs it here.
+ */
+export function osaHomeDir(home: string = homedir()): string {
+    return join(genieHome(home), 'osa');
+}
+
 /** The directory the installer owns. Read-only at runtime, as far as Genie is concerned. */
 export function installDir(execPath: string): string {
     return join(execPath, '..');
