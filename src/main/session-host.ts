@@ -129,6 +129,16 @@ export function driverEvents(events: DriverEvents): {
     };
 }
 
+/**
+ * A Claude agent's driver options: its cwd, its resume, and the PERMISSION MODE it starts with. Claude's driver cannot
+ * ask a person (CLAUDE_DRIVER_CAPABILITIES.permissionRequests is false), and with no mode Claude Code refused every tool
+ * that needs approval — the owner's agent could not run git, artisan or its tests. `all` (the default) →
+ * `bypassPermissions`; `edits` → `acceptEdits`, where file edits go through and shell is refused.
+ */
+export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits' } {
+    return { cwd, ...(resumeSessionId ? { resumeSessionId } : {}), permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions' };
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
@@ -137,7 +147,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ cwd, ...resume, ...binary, ...mcp }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp }, driverEvents(options.events));
 
         case 'codex':
             return (options) => new CodexDriver({ cwd, ...resume, ...binary, ...mcp }, driverEvents(options.events));
