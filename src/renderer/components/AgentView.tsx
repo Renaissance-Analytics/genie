@@ -93,6 +93,9 @@ export interface AgentOpsProps {
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
+    /** A Claude agent's tools: all, or edits only (shell refused). Absent = no control (a window that cannot set it). */
+    readonly permissions?: 'all' | 'edits';
+    readonly onSetPermissions?: (permissions: 'all' | 'edits') => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
@@ -992,6 +995,17 @@ export function AgentView({
                                 </button>
                             </div>
                             <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
+                            {/* A Claude session cannot ask mid-turn, so what it may do is chosen here; Codex asks in the chat. */}
+                            {agent.provider === 'claude' && ops.onSetPermissions ? (
+                                <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
+                                    Tools {agent.name} may use
+                                    <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                        <option value="all">all tools</option>
+                                        <option value="edits">edits only — shell refused</option>
+                                    </select>
+                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>
+                                </label>
+                            ) : null}
                             <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
                                 Who may message {agent.name}
                                 <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">

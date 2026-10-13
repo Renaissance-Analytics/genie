@@ -69,7 +69,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; permissions?: 'all' | 'edits'; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -210,6 +210,8 @@ export interface GenieBridge {
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** What a Claude agent may do without asking: all tools, or edits only. Refused for a Codex agent. */
+        setPermissions(agentId: string, permissions: 'all' | 'edits'): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /**

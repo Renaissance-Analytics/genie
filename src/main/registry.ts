@@ -385,6 +385,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, mode }));
     }
 
+    /** What a Claude agent may do without asking: all tools, or edits only (shell refused). Read when its session starts. */
+    async setPermissions(agentId: AgentId, permissions: 'all' | 'edits'): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, permissions }));
+    }
+
     /** The agent's own half of who may message it (§6.4). */
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }));

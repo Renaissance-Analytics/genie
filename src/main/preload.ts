@@ -101,6 +101,7 @@ const bridge: GenieBridge = {
         setBudget: (agentId, dailyLimitUsd) => ipcRenderer.invoke('genie:agent-set-budget', agentId, dailyLimitUsd) as never,
         setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,
         setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
+        setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
         diagnose: (agentId) => ipcRenderer.invoke('genie:agent-diagnose', agentId) as never,
     },
 

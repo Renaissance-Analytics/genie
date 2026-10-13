@@ -504,6 +504,8 @@ function DesktopApp({ bridge }: AppProps) {
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
+              permissions: detail?.agent.permissions ?? 'all',
+              onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? `${permissions === 'edits' ? 'edits only' : 'all tools'} — applies when it next starts` : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },

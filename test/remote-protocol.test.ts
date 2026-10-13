@@ -47,7 +47,8 @@ describe('the capability table', () => {
         // 51 since `workspaces.locateRepo` (the board's "Locate repo" on a Dashboard group fault): host-only — the picker is the host's.
         // 52 since `workspaces.commitsSince` (an observed agent's index): a read, workspace-scoped.
         // 51 since `updates.cancel` left with the upgrade drain (no agent is asked for a handoff any more).
-        expect(REMOTE_METHODS.length).toBe(51);
+        // 52 since `agents.setPermissions` (a Claude agent's tools, chosen on its Agent view): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(52);
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
