@@ -653,7 +653,8 @@ export class AgentSession {
         if (event.kind === 'think') {
             const open = this.#openMessage;
             if (open && open.event.kind === 'think') {
-                open.event = { ...open.event, text: open.event.text + event.text };
+                // The provider's estimate is cumulative for the thought: the newest one stands; a chunk without one keeps it.
+                open.event = { ...open.event, text: open.event.text + event.text, estimate: event.estimate ?? open.event.estimate ?? null };
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
             }

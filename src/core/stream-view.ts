@@ -333,7 +333,8 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
                 // arrives is the worst experience in agent UIs, and a thought is the one thing
                 // that streams continuously.
                 expandable: false,
-                meta: row.event.tokens === null ? null : `Δ+${thousands(row.event.tokens)} tok`,
+                // The provider's own estimate when it gave one (`~`: an estimate); otherwise the derived Δ, or nothing.
+                meta: typeof row.event.estimate === 'number' ? `~${thousands(row.event.estimate)} tok` : row.event.tokens === null ? null : `Δ+${thousands(row.event.tokens)} tok`,
                 lane: 'thoughts',
             };
 

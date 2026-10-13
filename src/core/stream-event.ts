@@ -36,6 +36,12 @@ export type StreamEvent =
            * someone's spend, invented here.
            */
           tokens: number | null;
+          /**
+           * The PROVIDER's estimate of this thought's tokens — prism-acp's
+           * `_meta["particle.academy/thinking_tokens_estimate"]`, kept out of `usage_update` because it is an
+           * estimate. Shown as `~842 tok`; `null` (or absent, in older threads) when the provider gave none.
+           */
+          estimate?: number | null;
       }
     | {
           kind: 'tool';
@@ -142,6 +148,14 @@ function toolStatusOf(value: unknown): ToolStatus | null {
  * unrecognised comes back as `kind: 'unknown'` instead, so a gap is visible rather than
  * silent.
  */
+/** prism-acp's thinking-token ESTIMATE on a thought chunk, or `null` when the provider sent none. */
+function thinkingEstimateOf(update: Record<string, unknown>): number | null {
+    const meta = update['_meta'];
+    if (!isRecord(meta)) return null;
+    const n = meta['particle.academy/thinking_tokens_estimate'];
+    return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {
     const kind = update['sessionUpdate'];
     if (typeof kind !== 'string') return null;
@@ -161,7 +175,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
         }
 
         case 'agent_thought_chunk':
-            return { kind: 'think', text: textOf(update), tokens: null };
+            return { kind: 'think', text: textOf(update), tokens: null, estimate: thinkingEstimateOf(update) };
 
         case 'tool_call':
         case 'tool_call_update':
