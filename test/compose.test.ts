@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
@@ -32,11 +33,17 @@ function fakePty() {
 let dir: string;
 let pty: ReturnType<typeof fakePty>;
 let services: ComposedServices;
+let roster: AgentRecord[] = [];
+/** An agent on the roster — what the registry hands the composed services. */
+const onRoster = (id: string, name: string, workspaceId: string): void => {
+    roster.push({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null } as never);
+};
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-compose-'));
     pty = fakePty();
-    services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    roster = [];
+    services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
 });
 
 afterEach(async () => {
@@ -84,7 +91,7 @@ describe('wiring', () => {
 
     it('the Deck items come from the stores, live', async () => {
         const agentId = 'agent_' + 'a'.repeat(32);
-        services.registerAgentName(agentId, { name: 'atlas', workspaceId: 'tynn' });
+        onRoster(agentId, 'atlas', 'tynn');
         await services.attention.imDone({ agentId: agentId as never, agentName: 'atlas', workspacePath: dir, handoff: 'done for today' });
         await services.inbox.send({ from: agentId as never, to: 'human', text: 'note' });
         const items = services.deckItems();

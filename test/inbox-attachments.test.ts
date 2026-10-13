@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
@@ -24,14 +25,19 @@ const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 let dir: string;
 let files: string;
 let services: ComposedServices;
+let roster: AgentRecord[] = [];
+/** An agent on the roster — what the registry hands the composed services. */
+const onRoster = (id: string, name: string, workspaceId: string): void => {
+    roster.push({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null } as never);
+};
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-inbox-att-'));
     files = await mkdtemp(join(tmpdir(), 'genie2-inbox-files-'));
     await writeFile(join(files, 'notes.md'), '# plan\nship it\n');
     await writeFile(join(files, 'tool.exe'), 'MZ');
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
-    services.registerAgentName('agent_a' as never, { name: 'atlas', workspaceId: 'tynn' });
-    services.registerAgentAddress('claude:atlas', 'agent_a' as never);
+    roster = [];
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
+    onRoster('agent_a', 'atlas', 'tynn');
 });
 afterEach(async () => {
     await services.shutdown();

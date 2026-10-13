@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { Registry } from '../src/main/registry.js';
@@ -22,10 +23,16 @@ const pty: PtyPort = {
 
 let dir: string;
 let services: ComposedServices;
+let roster: AgentRecord[] = [];
+/** An agent on the roster — what the registry hands the composed services. */
+const onRoster = (id: string, name: string, workspaceId: string): void => {
+    roster.push({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null } as never);
+};
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-signals-'));
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    roster = [];
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
 });
 
 afterEach(async () => {
@@ -42,8 +49,7 @@ describe('services.signals()', () => {
         await services.settings.set('github_installed', true);
         expect(services.signals({ osAgentWorking: false }).githubBlocked).toBe(false);
 
-        services.registerAgentName('agent_a' as never, { name: 'atlas', workspaceId: 'tynn' });
-        services.registerAgentAddress('claude:atlas', 'agent_a' as never);
+        onRoster('agent_a', 'atlas', 'tynn');
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'ping' });
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'pong' });
         expect(services.signals({ osAgentWorking: false }).uncollectedMail).toBe(2);

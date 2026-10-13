@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -26,10 +27,16 @@ const pty: PtyPort = {
 
 let dir: string;
 let services: ComposedServices;
+let roster: AgentRecord[] = [];
+/** An agent on the roster — what the registry hands the composed services. */
+const onRoster = (id: string, name: string, workspaceId: string): void => {
+    roster.push({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null } as never);
+};
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-'));
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    roster = [];
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
 });
 
 afterEach(async () => {
@@ -90,8 +97,7 @@ describe('actions', () => {
 
     it('inbox.send from the human reaches the agent by address, and the snapshot stays the human’s view', async () => {
         const a = 'agent_' + 'b'.repeat(32);
-        services.registerAgentName(a, { name: 'atlas', workspaceId: 'tynn' });
-        services.registerAgentAddress('claude:atlas', a);
+        onRoster(a, 'atlas', 'tynn');
         await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'hello atlas' });
         expect(services.inbox.unread(a as never).map((m) => m.text)).toEqual(['hello atlas']);
         await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:ghost', text: 'x' })).rejects.toThrow(/claude:ghost/);
