@@ -52,12 +52,13 @@ describe('statePill — the board’s words', () => {
 
 describe('headerActions — the board’s action set by state', () => {
     it('Stop while a turn runs; Restart only when broken; Open terminal only when broken; Take over and Chat always', () => {
-        expect(headerActions(session(), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, takeOver: true, chat: true });
-        expect(headerActions(session({ failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, takeOver: true, chat: true });
-        expect(headerActions(session({ running: false, turnState: 'idle' }), 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, takeOver: true, chat: true });
-        expect(headerActions(null, 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, takeOver: true, chat: true });
+        expect(headerActions(session(), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, start: false, takeOver: true, chat: true });
+        expect(headerActions(session({ failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, start: false, takeOver: true, chat: true });
+        // Not running and not broken: Start (the owner: there was no way to start the genie agent).
+        expect(headerActions(session({ running: false, turnState: 'idle' }), 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, start: true, takeOver: true, chat: true });
+        expect(headerActions(null, 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, start: true, takeOver: true, chat: true });
         // An observed agent is not managed: nothing to stop or restart; its window IS the terminal.
-        expect(headerActions(null, 'observed')).toEqual({ stop: false, restart: false, openTerminal: false, takeOver: true, chat: true });
+        expect(headerActions(null, 'observed')).toEqual({ stop: false, restart: false, openTerminal: false, start: false, takeOver: true, chat: true });
     });
 });
 

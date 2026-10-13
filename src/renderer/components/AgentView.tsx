@@ -176,6 +176,8 @@ export interface AgentViewProps {
     terminals?: GenieBridge['terminals'] | undefined;
     /** `Stop` while a turn runs (the board): stop the agent's work — §6.2 stop, everything about it kept. */
     onStop?: ((agentId: string) => void) | undefined;
+    /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
+    onStart?: ((agentId: string) => void) | undefined;
 }
 
 /**
@@ -212,7 +214,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -482,6 +484,13 @@ export function AgentView({
                 </span>
 
                 <div className="ml-auto flex items-center gap-1">
+                    {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
+                    {actions.start && onStart ? (
+                        <button type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                            <Icon name="play" size="xs" />
+                            Start
+                        </button>
+                    ) : null}
                     {/* STOP, while a turn runs (the board). Stop means stop (§6.2): identity, persona, inbox and history kept. */}
                     {actions.stop ? (
                         <button type="button" data-action="stop" title="Stop — the agent's work ends; everything about it is kept" onClick={() => onStop?.(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">

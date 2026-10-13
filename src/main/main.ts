@@ -44,7 +44,8 @@ import { electronBrowserView } from './electron-browser-view.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
-import { genieHome } from './paths.js';
+import { genieHome, installDir, osaHomeDir } from './paths.js';
+import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
 import { restoreSchedule } from '../core/upgrade-drain.js';
@@ -274,7 +275,8 @@ function createWindow(): BrowserWindow {
 
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
-    if (record.workspaceId === OS_WORKSPACE) return app.getPath('userData');
+    // The OSA belongs to the workstation: it runs in its own home, written at boot from its baked-in instructions.
+    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir();
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId);
     return workspace?.path ?? app.getPath('userData');
 }
@@ -418,6 +420,15 @@ async function boot(): Promise<void> {
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
+    await writeOsaHome({
+        dir: osaHomeDir(),
+        files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: app.getPath('userData') }),
+        fs: {
+            read: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
+            write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileText(p, text, 'utf8'); },
+        },
+    }).catch((error: unknown) => { console.error(`[genie] the OSA's home could not be written: ${(error as Error).message}`); });
     await importFromV1(theRegistry);
     await reapV1Runtime();
     registry.setProbe((id) => host?.probe(id) ?? null);

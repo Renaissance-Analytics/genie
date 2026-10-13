@@ -138,6 +138,8 @@ export interface ShellProps {
     onRestartAgent?: ((agentId: string) => void) | undefined;
     /** `Stop` in the Agent view's header while a turn runs (§6.2 stop). */
     onStopAgent?: ((agentId: string) => void) | undefined;
+    /** Start an agent that is not running (the Agent view's Start). */
+    onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -214,6 +216,7 @@ export function Shell({
     onTakeOver,
     onRestartAgent,
     onStopAgent,
+    onStartAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -463,6 +466,7 @@ export function Shell({
                             takeOver={agentDetail.takeOver ?? null}
                             log={agentDetail.log ?? []}
                             onStop={onStopAgent}
+                            onStart={onStartAgent}
                             terminals={terminals}
                         />
                     ) : null}
