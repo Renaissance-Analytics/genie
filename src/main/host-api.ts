@@ -1,5 +1,5 @@
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
-import type { AgentRecord } from '../core/identity.js';
+import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import type { RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
@@ -71,7 +71,7 @@ export interface HostApiDeps {
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
-        setPermissions(agentId: string, permissions: 'all' | 'edits'): Promise<unknown>;
+        setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
     };
@@ -143,7 +143,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setAccessScope':
                 return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
             case 'agents.setPermissions':
-                return deps.agentOps.setPermissions(str(args[0]), args[1] === 'edits' ? 'edits' : 'all');
+                return deps.agentOps.setPermissions(str(args[0]), args[1] === 'edits' || args[1] === 'ask' ? args[1] : 'all');
             case 'agents.setModel':
                 // `null` (or nothing, or empty) = back to the provider's default.
                 return deps.agentOps.setModel(str(args[0]), args[1] === null || args[1] === undefined || args[1] === '' ? null : str(args[1]));

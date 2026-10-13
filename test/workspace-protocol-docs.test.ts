@@ -50,7 +50,7 @@ describe('the per-provider files', () => {
             [`${W}/.agents/moic/AGENT.md`]: 'persona',
         });
         await run(fs);
-        expect(store.get(`${G}/genie-claude.md`)).toMatch(/Genie 2 for Claude Code[\s\S]*all tools[\s\S]*edits only/);
+        expect(store.get(`${G}/genie-claude.md`)).toMatch(/Genie 2 for Claude Code[\s\S]*all tools[\s\S]*ask before shell commands[\s\S]*edits only/);
         expect(store.get(`${G}/genie-codex.md`)).toMatch(/Genie 2 for Codex[\s\S]*approval[\s\S]*chat/);
         expect(store.get(`${G}/genie-aider.md`)).toMatch(/Genie 2 for aider[\s\S]*terminal/);
         for (const f of ['genie-claude.md', 'genie-codex.md', 'genie-aider.md']) expect(store.get(`${G}/${f}`)).not.toContain('genieGuide');

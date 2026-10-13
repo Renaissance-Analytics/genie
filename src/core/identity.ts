@@ -22,6 +22,15 @@ declare const AgentIdBrand: unique symbol;
 
 export type AgentId = string & { readonly [AgentIdBrand]: true };
 
+/**
+ * What a CLAUDE agent may do. Read when its session starts; absent = `all`.
+ * - `all` — every tool runs without asking (`--permission-mode bypassPermissions`);
+ * - `ask` — every tool runs, but a SHELL command (`Bash`) waits for the person's answer in the chat first, and runs
+ *   only on an explicit allow once (prism-acp's `permissionPrompts`, raised as `onRequestPermission`);
+ * - `edits` — file edits go through; shell commands are refused (`--permission-mode acceptEdits`).
+ */
+export type AgentPermissions = 'all' | 'edits' | 'ask';
+
 export function mintAgentId(): AgentId {
     return `agent_${randomBytes(16).toString('hex')}` as AgentId;
 }
@@ -96,10 +105,11 @@ export interface AgentRecord {
      */
     readonly mode: 'automated' | 'manual';
     /**
-     * What a CLAUDE agent may do without asking (its driver cannot ask a person): `all` tools, or file `edits` only —
-     * shell refused. Absent = `all`, so every agent registered before this field existed can still run its tools.
+     * What a CLAUDE agent may do: `all` tools, `ask` the person before shell commands, or file `edits` only — shell
+     * refused (see `AgentPermissions`). Absent = `all`, so every agent registered before this field existed can still
+     * run its tools.
      */
-    readonly permissions?: 'all' | 'edits';
+    readonly permissions?: AgentPermissions;
     /**
      * The model this agent's provider is started with — a name the provider accepts: Claude's `sonnet` / `opus` /
      * `haiku` or a full model id, Codex's model id. Absent = the provider's own default. Read when its session starts.

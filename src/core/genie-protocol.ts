@@ -46,7 +46,7 @@ export function providerProtocol(provider: string): string {
 
 # Genie 2 for Claude Code
 
-- As a session, Claude cannot ask the person for approval mid-turn. Each agent has a setting in its Agent view: **all tools** (the default) or **edits only** (file edits go through; shell commands are refused). If you need the shell and it is refused, say so in your reply.
+- As a session, each agent has a tool setting in its Agent view: **all tools** (the default; nothing waits), **ask before shell commands** (a shell command waits for the person's approval in the chat; wait for it, do not retry it while it waits — if it is denied, it did not run), or **edits only** (file edits go through; shell commands are refused). If you need the shell and it is refused, say so in your reply.
 - In a terminal, Claude Code asks for approval in the terminal as usual.
 `;
     }

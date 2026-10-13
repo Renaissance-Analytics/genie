@@ -18,6 +18,7 @@ import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { inspectorFor } from '../../core/inspector.js';
 import type { LiveSession } from '../../core/roster.js';
+import type { AgentPermissions } from '../../core/identity.js';
 import type { AgentTab } from '../../core/route.js';
 import type { StreamFilter, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
@@ -93,9 +94,9 @@ export interface AgentOpsProps {
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
-    /** A Claude agent's tools: all, or edits only (shell refused). Absent = no control (a window that cannot set it). */
-    readonly permissions?: 'all' | 'edits';
-    readonly onSetPermissions?: (permissions: 'all' | 'edits') => void;
+    /** A Claude agent's tools: all, ask before shell commands, or edits only (shell refused). Absent = no control (a window that cannot set it). */
+    readonly permissions?: AgentPermissions;
+    readonly onSetPermissions?: (permissions: AgentPermissions) => void;
     /** The model CHOSEN for the agent (`null` = the provider's default); the one IN USE is `session.model`. Absent `onSetModel` = no control. */
     readonly model?: string | null;
     readonly onSetModel?: (model: string | null) => void;
@@ -1019,12 +1020,13 @@ export function AgentView({
                                 </button>
                             </div>
                             <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
-                            {/* A Claude session cannot ask mid-turn, so what it may do is chosen here; Codex asks in the chat. */}
+                            {/* What a Claude agent may do is chosen here — all tools, ask before shell commands, or edits only; Codex asks in the chat. */}
                             {agent.provider === 'claude' && ops.onSetPermissions ? (
                                 <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
                                     Tools {agent.name} may use
-                                    <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                    <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : e.target.value === 'ask' ? 'ask' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
                                         <option value="all">all tools</option>
+                                        <option value="ask">ask me before shell commands</option>
                                         <option value="edits">edits only — shell refused</option>
                                     </select>
                                     <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>

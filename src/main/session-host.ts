@@ -4,16 +4,17 @@ import { statSync } from 'node:fs';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
 /**
- * Whether a provider's driver can ask for approval — the DRIVER's published claim (`permissionRequests`), read from
- * prism-acp's declaration rather than branched on a name. `null` for a provider Genie has no driver for: unknown is
- * not "no".
+ * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
+ * declaration rather than branched on a name; except that a Claude agent set to `ask` DOES ask: its shell commands
+ * raise `onRequestPermission` through prism-acp's `permissionPrompts` (see `claudeOptionsFor`). `null` for a provider
+ * Genie has no driver for: unknown is not "no".
  */
-export function raisesApprovals(provider: string): boolean | null {
-    if (provider === 'claude') return CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
+export function raisesApprovals(provider: string, permissions?: AgentPermissions): boolean | null {
+    if (provider === 'claude') return permissions === 'ask' ? true : CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
     return null;
 }
-import { threadIdIsResumable, type AgentId, type AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
 import {
@@ -130,14 +131,25 @@ export function driverEvents(events: DriverEvents): {
 }
 
 /**
- * A Claude agent's driver options: its cwd, its resume, and the PERMISSION MODE it starts with. Claude's driver cannot
- * ask a person (CLAUDE_DRIVER_CAPABILITIES.permissionRequests is false), and with no mode Claude Code refused every tool
- * that needs approval — the owner's agent could not run git, artisan or its tests. `all` (the default) →
- * `bypassPermissions`; `edits` → `acceptEdits`, where file edits go through and shell is refused. The agent's chosen
- * MODEL rides along (`--model`) when it has one; none = no key, and Claude Code picks its own default.
+ * A Claude agent's driver options: its cwd, its resume, and what it may do without asking. With no permission mode
+ * Claude Code refused every tool that needs approval — the owner's agent could not run git, artisan or its tests.
+ * - `all` (the default) → `bypassPermissions`: every tool runs.
+ * - `ask` → `bypassPermissions` PLUS prism-acp's `permissionPrompts` for `Bash`: every other tool (Genie's MCP tools
+ *   included) runs, and a shell command waits for the person — `onRequestPermission`, the same request Codex raises,
+ *   answered inline in the chat — and runs only on an explicit allow once. The hook's deny holds under bypass.
+ * - `edits` → `acceptEdits`: file edits go through and shell is refused. No prompts.
+ * The agent's chosen MODEL rides along (`--model`) when it has one; none = no key, and Claude Code picks its own default.
  */
-export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits'; model?: string } {
-    return { cwd, ...(resumeSessionId ? { resumeSessionId } : {}), permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions', ...(record.model ? { model: record.model } : {}) };
+export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits'; permissionPrompts?: { readonly tools: readonly string[] }; model?: string } {
+    return {
+        cwd,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions',
+        // BOTH shell tools: Bash, and PowerShell, which Claude Code also has on Windows — gating Bash alone would let a
+        // PowerShell command run unasked.
+        ...(record.permissions === 'ask' ? { permissionPrompts: { tools: ['Bash', 'PowerShell'] } } : {}),
+        ...(record.model ? { model: record.model } : {}),
+    };
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
@@ -556,10 +568,9 @@ export class SessionHost {
             /*
              * The parked approval, straight from the session.
              *
-             * `ClaudeDriver.permissionRequests` is false in prism-acp 0.6.1 — claude does not
-             * send these over ACP yet — and `CodexDriver`'s is true. So this is exercised today
-             * by codex and will light up for claude when 0.7.0 lands, with nothing here to
-             * change: only the driver's capability flips.
+             * Codex raises these for its approvals. Claude raises them only for an agent set to
+             * `ask` — its shell commands, through prism-acp's `permissionPrompts` (0.10.0). Both
+             * land here the same way, with nothing here to tell them apart.
              */
             pendingApproval: session.pendingApproval,
             parkedAt: session.parkedAt,
