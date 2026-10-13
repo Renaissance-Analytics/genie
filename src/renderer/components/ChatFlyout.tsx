@@ -1,4 +1,4 @@
-import { Icon, PromptInput } from '@particle-academy/react-fancy';
+import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
 import { ApprovalCard } from './ApprovalCard.js';
@@ -219,7 +219,8 @@ export function ChatFlyout({
                     ) : (
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
-                            <div className="text-[13px] leading-normal text-[var(--fg-2)]">{m.text}</div>
+                            {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
+                            <ContentRenderer value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
                         </div>
                     );
                 })}
