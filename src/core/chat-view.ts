@@ -45,7 +45,8 @@ export interface ChatMessage {
 export interface ChatChip {
     agentId: string;
     name: string;
-    state: AgentState;
+    /** `null` for genie, the OS agent: its tab carries Genie's mark, not a state Genie would be guessing. */
+    state: AgentState | null;
     fidelity: Fidelity;
     active: boolean;
     unread: number | null;
@@ -117,6 +118,33 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         context: detail ? chatContext(detail) : null,
         chips: chatChips(rows, subjectId),
     };
+}
+
+/** The OS agent's address in a route (`chat=genie`); its minted id resolves from the name. */
+const GENIE = 'genie';
+const isOsAgent = (r: AgentRow): boolean => r.workspaceId === '__genie__' && r.name === GENIE;
+/** How many conversations the tabs remember. */
+const KEPT = 8;
+
+/**
+ * THE CHAT'S TABS, across workspaces (the board's flyout: `atlas · lark · rook · genie`): the conversations you
+ * opened, newest first; then any agent waiting on you that is not already there; genie, the OS agent, always last.
+ * An agent no longer on the board drops out rather than showing a name that opens nothing.
+ */
+export function chatThreads(agents: readonly AgentRow[], opened: readonly string[], subjectId: string | null): ChatChip[] {
+    const os = agents.find(isOsAgent) ?? null;
+    const onBoard = agents.filter((r) => !isOsAgent(r));
+    const tab = (r: AgentRow): ChatChip => ({ agentId: r.id, name: r.name, state: r.state, fidelity: r.fidelity, active: r.id === subjectId, unread: null });
+    const first = opened.flatMap((id) => onBoard.filter((r) => r.id === id)).map(tab);
+    const waiting = onBoard.filter((r) => r.state === 'waiting' && !opened.includes(r.id)).map(tab);
+    const genie: ChatChip = { agentId: GENIE, name: GENIE, state: null, fidelity: 'declared', active: subjectId === GENIE || (os !== null && subjectId === os.id), unread: null };
+    return [...first, ...waiting, genie];
+}
+
+/** A conversation opened: first in the tabs, once; the tabs keep eight. genie is never remembered — it is always there. */
+export function rememberThread(opened: readonly string[], id: string): string[] {
+    if (id === GENIE) return [...opened];
+    return [id, ...opened.filter((x) => x !== id)].slice(0, KEPT);
 }
 
 /** The fields of an inbox message the observed thread reads (`main/inbox-store.ts`'s `InboxMessage`). */

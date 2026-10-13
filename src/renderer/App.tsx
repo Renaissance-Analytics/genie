@@ -10,7 +10,7 @@ import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popo
 import type { DockPanel } from '../core/dock.js';
 import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatSendFor, chatThreadFrom, observedMail, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatSendFor, chatThreadFrom, chatThreads, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -206,6 +206,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         disconnect: () => { client?.close(); setClient(null); setState(null); },
     };
 }
+
+/** Where the chat's remembered tabs are kept between launches. */
+const THREADS_KEY = 'genie.chat.threads';
 
 const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
 
@@ -615,6 +618,18 @@ function DesktopApp({ bridge }: AppProps) {
      * pinned chat's subject does not follow the view when you navigate elsewhere.
      */
     const chatSubject = parsed.chat;
+    // The chat's tabs: every conversation you open is remembered, newest first (eight), across restarts.
+    const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
+        try { const v: unknown = JSON.parse(window.localStorage.getItem(THREADS_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+    });
+    useEffect(() => {
+        if (chatSubject === null) return;
+        setOpenedThreads((o) => {
+            const next = rememberThread(o, chatSubject);
+            try { window.localStorage.setItem(THREADS_KEY, JSON.stringify(next)); } catch { /* storage unavailable: the tabs live for this window */ }
+            return next;
+        });
+    }, [chatSubject]);
     // The thread is DERIVED (`core/chat-view.ts`): the subject's message events with their speakers, the context
     // line, the workspace's chips. A declared agent's `unread` stays `null` — nothing reads it yet, and `0` would claim
     // you are up to date. An observed agent's thread IS its inbox thread (`observedMail`), with the inbox's own count.
@@ -694,6 +709,7 @@ function DesktopApp({ bridge }: AppProps) {
             agentResolved={resolved}
             selectedRowId={selectedRowId}
             chatThread={chatThread}
+            chatThreads={chatThreads(snapshot.agents, openedThreads, chatSubject)}
             chatSession={chatDetail?.session ?? null}
             pinned={pinned}
             onNavigate={(r) => navigate(carryPinnedChat(r, parsed, pinned === 'chat'))}

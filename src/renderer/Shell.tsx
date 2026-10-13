@@ -1,15 +1,16 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
-import { DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
+import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
 import { filesDock } from '../core/files-popout.js';
 import { Deck } from './components/Deck.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
-import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
-import { Dashboard } from './components/Dashboard.js';
+import { ChatFlyout, GenieMark, type ChatThread } from './components/ChatFlyout.js';
+import { Dashboard, FidelityDot } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
@@ -75,6 +76,8 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
+    /** The chat's tabs (`core/chat-view.ts` `chatThreads`): on the strip when nothing is pinned, and heading the flyout. */
+    chatThreads?: readonly ChatChip[] | undefined;
     /** The chat subject's session (§4.4): its approval is answered where the composer is; its running turn gets `[Stop]`. */
     chatSession?: LiveSession | null | undefined;
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
@@ -186,6 +189,7 @@ export function Shell({
     agentResolved,
     selectedRowId,
     chatThread,
+    chatThreads,
     chatSession = null,
     pinned,
     onNavigate,
@@ -293,6 +297,8 @@ export function Shell({
     // The chat is the composer for ITS subject wherever the view is, so the approval comes from the subject's own session
     // (the Agent view shows the marker) — not only when the routed agent happens to be the subject.
     const chatApproval = chatThread ? chatSession?.pendingApproval ?? (agentDetail?.agent.id === chatThread.agentId ? agentDetail.session?.pendingApproval ?? null : null) : null;
+    // The tabs, with the open conversation marked: the strip and the flyout show the same ones.
+    const tabs = (chatThreads ?? threadsFor(snapshot.agents, [], parsed.chat)).map((t) => (chatThread ? { ...t, active: t.agentId === chatThread.agentId } : t));
     const chatRunning = chatThread !== null && chatSession !== null && chatSession !== undefined && chatSession.running && chatSession.turnState === 'working';
 
     return (
@@ -570,10 +576,34 @@ export function Shell({
                         </button>
                     </aside>
                 ) : null}
+                {/*
+                 * THE CHAT STRIP (the owner: "a flyout that is always present with chat tabs"): with nothing pinned, a tab
+                 * per conversation on the right edge of every surface, in the width the reserve keeps for it; a tab opens
+                 * that conversation in the flyout, which overlays it. A pinned panel takes the edge instead.
+                 */}
+                {pinned === null ? (
+                    <aside data-chat-strip="" aria-label="Chats" className="flex-col items-center gap-1 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] py-2" style={{ ...dockFrame, width: CHAT_STRIP_WIDTH, flexDirection: 'column' }}>
+                        {tabs.map((t) => (
+                            <button
+                                key={t.agentId}
+                                type="button"
+                                data-chat-tab={t.agentId}
+                                data-state={t.state ?? 'genie'}
+                                {...(t.active ? { 'data-active': 'true' } : {})}
+                                title={`Chat with ${t.name}`}
+                                onClick={() => onNavigate(formatRoute({ ...parsed, chat: t.agentId }))}
+                                className={`flex w-6 shrink-0 flex-col items-center gap-1.5 rounded-md py-1.5 text-[11px] ${t.active ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                            >
+                                {t.state === null ? <GenieMark /> : <FidelityDot fidelity={t.fidelity} state={t.state} />}
+                                <span className="max-h-24 overflow-hidden text-ellipsis whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>{t.name}</span>
+                            </button>
+                        ))}
+                    </aside>
+                ) : null}
                 {chatThread || parsed.chat ? (
                     <DockFrame pinned={pinned === 'chat'} style={dockFrame}>
                     <ChatFlyout
-                        thread={chatThread}
+                        thread={chatThread ? { ...chatThread, chips: tabs } : null}
                         pinned={pinned === 'chat'}
                         contextTokens={200_000}
                         approval={chatApproval}

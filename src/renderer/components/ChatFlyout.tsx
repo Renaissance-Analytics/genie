@@ -50,6 +50,11 @@ export interface ChatThread {
 const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
 
 /** `13:58` from epoch ms, in the local clock — only ever called with a real time. */
+/** genie's tab mark: Genie's own gradient, the title bar's mark in small — the OS agent has no state to guess. */
+export function GenieMark() {
+    return <span data-genie-mark="" className="size-2 shrink-0 rounded-[2px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />;
+}
+
 function clock(at: number): string {
     const d = new Date(at);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -151,7 +156,7 @@ export function ChatFlyout({
                 )}
             </div>
 
-            {/* THREAD CHIPS (the board): the agents sharing this workspace, the subject active; a click switches the thread. */}
+            {/* THREAD TABS (the board): your conversations, whoever waits on you, genie last; a click switches the thread. */}
             {thread?.chips && thread.chips.length > 0 ? (
                 <div data-chat-threads="" className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-[var(--border-1)] px-3 py-2">
                     {thread.chips.map((c) => (
@@ -163,7 +168,7 @@ export function ChatFlyout({
                             onClick={() => onPickThread?.(c.agentId)}
                             className={`flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] ${c.active ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
                         >
-                            <FidelityDot fidelity={c.fidelity} state={c.state} />
+                            {c.state === null ? <GenieMark /> : <FidelityDot fidelity={c.fidelity} state={c.state} />}
                             <span>{c.name}</span>
                             {c.unread !== null && c.unread > 0 ? <span className="rounded-full bg-[var(--violet-400)] px-1.5 font-mono text-[10px] text-white">{c.unread}</span> : null}
                         </button>
