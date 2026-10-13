@@ -1,3 +1,4 @@
+import type { CommsLink } from './comms.js';
 /**
  * THE DASHBOARD'S DECISIONS, with no React in sight.
  *
@@ -79,6 +80,8 @@ export interface AgentRow {
      * the suite was green about it. One fact, stored once.
      */
     commsAgeSeconds: number | null;
+    /** Each collaborator link (peer id, count, age), newest first — the collaborator reveal's lanes. `null` = not measured. */
+    links?: readonly CommsLink[] | null | undefined;
     /** Tokens used. `null` = not reported (an observed agent never reports it). */
     contextUsed: number | null;
     contextSize: number | null;

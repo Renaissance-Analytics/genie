@@ -1,3 +1,4 @@
+import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
 import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 import { threadIdIsResumable, type AgentId, type AgentRecord } from '../core/identity.js';
@@ -165,6 +166,7 @@ export class SessionHost {
 
     readonly #processTree: ProcessTree | undefined;
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
+    readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
 
     /**
      * `processTree` is INJECTABLE, and that is not a convenience — it is a safety fix.
@@ -192,12 +194,19 @@ export class SessionHost {
          * test about resume passes.
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
+        /**
+         * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
+         * cell and the collaborator reveal (core/comms.ts). Late-bound: the inbox exists after the host. Absent or
+         * `null` = not measured, and the cell stays blank rather than claiming nobody.
+         */
+        comms?: (agentId: AgentId, since: number) => Comms | null;
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
         this.#onThreadId = options.onThreadId;
+        this.#comms = options.comms;
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
@@ -521,8 +530,7 @@ export class SessionHost {
             contextUsed,
             contextSize,
             lastDelivery: null,
-            collaborators: null,
-            commsAgeSeconds: null,
+            ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: planFrom(rows),
         };
     }
@@ -567,4 +575,9 @@ function planFrom(rows: readonly TimedEvent[]): LiveSession['plan'] {
         return { step: done, of: steps.length, doing: doing?.content ?? '' };
     }
     return null;
+}
+
+/** A measured comms reading as the row fields; `null` (not measured) leaves all three `null`, never `0`. */
+function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
+    return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }
