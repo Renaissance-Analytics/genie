@@ -84,7 +84,7 @@ jobs:
           # Tailwind actually scanned our sources: the board's exact column template, the
           # 280px palette box and the rail's 30px rows all have to be in the stylesheet.
           # Two pages now (Genie and the doctor window), so two stylesheets: read the one index.html links.
-          css="dist/renderer/$(grep -m1 -oE "assets/[^"]+\.css" dist/renderer/index.html)"
+          css="dist/renderer/$(grep -m1 -oE 'assets/[^"]+\.css' dist/renderer/index.html)"
           test -f "$css"
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
