@@ -72,7 +72,9 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
         expect(html).toContain('data-tab="stream"');
         expect(html).toMatch(/data-tab="stream"[^>]*data-active="true"/);
         expect(html).toContain('data-stream="rows"');
-        expect(html).toContain('data-stream-row="m1"');
+        // The edit is activity; the message `m1` is a chat message and lives in the chat, not the Stream (the owner).
+        expect(html).toContain('data-stream-row="ed1"');
+        expect(html).not.toContain('data-stream-row="m1"');
     });
 
     it('shows the Stream with an EMPTY STATE rather than hiding it when there are no events', () => {
@@ -373,16 +375,16 @@ describe('a parked approval renders in exactly ONE place', () => {
 });
 
 describe('the lane bar', () => {
-    it('shows all four lanes with REAL counts', () => {
+    it('shows the three ACTIVITY lanes with REAL counts — no Messages lane: replies live in the chat', () => {
         const html = render();
 
-        for (const lane of ['messages', 'thoughts', 'tools', 'edits']) {
+        for (const lane of ['thoughts', 'tools', 'edits']) {
             expect(html).toContain(`data-lane="${lane}"`);
         }
-        // One message and one edit in the fixture, and a measured zero for the rest. A turn
-        // with no thoughts genuinely has none, and a reader asking "did it change anything?"
-        // is answered by the number.
-        expect(html).toMatch(/data-lane="messages"[\s\S]*?data-lane-count="1"/);
+        expect(html).not.toContain('data-lane="messages"');
+        // One edit in the fixture, and a measured zero for the rest. A turn with no thoughts genuinely has none, and a
+        // reader asking "did it change anything?" is answered by the number.
+        expect(html).toMatch(/data-lane="edits"[\s\S]*?data-lane-count="1"/);
         expect(html).toMatch(/data-lane="thoughts"[\s\S]*?data-lane-count="0"/);
     });
 
@@ -404,7 +406,7 @@ describe('the lane bar', () => {
         expect(html).not.toContain('data-lanes-timeline');
         expect(html).toContain('no times');
         // The counts survive: what is missing is WHEN, not whether.
-        expect(html).toMatch(/data-lane="messages"[\s\S]*?data-lane-count="1"/);
+        expect(html).toMatch(/data-lane="edits"[\s\S]*?data-lane-count="1"/);
     });
 
     it('says something different for an empty turn than for an untimed one', () => {
@@ -427,7 +429,7 @@ describe('the lane bar', () => {
         const html = render({ lanes: ['edits'] });
 
         expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
-        expect(html).toMatch(/data-lane="messages"[^>]*data-on="false"/);
+        expect(html).toMatch(/data-lane="thoughts"[^>]*data-on="false"/);
         expect(html).toMatch(/data-chip="all"[^>]*data-on="false"/);
         expect(html).not.toContain('data-lanes-clear');
     });

@@ -1,6 +1,6 @@
 import { laneSummary, type Lane } from './lanes.js';
 import type { LiveSession } from './roster.js';
-import { FACETS, LANES, facetsOf, laneOf, type Facet, type StreamFilter, type TimedEvent } from './stream-view.js';
+import { FACETS, LANES, activityRows, facetsOf, laneOf, type Facet, type StreamFilter, type TimedEvent } from './stream-view.js';
 
 /**
  * THE SESSION TIMELINE STRIP AND THE CHIPS ROW (the board's `Agent View`).
@@ -88,12 +88,14 @@ const FACET_LABEL: Record<Facet, string> = { usage: 'Usage', approvals: 'Approva
  * over the same rows (a zero is a fact: a turn with no failures has none). No Approvals chip — see `FACETS`.
  */
 export function chipRow(rows: readonly TimedEvent[], selected: readonly StreamFilter[] | null): readonly Chip[] {
-    const counts = laneSummary(rows).counts;
+    // Over the ACTIVITY rows — what the Stream shows; replies live in the chat, so there is no Messages chip.
+    const activity = activityRows(rows);
+    const counts = laneSummary(activity).counts;
     const facetCounts: Record<Facet, number> = { usage: 0, approvals: 0, errors: 0 };
-    for (const row of rows) for (const facet of facetsOf(row.event)) facetCounts[facet] += 1;
+    for (const row of activity) for (const facet of facetsOf(row.event)) facetCounts[facet] += 1;
     return [
-        { id: 'all', label: 'All', n: rows.length, on: selected === null },
-        ...LANES.map((lane): Chip => ({ id: lane, label: LABEL[lane], n: counts[lane], on: selected !== null && selected.includes(lane) })),
+        { id: 'all', label: 'All', n: activity.length, on: selected === null },
+        ...LANES.filter((lane) => lane !== 'messages').map((lane): Chip => ({ id: lane, label: LABEL[lane], n: counts[lane], on: selected !== null && selected.includes(lane) })),
         ...FACETS.map((facet): Chip => ({ id: facet, label: FACET_LABEL[facet], n: facetCounts[facet], on: selected !== null && selected.includes(facet) })),
     ];
 }

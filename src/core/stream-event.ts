@@ -102,6 +102,8 @@ export type StreamEvent =
           message: string;
           /** The provider's rate-limit headroom when the notice carried it (`core/headroom.ts`); `null` otherwise. */
           headroom?: Headroom | null;
+          /** A thinking-token ESTIMATE riding the notice (Claude's `system/thinking_tokens` frame); it belongs to its thought. */
+          estimate?: number | null;
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
@@ -241,6 +243,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 level: stringOrNull(notice['level']) ?? 'info',
                 message: stringOrNull(notice['message']) ?? '',
                 headroom: isRecord(update['_meta']) ? headroomFromMeta(update['_meta'][RATE_LIMIT_META]) : null,
+                estimate: thinkingEstimateOf(update),
             };
         }
 

@@ -14,7 +14,8 @@ const working: LiveSession = { running: true, turnState: 'working', startedAt: 1
 const t = (id: string, event: StreamEvent): TimedEvent => ({ id, event, at: 1_000 });
 const rows: TimedEvent[] = [
     t('a1:0', { kind: 'turn', n: 1, by: 'you' }),
-    t('a1:1', { kind: 'message', speaker: 'you', peerName: null, text: 'Run the artisan tests' }),
+    // Activity the query can find (a message would be in the chat, not the Stream).
+    t('a1:1', { kind: 'tool', toolCallId: 'c1', name: 'Bash', title: 'php artisan test', status: 'completed', toolKind: 'execute', rawInput: null }),
     t('a1:2', { kind: 'think', text: 'looking for the suite', tokens: null }),
     t('a1:3', { kind: 'message', speaker: 'agent', peerName: null, text: 'Six passed.' }),
 ];

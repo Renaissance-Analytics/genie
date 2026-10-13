@@ -64,8 +64,8 @@ describe('sessionTimeline', () => {
 describe('chipRow', () => {
     it('All with the row count, the four lanes with their counts, then Usage and Errors; All is on when nothing is filtered', () => {
         expect(chipRow(rows, null)).toEqual([
-            { id: 'all', label: 'All', n: 8, on: true },
-            { id: 'messages', label: 'Messages', n: 1, on: false },
+            // Over the ACTIVITY rows: the fixture's one message is a chat message, so All is 7 and there is no Messages chip.
+            { id: 'all', label: 'All', n: 7, on: true },
             { id: 'thoughts', label: 'Thoughts', n: 1, on: false },
             { id: 'tools', label: 'Tools', n: 1, on: false },
             { id: 'edits', label: 'Edits', n: 2, on: false },
@@ -80,7 +80,7 @@ describe('chipRow', () => {
         expect(chips.find((c) => c.id === 'all')!.on).toBe(false);
         expect(chips.find((c) => c.id === 'edits')).toMatchObject({ n: 2, on: true });
         expect(chips.find((c) => c.id === 'thoughts')).toMatchObject({ n: 0, on: true });
-        expect(chips.find((c) => c.id === 'messages')).toMatchObject({ n: 1, on: false });
+        expect(chips.find((c) => c.id === 'messages')).toBeUndefined();
     });
 });
 

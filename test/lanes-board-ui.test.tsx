@@ -27,7 +27,9 @@ describe('the lanes drawer', () => {
         const html = render(null);
         expect(html).toMatch(/data-lanes-span[^>]*>[^<]*Turn 14 · \d{2}:\d{2} – now/);
         expect(html).toContain('Drag across the lanes to select a range');
-        for (const lane of ['messages', 'thoughts', 'tools', 'edits']) expect(html).toContain(`data-lane-track="${lane}"`);
+        // Three activity tracks: replies live in the chat, so there is no messages track.
+        for (const lane of ['thoughts', 'tools', 'edits']) expect(html).toContain(`data-lane-track="${lane}"`);
+        expect(html).not.toContain('data-lane-track="messages"');
         expect(html).toMatch(/data-lane-track="thoughts"[\s\S]*?data-lane-block="k1"/);
         expect(html).toMatch(/data-lane-track="edits"[\s\S]*?data-tick="e1"/);
         expect((html.match(/data-axis-tick/g) ?? []).length).toBe(5);

@@ -15,7 +15,8 @@ import { FACETS, FILTERS } from '../../core/stream-view.js';
 const TICK: Record<TickKind, string> = { edit: 'bg-[var(--success)]', message: 'bg-[var(--primary)]', thought: 'bg-[var(--violet-400)]', tool: 'bg-[var(--fg-4)]' };
 const TICK_HEIGHT: Record<TickKind, string> = { edit: 'h-5', message: 'h-3.5', thought: 'h-2', tool: 'h-1.5' };
 const HEAD: Record<TimelineHead, string> = { ok: 'bg-[var(--success)]', warn: 'bg-[var(--warning)]', bad: 'bg-[var(--danger)]' };
-const LEGEND: readonly TickKind[] = ['edit', 'message', 'thought', 'tool'];
+// The activity's kinds: replies live in the chat, so the strip carries no message ticks and no message legend.
+const LEGEND: readonly TickKind[] = ['edit', 'thought', 'tool'];
 
 export interface TimelineStripProps {
     timeline: SessionTimeline;
