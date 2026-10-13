@@ -423,7 +423,6 @@ export class AgentSession {
                     this.#closeMessage();
 
                     this.#turns += 1;
-                    this.#changed();
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -443,6 +442,10 @@ export class AgentSession {
                         this.#failure = null;
                         this.#failedAt = null;
                     }
+                    // Announced AFTER the state is set: announced before, every listener read `working` and nothing
+                    // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
+                    // Working (found in the first doctor trial, 2026-10-13).
+                    this.#changed();
                 },
                 onExit: (code, signal) => {
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
