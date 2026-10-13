@@ -5,7 +5,7 @@ import { Shell } from '../src/renderer/Shell.js';
 import { EMPTY_SNAPSHOT, type GenieSnapshot } from '../src/renderer/bridge.js';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import type { AgentDetail } from '../src/renderer/bridge.js';
-import { DOCK_WIDTH } from '../src/core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_WIDTH } from '../src/core/dock.js';
 import type { ChatThread } from '../src/renderer/components/ChatFlyout.js';
 
 /**
@@ -287,7 +287,7 @@ const THREAD: ChatThread = {
 };
 
 describe('the dock geometry \u2014 three shipped failures live here', () => {
-    it('reserves NOTHING for an unpinned flyout, and the panel overlays', () => {
+    it('an unpinned flyout reserves nothing beyond the chat strip, and the panel overlays', () => {
         /**
          * **Unpinned means nothing underneath moves.** That is the entire difference between
          * the two states and the reason a pin is worth having — a flyout that shoved the board
@@ -295,7 +295,9 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
          */
         const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
 
-        expect(html).toContain('data-dock-reserve="0"');
+        // The same reserve as with the chat closed: opening it moves nothing.
+        expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
+        expect(render({ route: 'genie://dashboard?group=workspace' })).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
         expect(html).toContain('data-chat="overlay"');
         expect(html).toMatch(/data-chat="overlay"[^>]*class="[^"]*absolute/);
     });
@@ -385,7 +387,7 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
     it('shows no chat at all when the route names none', () => {
         const html = render({ route: 'genie://dashboard?group=workspace' });
         expect(html).not.toContain('data-chat=');
-        expect(html).toContain('data-dock-reserve="0"');
+        expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
     });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DOCK_SLOTS, DOCK_WIDTH, dockReserve, pinPanel } from '../src/core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_SLOTS, DOCK_WIDTH, dockReserve, pinPanel } from '../src/core/dock.js';
 
 /**
  * THE DOCK'S GEOMETRY, which has three shipped failures behind it.
@@ -25,11 +25,11 @@ describe('the width', () => {
         expect(DOCK_WIDTH).toBe(380);
     });
 
-    it('reserves NOTHING when nothing is pinned', () => {
-        // An unpinned panel overlays the right edge with a shadow and **nothing underneath
-        // moves**. That is the whole difference between the two states and the reason a pin is
-        // worth having.
-        expect(dockReserve(null)).toBe(0);
+    it('reserves only the chat strip when nothing is pinned', () => {
+        // With nothing pinned the chat is a strip of tabs on the right edge (the owner: "always present"), and it
+        // keeps its own width. An unpinned FLYOUT adds nothing to that — it overlays, and nothing underneath moves.
+        expect(dockReserve(null)).toBe(CHAT_STRIP_WIDTH);
+        expect(CHAT_STRIP_WIDTH).toBeLessThan(DOCK_WIDTH);
     });
 });
 

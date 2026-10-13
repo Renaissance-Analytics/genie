@@ -26,17 +26,24 @@
 /** The dock's width, in pixels. The single source for the panel AND for the reserve. */
 export const DOCK_WIDTH = 380;
 
+/**
+ * The chat strip's width (the owner: "the chat should be a flyout that is always present with chat tabs"). With
+ * nothing pinned, the chat is a strip of thread tabs on the right edge of every surface; it reserves its own width so
+ * nothing sits under it. Opening the flyout from it overlays, and the reserve does not change: nothing moves.
+ */
+export const CHAT_STRIP_WIDTH = 32;
+
 export type DockPanel = 'chat' | 'files' | 'lists';
 
 /**
  * The reserve the content row gives up, in pixels.
  *
- * `0` when nothing is pinned — and an UNPINNED panel reserves nothing: it overlays the right
- * edge with a shadow and **nothing underneath moves**. That is the whole difference between
- * the two states, and the reason a pin is worth having.
+ * The chat strip's width when nothing is pinned — and an UNPINNED flyout adds nothing to it: it overlays the right
+ * edge with a shadow and **nothing underneath moves**. That is the whole difference between the two states, and the
+ * reason a pin is worth having.
  */
 export function dockReserve(pinned: DockPanel | null): number {
-    return pinned === null ? 0 : DOCK_WIDTH;
+    return pinned === null ? CHAT_STRIP_WIDTH : DOCK_WIDTH;
 }
 
 export interface PinOutcome {

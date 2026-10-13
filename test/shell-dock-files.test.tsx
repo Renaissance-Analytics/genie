@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DOCK_WIDTH } from '../src/core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_WIDTH } from '../src/core/dock.js';
 import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/bridge.js';
 import { Shell } from '../src/renderer/Shell.js';
 
@@ -60,10 +60,10 @@ describe('the file panel in the dock', () => {
         expect(html).toContain('data-pin="on"');
     });
 
-    it('unpinned: no dock, no reserve; on the Workspace surface the panel is inline with the lamp off', () => {
+    it('unpinned: no dock, only the chat strip’s reserve; on the Workspace surface the panel is inline with the lamp off', () => {
         const dashboard = render({ pinned: null });
         expect(dashboard).not.toContain('data-dock="files"');
-        expect(dashboard).toContain('data-dock-reserve="0"');
+        expect(dashboard).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
         const workspace = render({ pinned: null, route: 'genie://workspace/tynn?panel=files' });
         expect(workspace).toContain('data-files-panel="tynn"');
         expect(workspace).toContain('data-pin="off"');
