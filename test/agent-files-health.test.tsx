@@ -1,14 +1,13 @@
-import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AgentFilesHealth, agentFilesLine } from '../src/core/agent-files-health.js';
-import { agentFilesList } from '../src/renderer/components/FeatureSurfaces.js';
 
 /**
  * NOTHING ABOUT A WORKSPACE'S AGENT FILES IS SILENT (the owner: "workspace agents cannot be left stranded"). The sync
  * upgrades a workspace's agent files on its own, at boot and when a workspace is added; until now what it changed and
  * what failed went to a console nobody reads. Every file a step touches is recorded, a failing step no longer stops the
- * steps after it, and Settings shows one line per workspace: current, upgraded (what changed) or failed (which step,
- * why). A config-sync failure is reported beside them and cleared by the next good run.
+ * steps after it, and each workspace's Settings shows its line: current, upgraded (what changed) or failed (which step,
+ * why) — with when and who (test/workspace-agent-files.test.tsx). A config-sync failure is reported beside them and
+ * cleared by the next good run.
  */
 const W = '/w/moic';
 
@@ -39,18 +38,10 @@ describe('the record of a sync', () => {
 
 describe('the line Settings shows', () => {
     it('current, upgraded (with what changed) or failed (with which step and why)', () => {
-        expect(agentFilesLine({ workspacePath: W, at: 0, changed: [], failed: [] })).toBe('current');
-        expect(agentFilesLine({ workspacePath: W, at: 0, changed: ['CLAUDE.md', 'RULES.md'], failed: [] })).toBe('upgraded: CLAUDE.md, RULES.md');
-        expect(agentFilesLine({ workspacePath: W, at: 0, changed: ['a', 'b', 'c', 'd', 'e'], failed: [] })).toBe('upgraded: a, b, c (+2 more)');
-        expect(agentFilesLine({ workspacePath: W, at: 0, changed: ['a'], failed: [{ step: 'routers', error: 'EACCES' }] })).toBe('failed: routers: EACCES');
+        expect(agentFilesLine({ workspacePath: W, at: 0, source: 'start', changed: [], failed: [] })).toBe('current');
+        expect(agentFilesLine({ workspacePath: W, at: 0, source: 'start', changed: ['CLAUDE.md', 'RULES.md'], failed: [] })).toBe('upgraded: CLAUDE.md, RULES.md');
+        expect(agentFilesLine({ workspacePath: W, at: 0, source: 'start', changed: ['a', 'b', 'c', 'd', 'e'], failed: [] })).toBe('upgraded: a, b, c (+2 more)');
+        expect(agentFilesLine({ workspacePath: W, at: 0, source: 'start', changed: ['a'], failed: [{ step: 'routers', error: 'EACCES' }] })).toBe('failed: routers: EACCES');
     });
 
-    it('one row per workspace, named by its folder; no section at all before the first sync (positive control: one report renders)', () => {
-        expect(renderToStaticMarkup(<>{agentFilesList([])}</>)).toBe('');
-        const html = renderToStaticMarkup(<>{agentFilesList([{ workspacePath: W, at: 0, changed: [], failed: [{ step: 'routers', error: 'EACCES' }] }])}</>);
-        expect(html.match(/data-agent-files-row=/g)).toHaveLength(1);
-        expect(html).toContain('data-state="failed"');
-        expect(html).toContain('moic');
-        expect(html).toContain('failed: routers: EACCES');
-    });
 });

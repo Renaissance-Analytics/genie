@@ -358,8 +358,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'plugins.setEnabled':
             await services.plugins.setEnabled(action.id, action.enabled);
             break;
-        case 'integrations.syncConfig':
-            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath) };
+        case 'workspace.syncAgentFiles':
+            // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
         case 'remote.revokeShare':
             if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
