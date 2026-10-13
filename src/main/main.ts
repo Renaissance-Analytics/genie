@@ -44,6 +44,7 @@ import { electronBrowserView } from './electron-browser-view.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
+import { channelFrom } from '../core/update-channel.js';
 import { genieHome, installDir, osaHomeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
@@ -1011,6 +1012,10 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
+    // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
+    updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));
+    composed.settings.onChange((key, value) => { if (key === 'update_channel') updates?.setChannel(channelFrom(value)); });
     // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
     {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.

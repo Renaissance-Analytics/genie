@@ -89,27 +89,20 @@ export function orphanReport(orphans: readonly RunningProcess[]): string {
 }
 
 /**
- * The updater's channel settings.
+ * The updater's channel settings — a function of the UPDATE CHANNEL now (the owner, 2026-10-12:
+ * "stable and dev update channels"; `src/core/update-channel.ts`).
  *
- * **`allowPrerelease` and `electron-builder.yml`'s `releaseType: prerelease` are a PAIR**, and
- * `test/upgrade.test.ts` asserts both. Asserting only the flag lets somebody change the
- * publish channel later and leave a flag that now does nothing — true, inert and reassuring.
- * Asserting only the channel lets somebody drop the flag. The pair is what keeps either from
- * going stale.
+ * **`allowPrerelease` and how a tag publishes are a PAIR, per channel**, and
+ * `test/update-channels.test.ts` and `test/upgrade.test.ts` assert both halves:
+ *
+ * - dev → `allowPrerelease: true` ↔ a suffixed tag (`v2.0.0-beta.20`) publishes as a prerelease
+ *   (electron-builder.yml's `releaseType: prerelease` default);
+ * - stable → `allowPrerelease: false` ↔ a plain tag (`v2.0.0`) publishes as a full release
+ *   (`.github/workflows/release.yml` overrides the default with `--config.publish.releaseType` (electron-builder's documented dot-notation override)).
+ *
+ * Asserting only the flag lets somebody change the publish side later and leave a flag that now
+ * does nothing — true, inert and reassuring. Asserting only the publish side lets somebody drop
+ * the flag. The pair is what keeps either from going stale. `autoDownload` is `false` on every
+ * channel: nothing downloads before a human has said yes.
  */
-export const updaterChannel = {
-    /**
-     * Genie publishes prereleases, so the updater must be willing to see them.
-     *
-     * This defaults to FALSE in `electron-updater`, and the previous build never set it. Every
-     * release it ever shipped was invisible to its own updater.
-     */
-    allowPrerelease: true,
-    /**
-     * Never download before a human has said yes.
-     *
-     * An update that downloads itself is an update that applies on next quit, which on a
-     * machine running a dozen agents is a surprise rather than a convenience.
-     */
-    autoDownload: false,
-} as const;
+export { updaterConfigFor } from '../core/update-channel.js';

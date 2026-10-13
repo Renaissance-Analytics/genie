@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ORPHAN_REPORT_LIMIT, orphansUnder, updaterChannel } from '../src/main/upgrade.js';
+import { ORPHAN_REPORT_LIMIT, orphansUnder, updaterConfigFor } from '../src/main/upgrade.js';
 
 /**
  * UPGRADES — §7, and two of the eight failures that ended the previous build.
@@ -17,20 +17,26 @@ import { ORPHAN_REPORT_LIMIT, orphansUnder, updaterChannel } from '../src/main/u
 
 describe('the updater can see the channel it publishes to', () => {
     /**
-     * Both halves, and that is the whole point of §7.3.
+     * Both halves, and that is the whole point of §7.3 — per channel now (the owner, 2026-10-12:
+     * "stable and dev update channels").
      *
      * Asserting only that `allowPrerelease` is set lets somebody later change the publish
-     * channel to `release` and leave a flag that now does nothing — true, inert, and
+     * default to `release` and leave a flag that now does nothing — true, inert, and
      * reassuring. Asserting only the publish config lets somebody drop the flag. The pair is
-     * what keeps either from going stale, because this test fails if they stop agreeing.
+     * what keeps either from going stale, because this test fails if they stop agreeing. The
+     * stable half (a plain tag → a full release) is held in test/update-channels.test.ts.
      */
-    it('publishes as a PRERELEASE', () => {
+    it('publishes as a PRERELEASE by default — what a suffixed tag is, and what the dev channel sees', () => {
         const yaml = readFileSync('electron-builder.yml', 'utf8');
         expect(yaml).toMatch(/releaseType:\s*prerelease/);
     });
 
-    it('and allows prereleases in the updater', () => {
-        expect(updaterChannel.allowPrerelease).toBe(true);
+    it('and the DEV channel allows prereleases in the updater', () => {
+        expect(updaterConfigFor('dev').allowPrerelease).toBe(true);
+    });
+
+    it('while the STABLE channel does not — it sees full releases only', () => {
+        expect(updaterConfigFor('stable').allowPrerelease).toBe(false);
     });
 
     it('states the link between them where somebody changing one will read it', () => {
@@ -39,6 +45,7 @@ describe('the updater can see the channel it publishes to', () => {
         // person edits.
         const yaml = readFileSync('electron-builder.yml', 'utf8');
         expect(yaml).toContain('allowPrerelease');
+        expect(yaml).toContain('test/update-channels.test.ts');
     });
 });
 

@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { QUIT_DELAY_MS, UpdateHost, type UpdaterPort, type UpdateState } from '../src/main/updater.js';
-import { updaterChannel, type RunningProcess } from '../src/main/upgrade.js';
+import { type RunningProcess } from '../src/main/upgrade.js';
+import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor } from '../src/core/update-channel.js';
 
 /**
  * THE UPDATER — §7, and §0.8: "the updater could never see a release".
  *
- * `electron-updater` was configured (`updaterChannel`) and never WIRED: nothing called
+ * `electron-updater` was configured (then a constant, now `updaterConfigFor`) and never WIRED: nothing called
  * `checkForUpdates`, so "check for updates" could not run at all. This host is the wiring, with
  * the library behind a port so every rule below is proved without a network, a feed or an
  * installer:
  *
- *   - the channel settings reach the library exactly once, as the pair the config test pins;
+ *   - the channel settings reach the library once at construction, as the pair the config test
+ *     pins (re-configuring on a channel change is test/update-channels.test.ts);
  *   - a check reports `available <version>` or `none`, and NOTHING downloads by itself;
  *   - a second check while one is in flight is rejoined, not duplicated;
  *   - download is refused before anything is available; install is refused before anything
@@ -93,14 +95,12 @@ async function settle() {
 }
 
 describe('channel', () => {
-    it('hands the library the channel pair exactly once, as the config test pins it', () => {
+    it('hands the library the DEFAULT channel’s pair exactly once at construction, as the config test pins it', () => {
         const fake = fakePort();
         host(fake);
         expect(fake.configured).toHaveLength(1);
-        expect(fake.configured[0]).toEqual({
-            allowPrerelease: updaterChannel.allowPrerelease,
-            autoDownload: updaterChannel.autoDownload,
-        });
+        expect(DEFAULT_UPDATE_CHANNEL).toBe('dev');
+        expect(fake.configured[0]).toEqual(updaterConfigFor('dev'));
         expect(fake.configured[0]!.allowPrerelease).toBe(true);
         expect(fake.configured[0]!.autoDownload).toBe(false);
     });

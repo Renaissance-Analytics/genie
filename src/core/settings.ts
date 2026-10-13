@@ -18,6 +18,7 @@ export type SettingGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 export type SettingScope = 'device' | 'workspace' | 'host';
 
 import { alertSoundSettings } from './alerts.js';
+import { LEGACY_CHANNEL_NAMES } from './update-channel.js';
 
 /** INTERNAL settings are remembered, never drawn and never found by search — state the UI writes, not a choice a person makes. */
 export type SettingDef =
@@ -26,7 +27,7 @@ export type SettingDef =
     | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'enum'; options: readonly string[]; default: string; hidden?: true };
 
 export const SETTINGS: readonly SettingDef[] = [
-    { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'Which releases this Genie offers to install.', type: 'enum', options: ['beta', 'stable'], default: 'beta' },
+    { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'stable: full releases only. dev: every build, including prereleases.', type: 'enum', options: ['stable', 'dev'], default: 'dev' },
     { key: 'do_not_disturb', group: 'general', scope: 'host', label: 'Do not disturb', description: 'An agent that asks is told your reply at once; its question still waits for you.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
@@ -84,6 +85,17 @@ export interface CarryOver {
     readonly dropped: Array<{ key: string; reason: string }>;
 }
 
+/**
+ * A value a setting has since RENAMED, read as its new name — a migration, never a rejection.
+ * The one place it happens: the store's read of settings.json and the v1 carry-over both pass
+ * through here. Today: `update_channel` `beta` → `dev` (the owner, 2026-10-12: "stable and dev
+ * update channels"; `src/core/update-channel.ts`).
+ */
+export function migrateLegacyValue(key: string, value: boolean | string): boolean | string {
+    if (key === 'update_channel' && typeof value === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_CHANNEL_NAMES, value)) return LEGACY_CHANNEL_NAMES[value]!;
+    return value;
+}
+
 function coerce(def: SettingDef, raw: string): boolean | string | null {
     if (def.type === 'boolean') {
         const v = raw.trim().toLowerCase();
@@ -91,7 +103,10 @@ function coerce(def: SettingDef, raw: string): boolean | string | null {
         if (['false', '0', 'off', 'no'].includes(v)) return false;
         return null;
     }
-    if (def.type === 'enum') return def.options.includes(raw) ? raw : null;
+    if (def.type === 'enum') {
+        const value = migrateLegacyValue(def.key, raw) as string;
+        return def.options.includes(value) ? value : null;
+    }
     return raw;
 }
 

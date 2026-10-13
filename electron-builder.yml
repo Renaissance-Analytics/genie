@@ -69,19 +69,29 @@ asarUnpack:
 afterPack: ./scripts/after-pack.cjs
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
-# PUBLISH — and the pair this half belongs to.
+# PUBLISH — and the pairs this half belongs to.
 #
 # §0.8: the previous build's updater **could never see a release.** Every release published as
 # a prerelease, `allowPrerelease` defaults to false in electron-updater, and it was never set.
 # "Check for updates" had never worked, for the entire life of the product.
 #
-# `releaseType: prerelease` HERE and `allowPrerelease: true` in `src/main/upgrade.ts` are a
-# pair. `test/upgrade.test.ts` asserts BOTH, so that:
+# Two update channels now (the owner, 2026-10-12: "stable and dev update channels";
+# src/core/update-channel.ts), each a pair of a publish type and an updater flag:
 #
-#   - changing this to `release` and leaving the flag fails the test rather than leaving a flag
-#     that is true, inert and reassuring;
-#   - dropping the flag and leaving this fails the test rather than leaving an updater that
-#     cannot see what it publishes.
+#   - DEV channel    ↔ prereleases:   `allowPrerelease: true`  sees a tag like v2.0.0-beta.20,
+#                                     published with `releaseType: prerelease` — the default HERE.
+#   - STABLE channel ↔ full releases: `allowPrerelease: false` sees a plain tag like v2.0.0,
+#                                     which .github/workflows/release.yml publishes by overriding
+#                                     this default with `--config.publish.releaseType=release`.
+#
+# test/update-channels.test.ts asserts every link (and test/upgrade.test.ts the default pair), so:
+#
+#   - changing this default to `release` fails the test rather than publishing every beta to
+#     the stable channel;
+#   - dropping the workflow's override fails the test rather than leaving a stable channel
+#     (`allowPrerelease` false) that is never offered anything;
+#   - dropping the flag fails the test rather than leaving a dev updater that cannot see what
+#     it publishes.
 #
 # If you change one, change the other, and the test will tell you if you did not.
 # ─────────────────────────────────────────────────────────────────────────────────────────
