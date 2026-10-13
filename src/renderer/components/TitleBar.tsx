@@ -8,6 +8,8 @@ import {
 } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
+import type { SignalAction } from '../../core/deck.js';
+import type { UpdateChip } from '../../core/update-chip.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -48,6 +50,10 @@ export interface TitleBarProps {
     remote?: { host: string; driver: string | null; driving: boolean; locked: boolean } | null | undefined;
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
+    /** The update, from `available` on (core/update-chip.ts); absent = nothing to act on. */
+    update?: UpdateChip | null | undefined;
+    /** Its next step: download, or restart to install. */
+    onUpdateAction?: ((action: SignalAction) => void) | undefined;
     /**
      * The platform, for the palette's key hint. Injected so a test can render both branches on
      * one machine; resolved from the browser after mount when it is not.
@@ -55,7 +61,7 @@ export interface TitleBarProps {
     platform?: FancyPlatform | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, update, onUpdateAction }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -172,6 +178,26 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     <span className="font-semibold">{remoteBadge(remote.host)}</span>
                     <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
                 </div>
+            ) : null}
+            {/* THE UPDATE (the owner: "in the header, not buried in the deck page"): a button when there is a next step. */}
+            {update ? (
+                update.action && onUpdateAction ? (
+                    <button
+                        type="button"
+                        data-update-chip={update.phase}
+                        data-update-action={update.action}
+                        onClick={() => onUpdateAction(update.action!)}
+                        className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--primary)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--primary)]/25"
+                    >
+                        <Icon name={update.action === 'update-install' ? 'rotate-cw' : 'download'} size="xs" />
+                        {update.label}
+                    </button>
+                ) : (
+                    <span data-update-chip={update.phase} className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--bg-2)] px-2 py-0.5 text-[11px] text-[var(--fg-3)]">
+                        <Icon name="download" size="xs" />
+                        {update.label}
+                    </span>
+                )
             ) : null}
             {workstation ? (
                 <div

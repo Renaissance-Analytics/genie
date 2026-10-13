@@ -64,6 +64,8 @@ export const ICON_NAMES: readonly string[] = [
     'message-square', 'brain', 'wrench', 'pencil', 'gauge', 'list-checks', 'scissors',
     'rotate-ccw', 'ellipsis',
     'eye-off', 'pause', 'play',
+    // The header's update chip: download, then restart to install.
+    'download', 'rotate-cw',
     // The timeline strip's `Lanes ▾` toggle (the board), open or closed.
     'chevron-down', 'chevron-up',
     // The turns layout's collapsed card.

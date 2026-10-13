@@ -206,24 +206,7 @@ export function signalStrip(state: SignalState): readonly Signal[] {
         signals.push({ kind: 'os-agent', label: 'genie is working', route: 'genie://agent/genie' });
     }
 
-    /*
-     * THE UPDATE (§7). Silent in idle / checking / none / error: there is nothing to act on,
-     * and "no update" is furniture. From `available` on, it is true, and the door is the next
-     * step rather than a place — the only signal shaped that way.
-     */
-    const u = state.update;
-    if (u && u.version) {
-        if (u.phase === 'available') {
-            signals.push({ kind: 'update', label: `Genie ${u.version} is available — download`, route: 'genie://deck', action: 'update-download' });
-        } else if (u.phase === 'downloading') {
-            const progress = u.percent === null ? '' : ` ${Math.round(u.percent)}%`;
-            signals.push({ kind: 'update', label: `Downloading Genie ${u.version}${progress}`, route: 'genie://deck' });
-        } else if (u.phase === 'downloaded') {
-            signals.push({ kind: 'update', label: `Genie ${u.version} is ready — restart to install`, route: 'genie://deck', action: 'update-install' });
-        } else if (u.phase === 'installing') {
-            signals.push({ kind: 'update', label: `Installing Genie ${u.version}…`, route: 'genie://deck' });
-        }
-    }
+    // THE UPDATE is not a Deck signal any more: it is in the header, on every surface (core/update-chip.ts).
 
     return signals;
 }
