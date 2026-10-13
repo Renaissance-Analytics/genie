@@ -470,6 +470,16 @@ function DesktopApp({ bridge }: AppProps) {
                   onSet: (key, value) => { void resolvedBridge.workspaces.setSetting(workspaceId, key, value).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   onReset: (key) => { void resolvedBridge.workspaces.resetSetting(workspaceId, key).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               },
+              // THIS workspace's agent files: Genie's last sync of it (when, and who) and a Sync now for it alone.
+              agentFiles: {
+                  report: features.integrations?.agentFiles?.find((r) => r.workspacePath === workspaceRow.path) ?? null,
+                  results: features.integrations?.lastSync?.workspaceId === workspaceId ? features.integrations.lastSync.results : null,
+                  onSync: () => {
+                      void (resolvedBridge.features ?? NO_FEATURES).act({ kind: 'workspace.syncAgentFiles', workspaceId, workspacePath: workspaceRow.path }).then(setFeatures).catch((error: unknown) => {
+                          setWsView((v) => ({ ...v, lastOutcome: (error as Error).message }));
+                      });
+                  },
+              },
               governs: {
                   children: workspaceRow.governs ?? [],
                   candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id, name: workspaceLabel(snapshot.workspaces, w.id) })),

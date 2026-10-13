@@ -6,8 +6,8 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 /**
  * INTEGRATIONS IN SETTINGS → WORKSTATION (§6.9). Tynn is optional: signed out shows the sign-in with
  * every gated row still listed and annotated; signed in shows Sign out. The GitHub App is TWO steps,
- * each with its own confirm, the app's own URL in plain text to open; done steps are marked. Config
- * sync is one button per workspace with the last run's four results shown each on its own line.
+ * each with its own confirm, the app's own URL in plain text to open; done steps are marked. A workspace's
+ * config sync lives in that workspace's Settings (test/workspace-agent-files.test.tsx); this section points there.
  */
 
 const integrations: NonNullable<FeatureData['integrations']> = {
@@ -49,11 +49,10 @@ describe('Integrations', () => {
         expect(authorized).toContain('data-action="github-confirm-install"');
     });
 
-    it('config sync: a Sync now per workspace and the last run’s four results, one line each with its own verdict', () => {
+    it('config sync is not here: no Sync now and no results even after a sync — the note says each workspace’s Settings has it', () => {
         const html = render({ ...integrations, lastSync: { workspaceId: 'tynn', results: [{ id: 'claude', label: 'Claude Code (.mcp.json)', ok: true }, { id: 'cursor', label: 'Cursor (.cursor/mcp.json)', ok: false, error: 'EACCES' }, { id: 'codex', label: 'Codex (.codex/config.toml)', ok: true }, { id: 'hooks', label: 'Claude Code Stop hook (.claude/settings.local.json)', ok: true }] } });
-        expect(html).toContain('data-action="sync-config"');
-        expect((html.match(/data-sync-result="/g) ?? []).length).toBe(4);
-        expect(html).toContain('data-sync-result="cursor" data-ok="false"');
-        expect(html).toMatch(/EACCES/);
+        expect(html).not.toContain('data-action="sync-config"');
+        expect(html).not.toContain('data-sync-result=');
+        expect(html).toContain('data-workspace-files-note');
     });
 });

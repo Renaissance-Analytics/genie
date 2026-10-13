@@ -12,7 +12,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
-import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep } from '../core/agent-files-health.js';
+import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
@@ -118,10 +118,10 @@ export interface ComposedServices {
     inboxReminders(input: { now: number; idle: (agentId: string) => boolean }): Array<{ agentId: string; text: string }>;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
-    /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
-    syncConfig(workspacePath: string): Promise<SyncResult[]>;
+    /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
+    syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
-    syncAgentDocs(workspacePath: string): Promise<void>;
+    syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
     /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
     readonly plugins: PluginHost;
     readonly pluginsDir: string;
@@ -371,11 +371,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         get plugins() { return plugins; },
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
-        syncConfig: async (workspacePath) => {
+        syncConfig: async (workspacePath, source = 'start') => {
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
-                agentFiles.config(workspacePath, [{ label: 'Genie MCP', ok: false, error: reason }]);
+                agentFiles.config(workspacePath, [{ label: 'Genie MCP', ok: false, error: reason }], Date.now(), source);
                 throw new Error(reason);
             }
             const values = settings.snapshot();
@@ -391,10 +391,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
             });
             const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
-            agentFiles.config(workspacePath, results);
+            agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
         },
-        syncAgentDocs: async (workspacePath) => {
+        syncAgentDocs: async (workspacePath, source = 'start') => {
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;
             // One node fs for every step; each write and removal is reported to the health record Settings reads.
@@ -420,7 +420,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 steps.push({ step: 'skills', run: (t) => writeAgentSkills({ workspacePath, stamp, fs: nodeFs(t) }) });
             }
             // A failing step is recorded and does not stop the steps after it.
-            const report = await agentFiles.run(workspacePath, steps);
+            const report = await agentFiles.run(workspacePath, steps, Date.now(), source);
             for (const f of report.failed) console.error(`[workspace-files] ${workspacePath} ${f.step}: ${f.error}`);
         },
         agentAddresses: () => roster().map((r) => ({ address: addressOf(r, 'full'), agentId: r.id as string, name: r.name })),

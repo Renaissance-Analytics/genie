@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
-import { agentFilesLine, type AgentFilesReport } from '../../core/agent-files-health.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
@@ -550,7 +549,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                                 ))}
                             </ul>
                             {g === 'workstation' ? <Plugins plugins={data.plugins} onAction={onAction} /> : null}
-                            {g === 'workstation' ? <Integrations integrations={data.integrations} workspaces={workspaces} onAction={onAction} /> : null}
+                            {g === 'workstation' ? <Integrations integrations={data.integrations} onAction={onAction} /> : null}
                             {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                         </Tabs.Panel>
                     ))}
@@ -699,30 +698,11 @@ const GITHUB_APP_URL = 'https://github.com/apps/genie-aos';
  * INTEGRATIONS (§6.9). Tynn is OPTIONAL: signed out shows the sign-in and every Tynn-gated row still
  * listed, annotated with the route; signed in shows Sign out. The GitHub App is TWO distinct steps,
  * each confirmed by the person after doing it in the browser (the app's own URL is plain text to
- * open). Config sync is a button per workspace; the last run's four results each get their own line.
+ * open). A workspace's agent files — their status and its Sync now — are in that workspace's own Settings; this
+ * section says so (the owner, 2026-10-13: a picker here, above Genie start's record of every workspace, read as
+ * "I chose one workspace but it updated all workspaces").
  */
 /** Every tool Genie's MCP serves, with what it does — what every agent session is given (the owner: "no way to check"). */
-/** One line per workspace: what the sync last did to its agent files (the owner: workspace agents are never left stranded). */
-export function agentFilesList(reports: readonly AgentFilesReport[]) {
-    if (reports.length === 0) return null;
-    return (
-        <div data-agent-files="">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Agent files in each workspace</h3>
-            <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                {reports.map((r) => {
-                    const state = r.failed.length > 0 ? 'failed' : r.changed.length > 0 ? 'upgraded' : 'current';
-                    return (
-                        <li key={r.workspacePath} data-agent-files-row={r.workspacePath} data-state={state} className="flex items-center gap-3 py-1.5 text-sm">
-                            <span className="font-medium">{baseName(r.workspacePath)}</span>
-                            <span className={`text-xs ${state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>{agentFilesLine(r)}</span>
-                        </li>
-                    );
-                })}
-            </ul>
-        </div>
-    );
-}
-
 export function mcpToolsList(tools: readonly { name: string; description: string }[]) {
     if (tools.length === 0) return <p data-mcp-tools="0" className="text-sm text-[var(--fg-3)]">No tools are registered.</p>;
     return (
@@ -734,7 +714,7 @@ export function mcpToolsList(tools: readonly { name: string; description: string
     );
 }
 
-function Integrations({ integrations, workspaces, onAction }: { integrations: FeatureData['integrations']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+function Integrations({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
         <section data-integrations className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
@@ -767,7 +747,10 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                             {mcpToolsList(integrations.mcp.tools)}
                         </div>
                     ) : null}
-                    {agentFilesList(integrations.agentFiles ?? [])}
+                    <div data-workspace-files-note="">
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Workspace agent files</h3>
+                        <p className="text-sm text-[var(--fg-3)]">Genie writes its MCP endpoint and its agent instructions into every workspace when it starts and when a workspace is added; the switches above choose which harness configs it writes. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings.</p>
+                    </div>
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
                         {integrations.tynnSignedIn ? (
@@ -809,25 +792,6 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                             })}
                         </ol>
                         {integrations.github.signal ? <p className="mt-1 text-xs text-[var(--warning)]">{integrations.github.signal.label}</p> : null}
-                    </div>
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Config sync</h3>
-                        <form className="flex items-center gap-2 text-sm" onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'integrations.syncConfig', workspaceId: w.id, workspacePath: w.path }); }}>
-                            <WorkspacePick workspaces={workspaces} name="workspace" />
-                            <button type="submit" data-action="sync-config" disabled={workspaces.length === 0} className={`${button} disabled:opacity-50`}>Sync now</button>
-                            <span className="text-xs text-[var(--fg-3)]">Writes Genie’s MCP endpoint into the four harness configs of that workspace.</span>
-                        </form>
-                        {integrations.lastSync ? (
-                            <ul className="mt-2 divide-y divide-[var(--border-1)]">
-                                {integrations.lastSync.results.map((r) => (
-                                    <li key={r.id} data-sync-result={r.id} data-ok={r.ok ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
-                                        <span>{r.label}</span>
-                                        <Badge variant="soft" size="sm">{r.ok ? 'written' : 'failed'}</Badge>
-                                        {r.error ? <span className="text-xs text-[var(--danger)]">{r.error}</span> : null}
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : null}
                     </div>
                 </>
             )}

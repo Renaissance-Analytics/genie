@@ -76,8 +76,8 @@ describe('integrations in the snapshot', () => {
         expect(installed.integrations!.github).toMatchObject({ blocking: false, blockedBy: null, signal: null });
     });
 
-    it('integrations.syncConfig writes the four targets into the workspace and reports each; the snapshot carries the last sync', async () => {
-        const snap = await handleFeatureAction(services, { kind: 'integrations.syncConfig', workspaceId: 'tynn', workspacePath: ws }, state());
+    it('workspace.syncAgentFiles writes the four targets into the workspace and reports each; the snapshot carries the last sync', async () => {
+        const snap = await handleFeatureAction(services, { kind: 'workspace.syncAgentFiles', workspaceId: 'tynn', workspacePath: ws }, state());
         expect(snap.integrations!.lastSync).toMatchObject({ workspaceId: 'tynn', results: [{ id: 'claude', ok: true }, { id: 'cursor', ok: true }, { id: 'codex', ok: true }, { id: 'hooks', ok: true }] });
         const mcp = JSON.parse(await readFile(join(ws, '.mcp.json'), 'utf8'));
         expect(mcp.mcpServers.genie.url).toBe('http://127.0.0.1:51717/mcp/abc');

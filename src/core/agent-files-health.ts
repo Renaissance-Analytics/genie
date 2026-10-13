@@ -3,10 +3,19 @@
  * left stranded"). A run is a list of steps (gitignore, protocol, routers, skills); each step reports every path it
  * writes or removes, and a step that throws is recorded and does not stop the steps after it. Config-sync results
  * (the four harness configs) are kept beside the run: their failures show until a good run clears them.
+ *
+ * Each record says WHEN and WHO: Genie's own sync at start (and when a workspace is added) or your Sync now in the
+ * workspace's Settings. Without it, Genie start's record read as the result of a click (the owner, 2026-10-13: "I chose
+ * one workspace but it updated all workspaces").
  */
+export type SyncSource = 'start' | 'you';
+
 export interface AgentFilesReport {
     readonly workspacePath: string;
+    /** When the latest of the docs run and the config sync happened. */
     readonly at: number;
+    /** Who started that latest one: Genie at start, or you. */
+    readonly source: SyncSource;
     /** Workspace-relative paths the last run wrote or removed. */
     readonly changed: readonly string[];
     readonly failed: ReadonlyArray<{ step: string; error: string }>;
@@ -18,10 +27,10 @@ export interface AgentFilesStep {
 }
 
 export class AgentFilesHealth {
-    readonly #runs = new Map<string, { at: number; changed: string[]; failed: Array<{ step: string; error: string }> }>();
-    readonly #config = new Map<string, Array<{ step: string; error: string }>>();
+    readonly #runs = new Map<string, { at: number; source: SyncSource; changed: string[]; failed: Array<{ step: string; error: string }> }>();
+    readonly #config = new Map<string, { at: number; source: SyncSource; failed: Array<{ step: string; error: string }> }>();
 
-    async run(workspacePath: string, steps: readonly AgentFilesStep[], now = Date.now()): Promise<AgentFilesReport> {
+    async run(workspacePath: string, steps: readonly AgentFilesStep[], now = Date.now(), source: SyncSource = 'start'): Promise<AgentFilesReport> {
         const changed: string[] = [];
         const failed: Array<{ step: string; error: string }> = [];
         const prefix = `${workspacePath.replace(/[\\/]+$/, '')}/`;
@@ -33,12 +42,12 @@ export class AgentFilesHealth {
         for (const s of steps) {
             try { await s.run(touched); } catch (error) { failed.push({ step: s.step, error: (error as Error).message }); }
         }
-        this.#runs.set(workspacePath, { at: now, changed, failed });
+        this.#runs.set(workspacePath, { at: now, source, changed, failed });
         return this.#report(workspacePath)!;
     }
 
-    config(workspacePath: string, results: ReadonlyArray<{ label: string; ok: boolean; error?: string }>): void {
-        this.#config.set(workspacePath, results.filter((r) => !r.ok).map((r) => ({ step: r.label, error: r.error ?? 'failed' })));
+    config(workspacePath: string, results: ReadonlyArray<{ label: string; ok: boolean; error?: string }>, now = Date.now(), source: SyncSource = 'start'): void {
+        this.#config.set(workspacePath, { at: now, source, failed: results.filter((r) => !r.ok).map((r) => ({ step: r.label, error: r.error ?? 'failed' })) });
     }
 
     list(): AgentFilesReport[] {
@@ -47,9 +56,11 @@ export class AgentFilesHealth {
 
     #report(workspacePath: string): AgentFilesReport | null {
         const run = this.#runs.get(workspacePath);
-        const config = this.#config.get(workspacePath) ?? [];
-        if (!run && config.length === 0 && !this.#config.has(workspacePath)) return null;
-        return { workspacePath, at: run?.at ?? 0, changed: run?.changed ?? [], failed: [...(run?.failed ?? []), ...config] };
+        const config = this.#config.get(workspacePath);
+        if (!run && !config) return null;
+        // The latest of the two says when, and who.
+        const latest = !config || (run && run.at > config.at) ? run! : config;
+        return { workspacePath, at: latest.at, source: latest.source, changed: run?.changed ?? [], failed: [...(run?.failed ?? []), ...(config?.failed ?? [])] };
     }
 }
 
@@ -59,4 +70,11 @@ export function agentFilesLine(r: AgentFilesReport): string {
     if (r.changed.length === 0) return 'current';
     const shown = r.changed.slice(0, 3).join(', ');
     return r.changed.length > 3 ? `upgraded: ${shown} (+${r.changed.length - 3} more)` : `upgraded: ${shown}`;
+}
+
+/** When, and who: `at Genie start · 11:54`, `by you · 12:55` (local time). */
+export function agentFilesWhen(r: AgentFilesReport): string {
+    const d = new Date(r.at);
+    const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return r.source === 'you' ? `by you · ${hhmm}` : `at Genie start · ${hhmm}`;
 }

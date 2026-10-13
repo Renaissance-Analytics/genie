@@ -9,7 +9,9 @@ import {
     type WorkspaceState,
 } from '../../core/workspace-view.js';
 import { codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
-import { Icon } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon } from '@particle-academy/react-fancy';
+import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
+import type { SyncResult } from '../../core/integrations.js';
 import type { GenieBridge } from '../bridge.js';
 import type { RepoEntry } from '../../core/repo-registry.js';
 import { SETTINGS } from '../../core/settings.js';
@@ -81,6 +83,16 @@ export interface WorkspaceOpsProps {
         readonly overridden: readonly string[];
         readonly onSet: (key: string, value: boolean | string) => void;
         readonly onReset: (key: string) => void;
+    } | undefined;
+    /**
+     * THIS workspace's agent files (§6.9): what Genie's last sync did here — when, and whether it was Genie's start or
+     * you — and a Sync now for this workspace alone. `report: null` = not synced since Genie started; `results` = the
+     * four harness configs of your last Sync now here. Absent = not offered.
+     */
+    readonly agentFiles?: {
+        readonly report: AgentFilesReport | null;
+        readonly results: readonly SyncResult[] | null;
+        readonly onSync: () => void;
     } | undefined;
 }
 
@@ -382,6 +394,39 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                             })}
                         </ul>
                     )}
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.agentFiles ? (
+                <section data-ws-agent-files="" className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Agent files</h2>
+                        <span className="text-[var(--fg-4)]">Genie’s instructions for agents here, and its MCP endpoint in this workspace’s Claude Code, Cursor and Codex configs; Genie syncs them when it starts</span>
+                        <span className="ml-auto" />
+                        <Button data-action="ws-sync-agent-files" size="sm" onClick={ops.agentFiles.onSync}>Sync now</Button>
+                    </div>
+                    {ops.agentFiles.report === null ? (
+                        <p data-ws-agent-files-state="none" className="mt-1 text-[var(--fg-3)]">Not synced since Genie started.</p>
+                    ) : (() => {
+                        const r = ops.agentFiles.report;
+                        const state = r.failed.length > 0 ? 'failed' : r.changed.length > 0 ? 'upgraded' : 'current';
+                        return (
+                            <p data-ws-agent-files-state={state} className="mt-1 flex flex-wrap items-center gap-2">
+                                <span className={state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-2)]'}>{agentFilesLine(r)}</span>
+                                <span className="text-[var(--fg-4)]">{agentFilesWhen(r)}</span>
+                            </p>
+                        );
+                    })()}
+                    {ops.agentFiles.results ? (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.agentFiles.results.map((r) => (
+                                <li key={r.id} data-sync-result={r.id} data-ok={r.ok ? 'true' : 'false'} className="flex items-center gap-3 py-1">
+                                    <span>{r.label}</span>
+                                    <Badge variant="soft" size="sm">{r.ok ? 'written' : 'failed'}</Badge>
+                                    {r.error ? <span className="text-[var(--danger)]">{r.error}</span> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : null}
                 </section>
             ) : null}
             {view === 'settings' && ops?.repos ? (

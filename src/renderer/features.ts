@@ -194,6 +194,6 @@ export type FeatureAction =
     | { kind: 'integrations.tynnToken'; token: string }
     /** The person confirms a GitHub App step they did in the browser; install needs authorize first. */
     | { kind: 'integrations.githubConfirm'; step: 'authorize' | 'install' }
-    | { kind: 'integrations.syncConfig'; workspaceId: string; workspacePath: string }
+    | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
