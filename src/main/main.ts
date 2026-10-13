@@ -29,7 +29,7 @@ import { readV1Catalog } from './v1-import.js';
 import { planV1Import } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
-import { mainWindowOptions } from '../core/window.js';
+import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray } from './tray.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
@@ -529,6 +529,19 @@ async function boot(): Promise<void> {
             if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
         }
     });
+    // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
+    // theme's own bar colours whenever the theme changes; they are applied to the window that sent them.
+    const overlayApplied = new Map<number, { color: string; symbolColor: string }>();
+    ipcMain.handle('genie:window-overlay-colors', (event, color: unknown, symbolColor: unknown) => {
+        if (process.platform === 'darwin' || !overlayColorsOk(color, symbolColor)) return false;
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (!win || win.isDestroyed()) return false;
+        win.setTitleBarOverlay({ color: color as string, symbolColor: symbolColor as string, height: TITLE_BAR_HEIGHT });
+        overlayApplied.set(event.sender.id, { color: color as string, symbolColor: symbolColor as string });
+        return true;
+    });
+    // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
+    ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
     ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
     autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
     ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);

@@ -280,6 +280,13 @@ export interface GenieBridge {
      * no-op. `install` answers with the §7.2 teardown report — what had to be stopped — before
      * the app quits to apply.
      */
+    /** The native window buttons drawn over the title bar (Windows / Linux); absent in a browser or on a phone. */
+    windowChrome?: {
+        readonly overlay: boolean;
+        setOverlayColors(color: string, symbolColor: string): Promise<boolean>;
+        /** What the buttons were last painted with; `null` before the first paint. */
+        current(): Promise<{ color: string; symbolColor: string } | null>;
+    } | undefined;
     updates: {
         state(): Promise<UpdateState>;
         subscribe(onChange: (state: UpdateState) => void): () => void;

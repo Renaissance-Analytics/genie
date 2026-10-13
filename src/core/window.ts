@@ -25,6 +25,29 @@ export interface MainWindowOptions {
     readonly titleBarOverlay?: { readonly height: number; readonly color: string; readonly symbolColor: string };
 }
 
+/**
+ * THE SPACE THE NATIVE BUTTONS TAKE, measured (the owner, 2026-10-13: "content covered"). The bar used
+ * `env(titlebar-area-width)`, which resolved to nothing in a real window, so the workstation chip slid under the
+ * buttons. The renderer reads Electron's `navigator.windowControlsOverlay` title-bar area instead: the inset is the
+ * viewport width less that area's right edge. A window that HAS the overlay but cannot measure it keeps the Windows
+ * caption cluster's width (three 46 px buttons) clear; a window without one keeps nothing.
+ */
+export const CONTROLS_FALLBACK_INSET = 3 * 46;
+
+export function controlsInset(area: { x: number; width: number } | null, viewportWidth: number, hasOverlay: boolean): number {
+    if (!hasOverlay) return 0;
+    if (area === null) return CONTROLS_FALLBACK_INSET;
+    const right = area.x + area.width;
+    if (!(right >= 0) || right > viewportWidth) return CONTROLS_FALLBACK_INSET;
+    return Math.max(0, Math.round(viewportWidth - right));
+}
+
+/** The overlay's colours reach the window only as plain `#rrggbb` — what `setTitleBarOverlay` takes. */
+export function overlayColorsOk(color: unknown, symbolColor: unknown): boolean {
+    const hex = /^#[0-9a-fA-F]{6}$/;
+    return typeof color === 'string' && typeof symbolColor === 'string' && hex.test(color) && hex.test(symbolColor);
+}
+
 export function mainWindowOptions(platform: NodeJS.Platform): MainWindowOptions {
     const base = { width: 1440, height: 900, minWidth: 980, minHeight: 620, titleBarStyle: 'hidden' as const };
     if (platform === 'darwin') return base;
