@@ -1,3 +1,4 @@
+import { providerProtocol, sharedProtocol, type ProtocolTool } from '../core/genie-protocol.js';
 import { join } from 'node:path';
 import type { SyncTarget } from '../core/integrations.js';
 
@@ -15,6 +16,8 @@ export interface SyncFs {
     write(path: string, text: string): Promise<void>;
     /** Delete a file Genie owns (Genie 1's channel bridge); absent = nothing is deleted. A missing file is not an error. */
     remove?(path: string): Promise<void>;
+    /** The file names directly in a folder (none when it is missing); absent = nothing is listed. */
+    list?(dir: string): Promise<string[]>;
 }
 
 /** Genie 1's channel server entry: Genie 2 runs no channel bridge, so the entry would point a harness at nothing. */
@@ -122,4 +125,21 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
             },
         },
     ];
+}
+
+/**
+ * THE PROTOCOL, true for Genie 2 (core/genie-protocol.ts), written beside config sync — its own job, not a fifth
+ * config-sync target (§6.9 keeps those four): shared.md, the claude and codex files, and every other
+ * `genie-<provider>.md` Genie 1 left, rewritten for a terminal. Nothing else under `.agents/` is touched.
+ */
+export async function writeAgentProtocol(input: { workspacePath: string; fs: SyncFs; enabled: boolean; tools: readonly ProtocolTool[] }): Promise<void> {
+    if (!input.enabled) return;
+    const dir = join(input.workspacePath, '.agents', '_genie').replace(/\\/g, '/');
+    await input.fs.write(`${dir}/shared.md`, sharedProtocol(input.tools));
+    const providers = new Set(['claude', 'codex']);
+    for (const name of (await input.fs.list?.(dir)) ?? []) {
+        const m = /^genie-([a-z0-9-]+)\.md$/.exec(name);
+        if (m) providers.add(m[1]!);
+    }
+    for (const p of providers) await input.fs.write(`${dir}/genie-${p}.md`, providerProtocol(p));
 }
