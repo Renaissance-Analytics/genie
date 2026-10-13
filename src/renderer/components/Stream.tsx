@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     editLineCounts,
     ledgerRow,
-    resolveThinkTokens,
+    resolveThinkTokens, resolveTurnCosts,
     resolveToolDurations,
     visibleRows,
     type StreamFilter,
@@ -89,7 +89,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
         // applied. Computing them after filtering would attribute a thought's cost from
         // whichever usage rows happened to survive the lane selection — a number that changes
         // when you change the view, which is the definition of a figure not worth printing.
-        const withTokens = resolveThinkTokens(rows);
+        const withTokens = resolveTurnCosts(resolveThinkTokens(rows));
         const durations = resolveToolDurations(withTokens);
         const visible = visibleRows(withTokens, lanes);
 

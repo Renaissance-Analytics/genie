@@ -73,8 +73,13 @@ export type StreamEvent =
           kind: 'usage';
           used: number;
           size: number;
-          /** `null` = not reported. codex reports none, and a `0` would claim it was free. */
+          /**
+           * The session's RUNNING total as the provider reports it (ACP's `usage_update.cost`; Claude's
+           * `total_cost_usd`, cumulative over the session). `null` = not reported — codex reports none.
+           */
           cost: number | null;
+          /** What THIS turn cost: the rise from the previous report (`resolveTurnCosts`); absent until resolved. */
+          turnCost?: number | null;
       }
     | { kind: 'plan'; entries: readonly unknown[] }
     | { kind: 'divider'; variant: 'compaction'; before: number | null; after: number | null }

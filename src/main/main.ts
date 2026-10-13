@@ -1,3 +1,4 @@
+import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
@@ -304,9 +305,9 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         turns: host.turnsFor(record.id),
         // The engine's own recent words, for the process-ended block (the board's error state).
         log: host.recentStderrFor(record.id),
-        // No provider reports a cost over ACP today. `null` means there is no Cost row —
-        // never a `$0.00`, which would claim the work was free.
-        cost: null,
+        // The session's running total, from the latest usage report (claude reports it; codex does not). `null` means
+        // there is no Cost row — never a `$0.00`, which would claim the work was free.
+        cost: sessionCostOf(host.rowsFor(record.id)),
         refusal: host.refusals.get(record.id) ?? null,
         takeOver,
     };
