@@ -191,7 +191,8 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                         data-update-chip={update.phase}
                         data-update-action={update.action}
                         onClick={() => onUpdateAction(update.action!)}
-                        className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--primary)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--primary)]/25"
+                        // no-drag: in the bar's drag region a click is the OS's, and this button never heard it (the owner, beta.21).
+                        className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--primary)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--primary)]/25"
                     >
                         <Icon name={update.action === 'update-install' ? 'rotate-cw' : 'download'} size="xs" />
                         {update.label}
