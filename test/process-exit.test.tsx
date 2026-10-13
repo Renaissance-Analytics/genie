@@ -94,7 +94,7 @@ describe('the block in the Agent view', () => {
     });
 
     it('no exit line when none was reported — the block itself still there, with its door', () => {
-        const html = render({ session: failed() });
+        const html = render({ session: failed(), onTakeOver: () => {} });
         expect(html).toContain('data-rail="process-ended"');
         expect(block(html)).not.toContain('data-exit=');
         expect(block(html)).toContain('data-action="open-terminal-rail"');

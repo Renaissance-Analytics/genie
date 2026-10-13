@@ -1,6 +1,7 @@
-import { app } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { agentRecord, mintAgentId } from '../core/identity.js';
 import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
 import type { StreamEvent } from '../core/stream-event.js';
@@ -69,6 +70,34 @@ export async function runDoctor(): Promise<void> {
     await writeFile(join(doctorDir, 'doctor-mcp.json'), `${JSON.stringify({ url: endpoint.url, token: endpoint.token, connect }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     console.log(`[doctor] Genie doctor mode — genie ${started.ok ? 'is running' : 'did not start'} in ${osaDir}`);
     console.log(`[doctor] Connect Claude Code: ${connect}`);
+
+    // THE WINDOW: its own page and preload (`genieDoctor`), never Genie's renderer bridge.
+    const here = dirname(fileURLToPath(import.meta.url));
+    ipcMain.handle('doctor:facts', () => facts);
+    ipcMain.handle('doctor:connect', () => connect);
+    ipcMain.handle('doctor:detail', () => ({
+        agent: { id: record.id, name: record.name, provider: record.provider, fidelity: 'declared', cwd: osaDir },
+        session: host.probe(record.id),
+        rows: host.rowsFor(record.id),
+        turns: host.turnsFor(record.id),
+        cost: null,
+    }));
+    ipcMain.handle('doctor:prompt', (_e, text: unknown) => (typeof text === 'string' && text.trim() !== '' ? host.prompt(record.id, text, 'you') : false));
+    ipcMain.handle('doctor:start', () => host.start(record, osaDir));
+    ipcMain.handle('doctor:answer-approval', (_e, optionId: unknown) => (typeof optionId === 'string' ? host.answerApproval(record.id, optionId) : false));
+    const win = new BrowserWindow({
+        width: 1280,
+        height: 840,
+        title: 'Genie — doctor mode',
+        backgroundColor: '#09090b',
+        show: false,
+        webPreferences: { preload: join(here, 'doctor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    win.once('ready-to-show', () => win.show());
+    void win.loadFile(join(here, '../renderer/doctor.html'));
+    // Pushed, never polled: every change to genie's session tells the window to read again.
+    host.subscribe(() => { if (!win.isDestroyed()) win.webContents.send('doctor:changed'); });
+    app.on('window-all-closed', () => app.quit());
 
     app.on('before-quit', () => {
         host.stop(record.id);

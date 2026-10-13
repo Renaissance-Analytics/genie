@@ -154,6 +154,8 @@ export interface AgentViewProps {
     onRange?: ((range: TimeRange | null) => void) | undefined;
     /** Take Over (§1): open this agent's TUI in a new window. */
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** The chat is already on this page beside the view (the doctor window): no Chat button that would go nowhere. */
+    chatInView?: boolean | undefined;
     /** Agent operations (§6.2); absent = none offered. */
     ops?: AgentOpsProps | undefined;
     now?: (() => number) | undefined;
@@ -209,7 +211,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
+    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
@@ -496,8 +498,9 @@ export function AgentView({
                      * That is what the first screenshot of this screen showed.
                      *
                      * It navigates rather than toggling local state, so the conversation is
-                     * linkable and the subject lives in the URL.
+                     * linkable and the subject lives in the URL. Not drawn when the chat is already on the page.
                      */}
+                    {chatInView ? null : (
                     <button
                         type="button"
                         data-action="chat"
@@ -514,20 +517,24 @@ export function AgentView({
                         Chat
                         <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘J</span>
                     </button>
+                    )}
 
+                    {/* Take over and Open terminal only where this window can open one: a button with nothing behind it is not drawn. */}
+                    {onTakeOver ? (
                     <button
                         type="button"
                         data-action="take-over"
-                        onClick={() => onTakeOver?.(agent.id)}
+                        onClick={() => onTakeOver(agent.id)}
                         className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="square-terminal" size="xs" />
                         Take over
                         <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
                     </button>
+                    ) : null}
                     {/* In the error state (the board): the Take Over window IS the terminal. */}
-                    {actions.openTerminal ? (
-                        <button type="button" data-action="open-terminal" onClick={() => onTakeOver?.(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                    {actions.openTerminal && onTakeOver ? (
+                        <button type="button" data-action="open-terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                             <Icon name="square-terminal" size="xs" />
                             Open terminal
                         </button>
@@ -913,10 +920,12 @@ export function AgentView({
                                 <span className="font-semibold">Terminal</span>
                                 <span className="text-[11px] text-[var(--fg-4)]">live, read-only here</span>
                                 <span className="flex-1" />
-                                <button type="button" data-action="take-over-rail" onClick={() => onTakeOver?.(agent.id)} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)] hover:underline">
-                                    Take over
-                                    <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
-                                </button>
+                                {onTakeOver ? (
+                                    <button type="button" data-action="take-over-rail" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)] hover:underline">
+                                        Take over
+                                        <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
+                                    </button>
+                                ) : null}
                             </div>
                             <p className="font-mono text-[11px] text-[var(--fg-3)]">{lastOutputLabel(termBlock.lastOutputAt, clock())}</p>
                             <p className="text-[12px] leading-normal text-[var(--fg-2)]">{agent.provider} runs in a terminal and reports no conversation, plan, context or cost. Genie sees its terminal output.</p>
@@ -937,7 +946,7 @@ export function AgentView({
                                     <button type="button" data-action="restart-resume" onClick={() => ops.onRestart('graceful')} className="flex h-[26px] items-center rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart and resume</button>
                                 ) : null}
                                 {/* The board's `Open terminal` in the block: a Take Over window on this agent — the same door the header offers, where the reader is looking. */}
-                                <button type="button" data-action="open-terminal-rail" onClick={() => onTakeOver?.(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</button>
+                                {onTakeOver ? <button type="button" data-action="open-terminal-rail" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</button> : null}
                                 <button type="button" data-action="copy-log" onClick={() => { void navigator.clipboard?.writeText([ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')); }} className="flex h-[26px] items-center rounded-lg px-2.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Copy log</button>
                             </div>
                         </section>

@@ -18,7 +18,7 @@ const broken: LiveSession = { ...running, running: false, turnState: 'failed', f
 const ops: AgentOpsProps = { mode: 'manual', accessScope: 'self', budgetUsd: null, deletePreview: null, diagnosis: null, lastOutcome: null, onRestart: () => {}, onSwitchDriver: () => {}, onDiagnose: () => {}, onPreviewDelete: () => {}, onConfirmDelete: () => {}, onCancelDelete: () => {}, onSetMode: () => {}, onSetAccessScope: () => {}, onSetBudget: () => {} } as unknown as AgentOpsProps;
 const toolRow: TimedEvent = { id: 'e1', at: 1_000, event: { kind: 'tool', toolKind: 'execute', name: 'Bash', title: 'php artisan test', status: 'completed', rawInput: '{"command":"php artisan test"}', rawOutput: null, locations: [] } as never };
 const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
-    renderToStaticMarkup(<AgentView agent={agent} session={running} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={14} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1_000_000} workspace={workspace} {...props} />);
+    renderToStaticMarkup(<AgentView agent={agent} session={running} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={14} cost={null} onNavigate={() => {}} onSelect={() => {}} onTakeOver={() => {}} now={() => 1_000_000} workspace={workspace} {...props} />);
 
 describe('the header', () => {
     it('breadcrumb, fidelity dot, name, provider chip, the pill in turns', () => {

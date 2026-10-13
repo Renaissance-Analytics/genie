@@ -26,6 +26,8 @@ export default defineConfig({
         // A desktop app ships its own sources for its own debugging. Nothing here is served
         // to a third party, so there is nothing to withhold.
         sourcemap: true,
+        // Two pages: Genie, and the doctor window (`genie --doctor`), which loads only the doctor renderer.
+        rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html' } },
     },
     test: {
         /*
