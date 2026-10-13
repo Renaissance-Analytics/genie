@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { Shell } from '../src/renderer/Shell.js';
@@ -316,27 +317,41 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
         expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
         expect(html).toContain('data-chat="pinned"');
         expect(html).toContain(`width:${DOCK_WIDTH}px`);
-        expect(html).toContain(`margin-right:${DOCK_WIDTH}px`);
+        // The reserve is a variable the surface's body reads (styles.css), not a margin on the whole row.
+        expect(html).toContain(`--dock-reserve:${DOCK_WIDTH}px`);
+        expect(html).not.toContain(`margin-right:${DOCK_WIDTH}px`);
     });
 
-    it('puts the reserve on the CONTENT ROW, never the wrapper \u2014 the header keeps its width', () => {
+    it('starts the gutter BELOW THE VIEW HEADER \u2014 the surface\u2019s own header keeps its width', () => {
         /**
-         * The gutter starts **below** the view header. A reserve on the outer wrapper narrows
-         * the header too, and the design is explicit that the header keeps its width and
-         * position when a panel pins.
-         *
-         * Asserted structurally: the title bar appears BEFORE the reserved element in the
-         * markup, so it cannot be inside it.
+         * §4.4: a pinned panel "reserves a 380px gutter that starts *below* the view header. The header keeps its
+         * width and position; the table reflows". The view header is the SURFACE's (the Dashboard's 56px row), not
+         * the title bar — a reserve on the whole content row narrowed that header too. Now the row carries the
+         * reserve as a variable, styles.css applies it to everything in a surface except its marked header, and
+         * the docked panel's frame starts at the header's measured height (56px until measured).
          */
         const html = render({
             route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
         });
 
-        const bar = html.indexOf('data-route');
-        const reserved = html.indexOf('data-dock-reserve');
-        expect(bar).toBeGreaterThan(-1);
-        expect(reserved).toBeGreaterThan(bar);
-        expect(html.slice(0, reserved)).toContain('data-route');
+        expect(html.match(/data-view-header/g)).toHaveLength(1);
+        expect(html).toMatch(/data-surface="dashboard"[^>]*><div data-view-header/);
+        expect(html).toMatch(/data-dock-frame="chat"[^>]*style="[^"]*top:var\(--view-header-h\)/);
+        expect(html).toContain('--view-header-h:56px');
+        const css = readFileSync('src/renderer/styles.css', 'utf8');
+        expect(css).toMatch(/\[data-surface\]\s*>\s*:not\(\[data-view-header\]\)\s*\{\s*margin-right:\s*var\(--dock-reserve,\s*0px\)/);
+    });
+
+    it('every surface marks its own header once, as its first child (positive control: the Dashboard above)', () => {
+        for (const [route, over] of [
+            ['genie://deck', {}],
+            ['genie://workspace/tynn', {}],
+            ['genie://agent/kai', { agentDetail: DETAIL, agentResolved: true }],
+        ] as const) {
+            const html = render({ route, ...over });
+            expect(html.match(/data-view-header/g), route).toHaveLength(1);
+            expect(html, route).toMatch(/data-surface="[a-z]+"[^>]*><(div|header) data-view-header/);
+        }
     });
 
     it('reserves for a pinned panel that is not the chat, without the chat claiming the pin', () => {

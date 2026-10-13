@@ -21,7 +21,7 @@ import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features
 import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -164,6 +164,14 @@ export type ShellRemote = { host: string; driver: string | null; driving: boolea
 /** The dock's panels, as the notice names them (§4.4). */
 const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel', lists: 'lists' };
 
+/**
+ * A pinned chat sits in the dock's frame, under the view header (§4.4). Unpinned, the flyout positions itself over
+ * the right edge and nothing moves, so there is no frame.
+ */
+function DockFrame({ pinned, style, children }: { pinned: boolean; style: CSSProperties; children: ReactNode }) {
+    return pinned ? <div data-dock-frame="chat" className="z-10 bg-[var(--bg-0)]" style={style}>{children}</div> : <>{children}</>;
+}
+
 export function Shell({
     route,
     snapshot,
@@ -245,9 +253,11 @@ export function Shell({
     /**
      * THE DOCK RESERVE, and the three places it must not be.
      *
-     * It is a **`marginRight` on the content row** — the row that holds the rail and the
-     * surface, BELOW the title bar. From `dockReserve`, which reads the same `DOCK_WIDTH` the
-     * panel is sized by, so the two cannot diverge. See `core/dock.ts`:
+     * It starts BELOW THE VIEW HEADER (§4.4) — the surface's own header (`data-view-header`), not the title bar —
+     * which keeps its width and position while the body reflows. The content row carries it as `--dock-reserve`;
+     * styles.css applies it as a `margin-right` to every child of a surface except its header, and the docked
+     * panel's frame starts at that header's measured height (`--view-header-h`). From `dockReserve`, which reads
+     * the same `DOCK_WIDTH` the panel is sized by, so the two cannot diverge. See `core/dock.ts`:
      *
      *  - not `padding`, or the content sizes to the padded box and its borders run under the
      *    panel;
@@ -262,6 +272,16 @@ export function Shell({
     const filesSlot = filesDock({ pinned, filesWorkspaceId: filesWorkspaceId ?? null, popped: filesPopped });
     // A pinned slot reserves whatever panel holds it; only a POPPED-OUT file panel gives the width back.
     const reserve = filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(pinned);
+    // The header on screen sets where the dock starts: 56px on most surfaces, 44px on the Agent view. Measured before
+    // paint; 56 until then (and in a static render), 0 on a surface without one.
+    const rowRef = useRef<HTMLDivElement | null>(null);
+    const [headerHeight, setHeaderHeight] = useState(56);
+    useLayoutEffect(() => {
+        const header = rowRef.current?.querySelector<HTMLElement>('[data-view-header]') ?? null;
+        const h = header ? Math.round(header.getBoundingClientRect().height) : 0;
+        if (h !== headerHeight) setHeaderHeight(h);
+    });
+    const dockFrame: CSSProperties = { position: 'absolute', right: 0, bottom: 0, top: 'var(--view-header-h)', display: 'flex' };
 
     /**
      * The approval the FLYOUT may answer — only when this chat is the composer for the agent
@@ -301,7 +321,7 @@ export function Shell({
                 </div>
             ) : null}
 
-            <div className="relative flex min-h-0 flex-1" style={{ marginRight: reserve }} data-dock-reserve={reserve}>
+            <div ref={rowRef} className="relative flex min-h-0 flex-1" style={{ '--dock-reserve': `${reserve}px`, '--view-header-h': `${headerHeight}px` } as CSSProperties} data-dock-reserve={reserve}>
                 <Sidebar
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
@@ -520,7 +540,7 @@ export function Shell({
                  * surface does not draw it inline while it is here.
                  */}
                 {filesSlot.kind === 'docked' && workspaceFor(filesSlot.workspaceId!) ? (
-                    <aside data-dock="files" className="shrink-0 border-l border-[var(--border-1)]" style={{ width: DOCK_WIDTH }}>
+                    <aside data-dock="files" data-dock-frame="files" className="z-10 border-l border-[var(--border-1)] bg-[var(--bg-0)]" style={{ ...dockFrame, width: DOCK_WIDTH }}>
                         <FilesPanelContainer
                             workspace={workspaceFor(filesSlot.workspaceId!)!}
                             files={files}
@@ -536,7 +556,7 @@ export function Shell({
                 ) : null}
                 {/* Popped out (§4.3): the reserve is released and the dock column is a bar that brings the panel back. */}
                 {filesSlot.kind === 'popped' ? (
-                    <aside data-files-popped={filesSlot.workspaceId} className="flex w-7 shrink-0 items-start justify-center border-l border-[var(--border-1)] pt-2">
+                    <aside data-files-popped={filesSlot.workspaceId} data-dock-frame="files-popped" className="z-10 w-7 items-start justify-center border-l border-[var(--border-1)] bg-[var(--bg-0)] pt-2" style={dockFrame}>
                         <button
                             type="button"
                             data-action="bring-back-files"
@@ -550,6 +570,7 @@ export function Shell({
                     </aside>
                 ) : null}
                 {chatThread || parsed.chat ? (
+                    <DockFrame pinned={pinned === 'chat'} style={dockFrame}>
                     <ChatFlyout
                         thread={chatThread}
                         pinned={pinned === 'chat'}
@@ -565,6 +586,7 @@ export function Shell({
                         running={chatRunning}
                         onStop={() => { if (chatThread) onStopAgent?.(chatThread.agentId); }}
                     />
+                    </DockFrame>
                 ) : null}
             </div>
         </div>
