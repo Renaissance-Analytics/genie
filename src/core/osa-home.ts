@@ -79,8 +79,8 @@ export const DIAGNOSTICS_SKILL = {
 Run these checks in order and report each as healthy, unhealthy (with the evidence), or not checked (with why). Read before you change anything; back up before you repair.
 
 1. **Genie itself** — the version, and the install folder exists and holds the executable.
-2. **Genie's data folder** — it exists and is writable. Each JSON file in it parses (\`workspaces.json\`, \`agents.json\`, \`settings.json\`, \`mcp-endpoint.json\`, \`v1-import.json\`). A file that does not parse is the usual cause of a Genie that will not start: report it with its first bytes, and back it up before repairing it.
-3. **The MCP endpoint** — \`mcp-endpoint.json\` names a port; check whether something is listening on it and whether that something is Genie.
+2. **Genie's data folder** — it exists and is writable. Its records are in \`runtime/\` inside it: \`runtime/workspaces.json\`, \`runtime/agents.json\`, \`runtime/settings.json\`, \`runtime/running-at-quit.json\` (and the knowledge graph's \`knowledge.db\`). At its top level are \`v1-import.json\` (the record of the import from Genie 1) and \`mcp-endpoint.json\`. Each JSON file parses. A file that does not parse is the usual cause of a Genie that will not start: report it with its first bytes, and back it up before repairing it.
+3. **The MCP endpoint** — \`mcp-endpoint.json\` names a port; check whether something is listening on it and whether that something is Genie. Genie writes this file from 2.0.0-beta.20 on: on an older version its absence is not a fault.
 4. **Processes** — list processes whose executable is under the install folder. More than one Genie, or console hosts left from an earlier run, are worth reporting.
 5. **Provider CLIs** — \`claude --version\` and \`codex --version\` resolve on PATH. An agent cannot start without its CLI.
 6. **Toolchain** — \`git --version\` and \`node --version\`.
