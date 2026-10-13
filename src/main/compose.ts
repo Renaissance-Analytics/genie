@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, readFile as readFileP, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { mkdir, readdir as readdirP, readFile as readFileP, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
@@ -12,7 +12,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
-import { configSyncTargets } from './config-sync-targets.js';
+import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -116,6 +116,8 @@ export interface ComposedServices {
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] } };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
     syncConfig(workspacePath: string): Promise<SyncResult[]>;
+    /** The Genie 2 protocol files under `.agents/_genie/` (separate from the four config-sync targets). */
+    syncAgentDocs(workspacePath: string): Promise<void>;
     /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
     readonly plugins: PluginHost;
     readonly pluginsDir: string;
@@ -373,10 +375,24 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                     read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
                     write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
                     remove: async (p) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
+                    list: async (d) => { try { return await readdirP(d); } catch { return []; } },
                 },
                 flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
             });
             return configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+        },
+        syncAgentDocs: async (workspacePath) => {
+            // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
+            await writeAgentProtocol({
+                workspacePath,
+                enabled: settings.snapshot().mcp_sync_agents !== false,
+                tools: input.mcpTools?.() ?? [],
+                fs: {
+                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
+                    list: async (d) => { try { return await readdirP(d); } catch { return []; } },
+                },
+            });
         },
         agentAddresses: () => roster().map((r) => ({ address: addressOf(r, 'full'), agentId: r.id as string, name: r.name })),
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.

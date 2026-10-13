@@ -1082,6 +1082,7 @@ async function boot(): Promise<void> {
                 for (const w of registry?.listWorkspaces() ?? []) {
                     if (synced.has(w.path)) continue;
                     synced.add(w.path);
+                    void composed.syncAgentDocs(w.path).catch((error: unknown) => { console.error(`[workspace-files] ${w.id} protocol: ${(error as Error).message}`); });
                     void composed.syncConfig(w.path).then(
                         (results) => { for (const r of results) if (!r.ok) console.error(`[workspace-files] ${w.id} ${r.label}: ${r.error ?? "failed"}`); },
                         (error: unknown) => { console.error(`[workspace-files] ${w.id}: ${(error as Error).message}`); },
