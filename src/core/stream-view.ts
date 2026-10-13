@@ -207,9 +207,12 @@ function toolRow(
     // claim; `null` is one it did not, and the two must not share a rendering.
     const icon = event.toolKind === null ? 'circle-help' : (TOOL_ICONS[event.toolKind] ?? 'wrench');
 
-    const label = event.title ?? event.name ?? '(tool call)';
-    // A title that only repeats the tool's name (`Grep Grep`) is said once.
-    const main = isEdit ? label : [event.name, event.title !== event.name ? event.title : null].filter(Boolean).join('  ') || label;
+    // A title that only repeats the tool's name (`Grep Grep`) is said once — and then says nothing about the call
+    // (Claude's titles ARE the name), so the call's own argument stands in: `Bash  php artisan test`, an edit's path.
+    const titleIsName = event.title === null || event.title === event.name;
+    const argument = titleIsName ? argumentSummary(event.rawInput) : null;
+    const label = (isEdit ? argument : null) ?? event.title ?? event.name ?? '(tool call)';
+    const main = isEdit ? label : [event.name, titleIsName ? argument : event.title].filter(Boolean).join('  ') || label;
 
     // `rawInput === null` means the agent did not send this call's arguments — never `{}`. An
     // inspector opened on nothing is a panel that appears and says nothing, which reads as a
@@ -300,6 +303,22 @@ function planRow(row: TimedEvent, entries: readonly unknown[]): LedgerRow {
         meta: null, metaTone: 'default', tinted: false, inspectable: false, note: null, lane: null,
         kind: 'plan', who: null, plus: null, minus: null,
     };
+}
+
+/**
+ * The one argument that says what a tool call did, from its `rawInput`: the command, the path, the pattern, the URL, the
+ * query or the task's description — the first present, in that order, on one line. `null` when none is there:
+ * the row then says the name alone rather than guessing or printing `{}`.
+ */
+const SUMMARY_KEYS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'path'] as const;
+function argumentSummary(rawInput: unknown): string | null {
+    if (typeof rawInput !== 'object' || rawInput === null || Array.isArray(rawInput)) return null;
+    const input = rawInput as Record<string, unknown>;
+    for (const key of SUMMARY_KEYS) {
+        const value = input[key];
+        if (typeof value === 'string' && value.trim() !== '') return value.replace(/\s+/g, ' ').trim();
+    }
+    return null;
 }
 
 export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow {

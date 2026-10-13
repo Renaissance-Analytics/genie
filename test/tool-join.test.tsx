@@ -39,7 +39,7 @@ describe('joinToolCalls', () => {
 
 describe('the row', () => {
     it('says a title that only repeats the tool\'s name once', () => {
-        expect(ledgerRow(rows[0]!).main).toBe('Grep');
+        expect(ledgerRow(rows[0]!).main).toBe('Grep  Challenge'); // the name once, then what it searched for (Claude's title IS the name)
         expect(ledgerRow(rows[4]!).main).toBe('Read  src/a.ts');
     });
 
