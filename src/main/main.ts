@@ -313,6 +313,10 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         cost: sessionCostOf(host.rowsFor(record.id)),
         refusal: host.refusals.get(record.id) ?? null,
         takeOver,
+        // Its mail with other agents, for the system rows in its chat (the person's mail is the chat itself).
+        comms: services
+            ? services.inbox.involving(record.id, 50).filter((m) => m.from !== 'human' && m.to !== 'human').map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt }))
+            : null,
     };
 }
 
@@ -1129,6 +1133,8 @@ async function boot(): Promise<void> {
     composed.inbox.onRead(() => { pushFeatures(); });
     // Agent-to-agent mail changes the Dashboard's comms cells: rebuild the snapshot on every send.
     composed.inbox.onSend(() => { registry?.touch(); });
+    // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
+    composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
     host.subscribe((agentId) => remind(agentId));
     const featurePorts: FeaturePorts = {
         toolchain: {

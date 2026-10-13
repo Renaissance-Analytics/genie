@@ -8,6 +8,7 @@ import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { FilesState, OpenResult, WriteResult } from '../main/files-host.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -73,6 +74,8 @@ export interface AgentDetail {
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
+    /** The agent's recent AgentInbox mail with other agents (its chat shows each as a system row); absent = not read. */
+    comms?: readonly MailLike[] | null | undefined;
     turns: number;
     /** `null` when the provider reports no cost. codex reports none — so there is no row. */
     cost: number | null;
