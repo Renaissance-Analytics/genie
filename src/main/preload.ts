@@ -58,7 +58,7 @@ const bridge: GenieBridge = {
         void ipcRenderer.invoke('genie:stop-agent', agentId);
     },
 
-    prompt: (agentId, text) => ipcRenderer.invoke('genie:prompt', agentId, text) as Promise<{ ok: boolean }>,
+    prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
 
     addAgent: (workspaceId) => {
         void ipcRenderer.invoke('genie:add-agent', workspaceId);

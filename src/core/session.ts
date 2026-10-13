@@ -3,6 +3,7 @@ import { openAgentThread } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { toStreamEvent, type StreamEvent } from './stream-event.js';
 import type { AgentId } from './identity.js';
+import type { PromptBlock } from './prompt-content.js';
 import { systemProcessTree, type ProcessTree } from './process-tree.js';
 
 /**
@@ -21,7 +22,8 @@ import { systemProcessTree, type ProcessTree } from './process-tree.js';
 /** The slice of `prism-acp`'s driver this module needs. Narrow on purpose — it is the seam. */
 export interface SessionDriver {
     start(): void;
-    prompt(text: string): void;
+    /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
+    prompt(content: string | readonly PromptBlock[]): void;
     kill(signal?: NodeJS.Signals): void;
     /**
      * OPTIONAL, and that is a measurement rather than a guess.
@@ -505,17 +507,18 @@ export class AgentSession {
      * `by` is who started the turn when the caller knows (`you` from the composer, `genie` for a reminder or a
      * handoff ask, a peer's name) — written into the ledger as the turn's marker, and `null` when nobody said.
      */
-    prompt(text: string, by: string | null = null): void {
+    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null): void {
         if (!this.#driver) throw new Error('session is not started');
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn.
         void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
-        void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text } : { kind: 'message', speaker: 'peer', peerName: by, text });
+        const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
+        void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
         // A provider that DOES echo it is not recorded twice (see `#handle`).
         this.#echo = text;
         this.#echoSeen = '';
-        this.#driver.prompt(text);
+        this.#driver.prompt(sent ? sent.content : text);
         this.#turnState = 'working';
     }
 

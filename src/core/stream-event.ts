@@ -23,7 +23,7 @@ import type { ToolStatus } from '@particle-academy/prism-acp';
  */
 
 export type StreamEvent =
-    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string }
+    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[] }
     | {
           kind: 'think';
           text: string;

@@ -6,6 +6,7 @@ import { atThreadEnd, clampChatWidth, dragChatWidth, readChatWidth, writeChatWid
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
+import type { Attachment } from '../../core/prompt-content.js';
 import { FidelityDot } from './Dashboard.js';
 
 /**
@@ -46,7 +47,7 @@ export interface ChatThread {
     /** `null` when the count could not be read — never `0`, which claims you are up to date. */
     unread: number | null;
     /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
-    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read'>>)[];
+    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason'>>)[];
     /** The line under the chips — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
     /** The agents sharing the subject's workspace, the subject active; absent or empty = no chips row. */
@@ -79,7 +80,7 @@ export interface ChatFlyoutProps {
     approval?: Approval | null | undefined;
     answeringApproval?: string | null | undefined;
     onAnswerApproval?: ((optionId: string) => void) | undefined;
-    onSend: (text: string) => void;
+    onSend: (text: string, attachments?: readonly Attachment[]) => void;
     /** Absent = no pin control (the doctor window: the chat is the page, not a panel). */
     onTogglePin?: (() => void) | undefined;
     onClose: () => void;
@@ -97,6 +98,15 @@ export interface ChatFlyoutProps {
 const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
     try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
 };
+
+/**
+ * The composer's picks as bytes: react-fancy's `PromptAttachment` carries the `File` the person attached (5.10.0,
+ * react-fancy#16). One without a File (restored, not picked) cannot be sent, so it is named in the text that goes,
+ * rather than vanishing.
+ */
+async function readAttachments(picked: readonly { name: string; file?: File; type?: string }[]): Promise<Attachment[]> {
+    return Promise.all(picked.map(async (a) => ({ name: a.name, type: a.file?.type ?? a.type ?? '', bytes: a.file ? new Uint8Array(await a.file.arrayBuffer()) : new Uint8Array(0) })));
+}
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
@@ -306,6 +316,13 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
                             <div className={`rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
+                            {m.attachments ? (
+                                <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
+                                    {m.attachments.map((name) => (
+                                        <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
+                                    ))}
+                                </div>
+                            ) : null}
                             {/*
                              * An undelivered message is KEPT and MARKED, with the route to send it:
                              * the agent is not running. Dropping it loses what someone wrote, and
@@ -318,8 +335,8 @@ export function ChatFlyout({
                             ) : null}
                             {m.delivered ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
-                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {thread?.name ?? 'the agent'} is not running.</span>
-                                    <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>
+                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? `${thread?.name ?? 'the agent'} is not running.`}</span>
+                                    {m.reason ? null : <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>}
                                 </div>
                             )}
                         </div>
@@ -370,7 +387,7 @@ export function ChatFlyout({
                     budgetTokens={contextTokens}
                     placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox` : approval ? `Reply to ${thread.name}, or answer with A / D` : `Message ${thread.name}`}
                     showHint
-                    onSubmit={(text) => onSend(text)}
+                    onSubmit={(text, picked) => { void readAttachments(picked).then((files) => onSend(text, files)); }}
                 />
                 {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
                 {running ? (

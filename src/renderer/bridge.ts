@@ -1,5 +1,6 @@
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions } from '../core/identity.js';
+import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
@@ -135,8 +136,11 @@ export interface GenieBridge {
     openAgent(agentId: string): void;
     /** Stop means stop: the provider tree goes, and the capacity slot frees. */
     stopAgent(agentId: string): void;
-    /** `ok: false` = the agent is not running; the renderer KEEPS the text as an undelivered draft (§4.4). */
-    prompt(agentId: string, text: string): Promise<{ ok: boolean }>;
+    /**
+     * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
+     * why when the host knows (a file the provider cannot take); absent = the agent is not running.
+     */
+    prompt(agentId: string, text: string, attachments?: readonly Attachment[]): Promise<{ ok: boolean; reason?: string }>;
     /**
      * Answer a parked approval, with the PROVIDER'S own option id.
      *

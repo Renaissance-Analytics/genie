@@ -9,12 +9,23 @@ import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, Co
  * raise `onRequestPermission` through prism-acp's `permissionPrompts` (see `claudeOptionsFor`). `null` for a provider
  * Genie has no driver for: unknown is not "no".
  */
+/**
+ * What an agent's provider takes in a prompt beyond text, from its driver's DECLARED `promptBlocks` (prism-acp).
+ * A driver that declares nothing takes nothing more — and the composer says so rather than dropping the file.
+ */
+export function promptAcceptsFor(provider: string): PromptAccepts {
+    const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
+    const blocks = (caps as { promptBlocks?: readonly string[] } | null)?.promptBlocks ?? [];
+    return { image: blocks.includes('image'), textResource: blocks.includes('resource-text') };
+}
+
 export function raisesApprovals(provider: string, permissions?: AgentPermissions): boolean | null {
     if (provider === 'claude') return permissions === 'ask' ? true : CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
     return null;
 }
 import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
+import { promptContent, type Attachment, type PromptAccepts } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
 import {
@@ -180,6 +191,8 @@ interface Running {
     nextRowId: number;
     /** The MCP servers this session was STARTED with, by name — what the Agent view says it has. */
     mcp: readonly string[];
+    /** What its provider takes in a prompt beyond text. */
+    accepts: PromptAccepts;
 }
 
 export class SessionHost {
@@ -341,7 +354,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name) };
+        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider) };
 
         const session = new AgentSession({
             agentId: record.id,
@@ -483,6 +496,21 @@ export class SessionHost {
     }
 
     /** `by` is who started the turn, when the caller knows (`you`, `genie`, a peer's name); it is written into the ledger. */
+    /**
+     * Your message WITH files (the composer's attach): sent as prompt content blocks, or refused with the reason —
+     * naming the file — when the provider cannot take one. Never sent without the files it was written about.
+     */
+    promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
+        const entry = this.#running.get(agentId);
+        if (!entry) return { ok: false, reason: null };
+        if (attachments.length === 0) return this.prompt(agentId, text, by) ? { ok: true } : { ok: false, reason: null };
+        const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
+        if (!built.ok) return { ok: false, reason: built.reason };
+        entry.session.prompt(text, by, { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
+        this.#emit(agentId);
+        return { ok: true };
+    }
+
     prompt(agentId: AgentId, text: string, by: string | null = null): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;

@@ -57,7 +57,7 @@ beforeEach(() => { reaped = []; });
 
 /** A driver that records what it was asked to do and lets a test push updates. */
 function fakeDriver() {
-    const calls = { started: 0, prompts: [] as string[], kills: [] as (string | undefined)[] };
+    const calls = { started: 0, prompts: [] as (string | readonly unknown[])[], kills: [] as (string | undefined)[] };
     let events: DriverEvents = {};
     let running = false;
     let cliSessionId: string | null = null;

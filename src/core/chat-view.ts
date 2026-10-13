@@ -1,6 +1,7 @@
 import type { AgentRow, AgentState, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
+import type { Attachment } from './prompt-content.js';
 
 /**
  * THE CHAT FLYOUT'S THREAD, derived — no React in sight.
@@ -41,6 +42,10 @@ export interface ChatMessage {
      * every other message — a session prompt has no read receipt, and claiming one would be a guess.
      */
     read?: number | null;
+    /** The names of the files sent with it (your message only); absent when there were none. */
+    attachments?: readonly string[];
+    /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
+    reason?: string;
 }
 
 export interface ChatChip {
@@ -97,7 +102,7 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
         if (e.kind !== 'message') continue;
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
-        out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at });
+        out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at, ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}) });
     }
     return out;
 }
@@ -241,6 +246,10 @@ export interface Draft {
     text: string;
     /** When you sent it — a real time, the renderer's own clock. */
     at: number;
+    /** The files you attached: KEPT with the draft, so sending it again sends them too. */
+    attachments?: readonly Attachment[];
+    /** Why the host did not send it; absent = the agent is not running. */
+    reason?: string;
 }
 
 /**
@@ -253,6 +262,10 @@ export function withDrafts<T extends { agentId: string; messages: readonly ChatM
     if (mine.length === 0) return thread;
     return {
         ...thread,
-        messages: [...thread.messages, ...mine.map((d): ChatMessage => ({ id: d.id, who: 'you', from: 'you', text: d.text, delivered: false, at: d.at }))],
+        messages: [...thread.messages, ...mine.map((d): ChatMessage => ({
+            id: d.id, who: 'you', from: 'you', text: d.text, delivered: false, at: d.at,
+            ...(d.attachments && d.attachments.length > 0 ? { attachments: d.attachments.map((a) => a.name) } : {}),
+            ...(d.reason ? { reason: d.reason } : {}),
+        }))],
     };
 }

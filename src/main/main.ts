@@ -15,6 +15,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { quitPlan } from '../core/quit.js';
+import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
@@ -585,11 +586,13 @@ async function boot(): Promise<void> {
         return { ok: host.stop(record.id) };
     });
 
-    ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown) => {
+    ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown, files: unknown) => {
         const record = agentFromRenderer(raw);
-        if (!record || !host || typeof text !== 'string' || text.length === 0) return { ok: false };
+        const attachments = attachmentsFromRenderer(files);
+        if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
         // The composer: the turn is started by YOU, and the ledger says so.
-        return { ok: host.prompt(record.id, text, 'you') };
+        const sent = host.promptWith(record.id, text, attachments, 'you');
+        return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
     ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown) => {
