@@ -10,7 +10,6 @@ import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { FilesState, OpenResult, WriteResult } from '../main/files-host.js';
-import type { DrainRoster } from '../core/upgrade-drain.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 
@@ -279,8 +278,6 @@ export interface GenieBridge {
         subscribe(onChange: (state: UpdateState) => void): () => void;
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
-        /** Abandon a drain in progress (§7.5): nothing stopped, nothing installed; `false` when there is none. */
-        cancel(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
     };
 
@@ -292,13 +289,11 @@ export interface GenieBridge {
 
 /** Mirror of `src/main/updater.ts`'s state, crossed as-is — every unknown is `null`. */
 export interface UpdateState {
-    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'draining' | 'installing' | 'error';
+    phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
     error: string | null;
     checkedAt: number | null;
-    /** The drain roster (§7.5) while agents are asked for their handoffs; absent otherwise. */
-    drain?: DrainRoster | null;
 }
 
 /** The updates bridge when there is no bridge: idle forever, every action refused. */
@@ -307,7 +302,6 @@ export const NO_UPDATES: GenieBridge['updates'] = {
     subscribe: () => () => {},
     check: () => Promise.resolve({ phase: 'idle', version: null, percent: null, error: null, checkedAt: null }),
     download: () => Promise.resolve(false),
-    cancel: () => Promise.resolve(false),
     install: () => Promise.resolve(null),
 };
 

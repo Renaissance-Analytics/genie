@@ -1,5 +1,4 @@
 import { orphanReport, orphansUnder, updaterChannel, type RunningProcess } from './upgrade.js';
-import { drainAnswered, drainComplete, drainReport, drainTick, startDrain, type DrainRoster } from '../core/upgrade-drain.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
@@ -34,7 +33,6 @@ export type UpdatePhase =
     | 'available'
     | 'downloading'
     | 'downloaded'
-    | 'draining'
     | 'installing'
     | 'error';
 
@@ -48,8 +46,6 @@ export interface UpdateState {
     error: string | null;
     /** When the last check ANSWERED (not when it started). */
     checkedAt: number | null;
-    /** The drain roster (§7.5) while agents are asked for their handoffs; `null`/absent otherwise. */
-    drain?: DrainRoster | null;
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -64,16 +60,16 @@ export interface UpdaterPort {
     quitAndInstall(): void;
 }
 
-/** The live agents, for the drain (§7.5): who is running, how to ask, whether a handoff landed since, and the end of every session (§7.4). */
+/**
+ * The live agents at an upgrade: who is running, and the end of every session (§7.4). No agent is ASKED for anything
+ * (the owner, 2026-10-12: "agents no longer need to write a handoff when genie upgrades") — an agent is a session that
+ * resumes its own thread.
+ */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
-    ask(agentId: string, text: string): void;
-    handoffSince(agentId: string, sinceMs: number): boolean;
     stopAll(): void;
 }
 
-/** What every live agent is told. The handoff rides imDone, which is what the roster watches for. */
-export const DRAIN_ASK = 'Genie is about to upgrade. Stop what you are doing, write your handoff with imDone (what you were doing, what is unfinished, what the next run picks up) and acknowledge. You will be restarted after the upgrade if restore is on.';
 
 export interface UpdateHostOptions {
     port: UpdaterPort;
@@ -89,7 +85,7 @@ export interface UpdateHostOptions {
     caseInsensitive?: boolean;
     /** Runs `fn` after `ms`; `setTimeout` unless a test wants to hold the quit in its hand. */
     defer?: (fn: () => void, ms: number) => void;
-    /** The live agents to drain before installing; absent = install without asking (tests of the older rules). */
+    /** The live agents whose sessions end with the upgrade; absent = a test of the teardown alone. */
     agents?: DrainAgentsPort;
 }
 
@@ -107,8 +103,6 @@ export interface InstallResult {
     killed: readonly RunningProcess[];
     /** `orphanReport` — names every process that had to be stopped, or says none were. */
     report: string;
-    /** True while the roster is still being waited on: nothing was stopped or killed yet. */
-    draining?: boolean;
 }
 
 const IDLE: UpdateState = { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
@@ -214,34 +208,8 @@ export class UpdateHost {
      */
     install(): InstallResult | null {
         if (this.current.phase !== 'downloaded') return null;
-        const live = this.options.agents?.live() ?? [];
-        if (live.length > 0) {
-            // §7.5: ask first, show the roster, install when everyone answered or the limit passed. Nothing is stopped yet.
-            const roster = startDrain(live, this.clock());
-            for (const a of live) this.options.agents!.ask(a.id, DRAIN_ASK);
-            this.set({ ...this.current, phase: 'draining', drain: roster });
-            return { killed: [], report: `Waiting for ${live.length} agent${live.length === 1 ? '' : 's'} to write a handoff before installing`, draining: true };
-        }
-        return this.finishInstall(startDrain([], this.clock()));
-    }
-
-    /** Time passes during a drain: handoffs that landed mark their agent; the quiet turn amber; completion installs. */
-    tick(): void {
-        if (this.current.phase !== 'draining' || !this.current.drain) return;
-        const now = this.clock();
-        let roster = drainTick(this.current.drain, now);
-        for (const e of roster.entries) {
-            if (e.state !== 'answered' && this.options.agents?.handoffSince(e.agentId, roster.startedAt)) roster = drainAnswered(roster, e.agentId, now);
-        }
-        if (drainComplete(roster, now)) { this.finishInstall(roster); return; }
-        if (roster !== this.current.drain) this.set({ ...this.current, drain: roster });
-    }
-
-    /** Cancel ALWAYS abandons (§7.5): the update stays downloaded, nobody is stopped, nothing is installed. */
-    cancel(): boolean {
-        if (this.current.phase !== 'draining') return false;
-        this.set({ ...this.current, phase: 'downloaded', drain: null });
-        return true;
+        // No agent is asked for a handoff (the owner): the sessions end, and each resumes its own thread when started.
+        return this.finishInstall(this.options.agents?.live() ?? []);
     }
 
     /** The report of the install that ran last (the drain's words first, then §7.2's), for the UI that missed the return value. */
@@ -249,7 +217,7 @@ export class UpdateHost {
         return this.last;
     }
 
-    private finishInstall(roster: DrainRoster): InstallResult {
+    private finishInstall(live: ReadonlyArray<{ id: string; name: string }>): InstallResult {
         // §7.4: an upgrade ends every agent session and does not revive them.
         this.options.agents?.stopAll();
         const orphans = orphansUnder(
@@ -259,9 +227,9 @@ export class UpdateHost {
             this.options.caseInsensitive,
         );
         for (const p of orphans) this.options.kill(p.pid);
-        this.set({ ...this.current, phase: 'installing', drain: roster.entries.length > 0 ? roster : null });
+        this.set({ ...this.current, phase: 'installing' });
         (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
-        const result: InstallResult = { killed: orphans, report: this.options.agents ? `${drainReport(roster)}. ${orphanReport(orphans)}` : orphanReport(orphans) };
+        const result: InstallResult = { killed: orphans, report: this.options.agents ? `${endedReport(live)}. ${orphanReport(orphans)}` : orphanReport(orphans) };
         this.last = result;
         return result;
     }
@@ -270,4 +238,10 @@ export class UpdateHost {
         this.current = next;
         for (const l of this.listeners) l(next);
     }
+}
+
+/** The sessions an upgrade ended, by name, and that each resumes its own thread; or that none were running. */
+function endedReport(live: ReadonlyArray<{ id: string; name: string }>): string {
+    if (live.length === 0) return 'no agents were running';
+    return `Ended ${live.length} agent session${live.length === 1 ? '' : 's'} (${live.map((a) => a.name).join(', ')}); each resumes its own thread when started again`;
 }

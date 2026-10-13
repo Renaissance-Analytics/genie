@@ -113,7 +113,6 @@ let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
 let updates: UpdateHost | null = null;
-let drainTimer: ReturnType<typeof setInterval> | null = null;
 /** Set once the running set has been recorded for §7.6, so quit does not overwrite it with an empty list after the drain stopped everyone. */
 let runningRecorded = false;
 
@@ -494,11 +493,9 @@ async function boot(): Promise<void> {
         ownPid: process.pid,
         processes: listProcesses,
         kill: killProcess,
-        // §7.5: the live agents to drain before installing; §7.4: every session ends with the upgrade.
+        // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
         agents: {
             live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
-            ask: (id, text) => { host?.prompt(id as AgentId, text); },
-            handoffSince: (id, since) => (services?.attention.finished() ?? []).some((f) => f.agentId === id && Date.parse(f.at) >= since),
             stopAll: () => {
                 // Record who was running BEFORE the sessions end, so a restore after the upgrade knows (§7.6).
                 const running = (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => a.id as AgentId);
@@ -507,11 +504,6 @@ async function boot(): Promise<void> {
                 host?.stopAll();
             },
         },
-    });
-    // The drain advances on a clock while it lasts: handoffs that landed, agents gone quiet, the limit.
-    updates.onChange((state) => {
-        if (state.phase === 'draining' && drainTimer === null) drainTimer = setInterval(() => updates?.tick(), 1_000);
-        else if (state.phase !== 'draining' && drainTimer !== null) { clearInterval(drainTimer); drainTimer = null; }
     });
     updates.onChange((state) => {
         for (const w of BrowserWindow.getAllWindows()) {
@@ -528,7 +520,6 @@ async function boot(): Promise<void> {
         return result ? { report: result.report } : null;
     });
 
-    ipcMain.handle('genie:updates-cancel', () => updates?.cancel() ?? false);
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
     ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
@@ -984,7 +975,6 @@ async function boot(): Promise<void> {
                       check: () => updates!.check(),
                       download: () => updates!.download(),
                       install: () => { const r = updates!.install(); return r ? { report: r.report } : null; },
-                      cancel: () => updates!.cancel(),
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,

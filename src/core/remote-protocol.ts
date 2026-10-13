@@ -59,7 +59,6 @@ export const REMOTE_METHODS = [
     'updates.check',
     'updates.download',
     'updates.install',
-    'updates.cancel',
     /** A phone's upload (§6.8): bytes over the socket → the inbox's byte copy; never a path from the device. */
     'inbox.sendFile',
 ] as const;
@@ -121,7 +120,6 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.download': 'write',
     'updates.install': 'upgrade',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
-    'updates.cancel': 'write',
     'inbox.sendFile': 'write',
     addWorkspace: 'host-only',
     takeOver: 'host-only',

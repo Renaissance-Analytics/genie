@@ -84,7 +84,6 @@ export interface HostApiDeps {
         download(): Promise<boolean>;
         install(): { report: string } | null;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
-        cancel(): boolean;
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;
 }
@@ -228,8 +227,6 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
-            case 'updates.cancel':
-                return deps.updates?.cancel() ?? false;
             case 'inbox.sendFile':
                 return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
         }
