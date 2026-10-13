@@ -254,6 +254,9 @@ export class AgentSession {
      * written once when it closes rather than once per chunk.
      */
     #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null = null;
+    /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
+    #echo: string | null = null;
+    #echoSeen = '';
     /** Writes in flight, chained so the thread records rows in the order they were emitted. */
     #writes: Promise<void> = Promise.resolve();
     /**
@@ -503,6 +506,12 @@ export class AgentSession {
         if (!this.#driver) throw new Error('session is not started');
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn.
         void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+        // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
+        // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
+        void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text } : { kind: 'message', speaker: 'peer', peerName: by, text });
+        // A provider that DOES echo it is not recorded twice (see `#handle`).
+        this.#echo = text;
+        this.#echoSeen = '';
         this.#driver.prompt(text);
         this.#turnState = 'working';
     }
@@ -650,6 +659,19 @@ export class AgentSession {
          * chopped up, each piece with its own time. Consecutive thought chunks grow one row; anything else closes it.
          * While it is open and the turn is running, the surface shows it as the live `Thinking…` row.
          */
+        // The provider's echo of the prompt just sent — identical, before anything else arrives — is already in the
+        // thread (`prompt`). Anything else ends the watch; a user message that is not that echo (history replayed on
+        // resume) is kept.
+        if (this.#echo !== null) {
+            if (event.kind === 'message' && event.speaker === 'you' && this.#echo.startsWith(this.#echoSeen + event.text)) {
+                this.#echoSeen += event.text;
+                if (this.#echoSeen === this.#echo) { this.#echo = null; this.#echoSeen = ''; }
+                return;
+            }
+            this.#echo = null;
+            this.#echoSeen = '';
+        }
+
         if (event.kind === 'think') {
             const open = this.#openMessage;
             if (open && open.event.kind === 'think') {
@@ -703,16 +725,21 @@ export class AgentSession {
 
         this.#enqueue(closing);
 
-        try {
-            const thread = openAgentThread(this.#options.store, this.agentId);
-            await this.#writes; // The open message lands first, so the ledger keeps its order.
-            await thread.record([persistable(event)]);
-        } catch {
-            // A storage fault must not take the turn down with it — but it must also not
-            // vanish. Counted, so a surface can say "this conversation is not being saved"
-            // instead of quietly holding a partial history.
-            this.#unpersisted += 1;
-        }
+        // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
+        // emitted together (a turn marker and your message) reach the thread in either order.
+        const write = async (): Promise<void> => {
+            try {
+                const thread = openAgentThread(this.#options.store, this.agentId);
+                await thread.record([persistable(event)]);
+            } catch {
+                // A storage fault must not take the turn down with it — but it must also not
+                // vanish. Counted, so a surface can say "this conversation is not being saved"
+                // instead of quietly holding a partial history.
+                this.#unpersisted += 1;
+            }
+        };
+        this.#writes = this.#writes.then(write, write);
+        await this.#writes;
     }
 }
 

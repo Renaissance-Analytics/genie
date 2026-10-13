@@ -55,17 +55,18 @@ describe('a prompt opens a TURN in the ledger', () => {
 
         session.start();
         session.prompt('hello', 'you');
-        expect(rows.at(-1)).toEqual({ kind: 'turn', n: 1, by: 'you' });
+        // The marker, then the prompt itself as your message (recorded when sent — Claude does not echo it).
+        expect(rows.slice(-2)).toEqual([{ kind: 'turn', n: 1, by: 'you' }, { kind: 'message', speaker: 'you', peerName: null, text: 'hello' }]);
 
         d.endTurn();
         session.prompt('again');
-        expect(rows.at(-1)).toEqual({ kind: 'turn', n: 2, by: null });
+        expect(rows.slice(-2)).toEqual([{ kind: 'turn', n: 2, by: null }, { kind: 'message', speaker: 'you', peerName: null, text: 'again' }]);
         expect(rows.filter((r) => r.kind === 'turn')).toHaveLength(2);
 
         // The thread keeps the structure a resumed session is drawn from.
-        await vi.waitFor(async () => expect(await openAgentThread(store, id).count()).toBe(2));
+        await vi.waitFor(async () => expect(await openAgentThread(store, id).count()).toBe(4));
         const persisted = await openAgentThread(store, id).messages();
-        expect(persisted.map((r) => (r.message as { kind: string }).kind)).toEqual(['turn', 'turn']);
+        expect(persisted.map((r) => (r.message as { kind: string }).kind)).toEqual(['turn', 'message', 'turn', 'message']);
     });
 });
 

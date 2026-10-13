@@ -1,3 +1,4 @@
+import { chatSubscriptionId } from './agent-detail.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryPinnedChat, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
@@ -142,19 +143,20 @@ function useAgentDetail(
         // ledger under the new one's name for a frame.
         setState({ detail: null, resolved: false });
 
+        let off: (() => void) | null = null;
         void bridge.agentDetail(agentId).then((detail) => {
             if (!live) return;
+            // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
+            // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
+            const id = chatSubscriptionId(agentId, detail);
+            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (live) setState({ detail: next, resolved: true }); });
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
             const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
             if (canonical) { window.location.replace(`#${canonical}`); return; }
             setState({ detail, resolved: true });
         });
-        const off = bridge.subscribeAgent(agentId, (detail) => {
-            if (live) setState({ detail, resolved: true });
-        });
-
-        return () => { live = false; off(); };
+        return () => { live = false; off?.(); };
     }, [bridge, agentId]);
 
     return state;
