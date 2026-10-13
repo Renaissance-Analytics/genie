@@ -1,6 +1,17 @@
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
-import { ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
+import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
+
+/**
+ * Whether a provider's driver can ask for approval — the DRIVER's published claim (`permissionRequests`), read from
+ * prism-acp's declaration rather than branched on a name. `null` for a provider Genie has no driver for: unknown is
+ * not "no".
+ */
+export function raisesApprovals(provider: string): boolean | null {
+    if (provider === 'claude') return CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
+    if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
+    return null;
+}
 import { threadIdIsResumable, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { ProcessTree } from '../core/process-tree.js';
