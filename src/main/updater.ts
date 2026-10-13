@@ -114,12 +114,15 @@ export interface InstallResult {
 const IDLE: UpdateState = { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
 
 /**
- * When Genie checks BY ITSELF: once shortly after boot, then on a long interval. v1 checked at
+ * When Genie checks BY ITSELF: once shortly after boot, then every half hour. v1 checked at
  * boot and opened the sheet; 2.0.0-beta.5 never checked unless a script or a remote call asked,
- * so an installed Genie 2 could not learn that the next build existed (genie2#91). Nothing
- * downloads by itself — the check only moves the state to `available`, which the Deck shows.
+ * so an installed Genie 2 could not learn that the next build existed (genie2#91). The interval
+ * was four hours until the owner (2026-10-13): "it should not be every 4 hours, that is too
+ * long." A check is one small feed read, so thirty minutes costs nothing. Nothing downloads by
+ * itself — the check only moves the state to `available`, which the header's update chip shows;
+ * downloading and installing stay the user's two clicks.
  */
-export const AUTO_CHECK = { initialMs: 10_000, intervalMs: 4 * 60 * 60 * 1000 } as const;
+export const AUTO_CHECK = { initialMs: 10_000, intervalMs: 30 * 60 * 1000 } as const;
 
 export class UpdateHost {
     private current: UpdateState = IDLE;

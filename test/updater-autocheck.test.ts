@@ -6,7 +6,8 @@ import { AUTO_CHECK, UpdateHost, type UpdaterPort } from '../src/main/updater.js
  * never checked unless a script or a remote call asked, so an installed Genie 2 would never learn
  * that the next build existed (genie2#91, the owner: "will the new version pick up on an update
  * automatically? don't make me do this twice"). The host arms ONE check shortly after boot and
- * re-arms on a long interval; nothing downloads by itself (unchanged). Counted with a fake
+ * re-arms every half hour (the owner, 2026-10-13: "it should not be every 4 hours, that is too
+ * long"); nothing downloads by itself (unchanged). Counted with a fake
  * scheduler the test fires by hand: the number of timers armed and the number of checks made are
  * what is asserted, never "a check happened".
  */
@@ -94,10 +95,9 @@ describe('UpdateHost.startAutoCheck', () => {
         expect(fake.checks).toBe(0);
     });
 
-    it('the boot delay is seconds, the interval hours — a check soon after launch, then rarely', () => {
+    it('the boot delay is seconds, the interval exactly half an hour — a check soon after launch, then every 30 minutes', () => {
         expect(AUTO_CHECK.initialMs).toBeGreaterThanOrEqual(5_000);
         expect(AUTO_CHECK.initialMs).toBeLessThanOrEqual(30_000);
-        expect(AUTO_CHECK.intervalMs).toBeGreaterThanOrEqual(60 * 60 * 1000);
-        expect(AUTO_CHECK.intervalMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+        expect(AUTO_CHECK.intervalMs).toBe(30 * 60 * 1000);
     });
 });
