@@ -24,11 +24,11 @@ const timeline = timelineOf(rows)!;
 describe('laneTracks', () => {
     it('one block per event in its lane, placed by the fraction of the span; untimed rows and structure rows draw none', () => {
         const tracks = laneTracks(rows, timeline);
-        expect(tracks.map((tr) => tr.lane)).toEqual(['messages', 'thoughts', 'tools', 'edits']);
-        expect(tracks[0]!.blocks).toEqual([{ id: 'm1', x: 0.2 }, { id: 'm2', x: 1 }]);
-        expect(tracks[1]!.blocks).toEqual([{ id: 'k1', x: 0.4 }]);
-        expect(tracks[2]!.blocks).toEqual([{ id: 'b1', x: 0.6 }]);
-        expect(tracks[3]!.blocks).toEqual([{ id: 'e1', x: 0.8 }]);
+        expect(tracks.map((tr) => tr.lane)).toEqual(['thoughts', 'tools', 'edits']);
+        // The messages m1 / m2 are the chat's: no track draws them.
+        expect(tracks[0]!.blocks).toEqual([{ id: 'k1', x: 0.4 }]);
+        expect(tracks[1]!.blocks).toEqual([{ id: 'b1', x: 0.6 }]);
+        expect(tracks[2]!.blocks).toEqual([{ id: 'e1', x: 0.8 }]);
     });
 });
 

@@ -44,7 +44,8 @@ describe('a thought row', () => {
          */
         const row = ledgerRow(timed({ kind: 'think', text: 'The passkey flow needs a challenge table.', tokens: null }));
 
-        expect(row).toMatchObject({ icon: 'brain', tone: 'violet', clamp: true, expandable: false, italic: true });
+        // Drawn as one line, and EXPANDABLE to its whole text on click — the owner's word over the spec's "never".
+        expect(row).toMatchObject({ icon: 'brain', tone: 'violet', clamp: true, expandable: true, italic: true, full: 'The passkey flow needs a challenge table.' });
         expect(row.main).toBe('The passkey flow needs a challenge table.');
     });
 

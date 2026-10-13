@@ -72,22 +72,23 @@ describe('rows', () => {
     it('renders the ledger rows', () => {
         const html = render();
 
-        expect(html).toContain('data-stream-row="m1"');
-        expect(html).toContain('Add the passkey endpoint');
+        // Activity only: the message is the chat's.
+        expect(html).not.toContain('data-stream-row="m1"');
+        expect(html).not.toContain('Add the passkey endpoint');
         expect(html).toContain('php artisan test');
     });
 
-    it('flattens a thought to one line and does not make it a control', () => {
+    it('draws a thought as one line, a control that opens it in place — never the Inspector', () => {
         const html = render();
         const row = html.slice(html.indexOf('data-stream-row="th1"'), html.indexOf('data-stream-row="to1"'));
 
         expect(row).toContain('The flow needs a challenge table first.');
         expect(row).toContain('truncate');
         expect(row).toContain('italic');
-        // Not clickable, because clicking must not expand it — not on click, not while
-        // streaming. A row that highlights and then does nothing teaches people clicking is
-        // pointless here.
-        expect(row).not.toContain('role="button"');
+        // The owner (using beta.19): click the thinking line to see the reasoning. It toggles in place; it is not an
+        // Inspector selection.
+        expect(row).toContain('data-expandable="true"');
+        expect(row).toContain('role="button"');
         expect(row).not.toContain('data-inspectable');
     });
 

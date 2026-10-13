@@ -1,3 +1,4 @@
+import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
 import type { StreamEvent } from './stream-event.js';
 
@@ -87,6 +88,8 @@ export interface LedgerRow {
      * while streaming.
      */
     expandable: boolean;
+    /** A thought's WHOLE text, drawn when the row is expanded (the owner: click the thinking line to see the reasoning). */
+    full?: string | undefined;
     meta: string | null;
     /** `warn` = a tool still running (the board's amber `running`). */
     metaTone: 'default' | 'bad' | 'warn';
@@ -326,13 +329,13 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
                 icon: 'brain',
                 tone: 'violet',
                 kind: 'think',
-                main: oneLine(row.event.text),
+                // Claude's API redacts reasoning by default: the thought arrives with no text. Said, not drawn blank.
+                main: row.event.text.trim() === '' ? 'Reasoning not sent by the provider' : oneLine(row.event.text),
                 italic: true,
-                // `expandable: false` is the design's strongest instruction, and it is about
-                // reading rather than taste: content that grows and reflows as reasoning
-                // arrives is the worst experience in agent UIs, and a thought is the one thing
-                // that streams continuously.
-                expandable: false,
+                // The owner (using beta.19): a thought EXPANDS on click to its whole reasoning — over the spec's
+                // "never expands". Nothing to expand when the provider sent no text.
+                expandable: row.event.text.trim() !== '',
+                ...(row.event.text.trim() !== '' ? { full: row.event.text } : {}),
                 // The provider's own estimate when it gave one (`~`: an estimate); otherwise the derived Δ, or nothing.
                 meta: typeof row.event.estimate === 'number' ? `~${thousands(row.event.estimate)} tok` : row.event.tokens === null ? null : `Δ+${thousands(row.event.tokens)} tok`,
                 lane: 'thoughts',
@@ -373,7 +376,8 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
         }
 
         case 'notice':
-            return { ...base, icon: 'info', tone: 'amber', main: row.event.message, lane: null };
+            // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.
+            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null };
 
         case 'approval': {
             // The decision, in one line: `allowed · php artisan migrate --force`. The tool, when the request named one.
@@ -466,6 +470,33 @@ export function findRows(rows: readonly TimedEvent[], query: string): readonly T
  * first report in the thread is its own rise (nothing ran before it). A FALL — a `/clear`, or an older CLI that
  * restarted its totals on resume — says nothing about that turn, so it gets none; the next rise is measured from it.
  */
+/**
+ * THE STREAM'S ROWS: what the agent is DOING. Replies and your messages live in the chat (the owner, using beta.19);
+ * prism-acp's debug notices (`thinking`, `session started`, `turn complete`) are not rows — and a debug notice's
+ * thinking-token estimate is put on the thought before it, when that thought has none of its own.
+ */
+export function activityRows(rows: readonly TimedEvent[]): TimedEvent[] {
+    const out: TimedEvent[] = [];
+    for (const r of rows) {
+        const e = r.event;
+        if (e.kind === 'message') continue;
+        if (e.kind === 'notice' && e.level === 'debug') {
+            if (typeof e.estimate === 'number') {
+                for (let i = out.length - 1; i >= 0; i--) {
+                    const prev = out[i]!.event;
+                    if (prev.kind === 'think') {
+                        if (typeof prev.estimate !== 'number') out[i] = { ...out[i]!, event: { ...prev, estimate: e.estimate } };
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(r);
+    }
+    return out;
+}
+
 export function resolveTurnCosts(rows: readonly TimedEvent[]): readonly TimedEvent[] {
     // One rule for every running total — cost, input, output: the rise from the previous report that carried it.
     const previous: { cost: number | null; in: number | null; out: number | null } = { cost: null, in: null, out: null };

@@ -171,7 +171,8 @@ export interface LaneTrack {
 export function laneTracks(rows: readonly TimedEvent[], timeline: Timeline): readonly LaneTrack[] {
     const span = timeline.end - timeline.start;
     const at = (t: number): number => (span === 0 ? 0.5 : Math.round(((t - timeline.start) / span) * 1000) / 1000);
-    return LANES.map((lane) => ({
+    // The activity tracks: replies live in the chat, so there is no messages track.
+    return LANES.filter((lane) => lane !== 'messages').map((lane) => ({
         lane,
         blocks: rows.filter((r) => r.at !== null && laneOf(r.event) === lane).map((r) => ({ id: r.id, x: at(r.at as number) })),
     }));

@@ -67,7 +67,8 @@ describe('the route carries a facet like a lane', () => {
 describe('chipRow', () => {
     it('appends Usage and Errors after the lanes with MEASURED counts; a zero is kept', () => {
         const chips = chipRow(rows, null);
-        expect(chips.map((c) => c.id)).toEqual(['all', 'messages', 'thoughts', 'tools', 'edits', 'usage', 'approvals', 'errors']);
+        // No Messages chip: the Stream is activity; replies live in the chat.
+        expect(chips.map((c) => c.id)).toEqual(['all', 'thoughts', 'tools', 'edits', 'usage', 'approvals', 'errors']);
         expect(chips.find((c) => c.id === 'usage')).toEqual({ id: 'usage', label: 'Usage', n: 1, on: false });
         expect(chips.find((c) => c.id === 'errors')).toEqual({ id: 'errors', label: 'Errors', n: 2, on: false });
         const calm = chipRow(rows.filter((r) => r.id !== 'f1' && r.id !== 'n1'), null);

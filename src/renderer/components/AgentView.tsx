@@ -1,3 +1,4 @@
+import { activityRows } from '../../core/stream-view.js';
 import { headroomLine, headroomOf } from '../../core/headroom.js';
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
@@ -311,13 +312,15 @@ export function AgentView({
     // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
     const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
     // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
-    const timeline = active === 'stream' ? sessionTimeline(rows, session) : null;
+    // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
+    const activity = activityRows(rows);
+    const timeline = active === 'stream' ? sessionTimeline(activity, session) : null;
     const chips = chipRow(rows, lanes);
     // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
-    const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(rows, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
+    const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(activity, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
     const drawerOpen = lanesOpenProp ?? ownLanesOpen;
     // THE `turns` LAYOUT (the board): the Stream folded into cards; the chips row goes, the index and the strip stay.
-    const shownRows = findRows(rowsInRange(rows, range), findQuery);
+    const shownRows = findRows(rowsInRange(activity, range), findQuery);
     const cards = active === 'stream' && layout === 'turns' ? turnCards(shownRows, session, workspace?.path ?? null) : null;
     const otherLayout = layout === 'turns' ? { label: 'Ledger', route: `genie://agent/${agent.id}?tab=stream` } : { label: 'Turns', route: `genie://agent/${agent.id}?tab=stream&layout=turns` };
 
@@ -346,7 +349,7 @@ export function AgentView({
 
             // The rows a cursor can land on are the ones on screen: inside the range AND the
             // lane selection. Stepping onto a filtered-out row would select something invisible.
-            const inView = visibleRows(findRows(rowsInRange(rows, range), findQuery), lanes).map((r) => r.id);
+            const inView = visibleRows(findRows(rowsInRange(activity, range), findQuery), lanes).map((r) => r.id);
 
             switch (action) {
                 case 'next-edit': {
@@ -680,7 +683,7 @@ export function AgentView({
                             ) : null}
                             {/* The board's empty state draws no chips and no strip: counts over nothing are furniture. */}
                             {layout === 'turns' || rows.length === 0 ? null : <ChipsRow chips={chips} selected={lanes} onChange={(next) => onLanes?.(next)} find={findQuery} onFind={setOwnFind} findRef={findRef} matches={findMatches} />}
-                            {drawerOpen ? <Lanes rows={rows} range={range} onRange={(next) => onRange?.(next)} /> : null}
+                            {drawerOpen ? <Lanes rows={activity} range={range} onRange={(next) => onRange?.(next)} /> : null}
 
                             <div className="min-h-0 flex-1">
                                 {cards ? (

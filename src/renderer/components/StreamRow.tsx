@@ -34,10 +34,13 @@ export interface StreamRowProps {
     live?: boolean | undefined;
     /** The stream cursor is on this row (`j`/`k`) — a focus, drawn as a ring; not the Inspector's selection. */
     cursor?: boolean | undefined;
+    /** A thought opened to its whole text (click toggles it). */
+    expanded?: boolean | undefined;
+    onToggle?: ((id: string) => void) | undefined;
     onSelect: (id: string) => void;
 }
 
-export function StreamRow({ row, selected, live = false, cursor = false, onSelect }: StreamRowProps) {
+export function StreamRow({ row, selected, live = false, cursor = false, expanded = false, onToggle, onSelect }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
@@ -50,6 +53,8 @@ export function StreamRow({ row, selected, live = false, cursor = false, onSelec
             // that highlights on hover and then does nothing on click teaches people that
             // clicking is pointless here.
             {...(row.inspectable ? { role: 'button', tabIndex: 0, onClick: () => onSelect(row.id) } : {})}
+            // A thought with text opens to its whole reasoning in place; a second click closes it.
+            {...(!row.inspectable && row.expandable && row.full !== undefined ? { 'data-expandable': 'true', role: 'button', tabIndex: 0, 'aria-expanded': expanded, onClick: () => onToggle?.(row.id) } : {})}
             className={[
                 'flex items-start gap-3 px-5 py-1 text-[13px] leading-5',
                 cursor ? 'ring-1 ring-inset ring-[var(--border-2)]' : '',
@@ -90,7 +95,7 @@ export function StreamRow({ row, selected, live = false, cursor = false, onSelec
             >
                 {/* WHO spoke, on a message: a field in its colour, never a role word. */}
                 {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
-                {row.main}
+                {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{row.full}</span> : row.main}
             </span>
 
             {/*

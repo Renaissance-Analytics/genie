@@ -30,8 +30,10 @@ describe('the session timeline strip', () => {
         expect(html).toContain('data-segment="T1"');
         expect(html).toContain('data-segment="T2"');
         expect((html.match(/data-tick-kind="edit"/g) ?? []).length).toBe(1);
-        expect((html.match(/data-tick-kind="message"/g) ?? []).length).toBe(1);
-        for (const k of ['edit', 'message', 'thought', 'tool']) expect(html).toContain(`data-legend="${k}"`);
+        // The fixture's message is a chat message: no message tick and no message legend on an activity strip.
+        expect(html).not.toContain('data-tick-kind="message"');
+        for (const k of ['edit', 'thought', 'tool']) expect(html).toContain(`data-legend="${k}"`);
+        expect(html).not.toContain('data-legend="message"');
         expect(html).toContain('data-head="ok"');
         expect(html).toMatch(/data-action="toggle-lanes"[^>]*aria-pressed="false"/);
     });
@@ -57,7 +59,7 @@ describe('the chips row', () => {
         const html = render({ lanes: ['edits'] });
         expect(html).toMatch(/data-chip="all"[^>]*data-on="false"/);
         expect(html).toMatch(/data-lane="edits"[^>]*data-on="true"/);
-        expect(html).toMatch(/data-lane="messages"[^>]*data-on="false"/);
+        expect(html).toMatch(/data-lane="thoughts"[^>]*data-on="false"/);
     });
 });
 

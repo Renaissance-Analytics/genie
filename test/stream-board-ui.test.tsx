@@ -26,8 +26,8 @@ describe('the rows', () => {
         const html = renderToStaticMarkup(<Stream rows={rows} lanes={null} at={null} selectedId={null} onSelect={() => {}} agentName="atlas" diffs={diffs} />);
         expect(html).toContain('data-kind="Bash"');
         expect(html).toContain('data-kind="Edit"');
-        expect(html).toMatch(/data-who="you"[^>]*>you</);
-        expect(html).toMatch(/data-who="peer"[^>]*>wren → atlas</);
+        // Messages — yours and a peer's — are the chat's, not the Stream's: no speaker labels here at all.
+        expect(html).not.toContain('data-who=');
         expect(html).not.toMatch(/>\s*(user|assistant)\s*</);
         // A real diff's numbers as two cells — and only where a diff was computed.
         expect(html).toContain('data-plus="2"');

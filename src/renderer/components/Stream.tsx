@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     editLineCounts,
     ledgerRow,
-    resolveThinkTokens, resolveTurnCosts,
+    activityRows, resolveThinkTokens, resolveTurnCosts,
     resolveToolDurations,
     visibleRows,
     type StreamFilter,
@@ -78,6 +78,9 @@ export function initialFollowTail(at: string | null): boolean {
 export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
+    // Thoughts opened to their whole reasoning, by row id.
+    const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+    const toggle = (id: string) => setExpanded((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
     // A deep link arriving later — an agent sends one mid-turn — must stop following too.
     useEffect(() => {
@@ -89,7 +92,8 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
         // applied. Computing them after filtering would attribute a thought's cost from
         // whichever usage rows happened to survive the lane selection — a number that changes
         // when you change the view, which is the definition of a figure not worth printing.
-        const withTokens = resolveTurnCosts(resolveThinkTokens(rows));
+        // The activity: replies live in the chat, debug notices are not rows (`activityRows`).
+        const withTokens = resolveTurnCosts(resolveThinkTokens(activityRows(rows)));
         const durations = resolveToolDurations(withTokens);
         const visible = visibleRows(withTokens, lanes);
 
@@ -188,7 +192,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} onSelect={onSelect} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} />
                 )}
             />
 
