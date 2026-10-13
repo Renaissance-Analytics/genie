@@ -450,7 +450,7 @@ export function AgentView({
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
             {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
-            <div className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+            <div data-view-header="" className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 {workspace ? <span data-crumb={workspace.id} className="text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span className="font-medium">{agent.name}</span>

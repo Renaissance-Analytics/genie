@@ -244,7 +244,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
             {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
-            <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+            <header data-view-header="" className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
                 {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}

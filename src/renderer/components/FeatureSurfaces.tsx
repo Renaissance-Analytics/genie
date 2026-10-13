@@ -44,7 +44,7 @@ interface SurfaceProps {
 
 function Header({ title, children }: { title: string; children?: React.ReactNode }) {
     return (
-        <div className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
+        <div data-view-header="" className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
             <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
             {children}
         </div>
@@ -911,7 +911,7 @@ export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps
     const nav = url ? classifyNavigation(url, routes) : null;
     return (
         <div data-surface="browser" className="flex h-full min-h-0 flex-col">
-            <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
                 <form
                     className="flex-1"
                     onSubmit={(e) => { e.preventDefault(); onAction({ kind: 'browser.navigate', url: (new FormData(e.currentTarget).get('url') as string) ?? '' }); }}

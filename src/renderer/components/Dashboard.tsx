@@ -459,7 +459,7 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
     return (
         <div data-surface="dashboard" className="flex min-h-0 flex-col">
             {/* View header, 56px. */}
-            <div className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
+            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
                 <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
                 <div className="flex items-center gap-3.5 text-xs text-[var(--fg-2)]">
                     {chips.map((c) => (
