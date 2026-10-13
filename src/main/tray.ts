@@ -14,6 +14,8 @@ export interface TrayHandlers {
     readonly onOpen: () => void;
     /** Opens the window on the Settings surface — the second way to reach Settings, beside the rail row. */
     readonly onSettings: () => void;
+    /** Asks the feed now (the owner, 2026-10-13: "where even is the check for updates button?"). The header chip shows what it finds. */
+    readonly onCheckUpdates: () => void;
     readonly onQuit: () => void;
 }
 
@@ -22,6 +24,7 @@ export function trayMenuTemplate(handlers: TrayHandlers): { label: string; click
     return [
         { label: 'Open Genie', click: handlers.onOpen },
         { label: 'Settings…', click: handlers.onSettings },
+        { label: 'Check for updates', click: handlers.onCheckUpdates },
         { label: 'Quit Genie', click: handlers.onQuit },
     ];
 }

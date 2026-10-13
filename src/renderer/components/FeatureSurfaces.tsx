@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
 import { agentFilesLine, type AgentFilesReport } from '../../core/agent-files-health.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
@@ -11,6 +11,8 @@ import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../cor
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
+import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
+import type { UpdateState } from '../bridge.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -498,7 +500,7 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, onNavigate, group, workspaces = [], remoteConnect, query }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, group, workspaces = [], remoteConnect, query, update }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined }) {
     const values = data.settings.values;
     const active = group ?? 'general';
     // SEARCH across the four groups (§6.9). Transient view state: a query is not a place, so it is not in the route.
@@ -535,6 +537,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                 <Tabs.Panels className="min-h-0 flex-1 overflow-auto">
                     {settingGroups().map((g) => (
                         <Tabs.Panel key={g} value={g}>
+                            {g === 'general' && update ? <UpdatesBlock {...update} /> : null}
                             <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>
                                 {SETTINGS.filter((s) => s.group === g).map((def) => (
                                     <li key={def.key} data-setting={def.key} className="flex items-center gap-4 px-5 py-3">
@@ -554,6 +557,32 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                 </Tabs.Panels>
             </Tabs>
             )}
+        </div>
+    );
+}
+
+/** The update half of Settings → General. Absent when the window has no updates bridge — then no control is drawn. */
+export interface UpdateCheckProps {
+    readonly state: UpdateState | null;
+    readonly onCheck: () => void;
+}
+
+const updateClock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * UPDATES (the owner, 2026-10-13: "where even is the check for updates button?"). First in General:
+ * where things stand, and the one verb that asks the feed now. Busy while a check, a download or an
+ * install is already running — a second press would only queue the same question.
+ */
+function UpdatesBlock({ state, onCheck }: UpdateCheckProps) {
+    const busy = state !== null && !canCheckNow(state.phase);
+    return (
+        <div data-updates className="flex items-center gap-4 border-b border-[var(--border-1)] px-5 py-3">
+            <div className="flex-1">
+                <div className="text-sm font-medium">Updates</div>
+                <div data-update-status className="text-xs text-[var(--fg-3)]">{updateStatusLine(state, updateClock)}</div>
+            </div>
+            <Button data-action="update-check" size="sm" disabled={busy} onClick={onCheck}>{state?.phase === 'checking' ? 'Checking…' : 'Check for updates'}</Button>
         </div>
     );
 }

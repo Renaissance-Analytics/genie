@@ -1226,6 +1226,7 @@ async function boot(): Promise<void> {
             if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
             broadcast('genie:navigate', 'genie://settings');
         },
+        onCheckUpdates: () => { void updates?.check(); },
         onQuit: () => app.quit(),
     }, trayIconPath());
     browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
