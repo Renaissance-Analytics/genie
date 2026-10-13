@@ -34,6 +34,35 @@ export interface ReapOptions {
     /** Genie 2's own pid: it and its ancestors are never victims. */
     readonly selfPid: number;
     readonly shells?: readonly string[];
+    /**
+     * Whether orphaned INTERACTIVE shells may be taken at all: only on the boot that imports Genie 1, when its pty host
+     * has just died. Absent / false = every other boot, where only v1's runtime binaries (provable by path) are taken —
+     * an orphaned shell then is somebody's background work, not Genie 1's (the owner's desktop, 2026-10-13).
+     */
+    readonly includeShells?: boolean;
+}
+
+/** The arguments of a command line after its executable, split on whitespace outside double quotes. */
+function argsOf(commandLine: string): string[] {
+    const tokens = commandLine.match(/"[^"]*"|\S+/g) ?? [];
+    return tokens.slice(1).map((t) => t.replace(/^"|"$/g, ''));
+}
+
+const POSIX_INTERACTIVE = new Set(['-l', '--login', '-i', '-il', '-li', '--noprofile', '--norc', '-']);
+const PS_INTERACTIVE = new Set(['-nologo', '-noprofile', '-noexit', '-sta', '-mta', '-interactive']);
+
+/**
+ * An INTERACTIVE shell: one that runs nothing but itself — what a pty host opens for a person. `bash x.sh`, `bash -c`,
+ * `cmd /c`, `cmd /k <cmd>`, `powershell -File` / `-Command` run something and are somebody's work. An unreadable
+ * command line is NOT interactive: unknown is never taken for Genie 1's.
+ */
+export function isInteractiveShell(executable: string, commandLine: string | null | undefined): boolean {
+    if (commandLine === null || commandLine === undefined) return false;
+    const name = basename(executable).replace(/\.exe$/, '');
+    const args = argsOf(commandLine);
+    if (name === 'cmd') return args.every((a) => a.startsWith('/') && !/^\/[ck]$/i.test(a));
+    if (name === 'powershell' || name === 'pwsh') return args.every((a) => PS_INTERACTIVE.has(a.toLowerCase()));
+    return args.every((a) => POSIX_INTERACTIVE.has(a));
 }
 
 function norm(p: string): string {
@@ -66,7 +95,7 @@ export function v1Leftovers(processes: readonly RunningProcess[], options: ReapO
         const fromV1 = roots.some((r) => exe.startsWith(r));
         const orphan = p.parentPid !== null && !byPid.has(p.parentPid);
         if (fromV1) victims.set(p.pid, { pid: p.pid, executable: p.executable, why: 'v1 runtime binary' });
-        else if (orphan && shells.has(basename(p.executable))) victims.set(p.pid, { pid: p.pid, executable: p.executable, why: 'orphaned shell' });
+        else if (options.includeShells === true && orphan && shells.has(basename(p.executable)) && isInteractiveShell(p.executable, p.commandLine)) victims.set(p.pid, { pid: p.pid, executable: p.executable, why: 'orphaned shell' });
     }
 
     // Descendants, to a fixed point.

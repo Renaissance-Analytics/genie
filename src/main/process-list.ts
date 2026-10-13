@@ -42,26 +42,34 @@ export function killProcess(pid: number): boolean {
 
 function win32(): RunningProcess[] {
     // ExecutablePath is null for processes we cannot query (SYSTEM's); those cannot be ours.
+    // JSON, not a delimited line: a COMMAND LINE can contain any separator, and the boot reaper reads it (core/v1-reap).
     const script =
-        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)|$($_.ExecutablePath)" }';
+        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
     const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
         encoding: 'utf8',
         timeout: 30_000,
+        maxBuffer: 64 * 1024 * 1024,
     });
-    return out
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .flatMap((line) => {
-            const [pidText, parentText, ...rest] = line.split('|');
-            const pid = Number.parseInt(pidText ?? '', 10);
-            const parent = Number.parseInt(parentText ?? '', 10);
-            // The path itself may contain '|' (it cannot on Windows, but join rather than assume).
-            const executable = rest.join('|');
-            return Number.isFinite(pid) && executable
-                ? [{ pid, executable, parentPid: Number.isFinite(parent) ? parent : null }]
-                : [];
-        });
+    const parsed = JSON.parse(out.trim() === '' ? '[]' : out) as unknown;
+    const rows = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{ ProcessId?: unknown; ParentProcessId?: unknown; ExecutablePath?: unknown; CommandLine?: unknown }>;
+    return rows.flatMap((r) => {
+        const pid = typeof r.ProcessId === 'number' ? r.ProcessId : NaN;
+        const parent = typeof r.ParentProcessId === 'number' ? r.ParentProcessId : NaN;
+        const executable = typeof r.ExecutablePath === 'string' ? r.ExecutablePath : '';
+        return Number.isFinite(pid) && executable
+            ? [{ pid, executable, parentPid: Number.isFinite(parent) ? parent : null, commandLine: typeof r.CommandLine === 'string' ? r.CommandLine : null }]
+            : [];
+    });
+}
+
+/** /proc/<pid>/cmdline, its NUL-separated arguments joined by spaces; `null` when it cannot be read. */
+function commandLineOf(entry: string): string | null {
+    try {
+        const raw = readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+        return raw === '' ? null : raw.split('\0').filter((a) => a !== '').join(' ');
+    } catch {
+        return null;
+    }
 }
 
 /** The 4th field of /proc/<pid>/stat, after the parenthesised comm (which may itself contain spaces). */
@@ -84,7 +92,7 @@ function posix(): RunningProcess[] {
         try {
             // A process that exited between readdir and readlink, or one we may not inspect,
             // is simply not listed — it cannot hold our files open in either case.
-            found.push({ pid, executable: readlinkSync(`/proc/${entry}/exe`), parentPid: parentOf(entry) });
+            found.push({ pid, executable: readlinkSync(`/proc/${entry}/exe`), parentPid: parentOf(entry), commandLine: commandLineOf(entry) });
         } catch {
             // skip
         }
