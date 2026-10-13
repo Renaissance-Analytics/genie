@@ -22,7 +22,7 @@ export interface FilesPanelState {
     readonly changed: readonly ChangedGroup[] | null;
 }
 
-export type OpenFile = { ok: true; path: string; text: string; sha: string } | { ok: false; path: string; error: string };
+export type OpenFile = { ok: true; path: string; text: string; sha: string; git?: 'committed' | 'modified' | 'untracked' | null | undefined } | { ok: false; path: string; error: string };
 
 /** Editing (§4.3): the buffer's state and the choices when a save is refused. Absent = read-only viewer. */
 export interface FilesEdit {

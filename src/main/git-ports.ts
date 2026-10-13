@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -19,6 +20,27 @@ export function gitClone(url: string, into: string): Promise<void> {
 }
 
 export interface GitCommit { sha: string; subject: string; author: string; at: number }
+
+export type GitFileState = 'committed' | 'modified' | 'untracked';
+
+/**
+ * One file's state in its OWN repository (git walks up from the file's folder, so a file inside a submodule answers
+ * for the submodule): `committed` (tracked, unchanged), `modified` (tracked, uncommitted changes), `untracked`.
+ * `null` when git says nothing — not a repository, or an ignored file. Never a guess.
+ */
+export function gitFileStatus(root: string, rel: string): Promise<GitFileState | null> {
+    const parts = rel.split('/');
+    const name = parts.pop() ?? rel;
+    const cwd = join(root, ...parts);
+    return new Promise<GitFileState | null>((resolve) => {
+        execFile('git', ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
+            if (error) { resolve(null); return; }
+            const line = String(stdout).split('\n').find((l) => l.length > 0);
+            if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
+            execFile('git', ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
+        });
+    });
+}
 
 /**
  * The commits since a moment, newest first — `git log` itself, never a guess: the short sha, the subject, the author

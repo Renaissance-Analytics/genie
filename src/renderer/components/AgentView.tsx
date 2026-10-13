@@ -143,6 +143,8 @@ export interface AgentViewProps {
     personaText?: string | null | undefined;
     /** Why the persona file could not be read, when it could not. */
     personaError?: string | null | undefined;
+    /** The persona file's git state — controlled for tests; otherwise from the same `files.open`. */
+    personaGit?: 'committed' | 'modified' | 'untracked' | null | undefined;
     /** The time range from the route; a drag on the timeline changes it. */
     range?: TimeRange | null | undefined;
     onRange?: ((range: TimeRange | null) => void) | undefined;
@@ -204,7 +206,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, width: widthProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     const clock = now ?? (() => Date.now());
@@ -268,15 +270,16 @@ export function AgentView({
     // The persona path and the context note — both facts, both absent when unknown (§5).
     const persona = agent.instructions ?? null;
     // THE PERSONA'S TEXT (the board): read once per agent through the files bridge; the path shows regardless.
-    const [personaRead, setPersonaRead] = useState<{ text: string | null; error: string | null }>({ text: null, error: null });
+    const [personaRead, setPersonaRead] = useState<{ text: string | null; error: string | null; git?: 'committed' | 'modified' | 'untracked' | null | undefined }>({ text: null, error: null });
     useEffect(() => {
         if (personaTextProp !== undefined || !files || !workspace || !persona) return;
         let live = true;
-        void files.open(workspace.id, persona).then((r) => { if (live) setPersonaRead(r.ok ? { text: r.text, error: null } : { text: null, error: r.error }); });
+        void files.open(workspace.id, persona).then((r) => { if (live) setPersonaRead(r.ok ? { text: r.text, error: null, git: r.git ?? null } : { text: null, error: r.error }); });
         return () => { live = false; };
     }, [files, workspace, persona, personaTextProp]);
     const personaShown = personaView(personaTextProp !== undefined ? personaTextProp : personaRead.text);
     const personaError = personaTextProp !== undefined ? personaErrorProp : personaRead.error;
+    const personaGitShown = personaTextProp !== undefined ? personaGitProp ?? null : personaRead.git ?? null;
     const note = contextNote(session, rows, pill.tone);
     // THE RAIL COLLAPSE (§4.2): the root's width, measured; below 1100 px the column is a strip with a door to a popover.
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -936,7 +939,11 @@ export function AgentView({
                     {persona ? (
                         <section data-rail="persona">
                             <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
-                            <p className="font-mono text-[11px] text-[var(--fg-2)]">{persona}</p>
+                            <p className="font-mono text-[11px] text-[var(--fg-2)]">
+                                {persona}
+                                {/* The board's `· committed`: git's own word on the file the session runs on; nothing when git said nothing. */}
+                                {personaGitShown ? <> · <span data-persona-git={personaGitShown} className={personaGitShown === 'committed' ? 'text-[var(--fg-3)]' : 'text-[var(--warning)]'}>{personaGitShown === 'committed' ? 'committed' : personaGitShown === 'modified' ? 'uncommitted changes' : 'not committed'}</span></> : null}
+                            </p>
                             {personaShown ? (
                                 <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
                             ) : null}
