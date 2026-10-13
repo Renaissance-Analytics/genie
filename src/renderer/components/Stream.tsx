@@ -94,7 +94,9 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
         // when you change the view, which is the definition of a figure not worth printing.
         // The activity: replies live in the chat, debug notices are not rows (`activityRows`).
         const withTokens = resolveTurnCosts(resolveThinkTokens(activityRows(rows)));
-        const durations = resolveToolDurations(withTokens);
+        // Over every frame, BEFORE the updates fold into their call (`activityRows`): a duration is a call's first frame to
+        // its terminal update.
+        const durations = resolveToolDurations(rows);
         const visible = visibleRows(withTokens, lanes);
 
         // The turns each compaction summarised: the highest turn started before it, over the WHOLE stream (a lane
