@@ -95,6 +95,11 @@ export interface AgentRecord {
      * nothing may be built on it as though it were.
      */
     readonly mode: 'automated' | 'manual';
+    /**
+     * What a CLAUDE agent may do without asking (its driver cannot ask a person): `all` tools, or file `edits` only —
+     * shell refused. Absent = `all`, so every agent registered before this field existed can still run its tools.
+     */
+    readonly permissions?: 'all' | 'edits';
     /** Who may discover and message this agent. */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     /**
