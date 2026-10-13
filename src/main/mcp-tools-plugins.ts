@@ -1,6 +1,6 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AccessDecision, AccessRequest, PluginManifest, PluginTool } from '../core/plugins.js';
-import type { Caller, Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
 import type { RunResult } from './plugin-runner.js';
 
 /**
@@ -32,12 +32,6 @@ export interface PluginToolsDeps {
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
-
-const MIRRORED_TERMINAL_ID: JsonObject = {
-    type: 'string',
-    description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
-    'x-mcp-header': { type: 'string' },
-};
 
 export function pluginTools(deps: PluginToolsDeps): Registration[] {
     return deps.plugins.tools().map((ref) => {

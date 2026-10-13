@@ -104,7 +104,7 @@ describe('the registrations', () => {
         // reads only args would miss it. The schema declares the mirror; the handler reads both.
         const def = tools.find((t) => t.definition.name === 'lists')!.definition;
         const prop = (def.inputSchema as { properties: Record<string, Record<string, unknown>> }).properties.terminalId!;
-        expect(prop['x-mcp-header']).toBeDefined();
+        expect(prop['x-mcp-header']).toBe('terminalId'); // the header NAME (spec); an object here made Claude drop the tool
 
         const r = await call('lists', { action: 'show' }, { 'mcp-param-terminalid': 't-atlas' });
         expect(r.isError).toBe(false);
