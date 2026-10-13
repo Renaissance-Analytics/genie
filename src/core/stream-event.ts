@@ -81,6 +81,12 @@ export type StreamEvent =
           cost: number | null;
           /** What THIS turn cost: the rise from the previous report (`resolveTurnCosts`); absent until resolved. */
           turnCost?: number | null;
+          /** The provider's RUNNING input / output totals (codex's `_meta.inputTokens` / `outputTokens`); `null` = not sent. */
+          inTokens?: number | null;
+          outTokens?: number | null;
+          /** THIS turn's input / output: the rise from the previous report (`resolveTurnCosts`). */
+          turnIn?: number | null;
+          turnOut?: number | null;
       }
     | { kind: 'plan'; entries: readonly unknown[] }
     | { kind: 'divider'; variant: 'compaction'; before: number | null; after: number | null }
@@ -208,6 +214,8 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 used: numberOrNull(update['used']) ?? 0,
                 size: numberOrNull(update['size']) ?? 0,
                 cost: isRecord(cost) ? numberOrNull(cost['amount']) : null,
+                inTokens: isRecord(update['_meta']) ? numberOrNull(update['_meta']['inputTokens']) : null,
+                outTokens: isRecord(update['_meta']) ? numberOrNull(update['_meta']['outputTokens']) : null,
             };
         }
 

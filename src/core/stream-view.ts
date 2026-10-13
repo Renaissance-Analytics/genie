@@ -345,6 +345,8 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             // No cost field AT ALL when the provider reports none — codex reports none. A
             // `$0.00` would claim the turn was free.
             const parts = [`context ${thousands(row.event.used)} / ${thousands(row.event.size)}`];
+            // The turn's own input and output, when the provider sent its totals (codex); absent, never `+0`.
+            if (typeof row.event.turnIn === 'number' && typeof row.event.turnOut === 'number') parts.unshift(`+${thousands(row.event.turnIn)} in · +${thousands(row.event.turnOut)} out`);
             // The TURN's cost, resolved from the running totals — never the running total under this name.
             if (typeof row.event.turnCost === 'number') parts.push(`$${row.event.turnCost.toFixed(2)} this turn`);
             return { ...base, icon: 'gauge', tone: 'muted', kind: 'usage', main: parts.join(' · '), mono: true, lane: null };
@@ -465,14 +467,18 @@ export function findRows(rows: readonly TimedEvent[], query: string): readonly T
  * restarted its totals on resume — says nothing about that turn, so it gets none; the next rise is measured from it.
  */
 export function resolveTurnCosts(rows: readonly TimedEvent[]): readonly TimedEvent[] {
-    let previous: number | null = null;
+    // One rule for every running total — cost, input, output: the rise from the previous report that carried it.
+    const previous: { cost: number | null; in: number | null; out: number | null } = { cost: null, in: null, out: null };
+    const rise = (key: 'cost' | 'in' | 'out', now: number | null | undefined, round: number): number | null => {
+        if (typeof now !== 'number') return null;
+        const before = previous[key];
+        previous[key] = now;
+        const d = before === null ? now : now - before;
+        return d >= 0 ? Math.round(d * round) / round : null;
+    };
     return rows.map((r) => {
         if (r.event.kind !== 'usage') return r;
-        const cost = r.event.cost;
-        if (cost === null) return { ...r, event: { ...r.event, turnCost: null } };
-        const rise = previous === null ? cost : cost - previous;
-        previous = cost;
-        return { ...r, event: { ...r.event, turnCost: rise >= 0 ? Math.round(rise * 1e6) / 1e6 : null } };
+        return { ...r, event: { ...r.event, turnCost: rise('cost', r.event.cost, 1e6), turnIn: rise('in', r.event.inTokens, 1), turnOut: rise('out', r.event.outTokens, 1) } };
     });
 }
 
