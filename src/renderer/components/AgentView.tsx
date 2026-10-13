@@ -1,3 +1,4 @@
+import { headroomLine, headroomOf } from '../../core/headroom.js';
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
@@ -260,6 +261,8 @@ export function AgentView({
     // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
     const steps = planSteps(rows);
     const budget = budgetFor(session, cost, turns);
+    // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
+    const headroom = headroomOf(rows);
     // The persona path and the context note — both facts, both absent when unknown (§5).
     const persona = agent.instructions ?? null;
     // THE PERSONA'S TEXT (the board): read once per agent through the files bridge; the path shows regardless.
@@ -883,13 +886,13 @@ export function AgentView({
                         <span className="sr-only">{railText}</span>
                     </div>
                 ) : null}
-                {showColumn && (inspector || plan || budget || budgetLimit !== null || ops || persona || ended || termBlock) ? (
+                {showColumn && (inspector || plan || budget || budgetLimit !== null || headroom || ops || persona || ended || termBlock) ? (
                 <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
                 {railModeNow === 'strip' ? (
                     <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
                 ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
-                {plan || budget || budgetLimit !== null || ops || persona || ended || termBlock ? (
+                {plan || budget || budgetLimit !== null || headroom || ops || persona || ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
                     {termBlock ? (
@@ -988,7 +991,7 @@ export function AgentView({
                         </section>
                     ) : null}
 
-                    {budget || budgetLimit !== null ? (
+                    {budget || budgetLimit !== null || headroom ? (
                         <section data-rail="budget">
                             <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
                                 Budget
@@ -1027,6 +1030,9 @@ export function AgentView({
                                 </p>
                             ) : budget ? (
                                 <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>
+                            ) : null}
+                            {headroom ? (
+                                <p data-rail-headroom className={`mt-1 font-mono text-[11px] ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{headroomLine(headroom)}</p>
                             ) : null}
                         </section>
                     ) : null}

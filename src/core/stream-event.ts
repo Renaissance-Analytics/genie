@@ -1,3 +1,4 @@
+import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
 import type { ToolStatus } from '@particle-academy/prism-acp';
 
 /**
@@ -89,7 +90,13 @@ export type StreamEvent =
      * (`you`, `genie`, a peer's name) and `null` when nobody reported who — never guessed to be "you".
      */
     | { kind: 'turn'; n: number; by: string | null }
-    | { kind: 'notice'; level: string; message: string }
+    | {
+          kind: 'notice';
+          level: string;
+          message: string;
+          /** The provider's rate-limit headroom when the notice carried it (`core/headroom.ts`); `null` otherwise. */
+          headroom?: Headroom | null;
+      }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
      * one parked), never read off the wire. The request itself is state (the parked card) until then; the decision
@@ -225,6 +232,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 kind: 'notice',
                 level: stringOrNull(notice['level']) ?? 'info',
                 message: stringOrNull(notice['message']) ?? '',
+                headroom: isRecord(update['_meta']) ? headroomFromMeta(update['_meta'][RATE_LIMIT_META]) : null,
             };
         }
 
