@@ -67,6 +67,8 @@ export interface LiveSession {
     links?: readonly CommsLink[] | null | undefined;
     /** The agent's own plan, when it reports one. */
     plan: { step: number; of: number; doing: string } | null;
+    /** The MCP servers the session was started with, by name (`genie` = Genie's own); absent from an older host. */
+    mcpServers?: readonly string[] | undefined;
 }
 
 /**

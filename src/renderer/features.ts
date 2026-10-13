@@ -88,7 +88,7 @@ export interface IntegrationsSection {
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
-    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null };
+    readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
