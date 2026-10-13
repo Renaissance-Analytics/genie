@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { SETTINGS, carryOverV1, type CarryOver, type SettingDef } from '../core/settings.js';
+import { SETTINGS, carryOverV1, migrateLegacyValue, type CarryOver, type SettingDef } from '../core/settings.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -76,7 +76,8 @@ export class SettingsStore {
         }
         const clean: Record<string, Value> = {};
         for (const [k, v] of Object.entries(values)) {
-            if (BY_KEY.has(k) && (typeof v === 'boolean' || typeof v === 'string')) clean[k] = v;
+            // A renamed value (a stored `update_channel: beta`) is read as its new name, not kept as an option that no longer exists.
+            if (BY_KEY.has(k) && (typeof v === 'boolean' || typeof v === 'string')) clean[k] = migrateLegacyValue(k, v);
         }
         return new SettingsStore(file, { values: clean, carriedOver: __carriedOver ?? null }, now, workspaces);
     }

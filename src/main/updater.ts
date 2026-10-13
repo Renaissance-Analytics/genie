@@ -1,9 +1,10 @@
-import { orphanReport, orphansUnder, updaterChannel, type RunningProcess } from './upgrade.js';
+import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
+import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
  *
- * `upgrade.ts` carries the channel settings and the orphan scan; until this file nothing CALLED
+ * `update-channel.ts` carries the channel settings and `upgrade.ts` the orphan scan; until this file nothing CALLED
  * the library, so "check for updates" could not run — the §0.8 failure in a new coat
  * (configured, tested, inert). This host is the one place `electron-updater` is driven from,
  * behind `UpdaterPort` so `test/updater.test.ts` proves every rule without a feed.
@@ -50,7 +51,10 @@ export interface UpdateState {
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
 export interface UpdaterPort {
-    /** Called exactly once, before anything else, with the channel pair from `upgrade.ts`. */
+    /**
+     * Called once before anything else with `updaterConfigFor(channel)`, and again only when the
+     * update channel CHANGES (`UpdateHost.setChannel`). Each call replaces the last.
+     */
     configure(channel: { allowPrerelease: boolean; autoDownload: boolean }): void;
     /** Resolves the offered version, or `null` when there is none. Rejects on a library error. */
     check(): Promise<{ version: string } | null>;
@@ -87,6 +91,8 @@ export interface UpdateHostOptions {
     defer?: (fn: () => void, ms: number) => void;
     /** The live agents whose sessions end with the upgrade; absent = a test of the teardown alone. */
     agents?: DrainAgentsPort;
+    /** The update channel at construction; `DEFAULT_UPDATE_CHANNEL` (dev) when absent. `setChannel` changes it later. */
+    channel?: UpdateChannel;
 }
 
 /**
@@ -121,13 +127,28 @@ export class UpdateHost {
     private readonly listeners = new Set<(state: UpdateState) => void>();
     private readonly clock: () => number;
     private last: InstallResult | null = null;
+    private currentChannel: UpdateChannel;
 
     constructor(private readonly options: UpdateHostOptions) {
         this.clock = options.clock ?? Date.now;
-        options.port.configure({
-            allowPrerelease: updaterChannel.allowPrerelease,
-            autoDownload: updaterChannel.autoDownload,
-        });
+        this.currentChannel = options.channel ?? DEFAULT_UPDATE_CHANNEL;
+        options.port.configure(updaterConfigFor(this.currentChannel));
+    }
+
+    /** The channel the library was last told. */
+    channel(): UpdateChannel {
+        return this.currentChannel;
+    }
+
+    /**
+     * Follow the `update_channel` setting (the owner, 2026-10-12: "stable and dev update channels").
+     * Re-configures the library only on a CHANGE; the same channel again is a no-op. The next check
+     * — automatic or asked for — sees the new channel's releases.
+     */
+    setChannel(channel: UpdateChannel): void {
+        if (channel === this.currentChannel) return;
+        this.currentChannel = channel;
+        this.options.port.configure(updaterConfigFor(channel));
     }
 
     state(): UpdateState {

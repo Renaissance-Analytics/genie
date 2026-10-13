@@ -38,7 +38,7 @@ describe('reading and writing', () => {
         const reopened = await SettingsStore.open(dir);
         expect(reopened.get('update_channel')).toBe('stable');
         await reopened.reset('update_channel');
-        expect(reopened.get('update_channel')).toBe('beta');
+        expect(reopened.get('update_channel')).toBe('dev');
         expect(JSON.parse((await readFile(store.file)).toString())).toEqual({});
     });
 
@@ -76,7 +76,9 @@ describe('reading and writing', () => {
 describe('the v1 carry-over — once, on first run', () => {
     it('applies what still exists, records the drops, and marks the carry-over done so it never runs twice', async () => {
         const result = await store.carryOverFromV1({ theme: 'light', update_channel: 'beta', agent_command: 'claude', track_cwd: 'off' });
-        expect(result.applied).toEqual({ theme: 'light', update_channel: 'beta', track_cwd: false });
+        // v1's `beta` is the dev channel by its old name: carried over AS dev.
+        expect(result.applied).toEqual({ theme: 'light', update_channel: 'dev', track_cwd: false });
+        expect(store.get('update_channel')).toBe('dev');
         expect(result.dropped.map((d) => d.key)).toEqual(['agent_command']);
         expect(store.get('theme')).toBe('light');
         expect(store.carriedOver()).toEqual({ at: expect.any(String), applied: 3, dropped: [{ key: 'agent_command', reason: expect.stringMatching(/launch line/) }], sawV1: true });

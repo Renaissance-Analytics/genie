@@ -13,8 +13,11 @@ name: release
 # releases, so the publish uses `GENIE_RELEASE_TOKEN`: a fine-grained token with Contents:
 # read/write on `Renaissance-Analytics/genie`, stored as a secret of THIS repository.
 #
-# The publish target itself (owner, repo, prerelease) is electron-builder.yml's `publish`
-# block — one place, held by test/upgrade.test.ts.
+# The publish target itself (owner, repo) is electron-builder.yml's `publish` block — one place,
+# held by test/upgrade.test.ts. The RELEASE TYPE follows the tag (the owner, 2026-10-12: "stable
+# and dev update channels"): `v2.0.0-beta.20` publishes as a prerelease, which only the dev
+# channel sees; a plain `v2.0.0` publishes as a full release, which stable (and dev) see.
+# test/update-channels.test.ts holds the `case` below to `releaseTypeForTag`.
 
 on:
   push:
@@ -66,7 +69,7 @@ jobs:
       - run: npm run build
       # electron-builder creates (or reuses) the GitHub release for this tag on the repository
       # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
-      # marks it a prerelease (`releaseType: prerelease`). There is no macOS job: macOS support is
+      # marks it a prerelease or a full release by the tag (the publish step). There is no macOS job: macOS support is
       # dropped for now (owner, 2026-10-11); the `mac` block in electron-builder.yml stays for when it returns.
       - name: fetch the pinned Caddy runtime
         run: npx tsx scripts/fetch-caddy.ts
@@ -74,7 +77,13 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
-        run: npx electron-builder --publish always
+        # electron-builder.yml defaults to `releaseType: prerelease`; a plain tag overrides it to
+        # `release` so the stable channel (allowPrerelease false) is offered it.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          case "$tag" in *-*) type=prerelease ;; *) type=release ;; esac
+          echo "publishing v$tag as a $type"
+          npx electron-builder --publish always --config.publish.releaseType=$type
 
   notes:
     name: write the release notes into the GitHub release
@@ -84,7 +93,8 @@ jobs:
       - uses: actions/checkout@v4
       # electron-builder created the release on the OLD repo (electron-builder.yml publish block);
       # the body comes from docs/releases/v<version>.md, with the same cross-repo token. The
-      # release stays a prerelease; whether it is a draft is the owner's call after this runs.
+      # release keeps the type the publish step gave it (prerelease or full release, by the tag);
+      # whether it is a draft is the owner's call after this runs.
       - name: set the body
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}

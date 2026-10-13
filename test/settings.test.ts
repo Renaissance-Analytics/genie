@@ -24,7 +24,7 @@ describe('the registry', () => {
     it('carries the settings the spec names: restore agents on launch (default OFF), update channel, theme, default agent, DND reply, notification sounds', () => {
         const byKey = Object.fromEntries(SETTINGS.map((s) => [s.key, s])) as Record<string, SettingDef>;
         expect(byKey.restore_agents_on_launch).toMatchObject({ type: 'boolean', default: false, scope: 'host', group: 'agents' });
-        expect(byKey.update_channel).toMatchObject({ type: 'enum', options: ['beta', 'stable'], scope: 'host', group: 'general' });
+        expect(byKey.update_channel).toMatchObject({ type: 'enum', options: ['stable', 'dev'], default: 'dev', scope: 'host', group: 'general' });
         expect(byKey.theme).toMatchObject({ type: 'enum', options: ['dark', 'light', 'system'], default: 'system', scope: 'device', group: 'appearance' });
         expect(byKey.default_agent).toMatchObject({ scope: 'workspace', group: 'agents' });
         expect(byKey.dnd_reply).toMatchObject({ type: 'string', group: 'general' });
@@ -47,12 +47,12 @@ describe('carrying v1 settings over', () => {
         const v1 = {
             theme: 'light',
             restore_agents_on_launch: 'true',
-            update_channel: 'beta',
+            update_channel: 'beta', // v1's name for the dev channel — migrated, not dropped
             agent_command: 'claude --dangerously-skip-permissions',
             track_cwd: 'on',
         };
         const r = carryOverV1(v1);
-        expect(r.applied).toEqual({ theme: 'light', restore_agents_on_launch: true, update_channel: 'beta', track_cwd: true });
+        expect(r.applied).toEqual({ theme: 'light', restore_agents_on_launch: true, update_channel: 'dev', track_cwd: true });
         // COUNTED: the one field that must NOT come over — the agent launch line — is named, not lost silently.
         expect(r.dropped).toEqual([{ key: 'agent_command', reason: 'agents are sessions in Genie 2; there is no launch line to carry' }]);
     });
