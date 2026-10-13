@@ -1,3 +1,4 @@
+import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
@@ -382,6 +383,8 @@ async function boot(): Promise<void> {
          * the write was meant to protect. What it costs instead is resume, which is why it is
          * said out loud here.
          */
+        // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
+        comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
@@ -1074,6 +1077,8 @@ async function boot(): Promise<void> {
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });
     composed.inbox.onRead(() => { pushFeatures(); });
+    // Agent-to-agent mail changes the Dashboard's comms cells: rebuild the snapshot on every send.
+    composed.inbox.onSend(() => { registry?.touch(); });
     host.subscribe((agentId) => remind(agentId));
     const featurePorts: FeaturePorts = {
         toolchain: {

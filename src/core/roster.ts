@@ -1,3 +1,4 @@
+import type { CommsLink } from './comms.js';
 import type { Approval } from './approval.js';
 import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
@@ -62,6 +63,8 @@ export interface LiveSession {
     lastDelivery: Delivery | null;
     collaborators: number | null;
     commsAgeSeconds: number | null;
+    /** The links behind `collaborators` (core/comms.ts); absent or `null` = not measured. */
+    links?: readonly CommsLink[] | null | undefined;
     /** The agent's own plan, when it reports one. */
     plan: { step: number; of: number; doing: string } | null;
 }
@@ -140,6 +143,7 @@ export function agentRowFor(
         delivery: session?.lastDelivery ?? null,
         collaborators: session?.collaborators ?? null,
         commsAgeSeconds: session?.commsAgeSeconds ?? null,
+        links: session?.links ?? null,
         contextUsed: session?.contextUsed ?? null,
         contextSize: session?.contextSize ?? null,
     };
