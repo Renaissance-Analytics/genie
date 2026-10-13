@@ -4,6 +4,7 @@ import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
 import { filesDock } from '../core/files-popout.js';
+import { updateChip } from '../core/update-chip.js';
 import { Deck } from './components/Deck.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
@@ -317,6 +318,11 @@ export function Shell({
                 remote={remote}
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
+                update={updateChip(updateState)}
+                onUpdateAction={(action) => {
+                    if (action === 'update-download') void updates.download();
+                    else if (action === 'update-install') void updates.install();
+                }}
             />
 
             {/* THE DOCK'S NOTICE (§4.4): a second pin replaces the first VISIBLY; a refusal says why and offers pop-out. */}
