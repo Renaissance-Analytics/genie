@@ -3,7 +3,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 
 type AcpProvider = AgentRecord['provider'];
 import { sidecarPlan } from '../core/sidecar.js';
-import type { Caller, Registration, ToolContext } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext } from './mcp-tools.js';
 
 /**
  * `runAgent {action:"sidecar", agent}` (§6.2): the caller's review partner. Registers `<driver>-slave` in
@@ -20,12 +20,6 @@ export interface SidecarToolsDeps {
     readonly running: (agentId: string) => boolean;
     readonly addressOf: (record: AgentRecord) => string;
 }
-
-const MIRRORED_TERMINAL_ID: JsonObject = {
-    type: 'string',
-    description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
-    'x-mcp-header': { type: 'string' },
-};
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });

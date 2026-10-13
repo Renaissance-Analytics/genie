@@ -1,6 +1,6 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { KnowledgeStore, MemoryClass, Scope, ScopeFilter } from './knowledge-store.js';
-import type { Caller, Registration, ToolContext, ToolHandler } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
  * TWO MORE GENIE TOOLS on prism's contract (see `mcp-tools.ts` for the contract and attribution).
@@ -35,12 +35,6 @@ export interface MoreToolsDeps {
     readonly approve: ApprovalGate;
     readonly resolveCaller: (terminalId: string) => Caller | null;
 }
-
-const MIRRORED_TERMINAL_ID: JsonObject = {
-    type: 'string',
-    description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
-    'x-mcp-header': { type: 'string' },
-};
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });

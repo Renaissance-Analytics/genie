@@ -70,10 +70,15 @@ export interface GenieToolsDeps {
     readonly dnd?: () => { on: boolean; reply: string };
 }
 
-const MIRRORED_TERMINAL_ID: JsonObject = {
+/**
+ * The `terminalId` argument, mirrored into the `Mcp-Param-terminalId` header. The spec's `x-mcp-header` is the header
+ * NAME, a string: a client MUST exclude a tool whose annotation is anything else, and Claude Code does (measured
+ * 2026-10-13 — with `{ type: 'string' }` here every Genie tool was dropped). One definition, shared by every tool module.
+ */
+export const MIRRORED_TERMINAL_ID: JsonObject = {
     type: 'string',
     description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
-    'x-mcp-header': { type: 'string' },
+    'x-mcp-header': 'terminalId',
 };
 
 function ok(payload: unknown): McpToolResult {

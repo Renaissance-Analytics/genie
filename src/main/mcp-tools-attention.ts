@@ -1,7 +1,7 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { FeedbackKind, FeedbackStore } from './feedback-store.js';
-import type { Caller, Registration, ToolContext, ToolHandler } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
  * THE TWO ATTENTION TOOLS THAT WERE MISSING (§6.3). `openFileForUser` puts a file in front of the
@@ -16,12 +16,6 @@ export interface AttentionToolsDeps {
     readonly openFile: (absolutePath: string, line: number | null) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly feedback: FeedbackStore;
 }
-
-const MIRRORED_TERMINAL_ID: JsonObject = {
-    type: 'string',
-    description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
-    'x-mcp-header': { type: 'string' },
-};
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
