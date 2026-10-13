@@ -44,7 +44,7 @@ export function sidecarTools(deps: SidecarToolsDeps): Registration[] {
                     action: { type: 'string', enum: ['sidecar'] },
                     agent: { type: 'string', enum: ['claude', 'codex'], description: 'The driver of the sidecar.' },
                 },
-                required: ['terminalId', 'action', 'agent'],
+                required: ['action', 'agent'],
             },
             'Run agent',
         ),

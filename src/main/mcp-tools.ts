@@ -77,7 +77,9 @@ export interface GenieToolsDeps {
  */
 export const MIRRORED_TERMINAL_ID: JsonObject = {
     type: 'string',
-    description: 'The value of GENIE_TERMINAL_ID in your environment. Required: Genie refuses to guess which terminal is calling.',
+    description: 'Leave this out in a Genie session — Genie already knows which agent you are. Only an agent in a plain terminal '
+        + '(a Take Over window) passes the value of GENIE_TERMINAL_ID from its environment. Never invent one: an id Genie does not '
+        + 'know is refused.',
     'x-mcp-header': 'terminalId',
 };
 
@@ -103,7 +105,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
     ): ToolHandler => async (args, context) => {
         const headerValue = Object.entries(context.headers).find(([k]) => k.toLowerCase() === 'mcp-param-terminalid')?.[1];
         const terminalId = str(args.terminalId) ?? headerValue;
-        if (!terminalId) return err('terminalId is required — pass the value of GENIE_TERMINAL_ID; Genie will not guess which terminal is calling');
+        if (!terminalId) return err('Genie could not tell who is calling: a Genie session is known by its session (leave terminalId out); an agent in a plain terminal passes the value of GENIE_TERMINAL_ID');
         const caller = deps.resolveCaller(terminalId);
         if (!caller) return err(`terminal ${terminalId} is not one Genie knows; nothing was done`);
         try {
@@ -123,7 +125,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     terminalId: MIRRORED_TERMINAL_ID,
                     handoff: { type: 'string', description: 'The note for the next run of this agent. Omit only when there is genuinely nothing to carry.' },
                 },
-                required: ['terminalId'],
+                required: [],
             },
             'I’m done',
         ),
@@ -172,7 +174,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                         },
                     },
                 },
-                required: ['terminalId', 'questions'],
+                required: ['questions'],
             },
             'Force the question',
         ),
@@ -208,7 +210,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     path: { type: 'string' },
                     overwrite: { type: 'boolean' },
                 },
-                required: ['terminalId', 'action'],
+                required: ['action'],
             },
             'AgentInbox',
         ),
@@ -290,7 +292,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     text: { type: 'string' },
                     id: { type: 'string' },
                 },
-                required: ['terminalId', 'action'],
+                required: ['action'],
             },
             'Lists',
         ),
@@ -338,7 +340,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             {
                 type: 'object',
                 properties: { terminalId: MIRRORED_TERMINAL_ID, reason: { type: 'string' } },
-                required: ['terminalId'],
+                required: [],
             },
             'Thumbs up',
         ),

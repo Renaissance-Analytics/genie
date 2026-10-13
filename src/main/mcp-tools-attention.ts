@@ -47,7 +47,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
         definition: new ToolDefinition(
             'openFileForUser',
             'Put a file from your workspace in front of the person, optionally at a line. The path must be inside your workspace; anything outside is refused.',
-            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, path: { type: 'string' }, line: { type: 'number' } }, required: ['terminalId', 'path'] },
+            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, path: { type: 'string' }, line: { type: 'number' } }, required: ['path'] },
             'Open file for user',
         ),
         handler: withCaller(async (caller, args) => {
@@ -65,7 +65,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
         definition: new ToolDefinition(
             'submitFeedback',
             'Tell Genie’s makers something about Genie itself — a bug, an idea, or praise. Kept on this machine until Tynn is connected; the answer says so.',
-            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, kind: { type: 'string', enum: ['bug', 'idea', 'praise'] }, text: { type: 'string' } }, required: ['terminalId', 'kind', 'text'] },
+            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, kind: { type: 'string', enum: ['bug', 'idea', 'praise'] }, text: { type: 'string' } }, required: ['kind', 'text'] },
             'Submit feedback',
         ),
         handler: withCaller((caller, args) => {

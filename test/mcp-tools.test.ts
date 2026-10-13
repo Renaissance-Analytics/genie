@@ -82,10 +82,10 @@ describe('the registrations', () => {
         expect(tools.find((t) => t.definition.name === 'imDone')!.definition.digest()).toBe(genieTools({} as GenieToolsDeps).find((t) => t.definition.name === 'imDone')!.definition.digest());
     });
 
-    it('every tool requires terminalId — Genie refuses to guess which terminal is calling', async () => {
+    it('every tool TAKES terminalId and none REQUIRES it (a session is known by its header; terminal-id-optional.test) — and Genie still refuses to guess', async () => {
         for (const t of tools) {
             const schema = t.definition.inputSchema as { required?: string[]; properties: Record<string, unknown> };
-            expect(schema.required ?? []).toContain('terminalId');
+            expect(schema.required ?? []).not.toContain('terminalId');
             expect(schema.properties.terminalId).toBeDefined();
         }
         const r = await call('imDone', {});
