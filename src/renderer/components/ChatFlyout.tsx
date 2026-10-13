@@ -1,6 +1,8 @@
+import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
+import { atThreadEnd, clampChatWidth, dragChatWidth, readChatWidth, writeChatWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
@@ -25,6 +27,10 @@ import { FidelityDot } from './Dashboard.js';
  * The reserve lives on the content row in `Shell`, as a `margin`, from the same `DOCK_WIDTH`
  * this panel is sized by. See `core/dock.ts` for the three places it must not go, each of
  * which has already cost a release.
+ *
+ * **Unpinned, the person sets the width** by dragging the left edge, and it is remembered
+ * across closing, pinning and restarts (`core/chat-width.ts`). Pinned ignores it: the dock is
+ * `DOCK_WIDTH`, because the reserve reads that token and a wider panel would overlap the content.
  *
  * ## Not a `Drawer`
  *
@@ -84,12 +90,62 @@ export interface ChatFlyoutProps {
     /** A turn is running: `[Stop]` sits beside Send (§6.2 stop — everything about the agent kept). */
     running?: boolean | undefined;
     onStop?: (() => void) | undefined;
+    /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
+    widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
 }
+
+const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
+    try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
+};
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage,
 }: ChatFlyoutProps) {
+    const storage = widthStorage === undefined ? browserStorage() : widthStorage;
+    const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
+    const width = pinned ? DOCK_WIDTH : overlayWidth;
+
+    /**
+     * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive
+     * over whatever is underneath; the width is written once, when the drag ends.
+     */
+    const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const from = overlayWidth;
+        let last = from;
+        const onMove = (ev: PointerEvent) => { last = dragChatWidth(from, startX, ev.clientX, window.innerWidth); setOverlayWidth(last); };
+        const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            writeChatWidth(storage, last);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    };
+    /** The same separator from the keyboard: arrows move the edge 16px, and the width is kept. */
+    const keyResize = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+        const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
+        if (step === 0) return;
+        e.preventDefault();
+        const next = clampChatWidth(overlayWidth + step, window.innerWidth);
+        setOverlayWidth(next);
+        writeChatWidth(storage, next);
+    };
+
+    /**
+     * Follow the end of the thread while the person is AT the end; once they scroll up to read,
+     * new messages do not drag them back down. Opening a thread starts at its end.
+     */
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const followRef = useRef(true);
+    const messageCount = thread?.messages.length ?? 0;
+    useLayoutEffect(() => { followRef.current = true; }, [thread?.agentId]);
+    useLayoutEffect(() => {
+        const el = scrollRef.current;
+        if (el && followRef.current) el.scrollTop = el.scrollHeight;
+    }, [thread?.agentId, messageCount]);
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -103,7 +159,7 @@ export function ChatFlyout({
     return (
         <aside
             data-chat={pinned ? 'pinned' : 'overlay'}
-            style={{ width: DOCK_WIDTH }}
+            style={{ width }}
             className={[
                 'flex min-h-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]',
                 // Unpinned: absolutely positioned over the right edge with a shadow. Nothing
@@ -113,6 +169,20 @@ export function ChatFlyout({
                 .filter(Boolean)
                 .join(' ')}
         >
+            {/* The left edge, unpinned only: a pinned dock is the designed width, so it has nothing to drag. */}
+            {pinned ? null : (
+                <div
+                    data-chat-resize=""
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize chat"
+                    aria-valuenow={overlayWidth}
+                    tabIndex={0}
+                    onPointerDown={startResize}
+                    onKeyDown={keyResize}
+                    className="absolute inset-y-0 left-0 z-30 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-[var(--accent)]/40 focus-visible:bg-[var(--accent)]/40 focus-visible:outline-none"
+                />
+            )}
             <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3">
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                     {thread ? thread.name : 'genie'}
@@ -183,7 +253,20 @@ export function ChatFlyout({
                 <div data-chat-context={thread.context.tone} className={`shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread.context.tone]}`}>{thread.context.text}</div>
             ) : null}
 
-            <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-auto px-3 py-3">
+            {/*
+             * THE SCROLLER and THE COLUMN are two elements (the owner could not scroll at all): one element that
+             * both scrolled and packed its messages to the bottom (`justify-end`) overflowed at its TOP, and
+             * overflow at the start of a scroll container cannot be scrolled to — a long thread lost its top and
+             * had no scrollbar. The column is at least as tall as the scroller, so a short thread still sits at the
+             * bottom, and a long one grows downward, where scrolling reaches it.
+             */}
+            <div
+                ref={scrollRef}
+                data-chat-scroll=""
+                onScroll={(e) => { const el = e.currentTarget; followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight); }}
+                className="min-h-0 flex-1 overflow-y-auto"
+            >
+            <div data-chat-log="" className="flex min-h-full flex-col justify-end gap-3 px-3 py-3">
                 {/*
                  * An empty thread says NOTHING. No fake greeting, no system line, no "how can I
                  * help" — every one of those is a message the agent did not send, attributed to
@@ -255,6 +338,7 @@ export function ChatFlyout({
                         <span>{thread.context.text.replace(/^Broken · /, '')}</span>
                     </div>
                 ) : null}
+            </div>
             </div>
 
             {/*
