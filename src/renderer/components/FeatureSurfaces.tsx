@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
+import { agentFilesLine, type AgentFilesReport } from '../../core/agent-files-health.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
@@ -670,6 +671,27 @@ const GITHUB_APP_URL = 'https://github.com/apps/genie-aos';
  * open). Config sync is a button per workspace; the last run's four results each get their own line.
  */
 /** Every tool Genie's MCP serves, with what it does — what every agent session is given (the owner: "no way to check"). */
+/** One line per workspace: what the sync last did to its agent files (the owner: workspace agents are never left stranded). */
+export function agentFilesList(reports: readonly AgentFilesReport[]) {
+    if (reports.length === 0) return null;
+    return (
+        <div data-agent-files="">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Agent files in each workspace</h3>
+            <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                {reports.map((r) => {
+                    const state = r.failed.length > 0 ? 'failed' : r.changed.length > 0 ? 'upgraded' : 'current';
+                    return (
+                        <li key={r.workspacePath} data-agent-files-row={r.workspacePath} data-state={state} className="flex items-center gap-3 py-1.5 text-sm">
+                            <span className="font-medium">{baseName(r.workspacePath)}</span>
+                            <span className={`text-xs ${state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>{agentFilesLine(r)}</span>
+                        </li>
+                    );
+                })}
+            </ul>
+        </div>
+    );
+}
+
 export function mcpToolsList(tools: readonly { name: string; description: string }[]) {
     if (tools.length === 0) return <p data-mcp-tools="0" className="text-sm text-[var(--fg-3)]">No tools are registered.</p>;
     return (
@@ -714,6 +736,7 @@ function Integrations({ integrations, workspaces, onAction }: { integrations: Fe
                             {mcpToolsList(integrations.mcp.tools)}
                         </div>
                     ) : null}
+                    {agentFilesList(integrations.agentFiles ?? [])}
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
                         {integrations.tynnSignedIn ? (

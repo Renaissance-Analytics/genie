@@ -45,7 +45,22 @@ describe('integrations in the snapshot', () => {
             lastSync: null,
             // The endpoint composeServices was given flows into the section; nothing has probed it in this test.
             mcp: { url: 'http://127.0.0.1:51717/mcp/abc', verified: null, tools: [] },
+            // No workspace synced yet: nothing to report, not "current".
+            agentFiles: [],
         });
+    });
+
+    it('a workspace’s agent-files sync reaches Settings: what it wrote, from the real files, and no failure', async () => {
+        await services.syncAgentDocs(ws);
+        const rows = (await featureSnapshot(services, state())).integrations!.agentFiles!;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]!.workspacePath).toBe(ws);
+        expect(rows[0]!.failed).toEqual([]);
+        expect(rows[0]!.changed).toEqual(expect.arrayContaining(['.gitignore', 'AGENTS.md', 'CLAUDE.md', 'RULES.md', '.claude/skills/genie/SKILL.md']));
+        expect(await readFile(join(ws, '.gitignore'), 'utf8')).toContain('.mcp.json');
+        // A second sync of the same workspace changes nothing, and says so.
+        await services.syncAgentDocs(ws);
+        expect((await featureSnapshot(services, state())).integrations!.agentFiles![0]!.changed).toEqual([]);
     });
 
     it('integrations.tynnToken signs in (and an empty token signs out); integrations.githubConfirm marks each step done in order', async () => {

@@ -12,6 +12,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
@@ -116,7 +117,7 @@ export interface ComposedServices {
     /** §6.4: the reminders due now for registered agents with unread mail that are idle. Decides; never sends. */
     inboxReminders(input: { now: number; idle: (agentId: string) => boolean }): Array<{ agentId: string; text: string }>;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
-    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] } };
+    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. */
     syncConfig(workspacePath: string): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
@@ -311,6 +312,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
     const reminders = new ReminderBook();
+    // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
+    const agentFiles = new AgentFilesHealth();
     let down: Promise<void> | null = null;
 
     return {
@@ -362,6 +365,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 github: githubAppStatus({ authorized: values.github_authorized === true, installedRepos: values.github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }),
                 gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0 }),
                 mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: input.mcpTools?.() ?? [] },
+                agentFiles: agentFiles.list(),
             };
         },
         get plugins() { return plugins; },
@@ -369,7 +373,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         pluginsRefresh: async () => { plugins = await openPlugins(); },
         syncConfig: async (workspacePath) => {
             const endpoint = input.mcpEndpoint?.() ?? null;
-            if (!endpoint) throw new Error('Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace');
+            if (!endpoint) {
+                const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
+                agentFiles.config(workspacePath, [{ label: 'Genie MCP', ok: false, error: reason }]);
+                throw new Error(reason);
+            }
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
             const targets = configSyncTargets({
@@ -382,53 +390,38 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 },
                 flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
             });
-            return configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+            agentFiles.config(workspacePath, results);
+            return results;
         },
         syncAgentDocs: async (workspacePath) => {
-            // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
-            await writeAgentGitignore({
-                workspacePath,
-                fs: {
-                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                    write: async (p, text) => { await writeFileP(p, text, 'utf8'); },
-                },
+            const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            const on = settings.snapshot().mcp_sync_agents !== false;
+            // One node fs for every step; each write and removal is reported to the health record Settings reads.
+            const nodeFs = (touched: (path: string) => void) => ({
+                read: async (p: string) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                write: async (p: string, text: string) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); touched(p); },
+                remove: async (p: string) => { try { await unlinkP(p); touched(p); } catch { /* not there: nothing to remove */ } },
+                unlink: async (p: string) => { await unlinkP(p); touched(p); },
+                list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
+                removeDir: async (d: string) => { try { await rmdir(d); } catch { /* not empty or not there: left as it is */ } },
+                isSymlink: async (p: string) => { try { return (await lstat(p)).isSymbolicLink(); } catch { return false; } },
+                exists: async (p: string) => { try { await lstat(p); return true; } catch { return false; } },
             });
-            // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
-            await writeAgentProtocol({
-                workspacePath,
-                enabled: settings.snapshot().mcp_sync_agents !== false,
-                tools: input.mcpTools?.() ?? [],
-                fs: {
-                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                    list: async (d) => { try { return await readdirP(d); } catch { return []; } },
-                },
-            });
-            // The routers and RULES.md, after the protocol they import; Genie 1's routers and RULES.md repaired.
-            if (settings.snapshot().mcp_sync_agents === false) return;
-            await writeAgentRouters({
-                workspacePath,
-                stamp: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
-                fs: {
-                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                    isSymlink: async (p) => { try { return (await lstat(p)).isSymbolicLink(); } catch { return false; } },
-                    unlink: async (p) => { await unlinkP(p); },
-                    exists: async (p) => { try { await lstat(p); return true; } catch { return false; } },
-                },
-            });
-            // Genie 2's skills for both harnesses; Genie 1's with no Genie 2 meaning backed up and removed.
-            await writeAgentSkills({
-                workspacePath,
-                stamp: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
-                fs: {
-                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                    remove: async (p) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
-                    list: async (d) => { try { return await readdirP(d); } catch { return []; } },
-                    removeDir: async (d) => { try { await rmdir(d); } catch { /* not empty or not there: left as it is */ } },
-                },
-            });
+            const steps: AgentFilesStep[] = [
+                // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
+                { step: 'gitignore', run: (t) => writeAgentGitignore({ workspacePath, fs: nodeFs(t) }) },
+                // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
+                { step: 'protocol', run: (t) => writeAgentProtocol({ workspacePath, enabled: on, tools: input.mcpTools?.() ?? [], fs: nodeFs(t) }) },
+            ];
+            if (on) {
+                // The routers and RULES.md after the protocol they import (Genie 1's repaired); then Genie 2's skills.
+                steps.push({ step: 'routers', run: (t) => writeAgentRouters({ workspacePath, stamp, fs: nodeFs(t) }) });
+                steps.push({ step: 'skills', run: (t) => writeAgentSkills({ workspacePath, stamp, fs: nodeFs(t) }) });
+            }
+            // A failing step is recorded and does not stop the steps after it.
+            const report = await agentFiles.run(workspacePath, steps);
+            for (const f of report.failed) console.error(`[workspace-files] ${workspacePath} ${f.step}: ${f.error}`);
         },
         agentAddresses: () => roster().map((r) => ({ address: addressOf(r, 'full'), agentId: r.id as string, name: r.name })),
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.

@@ -1,3 +1,4 @@
+import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -89,6 +90,8 @@ export interface IntegrationsSection {
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
     readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
+    /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
+    readonly agentFiles?: readonly AgentFilesReport[];
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */

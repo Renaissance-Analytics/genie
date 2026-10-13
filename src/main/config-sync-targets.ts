@@ -134,12 +134,14 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
  */
 export async function writeAgentProtocol(input: { workspacePath: string; fs: SyncFs; enabled: boolean; tools: readonly ProtocolTool[] }): Promise<void> {
     if (!input.enabled) return;
+    // Written only when it differs, so a sync that changed nothing reports nothing (Settings' agent-files line).
+    const put = async (path: string, text: string) => { if ((await input.fs.read(path)) !== text) await input.fs.write(path, text); };
     const dir = join(input.workspacePath, '.agents', '_genie').replace(/\\/g, '/');
-    await input.fs.write(`${dir}/shared.md`, sharedProtocol(input.tools));
+    await put(`${dir}/shared.md`, sharedProtocol(input.tools));
     const providers = new Set(['claude', 'codex']);
     for (const name of (await input.fs.list?.(dir)) ?? []) {
         const m = /^genie-([a-z0-9-]+)\.md$/.exec(name);
         if (m) providers.add(m[1]!);
     }
-    for (const p of providers) await input.fs.write(`${dir}/genie-${p}.md`, providerProtocol(p));
+    for (const p of providers) await put(`${dir}/genie-${p}.md`, providerProtocol(p));
 }
