@@ -1,3 +1,4 @@
+import { CallerBook, genieMcpServers } from './mcp-callers.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
@@ -333,6 +334,15 @@ let services: ComposedServices | null = null;
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
 /** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
+/** The agents' MCP caller keys (one per agent, for the run). */
+const sessionCallers = new CallerBook();
+/** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
+function sessionCaller(key: string): { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string } | null {
+    const id = sessionCallers.agentFor(key);
+    const record = id ? registry?.find(id as AgentId) ?? null : null;
+    const ws = record ? registry?.workspace(record.workspaceId) ?? null : null;
+    return record && ws ? { agentId: record.id, agentName: record.name, workspaceId: ws.id, workspacePath: ws.path } : null;
+}
 const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 
@@ -386,6 +396,9 @@ async function boot(): Promise<void> {
          * the write was meant to protect. What it costs instead is resume, which is why it is
          * said out loud here.
          */
+        // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
+        // bearer token, and this agent's caller key so the tools know which agent is calling.
+        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {
@@ -987,7 +1000,8 @@ async function boot(): Promise<void> {
     composed.onFrontDoorChange(pushFeatures);
     // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
     {
-        const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? null;
+        // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
+        const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
         const values = () => composed.settings.snapshot();
         const registrations = allGenieTools({
