@@ -439,7 +439,7 @@ describe('the chat thread', () => {
         // POSITIVE CONTROL: a declared agent gets neither the chip nor that placeholder.
         const declared = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
         expect(declared).not.toContain('data-chat-chip="mail-only"');
-        expect(declared).toContain('Message this agent');
+        expect(declared).toContain('Message kai');
     });
 
     it('shows NO unread badge when the count could not be read', () => {

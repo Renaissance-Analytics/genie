@@ -197,6 +197,13 @@ export function ChatFlyout({
                         {thread.name} runs in a terminal. What you send here lands in its inbox, which it reads when its TUI asks, and mail it sends you shows here. Its replies in the terminal are not shown — that TUI does not report them.
                     </div>
                 ) : null}
+                {/* genie's empty thread (the board): what genie is for — the one thread with no work of its own to show. */}
+                {thread?.agentId === 'genie' && thread.messages.length === 0 ? (
+                    <div data-chat-empty="genie" className="my-auto flex flex-col items-start gap-1.5 px-1">
+                        <div className="text-[14px] font-semibold">No messages with genie yet.</div>
+                        <div className="text-[13px] leading-normal text-[var(--fg-3)]">genie can reach any agent in any workspace. Name one with @, or pick a thread above.</div>
+                    </div>
+                ) : null}
                 {thread?.messages.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                     const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
@@ -265,7 +272,7 @@ export function ChatFlyout({
                  */}
                 <PromptInput
                     budgetTokens={contextTokens}
-                    placeholder={mailOnly && thread ? `send to ${thread.name}'s inbox` : 'Message this agent'}
+                    placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox` : approval ? `Reply to ${thread.name}, or answer with A / D` : `Message ${thread.name}`}
                     showHint
                     onSubmit={(text) => onSend(text)}
                 />
