@@ -1,4 +1,5 @@
 import { Input } from '@particle-academy/react-fancy';
+import { workspaceLabel } from '../../core/workspace-label.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { SERVICE_CATALOG } from '../../core/services.js';
 
@@ -149,6 +150,8 @@ export interface AddServiceFormProps {
     readonly problems: readonly Problem[];
     /** The driver's answer when the image is not on this machine: the person pulls it, or cancels. */
     readonly consent: { image: string; note: string; form: ServiceForm } | null;
+    /** The workspace's name as a person reads it; the id is shown only when no name was given. */
+    readonly workspaceName?: string | undefined;
     readonly onSubmit: (form: ServiceForm, consent: boolean) => void;
     readonly onCancel: () => void;
 }
@@ -158,7 +161,7 @@ export interface AddServiceFormProps {
  * consent the form shows the note, names the image, and the pull is its OWN labelled submit — the
  * plain "Add engine" never pulls.
  */
-export function AddServiceForm({ defaults, problems, consent, onSubmit, onCancel }: AddServiceFormProps) {
+export function AddServiceForm({ defaults, problems, consent, workspaceName, onSubmit, onCancel }: AddServiceFormProps) {
     return (
         <form
             data-form="add-service"
@@ -197,7 +200,7 @@ export function AddServiceForm({ defaults, problems, consent, onSubmit, onCancel
                 <span className="font-medium">Scope</span>
                 <label className="flex items-center gap-2">
                     <input type="radio" name="scope" value="dedicated" defaultChecked={defaults.scope === 'dedicated'} />
-                    Dedicated to {defaults.workspaceId} — its own data and port
+                    Dedicated to {workspaceName ?? defaults.workspaceId} — its own data and port
                 </label>
                 <label className="flex items-center gap-2">
                     <input type="radio" name="scope" value="shared" defaultChecked={defaults.scope === 'shared'} />
@@ -225,7 +228,7 @@ export interface AddKnowledgeFormProps {
     readonly defaults: KnowledgeForm;
     readonly problems: readonly Problem[];
     /** Where a memory can file besides this machine. */
-    readonly workspaces: readonly { id: string }[];
+    readonly workspaces: readonly { id: string; path: string; name?: string | undefined }[];
     readonly onSubmit: (form: KnowledgeForm) => void;
     readonly onCancel: () => void;
 }
@@ -273,7 +276,7 @@ export function AddKnowledgeForm({ defaults, problems, workspaces, onSubmit, onC
             <Row label="Where it files">
                 <select name="scope" defaultValue={scopeTag(defaults.scope)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
                     <option value="system">This machine — every workspace’s agents can find it</option>
-                    {workspaces.map((w) => <option key={w.id} value={`workspace:${w.id}`}>{w.id} — this workspace only</option>)}
+                    {workspaces.map((w) => <option key={w.id} value={`workspace:${w.id}`}>{workspaceLabel(workspaces, w.id)} — this workspace only</option>)}
                 </select>
             </Row>
             <div className="flex gap-2">

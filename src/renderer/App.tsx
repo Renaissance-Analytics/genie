@@ -29,6 +29,7 @@ import type { DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
+import { workspaceLabel } from '../core/workspace-label.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -349,6 +350,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 }
             }}
             onDisconnect={remote.disconnect}
+            workspaces={snapshot.workspaces}
             agents={{
                 rows: snapshot.workspaces === null ? null : snapshot.agents,
                 onOpen: (id) => { window.location.hash = `#agent=${id}`; },
@@ -470,7 +472,7 @@ function DesktopApp({ bridge }: AppProps) {
               },
               governs: {
                   children: workspaceRow.governs ?? [],
-                  candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id })),
+                  candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id, name: workspaceLabel(snapshot.workspaces, w.id) })),
                   onSet: (childIds) => { void resolvedBridge.workspaces.setGoverns(workspaceId, childIds).then((r) => { if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               },
               repos: {

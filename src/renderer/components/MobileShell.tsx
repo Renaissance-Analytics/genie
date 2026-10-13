@@ -2,6 +2,7 @@ import { Icon, Input } from '@particle-academy/react-fancy';
 import type { FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
+import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
 import type { AgentDetail } from '../bridge.js';
@@ -51,7 +52,11 @@ export interface MobileShellProps {
     agents?: MobileAgentsSection | undefined;
     /** Upload to an agent's inbox; absent when the app does not offer it. */
     upload?: MobileUploadSection | undefined;
+    /** The host's workspaces, so a workspace is drawn by its name, not its id; absent or `null` = ids as given. */
+    workspaces?: readonly { id: string; path: string; name?: string | undefined }[] | null | undefined;
 }
+
+type Named = { workspaces?: readonly { id: string; path: string; name?: string | undefined }[] | null | undefined };
 
 const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
     ok: 'text-[var(--success)]',
@@ -60,7 +65,8 @@ const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
     muted: 'text-[var(--fg-4)]',
 };
 
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, upload }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, upload, workspaces }: MobileShellProps) {
+    const wsLabel = (id: string | null): string | null => (id === null ? null : workspaceLabel(workspaces, id));
     return (
         <div data-mobile="shell" className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
@@ -92,8 +98,8 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                             <li key={item.id} data-mobile-item={item.id} className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
                                 <div className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
                                     {item.blocking ? <span className="size-2 rounded-full bg-[var(--warning)]" aria-label="blocking" /> : null}
-                                    <span className="font-medium text-[var(--fg-1)]">{item.agentName ?? item.workspaceId}</span>
-                                    <span className="font-mono">{item.workspaceId}</span>
+                                    <span className="font-medium text-[var(--fg-1)]">{item.agentName ?? wsLabel(item.workspaceId)}</span>
+                                    <span className="font-mono">{wsLabel(item.workspaceId)}</span>
                                 </div>
                                 {item.answer.kind === 'inline' ? (
                                     <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
@@ -115,15 +121,15 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                         ))}
                     </ul>
                 )}
-                {agents ? <AgentsSection {...agents} /> : null}
-                {upload ? <UploadSection {...upload} /> : null}
+                {agents ? <AgentsSection {...agents} workspaces={workspaces} /> : null}
+                {upload ? <UploadSection {...upload} workspaces={workspaces} /> : null}
             </main>
         </div>
     );
 }
 
 /** THE AGENTS, as the Dashboard sees them (§4.1's words: Working / Idle / Waiting on you / Broken / Unreachable), one row each; tap to open. */
-function AgentsSection({ rows, onOpen }: MobileAgentsSection) {
+function AgentsSection({ rows, onOpen, workspaces }: MobileAgentsSection & Named) {
     return (
         <section className="flex flex-col gap-2">
             <h2 className="text-sm font-semibold">Agents</h2>
@@ -148,7 +154,7 @@ function AgentsSection({ rows, onOpen }: MobileAgentsSection) {
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
                                             <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.provider}</span>
-                                            <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{r.workspaceId}</span>
+                                            <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{workspaceLabel(workspaces, r.workspaceId)}</span>
                                         </span>
                                         <span className="flex items-baseline gap-2 text-xs">
                                             <span className={`font-medium ${TONE[status.tone]}`}>{status.word}</span>
@@ -170,7 +176,7 @@ function AgentsSection({ rows, onOpen }: MobileAgentsSection) {
  * the phone has no room for a disambiguation dance), one file, a line of text, one button. The outcome
  * — sent, or the inbox's refusal — is a sentence under the form.
  */
-function UploadSection({ agents, sending, outcome, onSend }: MobileUploadSection) {
+function UploadSection({ agents, sending, outcome, onSend, workspaces }: MobileUploadSection & Named) {
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const data = new FormData(e.currentTarget);
@@ -183,7 +189,7 @@ function UploadSection({ agents, sending, outcome, onSend }: MobileUploadSection
             <h2 className="text-sm font-semibold">Send a file</h2>
             <form onSubmit={submit} className="mt-2 flex flex-col gap-2">
                 <select name="to" aria-label="To" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1.5 text-sm">
-                    {agents.map((a) => <option key={a.id} value={`${a.workspaceId}:${a.provider}:${a.name}`}>{a.name} · {a.workspaceId}</option>)}
+                    {agents.map((a) => <option key={a.id} value={`${a.workspaceId}:${a.provider}:${a.name}`}>{a.name} · {workspaceLabel(workspaces, a.workspaceId)}</option>)}
                 </select>
                 <input type="file" name="file" aria-label="File" className="text-sm" />
                 <Input name="text" placeholder="a line to go with it" aria-label="Message" />

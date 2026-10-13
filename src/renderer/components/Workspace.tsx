@@ -70,7 +70,8 @@ export interface WorkspaceOpsProps {
     /** Ops projects (§6.1): which other workspaces this one governs; absent = not offered. */
     readonly governs?: {
         readonly children: readonly string[];
-        readonly candidates: readonly { id: string }[];
+        /** `name` is what the checkbox says; the id is what is sent back. */
+        readonly candidates: readonly { id: string; name?: string | undefined }[];
         readonly onSet: (childIds: string[]) => void;
     } | undefined;
     /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
@@ -334,7 +335,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                     <li key={c.id}>
                                         <label className="flex items-center gap-1.5">
                                             <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
-                                            <span>{c.id}</span>
+                                            <span>{c.name ?? c.id}</span>
                                         </label>
                                     </li>
                                 );
