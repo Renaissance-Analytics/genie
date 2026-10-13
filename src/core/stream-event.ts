@@ -91,6 +91,14 @@ export type StreamEvent =
     | { kind: 'plan'; entries: readonly unknown[] }
     | { kind: 'divider'; variant: 'compaction'; before: number | null; after: number | null }
     /**
+     * WHERE THIS RUN BEGINS, between an agent's recorded history and its live rows (the host places it; it is not
+     * recorded). `resumed`: the provider was asked to continue its conversation, which it remembers in full —
+     * including anything from before Genie recorded it.
+     */
+    | { kind: 'run'; resumed: boolean }
+    /** The ledger's history was cut to its most recent rows: `count` earlier recorded rows are not shown. */
+    | { kind: 'earlier'; count: number }
+    /**
      * A TURN STARTED — written by the session when a prompt goes in, not read off the wire (ACP reports turn ENDS,
      * and nothing a surface holds says where one began). `by` is whoever started it when the caller said so
      * (`you`, `genie`, a peer's name) and `null` when nobody reported who — never guessed to be "you".

@@ -389,6 +389,14 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             return { ...base, icon: 'scissors', tone: 'amber', kind: 'compacted', main, lane: null };
         }
 
+        case 'run':
+            // Where a run of this agent began. A resumed one continues a conversation the provider holds in full —
+            // including anything from before Genie recorded it, which is why the agent can remember more than is shown.
+            return { ...base, icon: 'history', tone: 'muted', kind: 'run', main: row.event.resumed ? 'Run started · the agent resumed its conversation (it remembers all of it, including anything from before Genie recorded it)' : 'Run started · a new conversation', lane: null };
+
+        case 'earlier':
+            return { ...base, icon: 'history', tone: 'muted', kind: 'earlier', main: `${row.event.count.toLocaleString('en-US')} earlier recorded rows are not shown`, lane: null };
+
         case 'turn': {
             // The board's divider: `Turn 14 · started by you · 14:07:12` (the time is the row's own).
             const main = row.event.by === null ? `Turn ${row.event.n}` : `Turn ${row.event.n} · started by ${row.event.by}`;
