@@ -31,7 +31,7 @@ import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { mainWindowOptions } from '../core/window.js';
 import { createTray } from './tray.js';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate } from './toolchain-prober.js';
@@ -1063,7 +1063,21 @@ async function boot(): Promise<void> {
                 resolveCaller,
             },
         });
-        mcp = genieMcpServer({ registrations });
+        // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
+        // wrote into workspaces stay valid after a restart.
+        const endpointFile = join(genieHome(), 'mcp-endpoint.json');
+        mcp = genieMcpServer({
+            registrations,
+            remember: {
+                read: () => {
+                    try {
+                        const v = JSON.parse(readFileSync(endpointFile, 'utf8')) as { port?: unknown; token?: unknown };
+                        return typeof v.port === 'number' && typeof v.token === 'string' && v.token.length >= 32 ? { port: v.port, token: v.token } : null;
+                    } catch { return null; }
+                },
+                write: (value) => { try { writeFileSync(endpointFile, JSON.stringify(value), { mode: 0o600 }); } catch (error) { console.error('[mcp] could not remember the endpoint:', (error as Error).message); } },
+            },
+        });
         try {
             await mcp.start();
             mcpVerified = await mcp.verify();

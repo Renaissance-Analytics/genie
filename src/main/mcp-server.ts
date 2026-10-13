@@ -18,6 +18,11 @@ export interface GenieMcpServerInput {
     readonly transport?: ServerTransport | undefined;
     /** 0 lets the OS pick; the URL carries the port actually bound. */
     readonly port?: number | undefined;
+    /**
+     * The endpoint remembered across launches (a private file in Genie's home). Reused when present, so the URLs and
+     * tokens config sync wrote stay valid; written when a new port or token had to be taken. Absent = random each time.
+     */
+    readonly remember?: { read(): { port: number; token: string } | null; write(value: { port: number; token: string }): void } | undefined;
 }
 
 export type Verification = { ok: true; versions: readonly string[] } | { ok: false; reason: string };
@@ -33,9 +38,13 @@ export interface GenieMcpServer {
 const NOT_LISTENING = 'the MCP server is not listening';
 
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
-    const transport = input.transport ?? new LoopbackHttpTransport({ port: input.port ?? 0 });
-    const server = new Server({ server: 'genie', transport });
-    for (const r of input.registrations) server.register(r.definition, r.handler as never);
+    const build = (options: { port: number; token?: string }): Server => {
+        const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport(options) });
+        for (const r of input.registrations) s.register(r.definition, r.handler as never);
+        return s;
+    };
+    const remembered = input.remember?.read() ?? null;
+    let server = build(remembered ? { port: remembered.port, token: remembered.token } : { port: input.port ?? 0 });
     let endpoint: { url: string; token: string } | null = null;
 
     const discover = async (): Promise<unknown> => {
@@ -56,8 +65,18 @@ export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
 
     return {
         start: async () => {
-            const listening = await server.listen();
+            let listening: { url: string; token?: string | null };
+            try {
+                listening = await server.listen();
+            } catch (error) {
+                // The remembered port is taken: a new one, the SAME token (so only the port in synced files changes).
+                if (!remembered || input.transport) throw error;
+                server = build({ port: 0, token: remembered.token });
+                listening = await server.listen();
+            }
             endpoint = { url: listening.url, token: listening.token ?? '' };
+            const bound = Number(new URL(endpoint.url).port);
+            if (input.remember && (!remembered || remembered.port !== bound || remembered.token !== endpoint.token)) input.remember.write({ port: bound, token: endpoint.token });
             return endpoint;
         },
         stop: async () => {
