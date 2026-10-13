@@ -21,7 +21,7 @@ export function trayOf(row: AgentRow): RowTray {
         doors: [
             { door: 'agent', label: 'Open agent →', route: `genie://agent/${row.id}` },
             { door: 'terminal', label: 'Terminal →', route: `genie://workspace/${row.workspaceId}` },
-            { door: 'files', label: 'Files →', route: `genie://workspace/${row.workspaceId}?panel=files` },
+            { door: 'files', label: 'Files →', route: `genie://workspace/${row.workspaceId}?files=` },
         ],
     };
 }

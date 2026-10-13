@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { TreeNode } from '../../core/files-panel.js';
+import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
@@ -9,7 +9,7 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from 
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange }: {
+export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
@@ -28,13 +28,23 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     /** Whether a buffer here differs from what was opened (§4.4: a panel with unsaved edits refuses to be replaced in the dock). */
     onDirtyChange?: ((dirty: boolean) => void) | undefined;
     onOpenInPane?: ((path: string) => void) | undefined;
+    /**
+     * THE PANEL IN THE URL (the board's `?files=<path>&filter=changed`): the route's file is opened, and opening a file
+     * or flipping the filter here is written back, so a link can point at a file and a refresh keeps it. Absent = a
+     * panel the route does not own (the dock, a code pane).
+     */
+    routeFile?: string | null | undefined;
+    routeFilter?: 'changed' | null | undefined;
+    onRouteChange?: ((file: string | null, filter: 'changed' | null) => void) | undefined;
 }) {
     const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
     const [state, setState] = useState<FilesPanelState | null>(null);
     const [tabs, setTabs] = useState<readonly string[]>([]);
     const [open, setOpen] = useState<OpenFile | null>(null);
     // The board's `All | Changed N` filter (§4.3): Changed shows the files grouped by who changed them.
-    const [filter, setFilter] = useState<'all' | 'changed'>('all');
+    const [filter, setFilter] = useState<'all' | 'changed'>(routeFilter === 'changed' ? 'changed' : 'all');
+    // The path last asked for, before its read lands — so the route's echo of a click does not open it twice.
+    const [requested, setRequested] = useState<string | null>(null);
     // The buffer you are typing into (§4.3): dirty while it differs from what was opened; never auto-reloaded.
     const [buffer, setBuffer] = useState<{ path: string; text: string } | null>(null);
     const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string; baseline?: string | undefined } | null>(null);
@@ -79,12 +89,28 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         return files.onChange((id) => { if (id === workspace.id) void files.open(workspace.id, open.path).then(setOpen); });
     }, [files, workspace.id, open, buffer]);
 
-    const select = useCallback((path: string) => {
+    const openPath = useCallback((path: string) => {
+        setRequested(path);
         setTabs((t) => (t.includes(path) ? t : [...t, path]));
         setBuffer(null);
         setConflict(null);
         void files.open(workspace.id, path).then(setOpen);
     }, [files, workspace.id]);
+    const select = useCallback((path: string) => {
+        openPath(path);
+        onRouteChange?.(path, filter === 'changed' ? 'changed' : null);
+    }, [openPath, onRouteChange, filter]);
+    // The route names a file: open it unless it is the one already open (or asked for).
+    useEffect(() => {
+        if (routeFile === undefined) return;
+        const path = routeFileToOpen(routeFile, requested ?? open?.path ?? null);
+        if (path) openPath(path);
+    }, [routeFile]);
+    useEffect(() => { if (routeFilter !== undefined) setFilter(routeFilter === 'changed' ? 'changed' : 'all'); }, [routeFilter]);
+    const pickFilter = useCallback((f: 'all' | 'changed') => {
+        setFilter(f);
+        onRouteChange?.(requested ?? open?.path ?? null, f === 'changed' ? 'changed' : null);
+    }, [onRouteChange, requested, open]);
 
     const closeTab = useCallback((path: string) => {
         setTabs((t) => {
@@ -93,10 +119,12 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
                 const fallback = next[next.length - 1];
                 if (fallback) void files.open(workspace.id, fallback).then(setOpen);
                 else setOpen(null);
+                setRequested(fallback ?? null);
+                onRouteChange?.(fallback ?? null, filter === 'changed' ? 'changed' : null);
             }
             return next;
         });
-    }, [files, workspace.id, open]);
+    }, [files, workspace.id, open, onRouteChange, filter]);
 
     const shown: OpenFile | null = open?.ok && buffer && buffer.path === open.path ? { ...open, text: buffer.text } : open;
     const save = (expected: string | null) => {
@@ -133,5 +161,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         : undefined;
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={setFilter} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} />;
 }

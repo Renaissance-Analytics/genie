@@ -479,7 +479,7 @@ function DesktopApp({ bridge }: AppProps) {
                   onRemove: (slug) => { void resolvedBridge.workspaces.removeRepo(workspaceId, slug).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   onRemoveLock: (slug) => { void resolvedBridge.workspaces.removeRepoLock(workspaceId, slug).then((r) => { if (r.ok) reloadRepos(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   // Open: the files panel of this workspace (the repo's folder is in its tree). A per-folder deep link is a later row.
-                  onOpen: () => navigate(`genie://workspace/${workspaceId}?panel=files`),
+                  onOpen: () => navigate(`genie://workspace/${workspaceId}?files=`),
               },
               onHibernate: () => { void resolvedBridge.workspaces.hibernate(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? `hibernated; handoffs landed from ${r.handoffs.landed.length === 0 ? 'nobody' : r.handoffs.landed.join(', ')}; ${r.handoffs.missing.length === 0 ? 'none missing' : `missing from ${r.handoffs.missing.join(', ')}`}` : r.reason }))); },
               onWake: () => { void resolvedBridge.workspaces.wake(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? 'awake' : r.reason }))); },
@@ -583,7 +583,7 @@ function DesktopApp({ bridge }: AppProps) {
             if (action !== 'toggle-files') return;
             if (parsed.surface !== 'workspace') return;
             e.preventDefault();
-            navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?panel=files`);
+            navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?files=`);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -812,8 +812,15 @@ function DesktopApp({ bridge }: AppProps) {
             dockNotice={dockNotice}
             onDismissDockNotice={() => setDockNotice(null)}
             onFilesDirtyChange={setFilesDirty}
-            onPopOutFiles={filesWindows ? (id) => { void filesWindows.popOut(id); } : undefined}
-            onBringBackFiles={(id) => { void filesWindows?.bringBack(id); }}
+            onPopOutFiles={filesWindows ? (id) => {
+                void filesWindows.popOut(id);
+                // The route says where the panel is: on this workspace, `?files=detached`.
+                if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
+            } : undefined}
+            onBringBackFiles={(id) => {
+                void filesWindows?.bringBack(id);
+                if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
+            }}
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}

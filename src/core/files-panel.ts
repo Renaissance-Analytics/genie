@@ -87,6 +87,11 @@ function normalise(p: string): string {
 }
 
 /** The path relative to the root, or `null` for anything outside it — never an error. */
+/** The file the panel should open for the route: the route's file when it is not the one already open; else nothing. */
+export function routeFileToOpen(routeFile: string | null, openPath: string | null): string | null {
+    return routeFile !== null && routeFile !== openPath ? routeFile : null;
+}
+
 export function confine(root: string, path: string): string | null {
     const rootN = normalise(root);
     const full = normalise(isAbsolute(path.replace(/\\/g, '/')) ? path : `${root}/${path}`);
