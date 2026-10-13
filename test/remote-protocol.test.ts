@@ -40,14 +40,14 @@ describe('the capability table', () => {
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
-        // 34 since `updates.cancel` (§7.5): a drain can be abandoned from a remote window too.
         // 46 since `inbox.sendFile` (§6.8): a phone's upload rides the socket as bytes.
         // 47 since `terminals.attach` (§6.5): a second surface JOINS a running terminal instead of opening one.
         // 49 since the Tynn source (§6.1): preview on the host, confirm as a write.
         // 50 since `workspaces.removeRepoLock` (the board's "Remove stale lock" on a red repo chip): a write, workspace-scoped.
         // 51 since `workspaces.locateRepo` (the board's "Locate repo" on a Dashboard group fault): host-only — the picker is the host's.
         // 52 since `workspaces.commitsSince` (an observed agent's index): a read, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(52);
+        // 51 since `updates.cancel` left with the upgrade drain (no agent is asked for a handoff any more).
+        expect(REMOTE_METHODS.length).toBe(51);
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
