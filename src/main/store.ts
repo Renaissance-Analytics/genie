@@ -172,6 +172,20 @@ export class Store {
         await writeJsonAtomic(this.runningAtQuitFile, ids);
     }
 
+    /** Which agents were MID-TURN when Genie last shut down — their turns were cancelled; they are resumed at launch. */
+    get interruptedAtQuitFile(): string {
+        return join(this.#dir, 'interrupted-at-quit.json');
+    }
+
+    async readInterruptedAtQuit(): Promise<readonly string[]> {
+        const raw = await readJson<unknown[]>(this.interruptedAtQuitFile, []);
+        return raw.filter((id): id is string => typeof id === 'string');
+    }
+
+    async writeInterruptedAtQuit(ids: readonly string[]): Promise<void> {
+        await writeJsonAtomic(this.interruptedAtQuitFile, ids);
+    }
+
     async readWorkspaces(): Promise<readonly WorkspaceRecord[]> {
         const raw = await readJson<unknown[]>(this.workspacesFile, []);
         return raw.filter(
