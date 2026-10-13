@@ -12,6 +12,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
@@ -384,6 +385,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
         },
         syncAgentDocs: async (workspacePath) => {
+            // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
+            await writeAgentGitignore({
+                workspacePath,
+                fs: {
+                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                    write: async (p, text) => { await writeFileP(p, text, 'utf8'); },
+                },
+            });
             // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
             await writeAgentProtocol({
                 workspacePath,
