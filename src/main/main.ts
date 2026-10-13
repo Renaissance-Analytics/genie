@@ -56,7 +56,7 @@ import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { tynnClient } from './tynn-client.js';
-import { gitClone, gitInit } from './git-ports.js';
+import { gitClone, gitFileStatus, gitInit } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
@@ -422,6 +422,8 @@ async function boot(): Promise<void> {
     snapshots = await TerminalSnapshots.open(genieHome());
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
     filesHost = new FilesHost({
+        // Each opened file carries its git state (the persona's `· committed`).
+        gitStatus: gitFileStatus,
         workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {

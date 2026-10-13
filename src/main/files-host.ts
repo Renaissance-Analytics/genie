@@ -1,3 +1,4 @@
+import type { GitFileState } from './git-ports.js';
 import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -36,9 +37,12 @@ export interface FilesHostPorts {
     readonly sizeCap?: number;
     /** Genie's clock, for when a disk change was seen; injected so a test can read the stamp. */
     readonly now?: () => number;
+    /** A file's git state (`git-ports.ts` `gitFileStatus`); absent = opened files carry none. */
+    readonly gitStatus?: (root: string, rel: string) => Promise<GitFileState | null>;
 }
 
-export type OpenResult = { ok: true; path: string; text: string; sha: string } | { ok: false; path: string; error: string };
+/** `git` — the file's state in its repository (`git-ports.ts`), present only when the host has a git port. */
+export type OpenResult = { ok: true; path: string; text: string; sha: string; git?: GitFileState | null } | { ok: false; path: string; error: string };
 
 /** A write that landed answers the new sha; a refused one carries the conflict (what is on disk NOW) so nothing is discarded. */
 export type WriteResult = { ok: true; sha: string } | { ok: false; reason: string; conflict?: { path: string; onDisk: string; sha: string } };
@@ -102,7 +106,8 @@ export class FilesHost {
             const refusal = openRefusal(info.size, this.#cap);
             if (refusal) return { ok: false, path: rel, error: refusal };
             const text = await readFile(full, 'utf8');
-            return { ok: true, path: rel, text, sha: shaOf(text) };
+            if (!this.#ports.gitStatus) return { ok: true, path: rel, text, sha: shaOf(text) };
+            return { ok: true, path: rel, text, sha: shaOf(text), git: await this.#ports.gitStatus(ws.path, rel) };
         } catch (error) {
             return { ok: false, path: rel, error: error instanceof Error ? error.message : String(error) };
         }
