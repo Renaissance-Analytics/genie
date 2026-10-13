@@ -120,6 +120,9 @@ nsis:
   # helper holds open. That is the structural half of the fix for the 31-orphan jam; the
   # teardown in `src/main/upgrade.ts` is the other half.
   deleteAppDataOnUninstall: false
+  # Two Start-menu shortcuts: Genie, and Genie in doctor mode (owner, 2026-10-13). build/installer.nsh adds the doctor
+  # one beside electron-builder's own and removes it on uninstall.
+  include: build/installer.nsh
 
 linux:
   icon: build/icon.png
