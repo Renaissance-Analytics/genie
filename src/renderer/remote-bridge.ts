@@ -136,7 +136,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         stopAgent: (agentId) => fire('stopAgent', agentId),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
-        prompt: (agentId, text) => call('prompt', agentId, text).then((r) => {
+        // Files do not cross to a remote workstation yet: said, never dropped.
+        prompt: (agentId, text, attachments) => attachments && attachments.length > 0
+            ? Promise.resolve({ ok: false, reason: 'Files cannot be sent to an agent on another workstation yet' })
+            : call('prompt', agentId, text).then((r) => {
             if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false }; }
             return { ok: (r.value as { ok?: boolean } | null)?.ok === true };
         }),

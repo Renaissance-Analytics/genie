@@ -26,6 +26,7 @@ import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import type { Attachment } from '../core/prompt-content.js';
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -94,7 +95,7 @@ export interface ShellProps {
     /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
     pinned: DockPanel | null;
     onNavigate: (route: string) => void;
-    onSend: (agentId: string, text: string) => void;
+    onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
     /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
     answeringApproval: string | null;
     onAnswerApproval: (optionId: string) => void;
@@ -635,7 +636,7 @@ export function Shell({
                         approval={chatApproval}
                         answeringApproval={answeringApproval}
                         onAnswerApproval={onAnswerApproval}
-                        onSend={(text) => onSend(chatThread?.agentId ?? '', text)}
+                        onSend={(text, attachments) => onSend(chatThread?.agentId ?? '', text, attachments)}
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}
                         onPickThread={(id) => onNavigate(formatRoute({ ...parsed, chat: id }))}

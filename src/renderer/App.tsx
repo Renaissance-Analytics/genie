@@ -11,6 +11,7 @@ import type { DockPanel } from '../core/dock.js';
 import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -470,16 +471,6 @@ function DesktopApp({ bridge }: AppProps) {
                   onSet: (key, value) => { void resolvedBridge.workspaces.setSetting(workspaceId, key, value).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   onReset: (key) => { void resolvedBridge.workspaces.resetSetting(workspaceId, key).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               },
-              // THIS workspace's agent files: Genie's last sync of it (when, and who) and a Sync now for it alone.
-              agentFiles: {
-                  report: features.integrations?.agentFiles?.find((r) => r.workspacePath === workspaceRow.path) ?? null,
-                  results: features.integrations?.lastSync?.workspaceId === workspaceId ? features.integrations.lastSync.results : null,
-                  onSync: () => {
-                      void (resolvedBridge.features ?? NO_FEATURES).act({ kind: 'workspace.syncAgentFiles', workspaceId, workspacePath: workspaceRow.path }).then(setFeatures).catch((error: unknown) => {
-                          setWsView((v) => ({ ...v, lastOutcome: (error as Error).message }));
-                      });
-                  },
-              },
               governs: {
                   children: workspaceRow.governs ?? [],
                   candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id, name: workspaceLabel(snapshot.workspaces, w.id) })),
@@ -652,24 +643,26 @@ function DesktopApp({ bridge }: AppProps) {
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
     // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
-    const send = (agentId: string, text: string): void => {
+    const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): void => {
         // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
         const row = snapshot.agents.find((r) => r.id === agentId);
         const route = row ? chatSendFor(row) : { kind: 'prompt' as const };
+        const keep = (reason?: string): void => setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now(), ...(attachments.length > 0 ? { attachments } : {}), ...(reason ? { reason } : {}) }]);
         if (route.kind === 'inbox') {
+            if (attachments.length > 0) { keep('Files cannot be sent to a Take Over window from here yet'); return; }
             void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: route.to, text }).then(setFeatures).catch((error: unknown) => {
                 console.error('[genie] mail not sent:', (error as Error).message);
             });
             return;
         }
-        void resolvedBridge?.prompt(agentId, text).then((r) => {
-            if (!r.ok) setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now() }]);
+        void resolvedBridge?.prompt(agentId, text, attachments).then((r) => {
+            if (!r.ok) keep(r.reason);
         });
     };
     const restartAndSend = (draftId: string): void => {
         const draft = drafts.find((d) => d.id === draftId);
         if (!draft || !resolvedBridge) return;
-        const send = () => resolvedBridge.prompt(draft.agentId, draft.text).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
+        const send = () => resolvedBridge.prompt(draft.agentId, draft.text, draft.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
         // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
         // one with no thread yet — a fresh install's genie).
         const session = chatDetail?.agent.id === draft.agentId || parsed.chat === draft.agentId ? chatDetail?.session ?? null : null;
@@ -743,7 +736,7 @@ function DesktopApp({ bridge }: AppProps) {
                     console.error('[genie] feature action refused:', (error as Error).message);
                 });
             }}
-            onSend={(id, text) => { if (id) send(id, text); }}
+            onSend={(id, text, attachments) => { if (id) send(id, text, attachments ?? []); }}
             onRestartAndSend={restartAndSend}
             answeringApproval={answering}
             onAnswerApproval={(optionId) => {
