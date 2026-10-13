@@ -75,6 +75,9 @@ jobs:
         run: npx tsx scripts/fetch-caddy.ts
 
       - name: publish
+        # bash on EVERY runner: the script below is bash, and Windows' default run shell is PowerShell (the 2.0.0-beta.20
+        # release run died there with a ParserError and built no installer). test/release-step-shells.test.ts holds it.
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
         # electron-builder.yml defaults to `releaseType: prerelease`; a plain tag overrides it to
