@@ -224,7 +224,7 @@ const DETAIL: AgentDetail = {
     session: {
         running: true, turnState: 'working', startedAt: null, pendingApproval: null, failure: null,
         contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null,
-        commsAgeSeconds: null, plan: null,
+        commsAgeSeconds: null, plan: null, model: null,
     },
     rows: [{ id: 'r1', event: { kind: 'message', speaker: 'you', peerName: null, text: 'go' }, at: null }],
     turns: 3,

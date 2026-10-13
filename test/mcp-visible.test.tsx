@@ -36,7 +36,7 @@ describe('the session records the servers it was started with', () => {
 });
 
 describe('the Agent view rail', () => {
-    const session = (mcpServers: readonly string[] | undefined) => ({ running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, ...(mcpServers ? { mcpServers } : {}) });
+    const session = (mcpServers: readonly string[] | undefined) => ({ running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null, ...(mcpServers ? { mcpServers } : {}) });
     const render = (s: ReturnType<typeof session> | null) => renderToStaticMarkup(
         <AgentView agent={{ id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared', cwd: '.' }} session={s} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} />,
     );

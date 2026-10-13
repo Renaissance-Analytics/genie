@@ -51,7 +51,7 @@ describe('the row', () => {
 
 describe('the rail', () => {
     const agent = { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared' as const, cwd: 'repos/genie2' };
-    const session = { running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null };
+    const session = { running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null };
     const render = (rows: readonly TimedEvent[]) => renderToStaticMarkup(
         <AgentView agent={agent} session={session} rows={rows} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => at(12, 0)} />,
     );

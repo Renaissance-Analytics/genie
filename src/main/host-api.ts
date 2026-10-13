@@ -72,6 +72,7 @@ export interface HostApiDeps {
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
         setPermissions(agentId: string, permissions: 'all' | 'edits'): Promise<unknown>;
+        setModel(agentId: string, model: string | null): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
     };
     features: {
@@ -143,6 +144,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
             case 'agents.setPermissions':
                 return deps.agentOps.setPermissions(str(args[0]), args[1] === 'edits' ? 'edits' : 'all');
+            case 'agents.setModel':
+                // `null` (or nothing, or empty) = back to the provider's default.
+                return deps.agentOps.setModel(str(args[0]), args[1] === null || args[1] === undefined || args[1] === '' ? null : str(args[1]));
             case 'agents.diagnose':
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':

@@ -13,7 +13,7 @@ import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/i
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { quitPlan } from '../core/quit.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -302,6 +302,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             mode: record.mode,
             accessScope: record.accessScope,
             permissions: record.permissions ?? 'all',
+            // The model CHOSEN (null = the provider's default); the one IN USE is the session's, as reported.
+            model: record.model ?? null,
             instructions: record.instructions ?? null,
             // Whether this provider can ask for approval at all (the driver's own claim); a Take Over window says nothing.
             raisesApprovals: takeOver ? null : raisesApprovals(record.provider),
@@ -617,6 +619,7 @@ async function boot(): Promise<void> {
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
             setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
+            setModel: (id, model) => registry!.setModel(id, model),
         },
         host: {
             start: (record, cwd) => host!.start(record, cwd),
@@ -663,6 +666,8 @@ async function boot(): Promise<void> {
         (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
     ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
         (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all or edits' }));
+    ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
+        (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
     ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
         (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
     ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
@@ -983,6 +988,7 @@ async function boot(): Promise<void> {
                 setMode: (id, mode) => setMode(agentOps, id, mode),
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
                 setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
+                setModel: (id, model) => setModel(agentOps, id, model),
                 diagnose: (id) => diagnose(agentOps, id),
             },
             features: {

@@ -102,6 +102,7 @@ const bridge: GenieBridge = {
         setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,
         setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
         setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
+        setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,
         diagnose: (agentId) => ipcRenderer.invoke('genie:agent-diagnose', agentId) as never,
     },
 

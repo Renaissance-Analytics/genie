@@ -104,6 +104,8 @@ export type StreamEvent =
           headroom?: Headroom | null;
           /** A thinking-token ESTIMATE riding the notice (Claude's `system/thinking_tokens` frame); it belongs to its thought. */
           estimate?: number | null;
+          /** The model IN USE when the notice reported one (`MODEL_META`); `null` when it did not say. */
+          model?: string | null;
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
@@ -169,6 +171,13 @@ function toolStatusOf(value: unknown): ToolStatus | null {
  * silent.
  */
 /** prism-acp's thinking-token ESTIMATE on a thought chunk, or `null` when the provider sent none. */
+/**
+ * Where prism-acp (0.8.0+) puts the model IN USE on a `notice` (its exported `META_MODEL`, spelled here as
+ * RATE_LIMIT_META is, so this module needs nothing at runtime from the driver package). Claude says it on its first
+ * init notice; Codex after thread start or resume and on `model/rerouted`. No key = the provider did not say.
+ */
+export const MODEL_META = 'particle.academy/model';
+
 function thinkingEstimateOf(update: Record<string, unknown>): number | null {
     const meta = update['_meta'];
     if (!isRecord(meta)) return null;
@@ -243,6 +252,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 level: stringOrNull(notice['level']) ?? 'info',
                 message: stringOrNull(notice['message']) ?? '',
                 headroom: isRecord(update['_meta']) ? headroomFromMeta(update['_meta'][RATE_LIMIT_META]) : null,
+                model: isRecord(update['_meta']) ? stringOrNull(update['_meta'][MODEL_META]) : null,
                 estimate: thinkingEstimateOf(update),
             };
         }

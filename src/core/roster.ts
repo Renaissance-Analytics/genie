@@ -67,6 +67,11 @@ export interface LiveSession {
     links?: readonly CommsLink[] | null | undefined;
     /** The agent's own plan, when it reports one. */
     plan: { step: number; of: number; doing: string } | null;
+    /**
+     * The model IN USE, as the provider reported it (a notice carrying `particle.academy/model`); the latest report
+     * wins. `null` or absent (an older remote host does not send it) = not reported — never the model Genie asked for, which is the agent's setting, not a reading.
+     */
+    model?: string | null;
     /** The MCP servers the session was started with, by name (`genie` = Genie's own); absent from an older host. */
     mcpServers?: readonly string[] | undefined;
 }
