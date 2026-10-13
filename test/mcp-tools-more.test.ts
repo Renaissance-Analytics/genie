@@ -69,9 +69,13 @@ afterEach(async () => {
 });
 
 describe('registrations', () => {
-    it('are knowledge and manageTerminals, both requiring terminalId', () => {
+    it('are knowledge and manageTerminals, both taking terminalId without requiring it (a session is known by its header)', () => {
         expect(tools.map((t) => t.definition.name).sort()).toEqual(['knowledge', 'manageTerminals']);
-        for (const t of tools) expect((t.definition.inputSchema as { required: string[] }).required).toContain('terminalId');
+        for (const t of tools) {
+            const schema = t.definition.inputSchema as { required: string[]; properties: Record<string, unknown> };
+            expect(schema.properties.terminalId).toBeDefined();
+            expect(schema.required).not.toContain('terminalId');
+        }
     });
 });
 
