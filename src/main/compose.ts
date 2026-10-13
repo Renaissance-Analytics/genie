@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, readFile as readFileP, writeFile as writeFileP } from 'node:fs/promises';
+import { mkdir, readFile as readFileP, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
@@ -372,6 +372,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 fs: {
                     read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
                     write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
+                    remove: async (p) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
                 },
                 flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
             });

@@ -1075,6 +1075,21 @@ async function boot(): Promise<void> {
         try {
             await mcp.start();
             mcpVerified = await mcp.verify();
+            // THE WORKSPACE AGENT FILES (the owner: Genie 2 manages them all and upgrades Genie 1's): every workspace once the
+            // endpoint is live, and every workspace added after — whichever path added it — by watching the registry.
+            const synced = new Set<string>();
+            const syncNew = () => {
+                for (const w of registry?.listWorkspaces() ?? []) {
+                    if (synced.has(w.path)) continue;
+                    synced.add(w.path);
+                    void composed.syncConfig(w.path).then(
+                        (results) => { for (const r of results) if (!r.ok) console.error(`[workspace-files] ${w.id} ${r.label}: ${r.error ?? "failed"}`); },
+                        (error: unknown) => { console.error(`[workspace-files] ${w.id}: ${(error as Error).message}`); },
+                    );
+                }
+            };
+            syncNew();
+            registry?.subscribe(() => syncNew());
         } catch (error) {
             mcpVerified = { ok: false, reason: error instanceof Error ? error.message : String(error) };
             console.error('[mcp] the loopback server did not start:', mcpVerified.reason);
