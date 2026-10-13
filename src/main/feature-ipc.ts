@@ -59,7 +59,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // Status is READ from Docker for every instance on every snapshot — never remembered.
         services: { instances: await Promise.all(services.engines.list().map(async (instance) => ({ instance, status: (await services.engines.status(instance.id)).state }))), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
-        inbox: { unread: services.inbox.unread(HUMAN), peers },
+        // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
+        inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes() },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },

@@ -104,7 +104,7 @@ describe('first paint — skeletons, never zeros or empty states', () => {
 describe('measured empties are a different claim', () => {
     it('flows with an empty list invites the first flow; inbox with no mail says so; hosting with no sites offers to add one', () => {
         expect(render('genie://flows', { flows: { flows: [], adding: null } })).toMatch(/first flow|Add a flow/i);
-        expect(render('genie://inbox', { inbox: { unread: [], peers: [] } })).toMatch(/No messages/i);
+        expect(render('genie://inbox', { inbox: { unread: [], peers: [], recent: [] } })).toMatch(/No messages/i);
         expect(render('genie://hosting', { hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } } })).toMatch(/Add a site/i);
     });
 

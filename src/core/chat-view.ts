@@ -35,6 +35,11 @@ export interface ChatMessage {
     delivered: boolean;
     /** Epoch ms, or `null` when the event carried none — never synthesised. */
     at: number | null;
+    /**
+     * Your inbox mail to an observed agent only: when it read it (epoch ms), or `null` = not read yet. Absent on
+     * every other message — a session prompt has no read receipt, and claiming one would be a guess.
+     */
+    read?: number | null;
 }
 
 export interface ChatChip {
@@ -112,6 +117,45 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         context: detail ? chatContext(detail) : null,
         chips: chatChips(rows, subjectId),
     };
+}
+
+/** The fields of an inbox message the observed thread reads (`main/inbox-store.ts`'s `InboxMessage`). */
+export interface MailLike {
+    readonly id: string;
+    readonly from: string;
+    readonly to: string;
+    readonly text: string;
+    readonly sentAt: string;
+    readonly readAt: string | null;
+}
+
+/**
+ * AN OBSERVED AGENT'S CHAT IS ITS INBOX THREAD (§4.4). Your mail to it, with whether it has read each one, and its
+ * mail to you by name, oldest first; `unread` counts its mail you have not read. A Take Over window's replies in its
+ * terminal are not here — that TUI does not report them. `recent === null` (the inbox not read yet) gives `unread:
+ * null`, never `0`, which would claim you are up to date.
+ */
+export function observedMail(recent: readonly MailLike[] | null, agentId: string, name: string): { messages: ChatMessage[]; unread: number | null } {
+    if (recent === null) return { messages: [], unread: null };
+    const messages: ChatMessage[] = [];
+    let unread = 0;
+    for (const m of recent) {
+        if (m.from === 'human' && m.to === agentId) {
+            messages.push({ id: m.id, who: 'you', from: 'you', text: m.text, delivered: true, at: Date.parse(m.sentAt), read: m.readAt === null ? null : Date.parse(m.readAt) });
+        } else if (m.from === agentId && m.to === 'human') {
+            messages.push({ id: m.id, who: 'agent', from: name, text: m.text, delivered: true, at: Date.parse(m.sentAt) });
+            if (m.readAt === null) unread++;
+        }
+    }
+    return { messages, unread };
+}
+
+/**
+ * Where the composer sends. A declared agent is prompted in its session; an observed one has no session — its mail
+ * goes to its inbox by full address (`{workspace}:{provider}:{name}`, core/inbox.ts), which its TUI reads over MCP.
+ */
+export function chatSendFor(agent: { fidelity: Fidelity; workspaceId: string; provider: string; name: string }): { kind: 'prompt' } | { kind: 'inbox'; to: string } {
+    return agent.fidelity === 'observed' ? { kind: 'inbox', to: `${agent.workspaceId}:${agent.provider}:${agent.name}` } : { kind: 'prompt' };
 }
 
 /** A message the renderer could not deliver: the agent was not running. Kept, never dropped (§4.4). */
