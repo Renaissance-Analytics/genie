@@ -56,6 +56,8 @@ export function agentShells(rows: readonly TimedEvent[]): AgentShells {
     /** Tool-use id → the background command it started, before (or without) a task naming it. */
     const commands = new Map<string, AgentShell>();
     const terminals: AgentShells['terminals'] = [];
+    /** A tool's name rides its first `tool_call`; its input the later `tool_call_update`, which has none (prism-acp). */
+    const names = new Map<string, string>();
     let reported = false;
 
     const taskFor = (taskId: string, toolUseId: string | null, at: number | null): AgentShell => {
@@ -79,12 +81,14 @@ export function agentShells(rows: readonly TimedEvent[]): AgentShells {
         }
 
         if (e.kind === 'tool') {
+            const said = `${e.name ?? ''} ${e.title ?? ''}`.trim();
+            if (said !== '' && e.toolCallId !== '' && !names.has(e.toolCallId)) names.set(e.toolCallId, said);
             const input = isRecord(e.rawInput) ? e.rawInput : null;
             if (!input) continue;
             if (input['run_in_background'] === true && typeof input['command'] === 'string' && !commands.has(e.toolCallId)) {
                 const description = typeof input['description'] === 'string' ? input['description'] : null;
                 commands.set(e.toolCallId, { key: e.toolCallId, kind: 'shell', command: input['command'], description, state: 'unreported', ambient: false, startedAt: at, endedAt: null, summary: null, outputFile: null });
-            } else if (input['action'] === 'create' && /manageTerminals/.test(`${e.name ?? ''} ${e.title ?? ''}`) && !terminals.some((t) => t.key === e.toolCallId)) {
+            } else if (input['action'] === 'create' && /manageTerminals/.test(`${e.name ?? ''} ${e.title ?? ''} ${names.get(e.toolCallId) ?? ''}`) && !terminals.some((t) => t.key === e.toolCallId)) {
                 terminals.push({ key: e.toolCallId, command: typeof input['command'] === 'string' ? input['command'] : null, at });
             }
             continue;
