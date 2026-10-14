@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { QuestionForm } from './QuestionForm.js';
 import { deckBand, signalStrip, sinceYouLooked, type DeckItem, type SignalAction, type SignalState } from '../../core/deck.js';
 import { ApprovalCard } from './ApprovalCard.js';
 
@@ -54,13 +55,6 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
     const open = expanded ?? ownExpanded;
     const focusRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => { focusRef.current?.scrollIntoView({ block: 'center' }); }, [focusId]);
-    const submitForm = (item: DeckItem, e: FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        if (item.answer.kind !== 'form' || !item.answer.questions) return;
-        const data = new FormData(e.currentTarget);
-        const selections = item.answer.questions.map((_, i) => data.getAll(`q${i}`).map(String));
-        onAnswerForm?.(item, selections, String(data.get('note') ?? ''));
-    };
 
     return (
         <div data-surface="deck" className="flex h-full min-h-0 flex-col">
@@ -172,28 +166,9 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             </button>
                         ) : null}
                         {item.answer.kind === 'form' && item.answer.questions && open === item.id ? (
-                            <form data-deck-form={item.id} onSubmit={(e) => submitForm(item, e)} className="mt-2 flex flex-col gap-3 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-xs">
-                                {item.answer.questions.map((q, i) => (
-                                    <fieldset key={i} data-deck-question={i} className="flex flex-col gap-1.5">
-                                        <legend className="flex items-center gap-2">
-                                            <span className="rounded-sm bg-[var(--bg-3)] px-1.5 py-px font-mono text-[10px] uppercase tracking-wide text-[var(--fg-3)]">{q.header}</span>
-                                            <span className="text-[13px] text-[var(--fg-1)]">{q.question}</span>
-                                        </legend>
-                                        {q.options.map((o) => (
-                                            <label key={o.label} className="flex items-center gap-2 text-[12px] text-[var(--fg-2)]">
-                                                <input type={q.multiSelect ? 'checkbox' : 'radio'} name={`q${i}`} value={o.label} />
-                                                <span>{o.label}</span>
-                                            </label>
-                                        ))}
-                                    </fieldset>
-                                ))}
-                                {/* The free text the modal always offers (§6.3). */}
-                                <textarea name="note" data-deck-note={item.id} rows={2} placeholder="A note for the agent (optional)" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px]" />
-                                <div className="flex items-center gap-2">
-                                    <button type="submit" data-action="deck-submit" disabled={answering === item.id} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-60">Answer</button>
-                                    <button type="button" onClick={() => setOwnExpanded(null)} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">Cancel</button>
-                                </div>
-                            </form>
+                            <div className="mt-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
+                                <QuestionForm item={item} answering={answering} onSubmit={(selections, note) => onAnswerForm?.(item, selections, note)} onCancel={() => setOwnExpanded(null)} />
+                            </div>
                         ) : null}
 
                         {/*
