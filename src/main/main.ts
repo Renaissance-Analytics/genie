@@ -1,3 +1,4 @@
+import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
@@ -1095,6 +1096,8 @@ async function boot(): Promise<void> {
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
         const registrations = allGenieTools(genieToolDeps({
+            // agentinbox list: whether each peer is running, read-only — never started by asking (core/liveness.ts).
+            liveness: (id) => livenessOf(host?.probe(id as AgentId) ?? null, host?.rowsFor(id as AgentId).at(-1)?.at ?? null),
             inbox: composed.inbox,
             attention: composed.attention,
             knowledge: composed.knowledge,

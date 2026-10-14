@@ -1,3 +1,4 @@
+import type { Liveness } from '../core/liveness.js';
 import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
@@ -28,6 +29,8 @@ export interface GenieToolParts {
     readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin', detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
+    /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
+    readonly liveness?: (agentId: string) => Liveness;
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
     readonly resolveCaller: (id: string) => Caller | null;
     readonly userActive: () => boolean;
@@ -47,6 +50,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             inbox: p.inbox,
             attention: p.attention,
             roster: p.roster,
+            ...(p.liveness ? { liveness: p.liveness } : {}),
             resolveCaller: p.resolveCaller,
             workspaceSetting: (workspaceId) => inboxSettingFrom(p.settings.snapshotFor(workspaceId)),
             userActive: p.userActive,

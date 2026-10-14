@@ -1,3 +1,4 @@
+import type { Liveness } from '../core/liveness.js';
 import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { type Question } from '../core/attention.js';
@@ -61,6 +62,8 @@ export interface GenieToolsDeps {
     readonly inbox: InboxStore;
     readonly attention: AttentionStore;
     readonly roster: () => readonly AgentRecord[];
+    /** Is that agent running, and when was it last seen (core/liveness.ts)? Read-only; absent = not reported. */
+    readonly liveness?: (agentId: string) => Liveness;
     readonly resolveCaller: (terminalId: string) => Caller | null;
     readonly workspaceSetting: (workspaceId: string) => WorkspaceInboxSetting;
     readonly userActive: () => boolean;
@@ -187,7 +190,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
     const agentinbox: Registration = {
         definition: new ToolDefinition(
             'agentinbox',
-            'Durable 1:1 messaging with other agents and the user. list → peers and whether you may reach them (permission, not liveness); send → to an address ({provider}:{name}, {workspace}:{provider}:{name}, or human) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
+            'Durable 1:1 messaging with other agents and the user. list → peers, whether you may reach them (`reachable`: permission) and whether each is running (`state`: working, idle, failed or stopped, with `lastSeen`; read-only, it never starts anyone); send → to an address ({provider}:{name}, {workspace}:{provider}:{name}, or human) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
             {
                 type: 'object',
                 properties: {
@@ -223,6 +226,8 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                             provider: r.provider,
                             workspaceId: r.workspaceId,
                             reachable: me ? reachable(me, r, deps.workspaceSetting) : false,
+                            // Liveness beside permission: whether it is running, read-only — never started by asking.
+                            ...(deps.liveness ? deps.liveness(r.id) : {}),
                         };
                     });
                     return ok({ ok: true, peers, human: { address: HUMAN, reachable: true } });
