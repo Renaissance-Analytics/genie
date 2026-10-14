@@ -125,3 +125,13 @@ nav,
 [data-surface] > :not([data-view-header]) {
     margin-right: var(--dock-reserve, 0px);
 }
+
+/*
+ * THIN SCROLLBARS, everywhere (the owner, 2026-10-14: "We should be using thin scroll bars"). One rule for the whole
+ * app rather than per-scroller classes, so a scroller added later is thin too. The thumb is a token, the track is
+ * transparent: the bar is there to be found, not to be looked at.
+ */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2, var(--border-1)) transparent;
+}
