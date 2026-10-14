@@ -100,13 +100,13 @@ describe('the registrations', () => {
     });
 
     it('a MIRRORED terminalId arrives as the Mcp-Param header and is honoured', async () => {
-        // prism-mcp's `x-mcp-header` moves an argument into `Mcp-Param-<name>`; a handler that
-        // reads only args would miss it. The schema declares the mirror; the handler reads both.
+        // prism-mcp's `x-mcp-header` moves an argument into `Mcp-Param-<name>`; prism hands the handler every
+        // `Mcp-Param-*` header unprefixed and lower-cased (README), so the handler sees `terminalid`.
         const def = tools.find((t) => t.definition.name === 'lists')!.definition;
         const prop = (def.inputSchema as { properties: Record<string, Record<string, unknown>> }).properties.terminalId!;
         expect(prop['x-mcp-header']).toBe('terminalId'); // the header NAME (spec); an object here made Claude drop the tool
 
-        const r = await call('lists', { action: 'show' }, { 'mcp-param-terminalid': 't-atlas' });
+        const r = await call('lists', { action: 'show' }, { terminalid: 't-atlas' });
         expect(r.isError).toBe(false);
         expect(r.json).toMatchObject({ agent: [], user: [] });
     });

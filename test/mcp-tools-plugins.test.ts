@@ -22,7 +22,7 @@ const manifest = (id: string, gated = false): PluginManifest => ({
 });
 
 const atlas: Caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'tynn', workspacePath: '/w/tynn' };
-const ctx = (tool: string): ToolContext => ({ server: 'genie', tool, headers: { 'x-genie-terminal-id': 'term_1' } });
+const ctx = (tool: string): ToolContext => ({ server: 'genie', tool, headers: { terminalid: 'term_1' } });
 
 function deps(over: Partial<PluginToolsDeps> = {}) {
     const runs: Array<{ pluginId: string; tool: string; args: unknown }> = [];
@@ -80,7 +80,7 @@ describe('pluginTools', () => {
         const reg = pluginTools(d).find((t) => t.definition.name === 'acme.lint.lint')!;
         // No id anywhere — neither the argument nor the mirrored header.
         expect((await reg.handler({}, { server: 'genie', tool: 'acme.lint.lint', headers: {} })).text).toMatch(/GENIE_TERMINAL_ID/);
-        expect((await reg.handler({ terminalId: 'term_9' }, ctx('acme.lint.lint'))).text).toMatch(/no agent/);
+        expect((await reg.handler({ terminalId: 'term_9' }, ctx('acme.lint.lint'))).text).toMatch(/terminal term_9 is not one Genie knows/);
         const gone = deps({ plugins: { tools: d.plugins.tools, guard: () => null } });
         expect((await pluginTools(gone.d)[0]!.handler({ terminalId: 'term_1' }, ctx('acme.gated.lint'))).text).toMatch(/not enabled/);
         expect(gone.runs).toEqual([]);

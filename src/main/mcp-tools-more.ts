@@ -1,3 +1,4 @@
+import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { KnowledgeStore, MemoryClass, Scope, ScopeFilter } from './knowledge-store.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
@@ -44,11 +45,8 @@ const BRACKETED_PASTE_END = '\x1b[201~';
 
 export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
     const withCaller = (body: (caller: Caller, args: JsonObject, context: ToolContext) => McpToolResult | Promise<McpToolResult>): ToolHandler => async (args, context) => {
-        const headerValue = Object.entries(context.headers).find(([k]) => k.toLowerCase() === 'mcp-param-terminalid')?.[1];
-        const terminalId = str(args.terminalId) ?? headerValue;
-        if (!terminalId) return err('terminalId is required — pass the value of GENIE_TERMINAL_ID; Genie will not guess which terminal is calling');
-        const caller = deps.resolveCaller(terminalId);
-        if (!caller) return err(`terminal ${terminalId} is not one Genie knows; nothing was done`);
+        const caller = callerFrom(args, context.headers, deps.resolveCaller);
+        if (typeof caller === 'string') return err(caller);
         try {
             return await body(caller, args, context);
         } catch (error) {

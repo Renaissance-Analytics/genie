@@ -1,3 +1,4 @@
+import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 
@@ -25,11 +26,7 @@ const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload)
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 
 function callerOf(deps: SidecarToolsDeps, args: JsonObject, context: ToolContext): Caller | string {
-    const fromArgs = typeof args.terminalId === 'string' ? args.terminalId : undefined;
-    const fromHeader = context.headers['mcp-param-terminalid'] ?? context.headers['Mcp-Param-TerminalId'];
-    const terminalId = fromArgs ?? (typeof fromHeader === 'string' ? fromHeader : undefined);
-    if (!terminalId) return 'terminalId is required: pass GENIE_TERMINAL_ID; Genie does not guess which terminal is calling';
-    return deps.resolveCaller(terminalId) ?? `no agent is registered for terminal ${terminalId}`;
+    return callerFrom(args, context.headers, deps.resolveCaller);
 }
 
 export function sidecarTools(deps: SidecarToolsDeps): Registration[] {
