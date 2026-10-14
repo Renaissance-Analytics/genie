@@ -53,7 +53,11 @@ export interface FeatureState {
 }
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
-    const hits = state.knowledgeQuery ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits : null;
+    // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
+    // 108 memories and drew skeletons until a search). A query searches.
+    const hits = state.knowledgeQuery
+        ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits
+        : services.knowledge.list({ scopes: 'all', limit: 200 }).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
     const peers = services.agentAddresses().map((a) => ({ address: a.address, name: a.name, reachable: true }));
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },

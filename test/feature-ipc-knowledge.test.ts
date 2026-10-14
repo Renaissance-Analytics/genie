@@ -35,9 +35,26 @@ afterEach(async () => {
 });
 
 describe('the knowledge section', () => {
-    it('carries the open form and the last add, both null until something happens', async () => {
+    // Changed 2026-10-14 (the owner: "the knowledge graph is empty or not rendering for me"): with no query the surface
+    // used to get `hits: null` and drew skeletons that never resolved — a graph with 108 memories looked empty until a
+    // search. With no query it now gets the most recent memories; an empty store is `[]`, which the surface says.
+    it('carries the open form and the last add, both null until something happens; with no query and nothing stored, hits is [] (not null)', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.knowledge).toEqual({ hits: null, query: '', adding: null, lastAdd: null });
+        expect(snap.knowledge).toEqual({ hits: [], query: '', adding: null, lastAdd: null });
+    });
+
+    it('with NO query, lists what the graph holds — newest first, every class and scope — so opening it shows the memories', async () => {
+        const names = ['', 'Caddy', 'Redis', 'Vite'];
+        const at = (n: number) => services.knowledge.add({ title: `${names[n]} note`, body: `Body of the ${names[n]} note, which is long enough to be cut down to a snippet for the row.`, class: n % 2 ? 'procedural' : 'knowledge', scope: n % 3 ? { kind: 'system' } : { kind: 'workspace', id: 'tynn' }, source: 'user' });
+        for (const n of [1, 2, 3]) at(n);
+        const snap = await featureSnapshot(services, state());
+        // COUNTED: all three, newest first, each a row the surface can draw.
+        expect(snap.knowledge.hits!.map((h) => h.title)).toEqual(['Vite note', 'Redis note', 'Caddy note']);
+        expect(snap.knowledge.hits![0]).toMatchObject({ class: 'procedural', snippet: expect.stringContaining('Body of the Vite note') });
+        // A query still searches: the list is only what an EMPTY query shows.
+        const searched = await featureSnapshot(services, state({ knowledgeQuery: 'Redis' }));
+        expect(searched.knowledge.hits!.map((h) => h.title)).toContain('Redis note');
+        expect(searched.knowledge.hits!.map((h) => h.title)).not.toContain('Vite note');
     });
 
     it('knowledge.openAdd opens the form with defaults for the machine or a workspace; cancel closes it', async () => {
