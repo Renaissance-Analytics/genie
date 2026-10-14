@@ -8,6 +8,8 @@ import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
 import { agentChanges } from '../../core/agent-changes.js';
+import { agentShells } from '../../core/agent-shells.js';
+import { ShellsPanel } from './ShellsPanel.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
@@ -67,6 +69,7 @@ const TAB_LABEL: Record<AgentTab, string> = {
     stream: 'Stream',
     files: 'Files',
     changes: 'Changes',
+    shells: 'Shells',
     terminal: 'Terminal',
     activity: 'Activity',
 };
@@ -324,6 +327,7 @@ export function AgentView({
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
 
     // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
+    const shells = agentShells(rows);
     const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
     // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
     // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
@@ -658,6 +662,8 @@ export function AgentView({
                         }`}
                     >
                         {TAB_LABEL[t]}
+                        {/* The indicator: how many it has running now, on the tab, from every tab. */}
+                        {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1.5 rounded-full bg-[var(--success)] px-1.5 text-[10px] font-semibold text-[var(--bg-1)]">{shells.count}</span> : null}
                     </button>
                 ))}
                 {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
@@ -806,6 +812,8 @@ export function AgentView({
                     ) : null}
 
                     {/* TERMINAL (observed, §4.2): the TUI's own terminal, attached here as a SECOND view of the same pty (§6.5). */}
+                    {active === 'shells' ? <ShellsPanel shells={shells} agentName={agent.name} provider={agent.provider} /> : null}
+
                     {active === 'terminal' ? (
                         takeOver && terminals ? (
                             <ObservedTerminal key={takeOver.terminalId} terminalId={takeOver.terminalId} terminals={terminals} />
