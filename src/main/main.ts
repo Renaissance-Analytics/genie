@@ -28,7 +28,7 @@ import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
 import { readV1Settings } from './v1-settings.js';
-import { readV1Catalog } from './v1-import.js';
+import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { planV1Import } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
@@ -946,6 +946,8 @@ async function boot(): Promise<void> {
         userData: genieHome(),
         pty: ptyPort,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
+        // Genie 1's knowledge graph, from the same database, read-only; the store decides whether it still needs it.
+        v1Knowledge: () => readV1Knowledge(v1DatabaseFile()),
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,

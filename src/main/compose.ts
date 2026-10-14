@@ -8,6 +8,7 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
+import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
@@ -59,6 +60,11 @@ export interface ComposeInput {
     readonly pty: PtyPort;
     /** Reads v1's settings table, or `null` when there is no v1 database. Called once, on first run only. */
     readonly v1Settings: () => Readonly<Record<string, string>> | null;
+    /**
+     * Reads Genie 1's knowledge graph (`readV1Knowledge`), or `null` when it cannot see one. Called at boot until the
+     * knowledge store records an import that saw v1 — then never again. Absent = no Genie 1 to import from.
+     */
+    readonly v1Knowledge?: () => V1Knowledge | null;
     readonly caddyBin: string | null;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
@@ -247,6 +253,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const inbox = await InboxStore.open(input.userData, iso);
     const attention = await AttentionStore.open(input.userData, inbox, iso);
     const knowledge = KnowledgeStore.open(input.userData, iso);
+    // Genie 1's memories, once (knowledge-store.ts records it). Not gated on ~/.genie/v1-import.json: installs that
+    // imported their workspaces before this existed have that file and an empty graph, and must still get theirs.
+    if (input.v1Knowledge && !knowledge.v1Import()?.sawV1) {
+        try {
+            const done = knowledge.importFromV1(planV1KnowledgeImport(input.v1Knowledge()));
+            const notes = knowledge.v1Import()?.notes ?? [];
+            if (!done.alreadyDone) console.log(`[genie] v1 knowledge import: ${done.noV1 ? 'no v1 knowledge graph seen' : `${done.imported} memories imported, ${done.kept} already here`}${notes.length ? `; ${notes.length} noted: ${notes.join(' | ')}` : ''}`);
+        } catch (error) {
+            // Not recorded as done (one transaction), so the next boot tries again; the graph Genie 2 has is untouched.
+            console.error(`[genie] v1 knowledge import failed: ${(error as Error).message}`);
+        }
+    }
     const flows = await FlowStore.open(input.userData, now);
     const flowScheduler = new FlowScheduler({
         store: flows,
