@@ -18,8 +18,15 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * turn marker and called it finished. The ask counts what it means: turns ended in this run.
  */
 let dir: string;
+const hosts: SessionHost[] = [];
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-askresumed-')); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+// Stop every host, then remove with retries: a session's row writes are fire-and-forget by design and `stop` does not
+// await them, so a removal right after can meet a write still landing — CI, 2026-10-14: `ENOTEMPTY ... runtime/sessions`
+// on this test, never alone, about one full suite in twelve. The same race and the same answer as session-host.test.ts.
+afterEach(async () => {
+    for (const h of hosts.splice(0)) h.stopAll();
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+});
 const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function host() {
@@ -28,8 +35,10 @@ function host() {
         events = options.events;
         return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return 'cli-1'; } };
     }) as unknown as SessionDriverFactory;
+    const host = new SessionHost({ userData: dir, driverFor, processTree: tree });
+    hosts.push(host);
     return {
-        host: new SessionHost({ userData: dir, driverFor, processTree: tree }),
+        host,
         say: (text: string) => events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } }),
         callTool: () => events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'mcp__genie__lists', status: 'in_progress' }),
         end: () => events.onTurnEnd?.({ stopReason: 'end_turn' } as never),
