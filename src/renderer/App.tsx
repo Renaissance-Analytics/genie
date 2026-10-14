@@ -1,6 +1,6 @@
 import { chatSubscriptionId } from './agent-detail.js';
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_ROUTE, canonicalAgentRoute, carryPinnedChat, formatRoute, parseRoute } from '../core/route.js';
+import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -726,7 +726,7 @@ function DesktopApp({ bridge }: AppProps) {
             chatThreads={chatThreads(snapshot.agents, openedThreads, chatSubject)}
             chatSession={chatDetail?.session ?? null}
             pinned={pinned}
-            onNavigate={(r) => navigate(carryPinnedChat(r, parsed, pinned === 'chat'))}
+            onNavigate={(r) => navigate(carryChat(r, parsed))}
             features={features}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) => {

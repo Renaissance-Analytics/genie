@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carryPinnedChat, parseRoute } from '../src/core/route.js';
+import { carryChat, parseRoute } from '../src/core/route.js';
 import { withDrafts, type Draft } from '../src/core/chat-view.js';
 
 /**
@@ -26,20 +26,24 @@ describe('withDrafts', () => {
     });
 });
 
-describe('carryPinnedChat', () => {
-    const current = parseRoute('genie://dashboard?group=workspace&chat=a1&pin=right');
+// Changed 2026-10-14 (the owner: a floating chat "remains open to the same agent chat until I close the flyout or pin
+// it again"): an open chat rides every navigation, pinned or floating. It used to follow only when pinned.
+describe('carryChat', () => {
+    const pinned = parseRoute('genie://dashboard?group=workspace&chat=a1&pin=right');
+    const floating = parseRoute('genie://dashboard?chat=a1');
 
-    it('a PINNED chat rides onto a route that names no chat', () => {
-        expect(carryPinnedChat('genie://workspace/tynn', current, true)).toBe('genie://workspace/tynn?chat=a1&pin=right');
-        expect(carryPinnedChat('genie://deck', current, true)).toBe('genie://deck?chat=a1&pin=right');
+    it('a PINNED chat rides onto a route that names no chat, still pinned', () => {
+        expect(carryChat('genie://workspace/tynn', pinned)).toBe('genie://workspace/tynn?chat=a1&pin=right');
+        expect(carryChat('genie://deck', pinned)).toBe('genie://deck?chat=a1&pin=right');
     });
 
-    it('an UNPINNED chat does not follow — it is an overlay on the view you were on', () => {
-        expect(carryPinnedChat('genie://deck', parseRoute('genie://dashboard?chat=a1'), false)).toBe('genie://deck');
+    it('a FLOATING chat rides along too, still floating — free roam, the same agent’s chat stays open', () => {
+        expect(carryChat('genie://deck', floating)).toBe('genie://deck?chat=a1');
+        expect(carryChat('genie://workspace/tynn', floating)).toBe('genie://workspace/tynn?chat=a1');
     });
 
-    it('a route that names its own chat, or closes it, is left alone; so is one with no chat open', () => {
-        expect(carryPinnedChat('genie://deck?chat=wren', current, true)).toBe('genie://deck?chat=wren');
-        expect(carryPinnedChat('genie://deck', parseRoute('genie://dashboard'), true)).toBe('genie://deck');
+    it('a route that names its own chat is left alone; so is one with no chat open', () => {
+        expect(carryChat('genie://deck?chat=wren', pinned)).toBe('genie://deck?chat=wren');
+        expect(carryChat('genie://deck', parseRoute('genie://dashboard'))).toBe('genie://deck');
     });
 });

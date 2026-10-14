@@ -1,5 +1,5 @@
 import { formatLanes, parseLanes } from '../core/lanes.js';
-import { formatRoute, parseRoute } from '../core/route.js';
+import { formatRoute, parseRoute, pickThreadRoute } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
@@ -639,7 +639,7 @@ export function Shell({
                         onSend={(text, attachments) => onSend(chatThread?.agentId ?? '', text, attachments)}
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}
-                        onPickThread={(id) => onNavigate(formatRoute({ ...parsed, chat: id }))}
+                        onPickThread={(id) => onNavigate(pickThreadRoute(parsed, id, pinned === 'chat'))}
                         onRestartAndSend={onRestartAndSend}
                         running={chatRunning}
                         onStop={() => { if (chatThread) onStopAgent?.(chatThread.agentId); }}

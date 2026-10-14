@@ -251,14 +251,25 @@ export function canonicalAgentRoute(current: string, resolvedId: string): string
 }
 
 /**
- * A PINNED chat's subject does not follow the view (§4.4) — it stays. The rail's routes are literals, so without this
- * every navigation dropped `chat=&pin=` and the pinned flyout vanished. Carries the current pinned chat onto `next`
- * when `next` names no chat of its own. An unpinned chat is an overlay on the view it was opened over, and does not
- * follow.
+ * AN OPEN CHAT STAYS OPEN WHEREVER YOU GO — pinned or floating (the owner, 2026-10-14: "When in flyout mode and it's
+ * floating I can free roam anywhere in the app and it remains open to the same agent chat until I close the flyout or
+ * pin it again"). It used to follow only when pinned; an unpinned chat vanished on the first navigation. The rail's
+ * routes are literals, so this carries the current chat (and whether it is pinned) onto `next` when `next` names no chat
+ * of its own. Closing the chat is a route without `chat=`, built from the current one — it never passes through here.
  */
-export function carryPinnedChat(next: string, current: Route, pinned: boolean): string {
-    if (!pinned || current.chat === null) return next;
+export function carryChat(next: string, current: Route): string {
+    if (current.chat === null) return next;
     const parsedNext = parseRoute(next);
     if (parsedNext.chat !== null) return next;
-    return formatRoute({ ...parsedNext, chat: current.chat, pin: current.pin ?? 'right' });
+    return formatRoute({ ...parsedNext, chat: current.chat, pin: current.pin });
+}
+
+/**
+ * PICKING A CHAT TAB (the owner, 2026-10-14: "When the chat is pinned, whenever I select an agent tab, it should bring me
+ * to that agent's view as well"). Pinned: the main view goes to that agent too, the chat pinned beside it. Floating: only
+ * the conversation switches, and the view stays where the person is roaming.
+ */
+export function pickThreadRoute(current: Route, agentId: string, pinned: boolean): string {
+    if (!pinned) return formatRoute({ ...current, chat: agentId });
+    return formatRoute({ ...parseRoute(`genie://agent/${agentId}?tab=stream`), chat: agentId, pin: 'right' });
 }
