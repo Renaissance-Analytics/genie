@@ -131,6 +131,16 @@ export class ProcessSupervisor {
         return true;
     }
 
+    /**
+     * Stop it AND forget it: it leaves `list()`. `stop` keeps a stopped entry so its row stays
+     * visible; a process that was REMOVED must not linger as a stopped row whose Restart revives it.
+     */
+    forget(id: string): boolean {
+        if (!this.stop(id)) return false;
+        this.#entries.delete(id);
+        return true;
+    }
+
     /** Stop the current run and start a new one, by hand: the failure count starts over. */
     restart(id: string): ProcessStatus | null {
         const entry = this.#entries.get(id);

@@ -41,6 +41,7 @@ import { runUpdate } from './toolchain-prober.js';
 import { HOST_TOOLS } from '../core/toolchain.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
+import { ProcessBook } from './process-book.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
@@ -928,6 +929,10 @@ async function boot(): Promise<void> {
      * the .gen front door, composed once (compose.ts). The v1 settings carry-over runs here on first
      * run, from v1's own database under the same ~/.genie.
      */
+    // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
+    // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
+    let processBook: ProcessBook | null = null;
+    const processPorts = (): FeaturePorts => (processBook ? { processes: processBook } : {});
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1021,7 +1026,7 @@ async function boot(): Promise<void> {
                 diagnose: (id) => diagnose(agentOps, id),
             },
             features: {
-                snapshot: () => featureSnapshot(services!, featureState),
+                snapshot: () => featureSnapshot(services!, featureState, processPorts()),
                 act: (action) => handleFeatureAction(services!, action, featureState, featurePorts),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
             },
@@ -1038,7 +1043,7 @@ async function boot(): Promise<void> {
     });
     services = composed;
     const pushFeatures = () => {
-        void featureSnapshot(composed, featureState).then((data) => {
+        void featureSnapshot(composed, featureState, processPorts()).then((data) => {
             if (window && !window.isDestroyed()) window.webContents.send(FEATURE_CHANNELS.changed, data);
             for (const l of featureListeners) l(data);
         });
@@ -1047,6 +1052,15 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
+    // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
+    processBook = await ProcessBook.open(genieHome(), {
+        supervisor: composed.supervisor,
+        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+    });
+    const restoredProcesses = processBook.restore();
+    if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated`);
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
     updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));
@@ -1182,6 +1196,7 @@ async function boot(): Promise<void> {
     composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
     host.subscribe((agentId) => remind(agentId));
     const featurePorts: FeaturePorts = {
+        ...processPorts(),
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: (tool) => runUpdate(tool, { platform: process.platform as 'win32' | 'darwin' | 'linux', packageManager: packageManagerHere() }, execFileRunner, null),
@@ -1201,7 +1216,7 @@ async function boot(): Promise<void> {
         const picked = await dialog.showOpenDialog(window, { title: 'Attach files', properties: ['openFile', 'multiSelections'] });
         return picked.canceled ? [] : picked.filePaths;
     });
-    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState));
+    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);
