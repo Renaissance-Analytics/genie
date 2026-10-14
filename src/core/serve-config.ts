@@ -82,14 +82,18 @@ function rootInside(repoPath: string, root: string): string {
 }
 
 /**
- * The per-site Caddyfile, or `null` for proxy mode (nothing to render). Loopback bind, always.
+ * The per-site Caddyfile, or `null` for proxy mode (nothing to render). Loopback bind, always, and ONLY its own port:
+ * `auto_https off` (else Caddy opens a redirect server on 0.0.0.0:80), `admin off` (else every site's Caddy wants
+ * 127.0.0.1:2019, which the front door holds), and an explicit `http://` address (else a host-qualified address is
+ * served over HTTPS, while the front door proxies in plain HTTP). Measured on the owner's machine, 2026-10-14: one
+ * site's Caddy held :80 and :2019, so the other sites and the front door could not start.
  */
 export function serveCaddyfile(input: CaddyfileInput): string | null {
     const { serve } = input;
     if (serve.mode === 'proxy') return null;
     if (!input.repoPath) throw new Error('a static or php site needs the repo path');
     const root = rootInside(input.repoPath, serve.root);
-    const lines = [`127.0.0.1:${input.sitePort} {`, `\troot * ${root}`];
+    const lines = ['{', '\tauto_https off', '\tadmin off', '}', '', `http://127.0.0.1:${input.sitePort} {`, `\troot * ${root}`];
     if (serve.mode === 'static') {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');

@@ -12,7 +12,9 @@ const LOOPBACK_TARGET = /^127\.0\.0\.1:\d{1,5}$/;
 
 export function frontDoorCaddyfile(routes: readonly GenRoute[]): string {
     for (const r of routes) if (!LOOPBACK_TARGET.test(r.target)) throw new Error(`${r.host} → ${r.target}: the front door proxies loopback targets only`);
-    const blocks: string[] = ['{\n\tdefault_bind 127.0.0.1\n\tauto_https disable_redirects\n}'];
+    // skip_install_trust: Caddy installs its local root into the OS trust store on start unless told not to, which put
+    // an unasked Windows certificate prompt in front of the owner (2026-10-14). Only the person's Trust (trustPlan) may.
+    const blocks: string[] = ['{\n\tdefault_bind 127.0.0.1\n\tskip_install_trust\n\tauto_https disable_redirects\n}'];
     for (const r of routes) blocks.push(`https://${r.host} {\n\ttls internal\n\treverse_proxy ${r.target}\n}`);
     if (routes.length > 0) blocks.push(`${routes.map((r) => `http://${r.host}`).join(', ')} {\n\tredir https://{host}{uri} permanent\n}`);
     return `${blocks.join('\n\n')}\n`;
