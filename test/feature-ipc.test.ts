@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -36,7 +36,8 @@ const onRoster = (id: string, name: string, workspaceId: string): void => {
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-'));
     roster = [];
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
+    // One registered workspace, `tynn`, at the temp dir: a site created in Hosting is kept in ITS project.json.
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, workspaces: () => [{ id: 'tynn', path: dir }] });
 });
 
 afterEach(async () => {
@@ -131,7 +132,8 @@ describe('opening the forms', () => {
 });
 
 describe('submitting the forms', () => {
-    it('hosting.createSite creates the site from a valid form (the route appears); an invalid form rejects with every problem', async () => {
+    it('hosting.createSite creates the site from a valid form (the route appears) and keeps it in project.json; an invalid form rejects with every problem', async () => {
+        await writeFile(join(dir, 'project.json'), `${JSON.stringify({ name: 'tynn', repos: [] }, null, 2)}\n`, 'utf8');
         const snap = await handleFeatureAction(services, {
             kind: 'hosting.createSite',
             workspaceId: 'tynn',
@@ -140,6 +142,8 @@ describe('submitting the forms', () => {
         });
         expect(snap.hosting!.sites.map((s) => [s.host, s.port, s.state])).toEqual([['docs.gen', 5173, 'external']]);
         expect(snap.browser.routes).toEqual([{ host: 'docs.gen', target: '127.0.0.1:5173' }]);
+        const kept = JSON.parse(await readFile(join(dir, 'project.json'), 'utf8')) as { sites: Record<string, unknown> };
+        expect(Object.values(kept.sites)).toEqual([{ repo: '', runMode: 'host', kind: 'http', enabled: true, name: 'docs', genName: 'docs.gen', hostPort: 5173 }]);
         // a refused submit keeps the form open with every problem — shown where it was caused, not logged.
         const refused = await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: dir, form: { name: 'docs', mode: 'proxy', devServer: null, hostPort: null, root: null, spa: false } });
         expect(refused.hosting!.adding!.problems.map((p) => p.field)).toEqual(['name', 'hostPort']);

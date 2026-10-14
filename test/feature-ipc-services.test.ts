@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -54,7 +54,12 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-services-'));
     docker = fakeDocker();
     opened.length = 0;
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run });
+    // Two registered envelopes; a site created from Hosting is kept in its workspace's project.json.
+    for (const ws of ['tynn', 'fancy']) {
+        await mkdir(join(dir, ws), { recursive: true });
+        await writeFile(join(dir, ws, 'project.json'), `${JSON.stringify({ name: ws, repos: [] }, null, 2)}\n`, 'utf8');
+    }
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, workspaces: () => [{ id: 'tynn', path: join(dir, 'tynn') }, { id: 'fancy', path: join(dir, 'fancy') }] });
 });
 
 afterEach(async () => {
@@ -116,12 +121,12 @@ describe('the env a workspace gets', () => {
         const added = await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
         const port = added.services!.instances[0]!.instance.publishedPort;
         const site = { name: 'tynn', mode: 'proxy' as const, devServer: { stack: 'node' as const, command: 'npm run dev -- --port {port}' }, hostPort: null, root: null, spa: false };
-        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: '/w/tynn', form: site }, state());
+        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'tynn', repoPath: join(dir, 'tynn'), form: site }, state());
         const dev = opened.find((o) => o.command?.startsWith('npm run dev'));
         expect(dev?.env).toMatchObject({ DB_PORT: String(port), PGPORT: String(port), DB_DATABASE: 'tynn', DB_USERNAME: 'genie' });
         expect(dev?.env?.DB_PASSWORD).toMatch(/.+/);
 
-        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'fancy', repoPath: '/w/fancy', form: { ...site, name: 'fancy' } }, state());
+        await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'fancy', repoPath: join(dir, 'fancy'), form: { ...site, name: 'fancy' } }, state());
         const other = opened.filter((o) => o.command?.startsWith('npm run dev')).at(-1);
         // Positive control above; here the ABSENCE is the claim: no engines, no service env.
         expect(other?.env ?? {}).not.toHaveProperty('DB_PORT');

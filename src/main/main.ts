@@ -968,6 +968,10 @@ async function boot(): Promise<void> {
         // A plain list, never `registry.snapshot()`: the snapshot builds the Deck's items, which ask this roster for
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
+        // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
+        // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
+        workspaces: () => registry?.listWorkspaces() ?? [],
+        onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time

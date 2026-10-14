@@ -41,6 +41,8 @@ import { ServiceDriver, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager } from './site-manager.js';
+import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
+import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
 import { execFileRunner } from './toolchain-runner.js';
 
@@ -93,6 +95,13 @@ export interface ComposeInput {
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
      */
     readonly roster?: () => readonly AgentRecord[];
+    /**
+     * The registered workspaces (id, folder, asleep), late-bound like the roster. Their envelopes' `sites`
+     * are what Hosting lists and serves (§6.6); absent = no workspaces, no declared sites.
+     */
+    readonly workspaces?: () => readonly WorkspaceRef[];
+    /** Fires when the registered workspaces change — one added, removed, hibernated or woken. */
+    readonly onWorkspacesChange?: (listener: () => void) => () => void;
 }
 
 /** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
@@ -109,6 +118,8 @@ export interface ComposedServices {
     readonly settings: SettingsStore;
     readonly supervisor: ProcessSupervisor;
     readonly sites: SiteManager;
+    /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
+    readonly envelopeSites: EnvelopeSites;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
     readonly frontDoor: GenRouterServer;
@@ -294,6 +305,20 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         },
     });
     const routes = () => sites.routes();
+    // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
+    const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
+    const envelopeSites = new EnvelopeSites(sites, {
+        fs: nodeEnvelopeFs(),
+        runState: {
+            load: async () => {
+                const data = await readJson<{ stopped?: unknown }>(siteRunState, { stopped: [] });
+                return Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [];
+            },
+            save: (stopped) => writeJsonAtomic(siteRunState, { stopped }),
+        },
+        envFor: (workspaceId) => engines.envFor(workspaceId),
+        log: (line) => console.error(line),
+    });
     const frontDoor = new GenRouterServer(routes);
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
@@ -326,6 +351,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         hostsPath: hostsFilePath(process.platform),
         runElevated: input.runElevated ?? ((step) => runElevatedViaOs(process.platform, step, elevationRun)),
     });
+    // The workspaces' declared sites, after the front door so it re-renders as they start. Awaited: Hosting's
+    // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
+    const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
+    await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
+    const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
+    }) ?? (() => {});
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
@@ -343,6 +375,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         settings,
         supervisor,
         sites,
+        envelopeSites,
         engines,
         frontDoor,
         approvals,
@@ -447,6 +480,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         shutdown: () => {
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
+                stopWatchingWorkspaces();
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();

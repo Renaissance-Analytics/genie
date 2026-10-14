@@ -158,3 +158,63 @@ describe('change events', () => {
         expect(seen).toEqual(['docs.gen', '', '']);
     });
 });
+
+describe('declared sites — known before, or without, a start (§6.6: a workspace’s envelope declares them)', () => {
+    it('declare lists a site as stopped with no port and starts nothing; start serves it; a second start of a running site does nothing', () => {
+        const { pty, sites } = make();
+        const info = sites.declare({ name: 'docs', workspaceId: 'acme', repoPath: '/repos/docs', serve: { mode: 'static', root: 'dist', spa: true } });
+        expect(info).toMatchObject({ id: 'site_docs', host: 'docs.gen', state: 'stopped', port: null, processIds: [], problem: null });
+        expect(pty.opened).toHaveLength(0);
+        expect(sites.routes()).toEqual([]);
+        expect(sites.start('site_docs')).toMatchObject({ state: 'running', port: 4101, processIds: ['site_docs'] });
+        expect(pty.opened).toHaveLength(1);
+        expect(sites.routes()).toEqual([{ host: 'docs.gen', target: '127.0.0.1:4101' }]);
+        sites.start('site_docs');
+        expect(pty.opened).toHaveLength(1);
+        // Stop, then start again: a stopped site comes back.
+        sites.stop('site_docs');
+        expect(sites.start('site_docs').state).toBe('running');
+        expect(pty.opened).toHaveLength(2);
+    });
+
+    it('a declared name is taken: create and declare refuse a second site at it', () => {
+        const { sites } = make();
+        sites.declare({ name: 'docs', workspaceId: 'acme', repoPath: '/r', serve: { mode: 'proxy' }, hostPort: 1 });
+        expect(() => sites.create({ name: 'docs', workspaceId: 'other', repoPath: '/r2', serve: { mode: 'proxy' }, hostPort: 2 })).toThrow(/docs\.gen is already a site/);
+        expect(() => sites.declare({ name: 'docs', workspaceId: 'other', repoPath: '/r2', serve: { mode: 'proxy' }, hostPort: 2 })).toThrow(/docs\.gen is already a site/);
+    });
+
+    it('a refused start throws the reason, keeps it on the site as its problem, and starts nothing', () => {
+        const { pty, sites } = make({ caddyBin: null });
+        sites.declare({ name: 'shop', workspaceId: 'acme', repoPath: '/repos/shop', serve: { mode: 'php', root: 'public' } });
+        expect(() => sites.start('site_shop')).toThrow(/bundled Caddy/);
+        expect(sites.get('site_shop')).toMatchObject({ state: 'stopped', problem: expect.stringMatching(/bundled Caddy/) });
+        expect(pty.opened).toHaveLength(0);
+        expect(() => sites.start('site_nope')).toThrow(/no site site_nope/);
+    });
+
+    it('a php root that escapes the repo is refused before the php worker starts', () => {
+        const { pty, sites } = make();
+        sites.declare({ name: 'shop', workspaceId: 'acme', repoPath: '/repos/shop', serve: { mode: 'php', root: '../../etc' } });
+        expect(() => sites.start('site_shop')).toThrow(/escapes the repo/);
+        expect(pty.opened).toHaveLength(0);
+    });
+
+    it('an unservable declaration is listed with its reason — never started, never routed, removable', () => {
+        const { pty, sites } = make();
+        const info = sites.declareUnservable({ workspaceId: 'acme', name: 'wallet', host: 'wallet.gen', repoPath: '/repos/api', reason: 'it runs inside the workspace container', key: 'aaaa000000000005' });
+        expect(info).toMatchObject({ id: 'site_acme_aaaa000000000005', host: 'wallet.gen', workspaceId: 'acme', state: 'unservable', serve: null, port: null, problem: 'it runs inside the workspace container' });
+        expect(sites.list('acme')).toHaveLength(1);
+        expect(() => sites.start(info.id)).toThrow(/cannot be served/);
+        expect(pty.opened).toHaveLength(0);
+        expect(sites.routes()).toEqual([]);
+        expect(sites.remove(info.id)).toBe(true);
+        expect(sites.list()).toEqual([]);
+    });
+
+    it('`{port}` in a dev server’s env is the allocated port — a dev server that reads PORT is told it', () => {
+        const { pty, sites } = make();
+        sites.create({ name: 'api', workspaceId: 'acme', repoPath: '/repos/api', serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'python dev.py' }, env: { PORT: '{port}', DB_PORT: '5432' } });
+        expect(pty.opened[0]).toMatchObject({ command: 'python dev.py', env: { PORT: '4101', DB_PORT: '5432' } });
+    });
+});
