@@ -155,7 +155,7 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'toolchain' | 'inbox' | 'workspace' | 'settings';
+export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'browser' | 'toolchain' | 'inbox' | 'workspace' | 'settings';
 
 /**
  * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
@@ -175,6 +175,8 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     // Labelled rows, not palette-only (the owner, 2026-10-14: "WTF happened to all of our genie sites and bg processes
     // features?" — Hosting, Toolchain and AgentInbox were built, served, and reachable from nowhere).
     if (servable.includes('hosting')) rows.push('hosting');
+    // The Genie Browser (the owner: "we are missing the Genie Browser for testing and access to sites").
+    if (servable.includes('browser')) rows.push('browser');
     if (servable.includes('toolchain')) rows.push('toolchain');
     if (servable.includes('inbox')) rows.push('inbox');
     if (servable.includes('workspace')) rows.push('workspace');
