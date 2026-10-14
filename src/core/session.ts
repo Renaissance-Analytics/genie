@@ -85,7 +85,7 @@ export interface DriverEvents {
      * idle, which is the most expensive possible rendering: indistinguishable from one that is
      * simply waiting for you.
      */
-    onProtocolError?: (problem: string) => void;
+    onProtocolError?: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     /** The provider's own output. Not a fault on its own — plenty of tools log here normally. */
     onStderr?: (line: string) => void;
     /**
@@ -384,7 +384,16 @@ export class AgentSession {
             ...(resumeSessionId ? { resumeSessionId } : {}),
             events: {
                 onUpdate: (update) => void this.#ingest(update),
-                onProtocolError: (problem) => {
+                onProtocolError: (problem, detail) => {
+                    /*
+                     * ONE thing lost, the session going on (prism-acp >= 0.13 says so: a frame it could not read, a
+                     * temporary file it could not remove). A warning row in the stream, the state untouched. Taking it as
+                     * the session's death painted a working agent `Broken` until its next turn (the owner, 2026-10-14).
+                     */
+                    if (detail?.recoverable === true) {
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: problem });
+                        return;
+                    }
                     this.#turnState = 'failed';
                     this.#changed();
                     /*
