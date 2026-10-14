@@ -1,5 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@particle-academy/prism-acp';
+import type { AgentId, AgentRecord } from '../core/identity.js';
+import type { Caller } from './mcp-tools.js';
+import { OS_WORKSPACE } from './registry.js';
 
 /**
  * WHO IS CALLING GENIE'S MCP, for an agent SESSION. A Take Over window passes its terminal's id as `terminalId`; an
@@ -23,6 +26,20 @@ export class CallerBook {
     agentFor(key: string): string | null {
         return this.#byKey.get(key) ?? null;
     }
+}
+
+/**
+ * The agent a session key belongs to, as a caller of Genie's tools: its workspace's path, or — for genie, the workstation
+ * agent, which belongs to no workspace record — its own home. `null` for a key nobody minted or an agent that is gone.
+ * Normal Genie and doctor mode both resolve sessions through this one function: the first version lived in main.ts,
+ * required a workspace record, and so answered "Genie does not know this session" to every call genie itself made.
+ */
+export function sessionCallerOf(book: CallerBook, key: string, look: { find(id: AgentId): AgentRecord | null; workspace(id: string): { path: string } | null }, osaDir: string): Caller | null {
+    const id = book.agentFor(key);
+    const record = id ? look.find(id as AgentId) : null;
+    if (!record) return null;
+    const path = record.workspaceId === OS_WORKSPACE ? osaDir : look.workspace(record.workspaceId)?.path ?? null;
+    return path === null ? null : { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: path };
 }
 
 /**

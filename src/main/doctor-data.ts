@@ -1,8 +1,9 @@
 import { readFile, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ToolDefinition, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AgentRecord } from '../core/identity.js';
 import { openDurableStore, readHistory } from '../core/thread-store.js';
+import { workspaceDisplayName } from '../core/workspace-name.js';
 import type { Registration } from './mcp-tools.js';
 import { sessionsDir } from './paths.js';
 import { OS_WORKSPACE } from './registry.js';
@@ -37,14 +38,9 @@ async function exists(path: string): Promise<boolean> {
     try { await stat(path); return true; } catch { return false; }
 }
 
-/** How a workspace is NAMED: its project.json name, else its folder — never its id. */
+/** How a workspace is NAMED: as every surface names it (core/workspace-name.ts) — project.json's name, else the folder. */
 async function nameOf(w: WorkspaceRecord): Promise<string> {
-    const raw = await readText(join(w.path, 'project.json'));
-    try {
-        const name = raw === null ? null : (JSON.parse(raw) as { name?: unknown }).name;
-        if (typeof name === 'string' && name.trim() !== '') return name;
-    } catch { /* an unreadable project.json is named by its folder */ }
-    return basename(w.path);
+    return workspaceDisplayName(await readText(join(w.path, 'project.json')), w.path);
 }
 
 /** One line of a recorded thread, as text a person (or genie) can read. */
@@ -65,15 +61,16 @@ export function doctorDataTools(deps: { genieHome: string }): Registration[] {
     const names = (list: readonly string[]) => (list.length > 0 ? list.join(', ') : 'none');
     const brief = (a: AgentRecord) => ({ name: a.name, provider: a.provider });
 
-    const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[], run: (args: Record<string, unknown>) => Promise<McpToolResult>): Registration => ({
-        definition: new ToolDefinition(name, description, { type: 'object', properties, required } as never),
+    // A TITLE on every tool: prism serializes an absent one as `null`, and Claude then rejects the whole list (mcp-tool-titles.test).
+    const tool = (name: string, title: string, description: string, properties: Record<string, unknown>, required: string[], run: (args: Record<string, unknown>) => Promise<McpToolResult>): Registration => ({
+        definition: new ToolDefinition(name, description, { type: 'object', properties, required } as never, title),
         handler: async (args) => {
             try { return await run(args as Record<string, unknown>); } catch (error) { return err((error as Error).message); }
         },
     });
 
     return [
-        tool('workspaces', 'Every workspace Genie knows, by name, with its agents, and the workstation agent. Reads Genie’s records; changes nothing.', {}, [], async () => {
+        tool('workspaces', 'Workspaces', 'Every workspace Genie knows, by name, with its agents, and the workstation agent. Reads Genie’s records; changes nothing.', {}, [], async () => {
             const data = await load();
             return ok({
                 workspaces: await Promise.all(data.workspaces.map(async (w) => ({
@@ -88,7 +85,7 @@ export function doctorDataTools(deps: { genieHome: string }): Registration[] {
                 ...(store.dropped.length > 0 ? { unreadable: [...store.dropped] } : {}),
             });
         }),
-        tool('loadWorkspace', 'Load ONE workspace to diagnose it: its record, its agents, and the agent files Genie writes into it (present or missing, and whether AGENTS.md and CLAUDE.md match). Reads only.', { workspace: { type: 'string', description: 'The workspace’s name, id or path.' } }, ['workspace'], async (args) => {
+        tool('loadWorkspace', 'Load a workspace', 'Load ONE workspace to diagnose it: its record, its agents, and the agent files Genie writes into it (present or missing, and whether AGENTS.md and CLAUDE.md match). Reads only.', { workspace: { type: 'string', description: 'The workspace’s name, id or path.' } }, ['workspace'], async (args) => {
             const key = typeof args.workspace === 'string' ? args.workspace.trim() : '';
             const data = await load();
             const w = find(data, key);
@@ -103,7 +100,7 @@ export function doctorDataTools(deps: { genieHome: string }): Registration[] {
                 agentFiles: files,
             });
         }),
-        tool('loadAgent', 'Load ONE agent to diagnose it: its record, its persona, and the last rows of its recorded conversation. Leave workspace out for the workstation agent (genie). Reads only.', {
+        tool('loadAgent', 'Load an agent', 'Load ONE agent to diagnose it: its record, its persona, and the last rows of its recorded conversation. Leave workspace out for the workstation agent (genie). Reads only.', {
             workspace: { type: 'string', description: 'The workspace’s name, id or path; leave out for the workstation agent.' },
             agent: { type: 'string', description: 'The agent’s name.' },
             rows: { type: 'number', description: `How many recorded rows to return (default ${HISTORY_ROWS}).` },

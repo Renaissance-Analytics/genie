@@ -62,8 +62,11 @@ export interface OsaHostLike {
     rowsFor(agentId: AgentId): readonly TimedEvent[];
     probe(agentId: AgentId): LiveSession | null;
     subscribe(listener: (agentId: AgentId) => void): () => void;
-    /** Turns finished in this session — counted at each turn's end. */
-    turnsFor(agentId: AgentId): number;
+    /**
+     * Turns ended in THIS run — counted at each turn's end. Not the display number (`turnsFor`), which carries on from
+     * the recorded history: compared with this run's markers it made an ask to a resumed agent return at once, empty.
+     */
+    turnsEndedThisRun(agentId: AgentId): number;
 }
 
 /**
@@ -75,28 +78,28 @@ export interface OsaHostLike {
  * once it is sent; it is done when N turns have finished. Its reply starts where turn N−1 FINISHED (an earlier turn still
  * running when this was sent speaks after this question's marker): the rows from the moment the count reached N−1.
  */
-export function askAndWait(host: OsaHostLike, agentId: AgentId | string, text: string, timeoutMs: number): Promise<{ ok: true; reply: string } | { ok: false; reason: string }> {
+export function askAndWait(host: OsaHostLike, agentId: AgentId | string, text: string, timeoutMs: number, who = 'genie'): Promise<{ ok: true; reply: string } | { ok: false; reason: string }> {
     const id = agentId as AgentId;
-    if (!host.prompt(id, text, 'doctor')) return Promise.resolve({ ok: false, reason: 'genie is not running' });
+    if (!host.prompt(id, text, 'doctor')) return Promise.resolve({ ok: false, reason: `${who} is not running` });
     const sent = host.rowsFor(id);
     const turnN = sent.filter((r) => r.event.kind === 'turn').length;
     let mine = -1;
     for (let i = sent.length - 1; i >= 0; i -= 1) if (sent[i]!.event.kind === 'turn') { mine = i; break; }
     // Where this turn's words begin: after its own marker if nothing was running, else where the turn before it ended.
-    let from: number | null = host.turnsFor(id) >= turnN - 1 ? mine + 1 : null;
+    let from: number | null = host.turnsEndedThisRun(id) >= turnN - 1 ? mine + 1 : null;
     return new Promise((resolve) => {
         let done = false;
         const finish = (r: { ok: true; reply: string } | { ok: false; reason: string }) => { if (done) return; done = true; clearTimeout(timer); off(); resolve(r); };
         const check = () => {
             const s = host.probe(id);
-            if (!s || !s.running) return finish({ ok: false, reason: 'genie stopped before it answered' });
-            const finished = host.turnsFor(id);
+            if (!s || !s.running) return finish({ ok: false, reason: `${who} stopped before it answered` });
+            const finished = host.turnsEndedThisRun(id);
             if (from === null && finished >= turnN - 1) from = Math.max(mine + 1, host.rowsFor(id).length);
             if (finished < turnN || from === null) return;
             const reply = host.rowsFor(id).slice(from).flatMap((r) => (r.event.kind === 'message' && r.event.speaker === 'agent' ? [r.event.text] : [])).join('\n\n');
             finish({ ok: true, reply });
         };
         const off = host.subscribe((changed) => { if (changed === id) check(); });
-        const timer = setTimeout(() => finish({ ok: false, reason: `genie had not finished after ${Math.round(timeoutMs / 1000)} s; read the transcript` }), timeoutMs);
+        const timer = setTimeout(() => finish({ ok: false, reason: `${who} had not finished after ${Math.round(timeoutMs / 1000)} s; read the transcript` }), timeoutMs);
     });
 }

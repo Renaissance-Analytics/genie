@@ -28,7 +28,7 @@ function fakeHost() {
         rowsFor: () => rows as never,
         probe: () => ({ running: true, turnState: state }) as never,
         subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
-        turnsFor: () => turns,
+        turnsEndedThisRun: () => turns,
     };
     // The provider finishes the oldest open turn with these words (and goes idle, as the session does between queued turns).
     const finishTurn = (words: string) => {

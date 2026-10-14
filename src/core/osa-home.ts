@@ -49,6 +49,12 @@ Genie's data is opened only when you ask for it, one workspace and one agent at 
 - \`loadWorkspace\` — one workspace: its record, its agents, and the agent files Genie writes into it.
 - \`loadAgent\` — one agent: its record, its persona, and the last rows of its recorded conversation (leave the workspace out for yourself, genie).
 
+To see an agent's problem happen, run it — one at a time, and only while normal Genie is closed (you are told so if it is not):
+
+- \`startAgent\` — start one agent on its own conversation, with exactly the Genie tools it has in normal Genie.
+- \`askAgent\` — send it a message and get its reply, with every tool call it made and whether each completed or failed. Ask it to quote what a tool answered.
+- \`stopAgent\` — stop it; its conversation and records are kept.
+
 ${factsBlock(facts)}
 
 How to work:

@@ -129,13 +129,13 @@ describe('ask, over a session host', () => {
             rowsFor: () => rows as never,
             probe: () => ({ running: true, turnState: turn }) as never,
             subscribe: (l) => { listeners.add(l); return () => listeners.delete(l); },
-            turnsFor: () => finished,
+            turnsEndedThisRun: () => finished,
         };
         expect(await askAndWait(host, 'osa', 'what is broken?', 1_000)).toEqual({ ok: true, reply: 'the MCP port is taken' });
     });
 
     it('a stopped OSA is a reason, not a hang', async () => {
-        const host: OsaHostLike = { prompt: () => false, rowsFor: () => [], probe: () => null, subscribe: () => () => {}, turnsFor: () => 0 };
+        const host: OsaHostLike = { prompt: () => false, rowsFor: () => [], probe: () => null, subscribe: () => () => {}, turnsEndedThisRun: () => 0 };
         expect(await askAndWait(host, 'osa', 'hi', 1_000)).toMatchObject({ ok: false });
     });
 });

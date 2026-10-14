@@ -6,6 +6,8 @@ import { agentRecord, mintAgentId } from '../core/identity.js';
 import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import { doctorDataTools } from './doctor-data.js';
+import { DoctorRun } from './doctor-run.js';
+import { genieRunningNow } from './genie-running-file.js';
 import { askAndWait, doctorTools, type DoctorOsa } from './doctor-mcp.js';
 import { genieMcpServer } from './mcp-server.js';
 import { genieHome, installDir } from './paths.js';
@@ -57,7 +59,21 @@ export async function runDoctor(): Promise<void> {
 
     // GENIE'S OWN TOOLS IN DOCTOR MODE (the owner, 2026-10-13): Genie's data on demand — one workspace and one agent at a
     // time, read only (doctor-data.ts). Nothing under ~/.genie is opened until genie calls one of them.
-    const dataServer = genieMcpServer({ registrations: doctorDataTools({ genieHome: genieHome() }), port: 0 });
+    // …and ONE of them started, on its real thread with Genie's real tools — never while normal Genie runs (doctor-run.ts).
+    const run = new DoctorRun({
+        genieHome: genieHome(),
+        genieRunning: () => genieRunningNow(genieHome()),
+        // genie's NORMAL home (~/.genie/osa), exactly as normal Genie's boot writes it — it runs here as itself.
+        prepareOsaHome: () => writeOsaHome({
+            dir: join(genieHome(), 'osa'),
+            files: osaHomeFiles('normal', facts),
+            fs: {
+                read: async (p) => { try { return await readFile(p, 'utf8'); } catch { return null; } },
+                write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFile(p, text, 'utf8'); },
+            },
+        }).then(() => undefined),
+    });
+    const dataServer = genieMcpServer({ registrations: [...doctorDataTools({ genieHome: genieHome() }), ...run.tools()], port: 0 });
     const data = await dataServer.start();
     const host = new SessionHost({
         userData: doctorDir,
@@ -112,5 +128,6 @@ export async function runDoctor(): Promise<void> {
         host.stop(record.id);
         void server.stop();
         void dataServer.stop();
+        void run.stop();
     });
 }
