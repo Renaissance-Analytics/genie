@@ -241,8 +241,14 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                                         <li key={s.id} data-site={s.id} className="flex items-center gap-3 px-5 py-2">
                                             <span className="font-mono">{s.host}</span>
                                             <Badge variant="soft" size="sm">{s.state}</Badge>
-                                            <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span>
-                                            <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
+                                            {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
+                                            {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
+                                            {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
+                                            {s.state === 'running' || s.state === 'restarting' || s.state === 'external' ? (
+                                                <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
+                                            ) : s.state === 'unservable' ? null : (
+                                                <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>
+                                            )}
                                         </li>
                                     ))}
                                 </ul>

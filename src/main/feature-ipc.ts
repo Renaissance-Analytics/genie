@@ -155,7 +155,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const f = action.form;
             // The workspace's service env (its engines + the shared ones) reaches every process of the site.
             const env = services.engines.envFor(action.workspaceId);
-            services.sites.create({
+            // Kept in the workspace's envelope (project.json `sites`), so it is there on the next launch.
+            await services.envelopeSites.create({
                 ...(Object.keys(env).length > 0 ? { env } : {}),
                 name: f.name,
                 workspaceId: action.workspaceId,
@@ -185,11 +186,17 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.syncHosts':
             await services.syncHosts();
             break;
+        case 'hosting.startSite':
+            // The person's Start: serves a listed site that is not running, and lifts a remembered Stop.
+            await services.envelopeSites.start(action.siteId);
+            break;
         case 'hosting.stopSite':
-            if (!services.sites.stop(action.siteId)) throw new Error(`no site ${action.siteId}`);
+            // The person's Stop, remembered on this machine: the next launch leaves it down.
+            if (!(await services.envelopeSites.stop(action.siteId))) throw new Error(`no site ${action.siteId}`);
             break;
         case 'hosting.removeSite':
-            if (!services.sites.remove(action.siteId)) throw new Error(`no site ${action.siteId}`);
+            // Removed from the workspace's envelope too, so it does not come back on the next launch.
+            if (!(await services.envelopeSites.remove(action.siteId))) throw new Error(`no site ${action.siteId}`);
             break;
         // A process the person keeps goes through the book, so their start/stop is written down and
         // holds through a restart; a site's or the front door's process is the supervisor's alone.

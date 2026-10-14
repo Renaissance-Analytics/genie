@@ -157,6 +157,7 @@ export type FeatureAction =
     | { kind: 'hosting.trustCertificate' }
     /** Try the hosts block again after a declined prompt. */
     | { kind: 'hosting.syncHosts' }
+    | { kind: 'hosting.startSite'; siteId: string }
     | { kind: 'hosting.stopSite'; siteId: string }
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }
