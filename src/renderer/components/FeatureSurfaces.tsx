@@ -249,20 +249,7 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
-                            {hosting.processes.length === 0 ? (
-                                <Empty>No background processes.</Empty>
-                            ) : (
-                                <ul className="divide-y divide-[var(--border-1)]">
-                                    {hosting.processes.map((p) => (
-                                        <li key={p.id} data-process={p.id} className="flex items-center gap-3 px-5 py-2">
-                                            <span className="font-medium">{p.name}</span>
-                                            <Badge variant="soft" size="sm">{p.state}</Badge>
-                                            {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
-                                            <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
+                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
                             <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} />
@@ -304,6 +291,77 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
                 </div>
             ) : null}
         </>
+    );
+}
+
+/**
+ * BACKGROUND PROCESSES (§6.6). The form adds one the person KEEPS: Genie starts it now, writes it
+ * down, and brings it back on every launch until they stop it. A running process offers Stop and
+ * Restart; a kept one that is not running offers Start and Remove (a stop is durable, so it stays
+ * listed). A site's process is the site's: Remove is never offered for it here.
+ */
+function ProcessesPanel({ processes, workspaces, onAction }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+    const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
+    const button = 'text-[13px]';
+    return (
+        <div className="flex flex-col">
+            <form
+                data-form="add-process"
+                className="flex flex-wrap items-center gap-2 px-5 py-2"
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
+                    if (!w) return;
+                    const f = new FormData(e.currentTarget);
+                    const folder = String(f.get('folder') ?? '').trim();
+                    onAction({
+                        kind: 'hosting.createProcess',
+                        workspaceId: w.id,
+                        workspacePath: w.path,
+                        name: String(f.get('name') ?? ''),
+                        command: String(f.get('command') ?? ''),
+                        ...(folder ? { folder } : {}),
+                        restart: String(f.get('restart') ?? 'on-failure') as 'never' | 'on-failure' | 'always',
+                    });
+                }}
+            >
+                <WorkspacePick workspaces={workspaces} name="workspace" />
+                <Input name="name" required placeholder="Name (queue worker)" aria-label="Name" />
+                <Input name="command" required placeholder="Command (php artisan queue:work)" aria-label="Command" />
+                <Input name="folder" placeholder="Folder in the workspace (optional)" aria-label="Folder" />
+                <select name="restart" defaultValue="on-failure" aria-label="Restart" className={field}>
+                    <option value="on-failure">Restart on failure</option>
+                    <option value="always">Always restart</option>
+                    <option value="never">Never restart</option>
+                </select>
+                <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                    Add a process
+                </button>
+            </form>
+            {processes.length === 0 ? (
+                <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
+            ) : (
+                <ul className="divide-y divide-[var(--border-1)]">
+                    {processes.map((p) => {
+                        const up = p.state === 'running' || p.state === 'restarting';
+                        return (
+                            <li key={p.id} data-process={p.id} className="flex items-center gap-3 px-5 py-2">
+                                <span className="font-medium">{p.name}</span>
+                                <Badge variant="soft" size="sm">{p.state}</Badge>
+                                {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+                                {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
+                                <span className="ml-auto flex shrink-0 items-center gap-3">
+                                    {up ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</button> : null}
+                                    {up || !p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</button> : null}
+                                    {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</button> : null}
+                                    {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</button> : null}
+                                </span>
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+        </div>
     );
 }
 

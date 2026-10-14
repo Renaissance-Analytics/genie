@@ -10,6 +10,7 @@ import type { FlowAdding, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAd
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
+import type { ProcessBook } from './process-book.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 
 /**
@@ -25,8 +26,10 @@ import type { FeatureAction, FeatureData } from '../renderer/features.js';
  * are "not asked yet", drawn as skeletons, never as empties.
  */
 
-/** What main wires in that the tests inject: the toolchain prober/updater with its clock. */
+/** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** The background processes the person keeps (§6.6): written down, restored on launch. */
+    readonly processes?: ProcessBook;
     readonly toolchain?: {
         probe(): Promise<ToolStatus[]>;
         update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
@@ -49,13 +52,14 @@ export interface FeatureState {
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
-export async function featureSnapshot(services: ComposedServices, state: FeatureState): Promise<FeatureData> {
+export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
     const hits = state.knowledgeQuery ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits : null;
     const peers = services.agentAddresses().map((a) => ({ address: a.address, name: a.name, reachable: true }));
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
-        hosting: { sites: services.sites.list(), processes: services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
+        // The kept processes are listed even when not running (a stop is durable, never a disappearance).
+        hosting: { sites: services.sites.list(), processes: ports.processes ? ports.processes.list() : services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered.
         services: { instances: await Promise.all(services.engines.list().map(async (instance) => ({ instance, status: (await services.engines.status(instance.id)).state }))), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
@@ -183,11 +187,30 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.removeSite':
             if (!services.sites.remove(action.siteId)) throw new Error(`no site ${action.siteId}`);
             break;
+        // A process the person keeps goes through the book, so their start/stop is written down and
+        // holds through a restart; a site's or the front door's process is the supervisor's alone.
         case 'hosting.restartProcess':
-            if (!services.supervisor.restart(action.processId)) throw new Error(`no process ${action.processId}`);
+            if (ports.processes?.owns(action.processId)) await ports.processes.restart(action.processId);
+            else if (!services.supervisor.restart(action.processId)) throw new Error(`no process ${action.processId}`);
             break;
         case 'hosting.stopProcess':
-            if (!services.supervisor.stop(action.processId)) throw new Error(`no process ${action.processId}`);
+            if (ports.processes?.owns(action.processId)) await ports.processes.stop(action.processId);
+            else if (!services.supervisor.stop(action.processId)) throw new Error(`no process ${action.processId}`);
+            break;
+        case 'hosting.createProcess': {
+            const book = ports.processes;
+            if (!book) throw new Error('no process book is wired into this Genie; a background process cannot be kept');
+            await book.create({ workspaceId: action.workspaceId, workspacePath: action.workspacePath, name: action.name, command: action.command, folder: action.folder, restart: action.restart });
+            break;
+        }
+        case 'hosting.startProcess':
+            if (!ports.processes?.owns(action.processId)) throw new Error(`no background process ${action.processId} that you keep`);
+            await ports.processes.start(action.processId);
+            break;
+        case 'hosting.removeProcess':
+            // A site's process goes with its site; only one the person keeps is removed here.
+            if (!ports.processes?.owns(action.processId)) throw new Error(`no background process ${action.processId} that you keep; a site's process is removed with its site`);
+            await ports.processes.remove(action.processId);
             break;
         case 'services.add':
             next.serviceAdding = { workspaceId: action.workspaceId, defaults: serviceFormDefaults({ workspaceId: action.workspaceId }), problems: [], consent: null };
@@ -373,6 +396,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
     }
-    return featureSnapshot(services, next);
+    return featureSnapshot(services, next, ports);
 }
 

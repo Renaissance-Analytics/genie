@@ -15,7 +15,8 @@ import type { PluginEntry } from '../main/plugin-host.js';
 import type { Device } from '../main/remote-devices.js';
 
 export type { FrontDoorStatus };
-import type { ProcessStatus } from '../main/process-supervisor.js';
+import type { HostedProcess } from '../main/process-book.js';
+import type { RestartPolicy } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
 
 /**
@@ -108,7 +109,7 @@ export interface PluginsSection {
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
-    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly ProcessStatus[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
+    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
     readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
@@ -160,6 +161,11 @@ export type FeatureAction =
     | { kind: 'hosting.removeSite'; siteId: string }
     | { kind: 'hosting.restartProcess'; processId: string }
     | { kind: 'hosting.stopProcess'; processId: string }
+    /** Add a background process the person keeps (§6.6): started now, written down, brought back on launch. */
+    | { kind: 'hosting.createProcess'; workspaceId: string; workspacePath: string; name: string; command: string; folder?: string; restart: RestartPolicy }
+    /** Start a kept process the person stopped; the start is written down too. */
+    | { kind: 'hosting.startProcess'; processId: string }
+    | { kind: 'hosting.removeProcess'; processId: string }
     | { kind: 'services.add'; workspaceId: string }
     | { kind: 'services.cancelForm' }
     /** The Add-an-engine form, submitted. `consent: true` is the person's answer to the pull question. */
