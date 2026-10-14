@@ -33,6 +33,8 @@ export const ICON_NAMES: readonly string[] = [
     // chrome
     'search', 'inbox', 'layout-list', 'sparkles',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
+    // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
+    'server', 'mail', 'moon',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.
     'folder-tree',
     // The workspace's popped-out-files bar (the board).
