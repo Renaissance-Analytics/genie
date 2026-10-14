@@ -1196,6 +1196,12 @@ async function boot(): Promise<void> {
     void remoteSocket.start().then(pushFeatures, pushFeatures);
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
+    // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
+    // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
+    registry.setDeckSource(() => composed.deckItems());
+    // A question asked or answered, a list item, a finished agent: the snapshot (and so the Deck, its badge and the
+    // "an agent asks you something" alert) follows at once.
+    composed.attention.onChange(() => registry?.touch());
     // §6.4 REMINDERS, event-driven: a message landing for an agent, or that agent's session changing (a turn
     // ending), never a poll. Only an IDLE agent is told; the book keeps the gap. Other agents' gaps are untouched
     // when one agent is being considered.

@@ -51,6 +51,7 @@ export class Registry {
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
     #loaded = false;
@@ -105,6 +106,17 @@ export class Registry {
     /** How a workspace is NAMED in every surface: project.json's name, else the folder — never the id (beta.7 showed 26 ULIDs). */
     setWorkspaceNamer(namer: (path: string) => string): void {
         this.#namer = namer;
+        if (this.#loaded) this.#emit();
+    }
+
+    /**
+     * Everything else the Deck holds, from the composition root: questions agents asked (ForceTheQuestion), the things
+     * only a person can do, unread mail to the person, finished agents, Genie's own tool approvals. The snapshot carried
+     * only live sessions' permission requests, and this source was built and never read, so no question ever reached the
+     * Deck (the owner, 2026-10-14).
+     */
+    setDeckSource(source: () => readonly DeckItem[]): void {
+        this.#deckSource = source;
         if (this.#loaded) this.#emit();
     }
 
@@ -218,7 +230,12 @@ export class Registry {
      * `blocking: true` without exception — a parked approval means the agent has STOPPED. That
      * is the strongest claim the band can carry and it is literally true here.
      */
+    /** Live sessions' permission requests, then everything the composition root's Deck source holds. */
     #deckItems(): readonly DeckItem[] {
+        return [...this.#sessionApprovals(), ...this.#deckSource()];
+    }
+
+    #sessionApprovals(): DeckItem[] {
         return this.#agents.flatMap((record): DeckItem[] => {
             const live = this.#probe(record.id);
             const approval = live?.pendingApproval;
