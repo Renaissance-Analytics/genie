@@ -295,5 +295,17 @@ export class AttentionStore {
 
     async #flush(): Promise<void> {
         await writeJsonAtomic(this.#file, this.#data);
+        // Every change lands here, so here is where it is announced: the Deck reads questions, the person's list and
+        // finished agents from this store, and a Deck that is not told shows nothing (the owner, 2026-10-14: "I have not
+        // seen FTQ modals pop up at all").
+        for (const listener of this.#changeListeners) listener();
+    }
+
+    readonly #changeListeners = new Set<() => void>();
+
+    /** Something the Deck shows changed: a question asked or answered, a list item, a finished agent. */
+    onChange(listener: () => void): () => void {
+        this.#changeListeners.add(listener);
+        return () => this.#changeListeners.delete(listener);
     }
 }
