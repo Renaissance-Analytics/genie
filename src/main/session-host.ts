@@ -228,6 +228,7 @@ export class SessionHost {
     readonly #processTree: ProcessTree | undefined;
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
+    readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
 
     /**
      * `processTree` is INJECTABLE, and that is not a convenience — it is a safety fix.
@@ -266,6 +267,11 @@ export class SessionHost {
          * `null` = not measured, and the cell stays blank rather than claiming nobody.
          */
         comms?: (agentId: AgentId, since: number) => Comms | null;
+        /**
+         * Something else is running an agent in this one's workspace and holds it — doctor mode beside this Genie
+         * (core/genie-running.ts). Answers the reason, or `null` when it may start. Absent = nothing holds anything.
+         */
+        heldElsewhere?: (record: AgentRecord) => string | null;
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
@@ -274,11 +280,17 @@ export class SessionHost {
         this.#processTree = options.processTree;
         this.#onThreadId = options.onThreadId;
         this.#comms = options.comms;
+        this.#heldElsewhere = options.heldElsewhere;
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
     get count(): number {
         return this.#running.size;
+    }
+
+    /** Which agents have a live session — what this Genie publishes for doctor mode (core/genie-running.ts). */
+    startedIds(): AgentId[] {
+        return [...this.#running.keys()];
     }
 
     subscribe(listener: (agentId: AgentId) => void): () => void {
@@ -296,6 +308,10 @@ export class SessionHost {
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
+
+        // Two processes driving one workspace's agents is how a conversation forks: a hold is a refusal, said.
+        const held = this.#heldElsewhere?.(record) ?? null;
+        if (held !== null) return { ok: false, reason: held };
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers });

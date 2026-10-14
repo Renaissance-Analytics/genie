@@ -62,6 +62,8 @@ export async function runDoctor(): Promise<void> {
     // …and ONE of them started, on its real thread with Genie's real tools — never while normal Genie runs (doctor-run.ts).
     const run = new DoctorRun({
         genieHome: genieHome(),
+        // Doctor's own copies of Genie's stores when it runs beside a running Genie — in doctor's own folder, never Genie's.
+        besideHome: join(doctorDir, 'beside'),
         genieRunning: () => genieRunningNow(genieHome()),
         // genie's NORMAL home (~/.genie/osa), exactly as normal Genie's boot writes it — it runs here as itself.
         prepareOsaHome: () => writeOsaHome({

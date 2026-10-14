@@ -57,12 +57,12 @@ function fakeDrivers() {
     return { started, driverFor };
 }
 
-function doctorRun(running: { running: true; pid: number } | { running: false }) {
+function doctorRun(running: { running: true; pid: number; agents: readonly string[] | null } | { running: false }) {
     const drivers = fakeDrivers();
     const prepared: string[] = [];
     // genie's home is written before genie starts (normal Genie's boot writes it; doctor must not depend on that).
     const prepareOsaHome = async () => { await mkdir(join(home, 'osa'), { recursive: true }); prepared.push('osa'); };
-    const run = new DoctorRun({ genieHome: home, genieRunning: () => running, prepareOsaHome, driverFor: drivers.driverFor, processTree: tree });
+    const run = new DoctorRun({ genieHome: home, besideHome: join(home, 'doctor-beside'), genieRunning: () => running, prepareOsaHome, driverFor: drivers.driverFor, processTree: tree });
     runs.push(run);
     const call = async (name: string, args: Record<string, unknown>) => {
         const tool = run.tools().find((t) => t.definition.name === name)!;
@@ -93,7 +93,9 @@ async function listAsClaude(server: McpServer): Promise<string[]> {
 describe('is normal Genie running?', () => {
     it('a live pid that is not doctor itself; a dead pid, garbage, no file, or our own pid is not', () => {
         const alive = (pid: number) => pid === 4242 || pid === 7;
-        expect(genieRunningFrom(JSON.stringify({ pid: 4242 }), alive, 7)).toEqual({ running: true, pid: 4242 });
+        // A Genie that did not say which agents it runs (an older build): `agents: null`, which doctor treats as "it may be any".
+        expect(genieRunningFrom(JSON.stringify({ pid: 4242 }), alive, 7)).toEqual({ running: true, pid: 4242, agents: null });
+        expect(genieRunningFrom(JSON.stringify({ pid: 4242, agents: ['agent_a'] }), alive, 7)).toEqual({ running: true, pid: 4242, agents: ['agent_a'] });
         expect(genieRunningFrom(JSON.stringify({ pid: 999 }), alive, 7)).toEqual({ running: false });
         expect(genieRunningFrom(JSON.stringify({ pid: 7 }), alive, 7)).toEqual({ running: false });
         expect(genieRunningFrom('not json', alive, 7)).toEqual({ running: false });
@@ -109,12 +111,15 @@ describe('is normal Genie running?', () => {
 });
 
 describe('starting a loaded agent', () => {
-    it('is refused while normal Genie runs — says why, starts nothing (the control: with Genie closed it starts exactly one)', async () => {
-        const blocked = doctorRun({ running: true, pid: 4242 });
+    // Changed 2026-10-14 (the owner: "doctor should be able to profile an agent even while we have genie open. It should
+    // be able to load any Active workspace that has no started agents"). Refused now only when the running Genie cannot
+    // say what it runs (an older build) — the beside-Genie rules are in doctor-beside.test.ts.
+    it('is refused while a Genie that does not say which agents it runs is running — says why, starts nothing (the control: with Genie closed it starts exactly one)', async () => {
+        const blocked = doctorRun({ running: true, pid: 4242, agents: null });
         const r = await blocked.call('startAgent', { workspace: 'tynn.ai', agent: 'kai' });
         expect(r.isError).toBe(true);
         expect(r.json.error).toMatch(/Genie is running/);
-        expect(r.json.error).toMatch(/close/i);
+        expect(r.json.error).toMatch(/restart Genie|close/i);
         expect(blocked.started).toHaveLength(0);
 
         const free = doctorRun({ running: false });

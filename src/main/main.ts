@@ -67,7 +67,7 @@ import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
-import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
+import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -395,8 +395,9 @@ const featureListeners = new Set<(data: FeatureData) => void>();
 async function boot(): Promise<void> {
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
-    // Doctor mode reads this to know normal Genie is running (and so refuses to start agents beside it).
-    markGenieRunning(genieHome());
+    // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
+    // an agent beside it only in an awake workspace where none of those is running (core/genie-running.ts).
+    markGenieRunning(genieHome(), []);
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
@@ -404,6 +405,13 @@ async function boot(): Promise<void> {
     theRegistry.setWorkspaceNamer(workspaceNameFor);
     host = new SessionHost({
         userData: genieHome(),
+        // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
+        heldElsewhere: (record) => {
+            const hold = doctorHoldNow(genieHome());
+            return hold !== null && hold.workspaceId === record.workspaceId
+                ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
+                : null;
+        },
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -1238,8 +1246,12 @@ async function boot(): Promise<void> {
     registry.subscribe((snapshot) => {
         if (window && !window.isDestroyed()) window.webContents.send('genie:changed', snapshot);
     });
+    let published = '';
     host.subscribe((agentId) => {
         pushAgent(agentId);
+        // Which agents are started, for doctor mode — rewritten only when that set changes.
+        const started = host?.startedIds().sort() ?? [];
+        if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieHome(), started); }
         // A model or tool setting waiting for this agent to be free applies the moment it is.
         settingApplier?.changed(agentId);
         // A ledger row can change a Dashboard cell — a plan step, a context figure — so the

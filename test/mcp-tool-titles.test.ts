@@ -46,7 +46,7 @@ describe('every tool Genie serves', () => {
         }))],
         ['the doctor channel', () => doctorTools(osa, facts)],
         ['doctor genie’s data tools', () => doctorDataTools({ genieHome: home })],
-        ['doctor genie’s run tools', () => new DoctorRun({ genieHome: home, genieRunning: () => ({ running: false }), prepareOsaHome: async () => {} }).tools()],
+        ['doctor genie’s run tools', () => new DoctorRun({ genieHome: home, besideHome: home, genieRunning: () => ({ running: false }), prepareOsaHome: async () => {} }).tools()],
     ];
     for (const [server, build] of servers) {
         it(`${server}: a string title on every tool in tools/list, as Claude receives it (counted; the offenders named)`, async () => {
