@@ -3,6 +3,8 @@ import { isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { runtimeDir } from './paths.js';
 import type { ProcessStatus, ProcessSupervisor, RestartPolicy } from './process-supervisor.js';
 import { readJson, writeJsonAtomic } from './store.js';
+import { planV1ProcessImport } from '../core/v1-processes.js';
+import { readV1Processes } from './v1-processes.js';
 
 /**
  * THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6) — written down, and brought back on launch.
@@ -63,10 +65,29 @@ export interface ProcessBookDeps {
     /** Hibernated (§6.1): nothing may start there. */
     readonly asleep: (workspaceId: string) => boolean;
     readonly now?: () => number;
+    /** Genie 1's database and Genie 2's workspaces: the book imports v1's background processes ONCE when it opens. */
+    readonly v1?: {
+        readonly database: string;
+        readonly workspaces: () => readonly { readonly id: string; readonly path: string }[];
+    };
+}
+
+/** What the v1 import did, kept IN processes.json — the store it filled — so "once" and the processes cannot disagree. */
+export interface V1ProcessImportRecord {
+    readonly at: string;
+    /** false = the boot could not see v1's database: provisional, a later boot that can see it still imports. */
+    readonly sawV1: boolean;
+    readonly imported?: number;
+    readonly wanted?: number;
+    /** v1 processes whose id was already kept here — left exactly as they were. */
+    readonly alreadyHere?: number;
+    /** What was not imported, or could not be carried, and why (core/v1-processes.ts). */
+    readonly notes?: readonly string[];
 }
 
 interface BookFile {
     processes: KeptProcess[];
+    v1Import?: V1ProcessImportRecord;
 }
 
 const RESTART_POLICIES: readonly RestartPolicy[] = ['never', 'on-failure', 'always'];
@@ -90,7 +111,43 @@ export class ProcessBook {
     static async open(userData: string, deps: ProcessBookDeps): Promise<ProcessBook> {
         const file = join(runtimeDir(userData), 'processes.json');
         const data = await readJson<BookFile>(file, { processes: [] });
-        return new ProcessBook(file, deps, { processes: Array.isArray(data.processes) ? data.processes : [] });
+        const v1Import = data.v1Import !== null && typeof data.v1Import === 'object' ? data.v1Import : undefined;
+        const book = new ProcessBook(file, deps, { processes: Array.isArray(data.processes) ? data.processes : [], ...(v1Import ? { v1Import } : {}) });
+        if (deps.v1) await book.#importFromV1(deps.v1);
+        return book;
+    }
+
+    /**
+     * GENIE 1's BACKGROUND PROCESSES, ONCE (core/v1-processes.ts plans them). "Once" is recorded in this
+     * file, in the same write as the processes, so an import that saw v1 is never repeated: a process the
+     * person removed, stopped or changed in Genie 2 stays as they left it. A boot that could not see v1
+     * records that provisionally and a later boot that can see it imports. An id already kept is left
+     * alone. Nothing is started here — `restore()` does that, holding back hibernated workspaces.
+     */
+    async #importFromV1(v1: NonNullable<ProcessBookDeps['v1']>): Promise<void> {
+        const prior = this.#data.v1Import;
+        if (prior?.sawV1 === true) return;
+        const plan = planV1ProcessImport(readV1Processes(v1.database), v1.workspaces());
+        if (plan === null) {
+            if (prior) return; // already provisional: keep the first blind boot's record
+            this.#data = { ...this.#data, v1Import: { at: new Date(this.#now()).toISOString(), sawV1: false } };
+            await this.#flush();
+            return;
+        }
+        const have = new Set(this.#data.processes.map((p) => p.id));
+        const changedAt = this.#now();
+        const fresh: KeptProcess[] = plan.processes.filter((p) => !have.has(p.id)).map((p) => ({ ...p, changedAt }));
+        const record: V1ProcessImportRecord = {
+            at: new Date(changedAt).toISOString(),
+            sawV1: true,
+            imported: fresh.length,
+            wanted: fresh.filter((p) => p.wanted).length,
+            alreadyHere: plan.processes.length - fresh.length,
+            notes: plan.notes,
+        };
+        this.#data = { ...this.#data, processes: [...this.#data.processes, ...fresh], v1Import: record };
+        await this.#flush();
+        console.log(`[genie] v1 background processes: ${record.imported} imported (${record.wanted} to start), ${record.alreadyHere} already here${plan.notes.length ? `; ${plan.notes.length} noted: ${plan.notes.join(' | ')}` : ''}`);
     }
 
     owns(id: string): boolean {
@@ -160,7 +217,7 @@ export class ProcessBook {
         const cwd = folderInside(input.workspacePath, input.folder);
         if (this.#deps.asleep(input.workspaceId)) throw new Error(`cannot start ${name}: ${ASLEEP_REASON}`);
         const kept: KeptProcess = { id: `proc_${randomUUID()}`, workspaceId: input.workspaceId, name, command, cwd, restart: input.restart, wanted: true, changedAt: this.#now() };
-        this.#data = { processes: [...this.#data.processes, kept] };
+        this.#data = { ...this.#data, processes: [...this.#data.processes, kept] };
         await this.#flush();
         return this.#run(kept);
     }
@@ -192,7 +249,7 @@ export class ProcessBook {
         this.#find(id);
         this.#deps.supervisor.forget(id);
         this.#heldBack.delete(id);
-        this.#data = { processes: this.#data.processes.filter((p) => p.id !== id) };
+        this.#data = { ...this.#data, processes: this.#data.processes.filter((p) => p.id !== id) };
         await this.#flush();
     }
 
@@ -219,7 +276,7 @@ export class ProcessBook {
     async #setWanted(id: string, wanted: boolean): Promise<KeptProcess> {
         const p = this.#find(id);
         const next: KeptProcess = { ...p, wanted, changedAt: this.#now() };
-        this.#data = { processes: this.#data.processes.map((x) => (x.id === id ? next : x)) };
+        this.#data = { ...this.#data, processes: this.#data.processes.map((x) => (x.id === id ? next : x)) };
         await this.#flush();
         return next;
     }
