@@ -692,6 +692,17 @@ export class AgentSession {
             this.#echoSeen = '';
         }
 
+        // Claude reports a running token estimate BETWEEN a thought's deltas (prism-acp: a debug notice). It is part of
+        // the thought, not something after it: closing the thought here split one thought into a row per delta.
+        if (event.kind === 'notice' && event.level === 'debug' && typeof event.estimate === 'number') {
+            const open = this.#openMessage;
+            if (open && open.event.kind === 'think') {
+                open.event = { ...open.event, estimate: event.estimate };
+                this.#options.onEvent?.(open.event, { replacesLast: true });
+                return;
+            }
+        }
+
         if (event.kind === 'think') {
             const open = this.#openMessage;
             if (open && open.event.kind === 'think') {
