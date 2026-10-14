@@ -1,5 +1,6 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AccessDecision, AccessRequest, PluginManifest, PluginTool } from '../core/plugins.js';
+import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
 import type { RunResult } from './plugin-runner.js';
 
@@ -44,10 +45,8 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
             { ...schema, type: 'object', properties } as JsonObject,
         );
         const handler = async (args: JsonObject, context: { headers: Record<string, string> }): Promise<McpToolResult> => {
-            const terminalId = typeof args.terminalId === 'string' ? args.terminalId : context.headers['x-genie-terminal-id'];
-            if (!terminalId) return err('pass terminalId — the value of GENIE_TERMINAL_ID in your environment');
-            const caller = deps.resolveCaller(terminalId);
-            if (!caller) return err(`no agent is known for terminal ${terminalId}`);
+            const caller = callerFrom(args, context.headers, deps.resolveCaller);
+            if (typeof caller === 'string') return err(caller);
             const guard = deps.plugins.guard(ref.pluginId);
             if (!guard) return err(`plugin ${ref.pluginId} is not enabled`);
             const { terminalId: _omit, ...rest } = args;

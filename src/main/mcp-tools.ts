@@ -1,3 +1,4 @@
+import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { type Question } from '../core/attention.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -77,7 +78,7 @@ export interface GenieToolsDeps {
  */
 export const MIRRORED_TERMINAL_ID: JsonObject = {
     type: 'string',
-    description: 'Leave this out in a Genie session — Genie already knows which agent you are. Only an agent in a plain terminal '
+    description: 'Leave this out in a Genie session — Genie already knows which agent you are, and ignores it. Only an agent in a plain terminal '
         + '(a Take Over window) passes the value of GENIE_TERMINAL_ID from its environment. Never invent one: an id Genie does not '
         + 'know is refused.',
     'x-mcp-header': 'terminalId',
@@ -96,18 +97,12 @@ function str(value: unknown): string | undefined {
 }
 
 export function genieTools(deps: GenieToolsDeps): Registration[] {
-    /**
-     * Resolve the caller or produce the error. Reads `args.terminalId` first, then the mirrored
-     * header (`Mcp-Param-terminalId`, lower-cased by HTTP).
-     */
+    /** Resolve the caller (mcp-callers `callerFrom`: a session's key first, else `terminalId`) or produce the error. */
     const withCaller = (
         body: (caller: Caller, args: JsonObject, context: ToolContext) => McpToolResult | Promise<McpToolResult>,
     ): ToolHandler => async (args, context) => {
-        const headerValue = Object.entries(context.headers).find(([k]) => k.toLowerCase() === 'mcp-param-terminalid')?.[1];
-        const terminalId = str(args.terminalId) ?? headerValue;
-        if (!terminalId) return err('Genie could not tell who is calling: a Genie session is known by its session (leave terminalId out); an agent in a plain terminal passes the value of GENIE_TERMINAL_ID');
-        const caller = deps.resolveCaller(terminalId);
-        if (!caller) return err(`terminal ${terminalId} is not one Genie knows; nothing was done`);
+        const caller = callerFrom(args, context.headers, deps.resolveCaller);
+        if (typeof caller === 'string') return err(caller);
         try {
             return await body(caller, args, context);
         } catch (error) {

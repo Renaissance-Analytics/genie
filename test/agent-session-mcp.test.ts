@@ -33,7 +33,7 @@ describe('the caller book', () => {
 describe('the server entry', () => {
     it('Genie over HTTP with its bearer token and the agent\'s caller key; no endpoint, no entry', () => {
         expect(genieMcpServers({ url: 'http://127.0.0.1:4100/mcp', token: 't0k' }, 'session-abc')).toEqual([
-            { type: 'http', name: 'genie', url: 'http://127.0.0.1:4100/mcp', headers: [{ name: 'Authorization', value: 'Bearer t0k' }, { name: 'Mcp-Param-terminalId', value: 'session-abc' }] },
+            { type: 'http', name: 'genie', url: 'http://127.0.0.1:4100/mcp', headers: [{ name: 'Authorization', value: 'Bearer t0k' }, { name: 'Mcp-Param-Genie-Session', value: 'session-abc' }] },
         ]);
         expect(genieMcpServers(null, 'session-abc')).toEqual([]);
     });
