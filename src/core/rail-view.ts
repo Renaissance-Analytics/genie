@@ -52,6 +52,8 @@ export interface RailItem {
     alert: boolean | null;
     /** Present only on a governed workspace: the ops project it sits under. */
     governedBy?: string;
+    /** Hibernated. The rail hides these unless the person asks to see them. */
+    asleep?: boolean;
 }
 
 /**
@@ -95,7 +97,8 @@ export function railWorkspaces(
         const governor = governorOf(w.id);
         const governed = governor !== null ? { governedBy: governor } : {};
         const named = w.name ? { name: w.name } : {};
-        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...named, ...governed };
+        const asleep = w.asleep === true ? { asleep: true } : {};
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...named, ...governed, ...asleep };
 
         const mine = rows.filter((r) => r.workspaceId === w.id);
         return {
@@ -105,6 +108,7 @@ export function railWorkspaces(
             count: mine.length,
             alert: mine.some((r) => r.state === 'waiting' || r.state === 'broken'),
             ...governed,
+            ...asleep,
         };
     });
 }
@@ -151,7 +155,7 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'workspace' | 'settings';
+export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'toolchain' | 'inbox' | 'workspace' | 'settings';
 
 /**
  * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
@@ -168,6 +172,11 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     if (servable.includes('deck')) rows.push('deck');
     if (servable.includes('dashboard')) rows.push('dashboard');
     if (servable.includes('agent')) rows.push('genie');
+    // Labelled rows, not palette-only (the owner, 2026-10-14: "WTF happened to all of our genie sites and bg processes
+    // features?" — Hosting, Toolchain and AgentInbox were built, served, and reachable from nowhere).
+    if (servable.includes('hosting')) rows.push('hosting');
+    if (servable.includes('toolchain')) rows.push('toolchain');
+    if (servable.includes('inbox')) rows.push('inbox');
     if (servable.includes('workspace')) rows.push('workspace');
     // Settings is a labelled route in the rail, not a palette-only surface (owner, 2026-10-12: "I have no menu to access my settings").
     if (servable.includes('settings')) rows.push('settings');

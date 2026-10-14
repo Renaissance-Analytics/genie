@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import { useState } from 'react';
 import { deckBadge, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
 
@@ -90,8 +91,25 @@ function NavRow({
     );
 }
 
+/** Where the rail remembers whether hibernated workspaces are shown — this device's preference, not the host's. */
+const SHOW_ASLEEP_KEY = 'genie.rail.showHibernated';
+
+function readShowAsleep(): boolean {
+    try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
+}
+
 export function Sidebar({ route, deckCount, workspaces, available, onNavigate }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
+    // Hibernated workspaces are hidden by default; the one being looked at is never hidden from under the reader.
+    const [showAsleep, setShowAsleep] = useState(readShowAsleep);
+    const toggleAsleep = (): void => {
+        const next = !showAsleep;
+        setShowAsleep(next);
+        try { window.localStorage.setItem(SHOW_ASLEEP_KEY, next ? '1' : '0'); } catch { /* a preference that cannot be saved still applies now */ }
+    };
+    const current = route.split('?')[0];
+    const asleepCount = workspaces.filter((w) => w.asleep === true).length;
+    const shown = workspaces.filter((w) => showAsleep || w.asleep !== true || current === `genie://workspace/${w.id}`);
     // No orphan badge: the Deck's count has nowhere to live without the Deck.
     const badge = has('deck') ? deckBadge(deckCount) : null;
 
@@ -135,6 +153,11 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                 <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} />
             ) : null}
 
+            {/* Each named as its surface names itself: Sites / Processes / Services live in Hosting. */}
+            {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} /> : null}
+            {has('toolchain') ? <NavRow route="genie://toolchain" current={route} icon="wrench" label="Toolchain" onNavigate={onNavigate} /> : null}
+            {has('inbox') ? <NavRow route="genie://inbox" current={route} icon="mail" label="AgentInbox" onNavigate={onNavigate} /> : null}
+
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (
                 <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} />
@@ -145,12 +168,22 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
              * reads as a list that failed to load, which is a worse lie than no heading.
              */}
             {has('workspace') ? (
-                <div className="mt-2 px-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                <div className="mt-2 flex items-center px-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
                     Workspaces
+                    {asleepCount > 0 ? (
+                        <button
+                            type="button"
+                            data-toggle-asleep={showAsleep ? 'hide' : 'show'}
+                            onClick={toggleAsleep}
+                            className="ml-auto rounded px-1 font-normal normal-case tracking-normal hover:text-[var(--fg-2)]"
+                        >
+                            {showAsleep ? 'Hide hibernated' : `Show hibernated · ${asleepCount}`}
+                        </button>
+                    ) : null}
                 </div>
             ) : null}
 
-            {(has('workspace') ? workspaces : []).map((w) => {
+            {(has('workspace') ? shown : []).map((w) => {
                 const route_ = `genie://workspace/${w.id}`;
                 const active = route.split('?')[0] === route_;
 
@@ -160,6 +193,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                         type="button"
                         data-nav={route_}
                         data-workspace={w.id}
+                        {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
                         // A governed workspace (§6.1) sits indented under its ops project and says whose it is.
                         {...(w.governedBy ? { 'data-governed-by': w.governedBy, style: { paddingLeft: '1.5rem' } } : {})}
                         data-active={active ? 'true' : 'false'}
@@ -172,7 +206,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
                         title={w.path}
                         className={`${ROW} ${active ? ROW_ACTIVE : ''}`}
                     >
-                        <Icon name="folder" size="sm" className="shrink-0 text-[var(--fg-4)]" />
+                        <Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />
                         <span className="truncate">{w.name ?? folderName(w.path)}</span>
 
                         <span className="ml-auto flex shrink-0 items-center gap-1.5">
