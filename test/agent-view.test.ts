@@ -18,8 +18,8 @@ const session = (over: Partial<LiveSession> = {}): LiveSession => ({
 });
 
 describe('tabs by fidelity — ABSENCE of a tab, not a disabled tab', () => {
-    it('gives a declared agent Stream, Files and Changes, with Stream first', () => {
-        expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes']);
+    it('gives a declared agent Stream, Files, Changes and Shells, with Stream first', () => {
+        expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes', 'shells']);
     });
 
     it('gives an observed agent Activity first (the board), then Terminal, and NO Stream at all', () => {

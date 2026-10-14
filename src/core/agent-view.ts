@@ -25,7 +25,8 @@ import { editLineCounts, type TimedEvent } from './stream-view.js';
 
 const TABS: Record<Fidelity, readonly AgentTab[]> = {
     /** Stream is first and always present. With no events it shows an empty state, not nothing. */
-    declared: ['stream', 'files', 'changes'],
+    /** Shells after Changes (the owner): what it has running in the background, read from its own ledger. */
+    declared: ['stream', 'files', 'changes', 'shells'],
     /** Activity first (the board). A Stream tab here would be a tab that cannot populate. */
     observed: ['activity', 'terminal', 'files', 'changes'],
     /**

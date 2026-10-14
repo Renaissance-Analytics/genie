@@ -1,3 +1,4 @@
+import { backgroundTasksOf, taskEventOf, type BackgroundTask, type TaskEvent } from './background-tasks.js';
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
 import type { ToolStatus } from '@particle-academy/prism-acp';
 
@@ -114,6 +115,10 @@ export type StreamEvent =
           estimate?: number | null;
           /** The model IN USE when the notice reported one (`MODEL_META`); `null` when it did not say. */
           model?: string | null;
+          /** Claude's FULL live set of background tasks (`core/background-tasks.ts`); absent when the notice is not one. */
+          tasks?: BackgroundTask[];
+          /** One background task's event — started, updated, ended; absent when the notice is not one. */
+          task?: TaskEvent;
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
@@ -255,6 +260,8 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
 
         case 'notice': {
             const notice = isRecord(update['notice']) ? update['notice'] : {};
+            const tasks = backgroundTasksOf(update['_meta']);
+            const task = taskEventOf(update['_meta']);
             return {
                 kind: 'notice',
                 level: stringOrNull(notice['level']) ?? 'info',
@@ -262,6 +269,8 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 headroom: isRecord(update['_meta']) ? headroomFromMeta(update['_meta'][RATE_LIMIT_META]) : null,
                 model: isRecord(update['_meta']) ? stringOrNull(update['_meta'][MODEL_META]) : null,
                 estimate: thinkingEstimateOf(update),
+                ...(tasks ? { tasks } : {}),
+                ...(task ? { task } : {}),
             };
         }
 
