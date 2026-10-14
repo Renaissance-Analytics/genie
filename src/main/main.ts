@@ -1072,6 +1072,8 @@ async function boot(): Promise<void> {
         supervisor: composed.supervisor,
         envFor: (workspaceId) => composed.engines.envFor(workspaceId),
         asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+        // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
+        v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [] },
     });
     const restoredProcesses = processBook.restore();
     if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated`);
