@@ -22,7 +22,16 @@ describe('the front-door Caddyfile', () => {
     });
 
     it('no routes → the global options only, so a running Caddy serves nothing rather than erroring on an empty file', () => {
-        expect(frontDoorCaddyfile([])).toBe('{\n\tdefault_bind 127.0.0.1\n\tauto_https disable_redirects\n}\n');
+        expect(frontDoorCaddyfile([])).toBe('{\n\tdefault_bind 127.0.0.1\n\tskip_install_trust\n\tauto_https disable_redirects\n}\n');
+    });
+
+    // The owner, 2026-10-14: a Windows "install this certificate?" prompt appeared at Genie's start, unasked. Caddy
+    // installs its local root into the trust store on start unless told not to; only the person's Trust may.
+    it('never installs its root into the trust store by itself: skip_install_trust in the global block, routes or none', () => {
+        for (const routes of [[], [{ host: 'tynn.gen', target: '127.0.0.1:4101' }]]) {
+            const globals = /^\{([\s\S]*?)\n\}/.exec(frontDoorCaddyfile(routes))?.[1] ?? '';
+            expect(globals).toMatch(/^\s*skip_install_trust\s*$/m);
+        }
     });
 
     it('a non-loopback target is refused — the front door never proxies off-host', () => {

@@ -74,6 +74,22 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         expect(php).toContain('file_server');
     });
 
+    // The owner, 2026-10-14, on beta.24: "Zero *.gen sites are being served". Measured on his machine: one site's own
+    // Caddy (127.0.0.1:4109) also held 0.0.0.0:80 and 127.0.0.1:2019 — automatic HTTPS opens a redirect server on :80
+    // and every Caddy opens its admin API on :2019 — so the other four PHP sites and Genie's front door could not start.
+    // And a bare `127.0.0.1:4109` address is served over HTTPS, while the front door proxies to it in plain HTTP.
+    it('a site’s Caddy holds ITS port and nothing else: auto_https off, admin off, an explicit http:// address', () => {
+        for (const serve of [{ mode: 'static', root: 'dist', spa: false }, { mode: 'php', root: 'public', fcgiPort: 4102 }] as const) {
+            const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve })!;
+            const globals = /^\{([\s\S]*?)\n\}/.exec(out)?.[1] ?? '';
+            expect(globals).toMatch(/^\s*auto_https off\s*$/m);
+            expect(globals).toMatch(/^\s*admin off\s*$/m);
+            // COUNTED: exactly one site block, on the plain-HTTP loopback address.
+            expect(out.match(/^http:\/\/127\.0\.0\.1:4101 \{$/gm) ?? []).toHaveLength(1);
+            expect(out).not.toMatch(/^127\.0\.0\.1:4101 \{$/m);
+        }
+    });
+
     it('never binds beyond loopback, and refuses a root that escapes the repo', () => {
         const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })!;
         // A bare `:4101 {` is an all-interfaces bind; only `127.0.0.1:4101 {` may appear.
