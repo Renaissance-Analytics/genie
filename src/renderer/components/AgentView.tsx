@@ -480,13 +480,13 @@ export function AgentView({
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
             {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
             <div data-view-header="" className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
-                {workspace ? <span data-crumb={workspace.id} className="text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
+                {workspace ? <span data-crumb={workspace.id} className="max-w-[12rem] shrink truncate whitespace-nowrap text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span className="font-medium">{agent.name}</span>
-                <span data-provider-chip={agent.provider} className="rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
-                <span className="truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
+                <span className="shrink-0 whitespace-nowrap font-medium">{agent.name}</span>
+                <span data-provider-chip={agent.provider} className="shrink-0 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
+                <span className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
-                <span data-pill={pill.word} className={`flex items-center gap-1.5 text-xs ${PILL_TONE[pill.tone]}`}>
+                <span data-pill={pill.word} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
                     <span className="size-1.5 rounded-full bg-current" />
                     {pill.word}
                     {/* A clock only while a turn runs. On an idle agent it counts up forever
