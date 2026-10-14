@@ -9,6 +9,8 @@ import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
 import { hostsFileBlock } from '../core/gen-router.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
+import type { V1Inbox } from '../core/v1-inbox.js';
+import { runV1InboxImport } from './v1-inbox.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
@@ -67,6 +69,8 @@ export interface ComposeInput {
      * knowledge store records an import that saw v1 — then never again. Absent = no Genie 1 to import from.
      */
     readonly v1Knowledge?: () => V1Knowledge | null;
+    /** Reads Genie 1's AgentInbox history (`readV1Inbox`), or `null`; called at boot until the inbox records an import that saw v1. */
+    readonly v1Inbox?: () => V1Inbox | null;
     readonly caddyBin: string | null;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
@@ -276,6 +280,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             console.error(`[genie] v1 knowledge import failed: ${(error as Error).message}`);
         }
     }
+    // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
+    if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
     const flows = await FlowStore.open(input.userData, now);
     const flowScheduler = new FlowScheduler({
         store: flows,

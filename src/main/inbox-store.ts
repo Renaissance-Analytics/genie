@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { ATTACHMENT_LIMITS, attachmentRefusal, isExecutableName, type Participant } from '../core/inbox.js';
+import { sequenceV1Mail, type V1InboxPlan } from '../core/v1-inbox.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -58,7 +59,21 @@ interface MailFile {
     messages: InboxMessage[];
     /** participant → seq of the last acknowledged message. */
     cursors: Record<string, number>;
+    /** Genie 1's history import (core/v1-inbox.ts), once it ran — `sawV1: false` is a blind boot, provisional. */
+    v1Import?: V1InboxImportRecord;
 }
+
+export interface V1InboxImportRecord {
+    readonly at: string;
+    readonly sawV1: boolean;
+    readonly imported: number;
+    /** Planned v1 messages whose id was already here — left exactly as they were. */
+    readonly kept: number;
+    /** What was not imported, or not imported whole, with why. Counts and ids — never message text. */
+    readonly notes: readonly string[];
+}
+
+export type V1InboxImportResult = { imported: number; kept: number; alreadyDone?: true; noV1?: true };
 
 export interface SendInput {
     readonly from: Participant;
@@ -241,6 +256,64 @@ export class InboxStore {
         await mkdir(dirname(dest), { recursive: true });
         await copyFile(join(this.attachmentsDir, attachment.sha256), dest);
         return dest;
+    }
+
+    /** Genie 1's history import, if it ran here. */
+    v1Import(): V1InboxImportRecord | null {
+        return this.#mail.v1Import ?? null;
+    }
+
+    /**
+     * Bring Genie 1's AgentInbox history in, ONCE (core/v1-inbox.ts has the rules). Recorded in mail.json itself, so
+     * a second boot does nothing; a blind boot (`plan` null) is recorded as provisional and a later boot that sees v1
+     * still imports. Mail already here is never renumbered, rewritten or re-read: history takes the seqs below it,
+     * and only a participant with no cursor yet gets one. An attachment whose bytes v1 no longer has (or whose bytes
+     * do not match their hash) is left off its message, noted. One write: the messages, cursors and record land together.
+     */
+    async importFromV1(plan: V1InboxPlan | null, blob: (sha256: string) => Buffer | null): Promise<V1InboxImportResult> {
+        const prior = this.v1Import();
+        if (prior?.sawV1) return { imported: 0, kept: 0, alreadyDone: true };
+        if (plan === null) {
+            if (prior === null) {
+                this.#mail = { ...this.#mail, v1Import: { at: this.#now(), sawV1: false, imported: 0, kept: 0, notes: [] } };
+                await this.#flush();
+            }
+            return { imported: 0, kept: 0, noV1: true };
+        }
+        const notes = [...plan.notes];
+        const stored = new Set<string>();
+        let missing = 0;
+        const mail: Array<V1InboxPlan['mail'][number]> = [];
+        for (const m of plan.mail) {
+            const attachments: StoredAttachment[] = [];
+            for (const a of m.attachments) {
+                if (!stored.has(a.sha256)) {
+                    const bytes = blob(a.sha256);
+                    if (bytes === null || createHash('sha256').update(bytes).digest('hex') !== a.sha256) { missing++; continue; }
+                    await this.#storeBlob(a.sha256, bytes);
+                    stored.add(a.sha256);
+                }
+                attachments.push(a);
+            }
+            mail.push({ ...m, attachments });
+        }
+        if (missing) notes.push(`${missing} attachments left off their messages: Genie 1 no longer has their bytes`);
+        const seqs = this.#mail.messages.map((m) => m.seq);
+        const done = sequenceV1Mail({ mail, notes: [] }, {
+            ids: new Set(this.#mail.messages.map((m) => m.id)),
+            cursors: this.#mail.cursors,
+            lowestSeq: seqs.length ? Math.min(...seqs) : null,
+        }, this.#now());
+        notes.push(...done.notes);
+        const next: MailFile = {
+            messages: [...done.messages, ...this.#mail.messages],
+            cursors: { ...done.cursors, ...this.#mail.cursors },
+            v1Import: { at: this.#now(), sawV1: true, imported: done.messages.length, kept: done.kept, notes },
+        };
+        // Written first, adopted after: a failed write leaves this process on the mail it had, and the next boot retries.
+        await writeJsonAtomic(this.mailFile, next);
+        this.#mail = next;
+        return { imported: done.messages.length, kept: done.kept };
     }
 
     #cursorOf(participant: Participant): number {
