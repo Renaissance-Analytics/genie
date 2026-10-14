@@ -109,6 +109,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
                         pinned
                         contextTokens={200_000}
                         approval={detail.session?.pendingApproval ?? null}
+                        commands={detail.session?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}
                         onAnswerApproval={onAnswerApproval}
                         onSend={onSend}

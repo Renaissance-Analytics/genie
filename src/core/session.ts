@@ -2,6 +2,7 @@ import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { toStreamEvent, type StreamEvent } from './stream-event.js';
+import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
 import { systemProcessTree, type ProcessTree } from './process-tree.js';
@@ -272,6 +273,9 @@ export class AgentSession {
      */
     #approval: { approval: Approval; resolve: (outcome: PermissionOutcomeLike) => void } | null = null;
 
+    /** The agent's commands, skills, plugins and subagents, as its CLI last reported them (core/provider-commands.ts). */
+    #extensions: ProviderExtensions | null = null;
+
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
@@ -346,6 +350,11 @@ export class AgentSession {
     }
 
     /** The question waiting on a human, or `null`. This is what makes a row `waiting`. */
+    /** What the agent's own CLI can run, as it last reported; `null` until it reports. */
+    get extensions(): ProviderExtensions | null {
+        return this.#extensions;
+    }
+
     get pendingApproval(): Approval | null {
         return this.#approval?.approval ?? null;
     }
@@ -655,6 +664,14 @@ export class AgentSession {
          * placed after that return would never run on the one update that matters.
          */
         this.#noticeSessionId();
+
+        // The agent's commands, skills and plugins (core/provider-commands.ts): state, not a ledger row — and checked
+        // before the early return below for the same reason as the session id.
+        const extensions = extensionsFrom(update);
+        if (extensions) {
+            this.#extensions = extensions;
+            this.#changed();
+        }
 
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).

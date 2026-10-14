@@ -634,6 +634,7 @@ export function Shell({
                         pinned={pinned === 'chat'}
                         contextTokens={200_000}
                         approval={chatApproval}
+                        commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}
                         onAnswerApproval={onAnswerApproval}
                         onSend={(text, attachments) => onSend(chatThread?.agentId ?? '', text, attachments)}
