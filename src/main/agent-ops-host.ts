@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
-import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
+import { applyWhen, budgetDecision, deletePlan, restartPlan, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
@@ -45,6 +45,8 @@ export interface AgentOpsPorts {
     linkedSystems(record: AgentRecord): string[];
     providerInstalled(provider: string): boolean;
     signedIn(provider: string): boolean;
+    /** A setting read at start changed: when it takes effect (`SettingApplier.requested`). Absent = the next start, said so. */
+    applyOnStart?(id: AgentRecord['id']): ApplyWhen;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -133,12 +135,12 @@ export async function setMode(ports: AgentOpsPorts, agentId: string, mode: Agent
  * What a CLAUDE agent may do: all tools, ask the person before shell commands, or edits only (shell refused).
  * Codex asks in the chat for each approval, so it has no such setting. Applies when the session next starts.
  */
-export async function setPermissions(ports: AgentOpsPorts, agentId: string, permissions: AgentPermissions): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+export async function setPermissions(ports: AgentOpsPorts, agentId: string, permissions: AgentPermissions): Promise<{ ok: true; record: AgentRecord; apply: ApplyWhen } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (record.provider !== 'claude') return { ok: false, reason: `${record.name} runs on ${record.provider}; Codex asks in the chat for each approval, so it has no tool setting` };
     const updated = await ports.registry.setPermissions(record.id, permissions);
-    return updated ? { ok: true, record: updated } : UNKNOWN;
+    return updated ? { ok: true, record: updated, apply: ports.applyOnStart?.(record.id) ?? { when: 'next-start' } } : UNKNOWN;
 }
 
 /**
@@ -146,14 +148,71 @@ export async function setPermissions(ports: AgentOpsPorts, agentId: string, perm
  * names a provider accepts is the provider's call: Genie refuses only what cannot be a model name — empty, or a
  * leading `-` that would read as a flag on the command line. Applies when the session next starts.
  */
-export async function setModel(ports: AgentOpsPorts, agentId: string, model: string | null): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+export async function setModel(ports: AgentOpsPorts, agentId: string, model: string | null): Promise<{ ok: true; record: AgentRecord; apply: ApplyWhen } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const name = model === null ? null : model.trim();
     if (name !== null && name.length === 0) return { ok: false, reason: 'a model needs a name — choose the default to clear it' };
     if (name !== null && name.startsWith('-')) return { ok: false, reason: `"${name}" is not a model name — it would read as a command-line flag` };
     const updated = await ports.registry.setModel(record.id, name);
-    return updated ? { ok: true, record: updated } : UNKNOWN;
+    return updated ? { ok: true, record: updated, apply: ports.applyOnStart?.(record.id) ?? { when: 'next-start' } } : UNKNOWN;
+}
+
+/**
+ * APPLYING A START-TIME SETTING TO A RUNNING AGENT (`applyWhen` in core/agent-ops). `requested` restarts at once when
+ * that costs nothing, and otherwise remembers the agent; `changed` — called on every change to the agent's session —
+ * restarts it the first time it is free. One restart per request, however many changes follow: the pending entry is
+ * dropped BEFORE the restart, so the restart's own events find nothing to do.
+ *
+ * The restart is graceful (the same conversation); an agent that has never been prompted has no conversation to lose,
+ * so a plain stop and start is the same thing.
+ */
+export class SettingApplier {
+    readonly #ports: AgentOpsPorts;
+    readonly #shellsRunning: (id: AgentRecord['id']) => number;
+    readonly #pending = new Set<AgentRecord['id']>();
+
+    constructor(ports: AgentOpsPorts, shellsRunning: (id: AgentRecord['id']) => number) {
+        this.#ports = ports;
+        this.#shellsRunning = shellsRunning;
+    }
+
+    requested(id: AgentRecord['id']): ApplyWhen {
+        const decision = this.#decide(id);
+        if (decision.when === 'now') {
+            this.#pending.delete(id);
+            void this.#restart(id);
+        } else if (decision.when === 'next-start') {
+            this.#pending.delete(id);
+        } else {
+            this.#pending.add(id);
+        }
+        return decision;
+    }
+
+    changed(id: AgentRecord['id']): void {
+        if (!this.#pending.has(id)) return;
+        const decision = this.#decide(id);
+        if (decision.when === 'next-start') { this.#pending.delete(id); return; }
+        if (decision.when !== 'now') return;
+        this.#pending.delete(id);
+        void this.#restart(id);
+    }
+
+    /** Waiting to apply — for the view to say so. */
+    pending(id: AgentRecord['id']): boolean {
+        return this.#pending.has(id);
+    }
+
+    #decide(id: AgentRecord['id']): ApplyWhen {
+        return applyWhen(this.#ports.host.probe(id), this.#shellsRunning(id));
+    }
+
+    async #restart(id: AgentRecord['id']): Promise<void> {
+        const record = this.#ports.registry.find(id);
+        if (!record) return;
+        await restartAgent(this.#ports, record.id, record.threadId === null ? 'fresh' : 'graceful');
+    }
 }
 
 /** The agent's own half of who may message it (§6.4). */

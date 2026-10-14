@@ -1,4 +1,4 @@
-import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions } from '../core/identity.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
@@ -219,9 +219,10 @@ export interface GenieBridge {
         /** The agent's own half of who may message it (§6.4). */
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */
-        setPermissions(agentId: string, permissions: AgentPermissions): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** `apply`: when the change takes effect on a running agent (`applyWhen`); absent from an older host. */
+        setPermissions(agentId: string, permissions: AgentPermissions): Promise<{ ok: true; apply?: ApplyWhen } | { ok: false; reason: string }>;
         /** The model the agent starts with (any provider); `null` = the provider's default. Applies when it next starts. */
-        setModel(agentId: string, model: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        setModel(agentId: string, model: string | null): Promise<{ ok: true; apply?: ApplyWhen } | { ok: false; reason: string }>;
     };
 
     /**

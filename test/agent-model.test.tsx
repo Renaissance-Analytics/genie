@@ -159,7 +159,9 @@ describe('the control', () => {
         expect(html).toMatch(/<option value="opus" selected=""[^>]*>opus<\/option>/);
         expect(html).toMatch(/<option value="sonnet"[^>]*>sonnet<\/option>/);
         expect(html).toMatch(/Model <span class="font-mono[^"]*">claude-opus-5-5<\/span>/);
-        expect(html).toMatch(/A change applies when atlas next starts/);
+        // Live, not 'next start' (the owner, 2026-10-14): idle = now, mid-turn = when the turn ends, same conversation.
+        expect(html).toMatch(/A change applies at once while atlas is idle, or when its turn ends — it restarts on the same conversation\./);
+        expect(html).not.toMatch(/applies when atlas next starts/);
     });
 
     it('a chosen full id that is not an alias is kept as its own option', () => {

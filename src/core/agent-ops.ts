@@ -95,3 +95,41 @@ export function budgetDecision(input: { dailyLimitUsd: number | null; spentToday
         ? { kind: 'finish-then-park', reason, spentUsd: input.spentTodayUsd, limitUsd: input.dailyLimitUsd }
         : { kind: 'park', reason, spentUsd: input.spentTodayUsd, limitUsd: input.dailyLimitUsd };
 }
+
+/**
+ * WHEN A SETTING THAT IS READ AT START TAKES EFFECT — the model, a Claude agent's tool setting. The owner, 2026-10-14:
+ * "I had to restart you because I was not able to change your model … all settings UI for agents is not live".
+ *
+ * The provider reads both on its command line (`--model`, `--permission-mode`), so a running session takes them by
+ * restarting ON THE SAME CONVERSATION. Genie does that itself, at the first moment it costs nothing:
+ * - not running: the next start reads it — nothing to do;
+ * - idle, nothing parked, no background task running: now;
+ * - mid-turn, or a question parked on the person: when the turn ends — a restart would cut the turn or cancel the
+ *   question being answered;
+ * - background tasks running: when they end — they die with the process, and nobody asked for that;
+ * - failed: not by itself — a graceful restart refuses a wedged agent, and a fresh one would throw the conversation
+ *   away; the next start (the person's restart) reads it.
+ */
+export type ApplyWhen =
+    | { readonly when: 'next-start' }
+    | { readonly when: 'now' }
+    | { readonly when: 'after-turn' }
+    | { readonly when: 'after-shells'; readonly shells: number };
+
+export function applyWhen(session: { running: boolean; turnState: string; pendingApproval: unknown; failure: unknown } | null, shellsRunning: number): ApplyWhen {
+    if (session === null || !session.running) return { when: 'next-start' };
+    if (session.turnState === 'failed' || session.turnState === 'stopped' || session.failure !== null) return { when: 'next-start' };
+    if (session.turnState !== 'idle' || session.pendingApproval !== null) return { when: 'after-turn' };
+    if (shellsRunning > 0) return { when: 'after-shells', shells: shellsRunning };
+    return { when: 'now' };
+}
+
+/** What the view says after the change: `what` is the setting's new value in words (`opus`, `edits only`). */
+export function applyOutcome(agentName: string, what: string, apply: ApplyWhen): string {
+    switch (apply.when) {
+        case 'now': return `${what} — applied: ${agentName} restarted on the same conversation`;
+        case 'after-turn': return `${what} — applies when ${agentName} finishes this turn (it restarts on the same conversation)`;
+        case 'after-shells': return `${what} — applies when ${agentName}’s ${apply.shells === 1 ? 'background task ends' : `${apply.shells} background tasks end`}; restarting now would stop ${apply.shells === 1 ? 'it' : 'them'}`;
+        case 'next-start': return `${what} — applies when ${agentName} next starts`;
+    }
+}

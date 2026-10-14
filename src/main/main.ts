@@ -14,7 +14,8 @@ import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/i
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { agentShells } from '../core/agent-shells.js';
 import { quitPlan } from '../core/quit.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
@@ -117,6 +118,8 @@ let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
+/** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
+let settingApplier: SettingApplier | null = null;
 let updates: UpdateHost | null = null;
 /** Set once the running set has been recorded for §7.6, so quit does not overwrite it with an empty list after the drain stopped everyone. */
 let runningRecorded = false;
@@ -667,7 +670,10 @@ async function boot(): Promise<void> {
         linkedSystems: () => [],
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         signedIn: () => true,
+        applyOnStart: (id) => settingApplier!.requested(id),
     };
+    // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
+    settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
         if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
         return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());
@@ -1217,6 +1223,8 @@ async function boot(): Promise<void> {
     });
     host.subscribe((agentId) => {
         pushAgent(agentId);
+        // A model or tool setting waiting for this agent to be free applies the moment it is.
+        settingApplier?.changed(agentId);
         // A ledger row can change a Dashboard cell — a plan step, a context figure — so the
         // estate-wide snapshot is refreshed too. It carries no ledgers, so this is cheap.
         registry?.touch();
