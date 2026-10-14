@@ -672,9 +672,9 @@ export function AgentView({
 
             <div className="flex min-h-0 flex-1">
                 {index ? (
-                    <nav data-index-column="" className="flex w-[216px] shrink-0 flex-col gap-0.5 overflow-hidden border-r border-[var(--border-1)] px-2 py-3">
+                    <nav data-index-column="" className="flex min-h-0 w-[216px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border-1)] px-2 py-3">
                         {index.map((section) => (
-                            <div key={section.title} className="mb-3.5 flex flex-col gap-0.5">
+                            <div key={section.title} className="mb-3.5 flex shrink-0 flex-col gap-0.5">
                                 <h2 className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{section.title}</h2>
                                 {section.items.map((item) => {
                                     const door = `genie://agent/${agent.id}?tab=stream&at=${item.rowId}`;
