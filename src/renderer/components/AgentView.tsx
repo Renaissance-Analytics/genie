@@ -1143,6 +1143,39 @@ export function AgentView({
                             ) : null}
                         </section>
                     ) : null}
+                    {/*
+                     * What the agent's OWN CLI can run (the owner, 2026-10-14: surfaced in the chat and here, read-only).
+                     * Run one from the chat's `/` menu. Absent until the provider reports; an agent that reports none says so.
+                     */}
+                    {session?.extensions ? (
+                        <section data-rail="extensions">
+                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                                Skills and commands
+                            </h2>
+                            {session.extensions.commands.length === 0 ? (
+                                <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
+                            ) : (
+                                <ul data-rail-commands={session.extensions.commands.length} className="max-h-48 overflow-y-auto font-mono text-[11px] text-[var(--fg-2)]">
+                                    {session.extensions.commands.map((c) => (
+                                        <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
+                                            <span className="truncate">/{c.name}</span>
+                                            <span className="shrink-0 font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                            {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
+                                <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
+                                    Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
+                                </p>
+                            ) : null}
+                            {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
+                                <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
+                                    Subagents: {session.extensions.subagents.join(', ')}
+                                </p>
+                            ) : null}
+                        </section>
+                    ) : null}
                 </div>
                 ) : null}
                 </aside>

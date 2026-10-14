@@ -663,6 +663,7 @@ export class SessionHost {
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: planFrom(rows),
             model: modelFrom(rows),
+            extensions: session.extensions,
         };
     }
 

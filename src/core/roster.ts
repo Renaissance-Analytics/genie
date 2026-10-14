@@ -3,6 +3,7 @@ import type { Approval } from './approval.js';
 import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
 import type { TurnState } from './session.js';
+import type { ProviderExtensions } from './provider-commands.js';
 
 /**
  * RECORD + LIVE SESSION → DASHBOARD ROW.
@@ -72,6 +73,8 @@ export interface LiveSession {
      * wins. `null` or absent (an older remote host does not send it) = not reported — never the model Genie asked for, which is the agent's setting, not a reading.
      */
     model?: string | null;
+    /** What the agent's own CLI can run (core/provider-commands.ts); `null` = not reported, absent from an older host. */
+    extensions?: ProviderExtensions | null;
     /** The MCP servers the session was started with, by name (`genie` = Genie's own); absent from an older host. */
     mcpServers?: readonly string[] | undefined;
 }

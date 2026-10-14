@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
+import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
 import { atThreadEnd, clampChatWidth, dragChatWidth, readChatWidth, writeChatWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
@@ -78,6 +79,8 @@ export interface ChatFlyoutProps {
      * decision (`approvalPlacement`) and not a property of the conversation.
      */
     approval?: Approval | null | undefined;
+    /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
+    commands?: readonly ProviderCommand[] | null | undefined;
     answeringApproval?: string | null | undefined;
     onAnswerApproval?: ((optionId: string) => void) | undefined;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
@@ -109,7 +112,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, pinned, contextTokens, approval, answeringApproval, onAnswerApproval,
+    thread, pinned, contextTokens, approval, commands, answeringApproval, onAnswerApproval,
     onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -385,6 +388,7 @@ export function ChatFlyout({
                  */}
                 <PromptInput
                     budgetTokens={contextTokens}
+                    commands={toPromptCmds(commands)}
                     placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox` : approval ? `Reply to ${thread.name}, or answer with A / D` : `Message ${thread.name}`}
                     showHint
                     onSubmit={(text, picked) => { void readAttachments(picked).then((files) => onSend(text, files)); }}
