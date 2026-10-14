@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { agentRecord, mintAgentId } from '../core/identity.js';
 import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import { doctorDataTools } from './doctor-data.js';
 import { askAndWait, doctorTools, type DoctorOsa } from './doctor-mcp.js';
 import { genieMcpServer } from './mcp-server.js';
 import { genieHome, installDir } from './paths.js';
@@ -14,7 +15,8 @@ import { SessionHost } from './session-host.js';
  * DOCTOR MODE (`genie --doctor`, the owner 2026-10-12): Genie with ONLY the Genie OSA, to diagnose the system and repair
  * the install. It does not even attempt to open Genie's configuration or database — no store, registry, settings, v1
  * import or reap, config sync, remote listener, pty host or knowledge graph (a test keeps those imports out of this
- * file). It must run beside a Genie that is running or broken, so it takes its own per-user folder and lock and an MCP
+ * file) at boot; genie loads one workspace and one agent on demand, read only (doctor-data.ts). It must run beside a
+ * Genie that is running or broken, so it takes its own per-user folder and lock and an MCP
  * port the OS picks, never the remembered one.
  *
  *  - The OSA runs in `<doctor>/osa`, a folder written from Genie's baked-in doctor instructions and the diagnostics
@@ -53,7 +55,14 @@ export async function runDoctor(): Promise<void> {
         },
     });
 
-    const host = new SessionHost({ userData: doctorDir });
+    // GENIE'S OWN TOOLS IN DOCTOR MODE (the owner, 2026-10-13): Genie's data on demand — one workspace and one agent at a
+    // time, read only (doctor-data.ts). Nothing under ~/.genie is opened until genie calls one of them.
+    const dataServer = genieMcpServer({ registrations: doctorDataTools({ genieHome: genieHome() }), port: 0 });
+    const data = await dataServer.start();
+    const host = new SessionHost({
+        userData: doctorDir,
+        mcpServersFor: () => [{ type: 'http', name: 'genie', url: data.url, headers: [{ name: 'Authorization', value: `Bearer ${data.token}` }] }],
+    });
     const record = agentRecord({ id: mintAgentId(), workspaceId: OS_WORKSPACE, provider: 'claude', name: 'genie' });
     const started = host.start(record, osaDir);
     if (!started.ok) console.error(`[doctor] genie did not start: ${started.reason}`);
@@ -102,5 +111,6 @@ export async function runDoctor(): Promise<void> {
     app.on('before-quit', () => {
         host.stop(record.id);
         void server.stop();
+        void dataServer.stop();
     });
 }
