@@ -956,6 +956,7 @@ async function boot(): Promise<void> {
         remoteApi: buildHostApi({
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
+            subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
             find: (id) => registry?.find(id as AgentId) ?? null,
             detailFor: (id) => detailFor(id as AgentId),
             cwdFor,
@@ -1220,6 +1221,8 @@ async function boot(): Promise<void> {
         // estate-wide snapshot is refreshed too. It carries no ledgers, so this is cheap.
         registry?.touch();
     });
+    // A saved setting changes the agent's RECORD, not its session: the Agent view reads it from the detail.
+    registry.subscribeAgentRecords(pushAgent);
 
     window = createWindow();
     tray = createTray({
