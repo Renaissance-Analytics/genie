@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { V1KnowledgePlan } from '../core/v1-import.js';
 import { runtimeDir } from './paths.js';
 
 /**
@@ -94,6 +95,19 @@ export interface ListInput {
 }
 
 export type LinkResult = { ok: true; to: string } | { ok: false; reason: 'missing' | 'ambiguous' | 'no such source' };
+
+/** What the import from Genie 1 did, kept in the store it filled (the `meta` table). */
+export interface V1KnowledgeImportRecord {
+    readonly at: string;
+    /** false = the boot could not see v1's database: provisional, a later boot that can see it still imports. */
+    readonly sawV1: boolean;
+    readonly imported: number;
+    /** v1 nodes whose id was already here — left exactly as they were. */
+    readonly kept: number;
+    readonly notes: readonly string[];
+}
+
+export type V1KnowledgeImportResult = { imported: number; kept: number; alreadyDone?: true; noV1?: true };
 
 interface Row {
     id: string;
@@ -194,7 +208,59 @@ export class KnowledgeStore {
                 UNIQUE (from_id, to_ref, kind)
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, title, body, tags);
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         `);
+    }
+
+    /** What the import from Genie 1 recorded, or `null` when it has never run against this store. */
+    v1Import(): V1KnowledgeImportRecord | null {
+        const row = this.#db.prepare("SELECT value FROM meta WHERE key = 'v1_import'").get() as { value: string } | undefined;
+        if (!row) return null;
+        try { return JSON.parse(row.value) as V1KnowledgeImportRecord; } catch { return null; }
+    }
+
+    /**
+     * GENIE 1's KNOWLEDGE, ONCE (core/v1-import.ts plans it). "Once" is recorded HERE, in the store that was
+     * filled — not in `~/.genie/v1-import.json`, which installs that imported their workspaces before this
+     * existed already have: an empty store with no record imports, whatever that file says. A recorded import
+     * that saw v1 is never repeated, so a node deleted or edited in Genie 2 stays as the person left it. A boot
+     * that could not see v1 (`null`) records that provisionally and a later boot that can see it imports.
+     * A v1 node whose id is already here is left alone, never overwritten. Nodes keep v1's id and times; edges
+     * keep v1's text and kind. One transaction: a half import is not recorded as done.
+     */
+    importFromV1(plan: V1KnowledgePlan | null): V1KnowledgeImportResult {
+        const prior = this.v1Import();
+        if (prior?.sawV1) return { imported: 0, kept: 0, alreadyDone: true };
+        const record = (r: V1KnowledgeImportRecord) => this.#db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('v1_import', ?)").run(JSON.stringify(r));
+        if (plan === null) {
+            if (prior === null) record({ at: this.#now(), sawV1: false, imported: 0, kept: 0, notes: [] });
+            return { imported: 0, kept: 0, noV1: true };
+        }
+        let imported = 0;
+        let kept = 0;
+        const exists = this.#db.prepare('SELECT 1 FROM nodes WHERE id = ?');
+        const insert = this.#db.prepare(
+            `INSERT INTO nodes (id, title, slug, body, class, tags, scope_kind, scope_id, source, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        const fts = this.#db.prepare('INSERT INTO nodes_fts (id, title, body, tags) VALUES (?, ?, ?, ?)');
+        const edge = this.#db.prepare('INSERT OR IGNORE INTO edges (from_id, to_ref, kind) VALUES (?, ?, ?)');
+        this.#db.exec('BEGIN');
+        try {
+            for (const n of plan.nodes) {
+                if (exists.get(n.id)) { kept++; continue; }
+                insert.run(n.id, n.title, slugify(n.title), n.body, n.class, JSON.stringify(n.tags), n.scope.kind, n.scope.kind === 'system' ? null : n.scope.id, n.source, n.createdAt, n.updatedAt);
+                fts.run(n.id, n.title, n.body, n.tags.join(' '));
+                for (const e of n.edges) edge.run(n.id, e.toRef, e.kind);
+                imported++;
+            }
+            record({ at: this.#now(), sawV1: true, imported, kept, notes: [...plan.notes] });
+            this.#db.exec('COMMIT');
+        } catch (error) {
+            this.#db.exec('ROLLBACK');
+            throw error;
+        }
+        return { imported, kept };
     }
 
     add(input: AddInput): { id: string; unresolved: Unresolved[] } {
