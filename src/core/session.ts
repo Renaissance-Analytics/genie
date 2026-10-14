@@ -192,6 +192,8 @@ export class AgentSession {
     #unpersisted = 0;
     /** Completed turns, failed ones included — a failed turn still happened and still cost. */
     #turns = 0;
+    /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
+    #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
     #failure: string | null = null;
     /** How the provider process ended, as node reported it. `null` until it exits. */
@@ -307,6 +309,11 @@ export class AgentSession {
     /** Turns this session has completed. The Budget panel's count comes from here. */
     get turns(): number {
         return this.#turns;
+    }
+
+    /** Turns that ended in THIS run — never the recorded history's. What a caller waiting on an answer counts. */
+    get turnsEndedThisRun(): number {
+        return this.#endedThisRun;
     }
 
     /** Why the last turn failed, in the provider's own words, or `null`. */
@@ -425,6 +432,7 @@ export class AgentSession {
                     this.#closeMessage();
 
                     this.#turns += 1;
+                    this.#endedThisRun += 1;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the

@@ -1,4 +1,5 @@
-import { CallerBook, genieMcpServers } from './mcp-callers.js';
+import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
+import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
@@ -63,8 +64,9 @@ import { tynnClient } from './tynn-client.js';
 import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
+import { genieToolDeps } from './genie-tool-deps.js';
+import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
-import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 
@@ -353,11 +355,8 @@ let mcpToolList: readonly { name: string; description: string }[] = [];
 /** The agents' MCP caller keys (one per agent, for the run). */
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
-function sessionCaller(key: string): { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string } | null {
-    const id = sessionCallers.agentFor(key);
-    const record = id ? registry?.find(id as AgentId) ?? null : null;
-    const ws = record ? registry?.workspace(record.workspaceId) ?? null : null;
-    return record && ws ? { agentId: record.id, agentName: record.name, workspaceId: ws.id, workspacePath: ws.path } : null;
+function sessionCaller(key: string): Caller | null {
+    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir()) : null;
 }
 const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
@@ -392,6 +391,8 @@ const featureListeners = new Set<(data: FeatureData) => void>();
 async function boot(): Promise<void> {
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
+    // Doctor mode reads this to know normal Genie is running (and so refuses to start agents beside it).
+    markGenieRunning(genieHome());
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
@@ -1048,47 +1049,36 @@ async function boot(): Promise<void> {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
         const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
-        const values = () => composed.settings.snapshot();
-        const registrations = allGenieTools({
-            genie: {
-                inbox: composed.inbox,
-                attention: composed.attention,
-                roster,
-                resolveCaller,
-                workspaceSetting: (workspaceId) => inboxSettingFrom(composed.settings.snapshotFor(workspaceId)),
-                userActive: () => powerMonitor.getSystemIdleTime() < 120,
-                glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
-                thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
-                dnd: () => ({ on: values().do_not_disturb === true, reply: String(values().dnd_reply ?? '') }),
-            },
-            more: {
-                knowledge: composed.knowledge,
-                terminals: {
-                    list: () => terminals!.list(),
-                    open: (options) => terminals!.open(options),
-                    write: (id, data) => terminals!.write(id, data),
-                    scrollback: (id) => terminals!.scrollback(id),
-                    // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
-                    scrollbackCap: 1_000_000,
-                },
-                approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
-                resolveCaller,
-            },
-            attention: {
-                resolveCaller,
-                openFile: async (absolutePath) => { const failed = await shell.openPath(absolutePath); return failed ? { ok: false, reason: failed } : { ok: true }; },
-                feedback: composed.feedback,
+        // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
+        const registrations = allGenieTools(genieToolDeps({
+            inbox: composed.inbox,
+            attention: composed.attention,
+            knowledge: composed.knowledge,
+            settings: composed.settings,
+            feedback: composed.feedback,
+            approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
+            roster,
+            resolveCaller,
+            userActive: () => powerMonitor.getSystemIdleTime() < 120,
+            glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
+            thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
+            openFile: async (absolutePath) => { const failed = await shell.openPath(absolutePath); return failed ? { ok: false, reason: failed } : { ok: true }; },
+            terminals: {
+                list: () => terminals!.list(),
+                open: (options) => terminals!.open(options),
+                write: (id, data) => terminals!.write(id, data),
+                scrollback: (id) => terminals!.scrollback(id),
+                // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
+                scrollbackCap: 1_000_000,
             },
             sidecar: {
-                resolveCaller,
-                roster,
                 register: (input) => registry!.register(input),
                 start: (record, cwd) => host!.start(record, cwd),
                 running: (agentId) => host!.probe(agentId as AgentId)?.running === true,
-                addressOf: (record) => addressOf(record, 'full'),
             },
             plugins: {
-                plugins: { tools: () => composed.plugins.tools(), guard: (id) => composed.plugins.guard(id) },
+                tools: () => composed.plugins.tools(),
+                guard: (id) => composed.plugins.guard(id),
                 run: (input) => runPluginTool({
                     pluginDir: input.dir,
                     tool: input.tool,
@@ -1104,10 +1094,8 @@ async function boot(): Promise<void> {
                     timeoutMs: 30_000,
                     label: `${input.manifest.id}.${input.tool.name}`,
                 }),
-                approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
-                resolveCaller,
             },
-        });
+        }));
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
@@ -1307,6 +1295,7 @@ app.on('before-quit', (event) => {
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();
+    clearGenieRunning(genieHome());
 });
 
 app.whenReady().then(boot).catch((error: unknown) => {

@@ -660,6 +660,11 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.turns ?? 0;
     }
 
+    /** Turns ended in this run only (doctor-mcp `askAndWait`); `turnsFor` numbers on from the recorded history. */
+    turnsEndedThisRun(agentId: AgentId): number {
+        return this.#running.get(agentId)?.session.turnsEndedThisRun ?? 0;
+    }
+
     /** Stop everything. An upgrade ends every agent session and does not revive them. */
     stopAll(): void {
         for (const id of [...this.#running.keys()]) this.stop(id);
