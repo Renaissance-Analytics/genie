@@ -692,6 +692,17 @@ export class AgentSession {
             this.#echoSeen = '';
         }
 
+        // A TURN THE AGENT STARTED ITSELF. After a turn has ended, Claude Code can begin another with no prompt from Genie
+        // (a background task finished, a subagent reported). Its activity — a reply, a thought, a tool call — opens a
+        // turn: a marker (nobody prompted it, so `by: null`) and `working` until it ends. Without this it ran under
+        // "Idle", and a quit, which cancels only the turns it believes are running, killed it mid-flight. What trails a
+        // turn's end (usage, debug notices) is not activity and opens nothing.
+        if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
+            void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by: null });
+            this.#turnState = 'working';
+            this.#changed();
+        }
+
         // Claude reports a running token estimate BETWEEN a thought's deltas (prism-acp: a debug notice). It is part of
         // the thought, not something after it: closing the thought here split one thought into a row per delta.
         if (event.kind === 'notice' && event.level === 'debug' && typeof event.estimate === 'number') {
