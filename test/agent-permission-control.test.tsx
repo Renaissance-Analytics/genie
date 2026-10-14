@@ -72,7 +72,8 @@ describe('the control', () => {
         expect(html).toContain('data-permissions="edits"');
         expect(html).toMatch(/<option value="all"[^>]*>all tools<\/option>/);
         expect(html).toMatch(/<option value="edits" selected=""[^>]*>edits only — shell refused<\/option>/);
-        expect(html).toMatch(/applies when .*next starts/);
+        expect(html).toMatch(/applies at once while .* is idle, or when its turn ends/);
+        expect(html).not.toMatch(/applies when .*next starts/);
     });
 
     it('a Codex agent has no such control (positive control: the same ops on a Claude agent draw it)', () => {

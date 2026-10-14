@@ -26,7 +26,7 @@ import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
-import type { DeletePlan } from '../core/agent-ops.js';
+import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
@@ -509,8 +509,8 @@ function DesktopApp({ bridge }: AppProps) {
               accessScope: detail?.agent.accessScope ?? 'self',
               permissions: detail?.agent.permissions ?? 'all',
               model: detail?.agent.model ?? null,
-              onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? `${model ?? 'the provider default'} — applies when it next starts` : r.reason }))); },
-              onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? `${permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools'} — applies when it next starts` : r.reason }))); },
+              onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason }))); },
+              onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },

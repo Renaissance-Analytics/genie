@@ -1037,7 +1037,7 @@ export function AgentView({
                                         <option value="ask">ask me before shell commands</option>
                                         <option value="edits">edits only — shell refused</option>
                                     </select>
-                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>
+                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
                                 </label>
                             ) : null}
                             {/* The model: what the provider REPORTED it runs, and what the agent starts with. Never one Genie made up. */}
@@ -1075,7 +1075,7 @@ export function AgentView({
                                             />
                                         )}
                                     </label>
-                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies when {agent.name} next starts.</span>
+                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
                                 </div>
                             ) : null}
                             <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
