@@ -155,6 +155,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
 
             {/* Each named as its surface names itself: Sites / Processes / Services live in Hosting. */}
             {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} /> : null}
+            {has('browser') ? <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} /> : null}
             {has('toolchain') ? <NavRow route="genie://toolchain" current={route} icon="wrench" label="Toolchain" onNavigate={onNavigate} /> : null}
             {has('inbox') ? <NavRow route="genie://inbox" current={route} icon="mail" label="AgentInbox" onNavigate={onNavigate} /> : null}
 

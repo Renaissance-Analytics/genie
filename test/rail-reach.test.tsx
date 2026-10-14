@@ -23,8 +23,13 @@ describe('every servable feature surface is reachable by a labelled control', ()
     it('COUNTED: no feature surface the shell serves is left without a rail row or a title-bar icon', () => {
         const html = rail();
         const titleBar = new Set(FEATURE_ICONS.map((f) => f.route));
-        const features = ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings'] as const;
-        const unreachable = features.filter((s) => SERVABLE.includes(s) && !titleBar.has(`genie://${s}`) && !html.includes(`data-nav="genie://${s}"`));
+        // DERIVED, not typed: every servable surface that is not reached through an agent or a workspace row. A typed
+        // list left the Genie Browser out, and the owner found it missing (2026-10-14) — a new surface must not need
+        // someone to remember to add it here.
+        const reachedOtherwise = new Set(['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files']);
+        const features = SERVABLE.filter((s) => !reachedOtherwise.has(s));
+        expect(features).toContain('browser');
+        const unreachable = features.filter((s) => !titleBar.has(`genie://${s}`) && !html.includes(`data-nav="genie://${s}"`));
         expect(unreachable).toEqual([]);
     });
 
@@ -33,6 +38,10 @@ describe('every servable feature surface is reachable by a labelled control', ()
         expect(html).toMatch(/data-nav="genie:\/\/hosting"[\s\S]*?>Hosting</);
         expect(html).toMatch(/data-nav="genie:\/\/toolchain"[\s\S]*?>Toolchain</);
         expect(html).toMatch(/data-nav="genie:\/\/inbox"[\s\S]*?>AgentInbox</);
+    });
+
+    it('the Genie Browser is a row — .gen sites, tailnet and Tynn addresses open inside Genie', () => {
+        expect(rail()).toMatch(/data-nav="genie:\/\/browser"[\s\S]*?>Browser</);
     });
 
     it('a row exists only when its surface is served — CONTROL: absent from a build that cannot serve it', () => {
