@@ -48,6 +48,7 @@ export class Registry {
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
     #listeners = new Set<(snapshot: GenieSnapshot) => void>();
+    #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
     #runningAtQuit: AgentId[] = [];
@@ -249,6 +250,16 @@ export class Registry {
         return () => this.#listeners.delete(listener);
     }
 
+    /**
+     * Which agent's RECORD changed — a setting saved, its provider switched, its thread cleared. The
+     * snapshot carries no detail, and the Agent view reads its settings from the agent's detail, so
+     * whoever pushes details listens here as well as to the session host.
+     */
+    subscribeAgentRecords(listener: (agentId: AgentId) => void): () => void {
+        this.#recordListeners.add(listener);
+        return () => this.#recordListeners.delete(listener);
+    }
+
     /** Call when live session state changed. The registry does not watch anything itself. */
     touch(): void {
         this.#emit();
@@ -309,7 +320,7 @@ export class Registry {
 
         this.#agents = this.#agents.map((a) => (a.id === agentId ? { ...a, threadId } : a));
         await this.#store.writeAgents(this.#agents);
-        this.#emit();
+        this.#changed(existing.id);
         return { ok: true };
     }
 
@@ -380,7 +391,7 @@ export class Registry {
         const cleared: AgentRecord = { ...existing, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
         await this.#store.writeAgents(this.#agents);
-        this.#emit();
+        this.#changed(cleared.id);
         return cleared;
     }
 
@@ -392,7 +403,7 @@ export class Registry {
         const record: AgentRecord = { ...existing, provider };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
-        this.#emit();
+        this.#changed(record.id);
         return { ok: true, record };
     }
 
@@ -425,18 +436,12 @@ export class Registry {
         const record = change(existing);
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
-        this.#emit();
+        this.#changed(record.id);
         return record;
     }
 
     async setBudget(agentId: AgentId, dailyBudgetUsd: number | null): Promise<AgentRecord | null> {
-        const existing = this.#agents.find((a) => a.id === agentId);
-        if (!existing) return null;
-        const record: AgentRecord = { ...existing, dailyBudgetUsd };
-        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
-        await this.#store.writeAgents(this.#agents);
-        this.#emit();
-        return record;
+        return this.#update(agentId, (a) => ({ ...a, dailyBudgetUsd }));
     }
 
     /**
@@ -465,5 +470,11 @@ export class Registry {
     #emit(): void {
         const snapshot = this.snapshot();
         for (const listener of this.#listeners) listener(snapshot);
+    }
+
+    /** One agent's record changed: the estate snapshot, then that agent's own listeners. */
+    #changed(agentId: AgentId): void {
+        this.#emit();
+        for (const listener of this.#recordListeners) listener(agentId);
     }
 }

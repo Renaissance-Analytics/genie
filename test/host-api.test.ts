@@ -17,10 +17,11 @@ const record = { id: 'agent_a', workspaceId: 'tynn', provider: 'claude', name: '
 
 function fakes() {
     const calls: string[] = [];
-    const listeners = { snapshot: new Set<(s: GenieSnapshot) => void>(), agent: new Set<(id: string) => void>(), data: new Set<(id: string, d: string) => void>(), exit: new Set<(id: string, c: number) => void>(), features: new Set<(d: FeatureData) => void>(), updates: new Set<(s: UpdateState) => void>() };
+    const listeners = { snapshot: new Set<(s: GenieSnapshot) => void>(), agent: new Set<(id: string) => void>(), record: new Set<(id: string) => void>(), data: new Set<(id: string, d: string) => void>(), exit: new Set<(id: string, c: number) => void>(), features: new Set<(d: FeatureData) => void>(), updates: new Set<(s: UpdateState) => void>() };
     const deps: HostApiDeps = {
         snapshot: () => ({ agents: [], workspaces: [{ id: 'tynn', path: '/w/tynn', agentsKnown: true }], deckItems: [], signals: {} }) as never,
         subscribeSnapshot: (cb) => { listeners.snapshot.add(cb); return () => listeners.snapshot.delete(cb); },
+        subscribeAgentRecords: (cb) => { listeners.record.add(cb); return () => listeners.record.delete(cb); },
         find: (id) => (id === 'agent_a' ? record : null),
         detailFor: (id) => (id === 'agent_a' ? { agent: { id }, rows: [] } : null) as never,
         cwdFor: () => '/w/tynn',
@@ -184,5 +185,17 @@ describe('events', () => {
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);
         expect(got).toHaveLength(6);
         expect(f.listeners.snapshot.size).toBe(0);
+    });
+
+    it('a SETTING saved on an agent (its record, not its session) pushes agent:<id> too — the remote Agent view reads its model from that detail', () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        const got: Array<[string, unknown]> = [];
+        const off = api.onEvent((channel, payload) => got.push([channel, payload]));
+        for (const l of f.listeners.record) l('agent_a');
+        // COUNTED: exactly one push, on the agent's own channel, carrying its detail.
+        expect(got).toEqual([['agent:agent_a', { agent: { id: 'agent_a' }, rows: [] }]]);
+        off();
+        expect(f.listeners.record.size).toBe(0);
     });
 });

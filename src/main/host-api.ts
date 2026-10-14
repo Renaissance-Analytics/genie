@@ -20,6 +20,8 @@ import type { PtyOpened, TerminalOptions } from './terminal-host.js';
 export interface HostApiDeps {
     snapshot(): GenieSnapshot;
     subscribeSnapshot(listener: (snapshot: GenieSnapshot) => void): () => void;
+    /** Which agent's RECORD changed (a saved setting) — its detail is pushed, as for a session event. */
+    subscribeAgentRecords(listener: (agentId: string) => void): () => void;
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
@@ -246,6 +248,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             const offs = [
                 deps.subscribeSnapshot((s) => listener('snapshot', s)),
                 deps.host.subscribe((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
+                deps.subscribeAgentRecords((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),
