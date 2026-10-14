@@ -123,7 +123,7 @@ export function driverEvents(events: DriverEvents): {
     onUpdate: (update: unknown) => void;
     onRequestPermission: (request: PermissionRequestLike) => Promise<PermissionOutcomeLike>;
     onTurnEnd: (outcome: TurnOutcomeLike) => void;
-    onProtocolError: (problem: string) => void;
+    onProtocolError: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     onStderr: (line: string) => void;
     onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
 } {
@@ -138,7 +138,7 @@ export function driverEvents(events: DriverEvents): {
         onRequestPermission: (request) =>
             events.onRequestPermission?.(request) ?? Promise.resolve({ outcome: 'cancelled' as const }),
         onTurnEnd: (outcome) => events.onTurnEnd?.(outcome),
-        onProtocolError: (problem) => events.onProtocolError?.(problem),
+        onProtocolError: (problem, detail) => events.onProtocolError?.(problem, detail),
         onStderr: (line) => events.onStderr?.(line),
         onExit: (code, signal) => events.onExit?.(code, signal),
     };
