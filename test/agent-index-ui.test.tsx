@@ -40,6 +40,22 @@ describe('the index column', () => {
         expect(html).toContain('data-stream=');
     });
 
+    // The owner, 2026-10-14: "make sure that the Turns column in the agent view has a scroll bar. I have turns off screen
+    // I can't scroll to." The column clipped (`overflow-hidden`), so every turn below the fold was unreachable.
+    it('SCROLLS vertically when it holds more than fits — never clips; its sections keep their height rather than squash', () => {
+        const many: TimedEvent[] = Array.from({ length: 80 }, (_, i) => t(`a1:${i}`, { kind: 'turn', n: i + 1, by: 'you' }));
+        const html = render({ rows: many });
+        const nav = html.match(/<nav data-index-column[^>]*class="([^"]*)"/)?.[1] ?? '';
+        expect(nav.split(' ')).toContain('overflow-y-auto');
+        expect(nav.split(' ')).not.toContain('overflow-hidden');
+        expect(nav.split(' ')).toContain('min-h-0');
+        // COUNTED: all 80 turns are in the column — reachable by scrolling, none dropped.
+        expect(html.match(/data-index-item="turn:/g) ?? []).toHaveLength(80);
+        const sections = [...html.matchAll(/<nav data-index-column[\s\S]*?<\/nav>/g)][0]?.[0].match(/<div class="([^"]*mb-3\.5[^"]*)"/g) ?? [];
+        expect(sections.length).toBeGreaterThan(0);
+        for (const s of sections) expect(s).toContain('shrink-0');
+    });
+
     it('absent on the Files and Changes tabs — the index belongs to the Stream', () => {
         expect(render({ tab: 'files' })).not.toContain('data-index-column');
     });
