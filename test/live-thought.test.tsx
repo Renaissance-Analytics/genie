@@ -91,6 +91,52 @@ describe('a streamed thought is ONE row, not one row per chunk', () => {
         expect(texts(rows)).toEqual(['hmm', 'Done.', 'next']);
     });
 
+    // The owner, 2026-10-14, on beta.22: "it seems to be posting every chunk of a thinking content as individual posts"
+    // — `Found` / `that Genie l` / `acks background-shell trac` …, and a column of `Reasoning not sent`. Claude sends a
+    // `thinking_tokens` frame between thought deltas; prism-acp maps it to a DEBUG notice carrying the running estimate,
+    // and that notice closed the open thought, so every delta opened a new row.
+    const estimate = (n: number) => ({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'thinking' }, _meta: { 'particle.academy/thinking_tokens_estimate': n } });
+
+    it('a thinking-estimate notice between deltas does NOT close the thought — one row, carrying the newest estimate', () => {
+        const { d, rows, replaced } = open();
+        const before = rows.length;
+        d.emit(thought('Found'));
+        d.emit(estimate(4));
+        d.emit(thought(' that Genie l'));
+        d.emit(estimate(9));
+        d.emit(thought('acks shell tracking.'));
+        d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read', status: 'completed' });
+
+        const mine = rows.slice(before);
+        const opened = replaced.slice(before);
+        // COUNTED: one thought opened (the rest replace it), no notice rows, then the tool call.
+        expect(mine.filter((r, i) => r.kind === 'think' && !opened[i])).toHaveLength(1);
+        expect(mine.filter((r) => r.kind === 'notice')).toHaveLength(0);
+        const last = [...mine].reverse().find((r) => r.kind === 'think');
+        expect(last).toMatchObject({ kind: 'think', text: 'Found that Genie lacks shell tracking.', estimate: 9 });
+    });
+
+    it('a thought the provider did not send (empty deltas with estimates between) is ONE "not sent" row, not one per frame', () => {
+        const { d, rows, replaced } = open();
+        const before = rows.length;
+        d.emit(thought(''));
+        d.emit(estimate(12));
+        d.emit(thought(''));
+        d.emit(estimate(30));
+        d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Read', status: 'completed' });
+        const mine = rows.slice(before);
+        const opened = replaced.slice(before);
+        expect(mine.filter((r, i) => r.kind === 'think' && !opened[i])).toHaveLength(1);
+        expect(mine.filter((r) => r.kind === 'notice')).toHaveLength(0);
+    });
+
+    it('an estimate with no thought open still arrives as its notice (nothing to fold it into)', () => {
+        const { d, rows } = open();
+        const before = rows.length;
+        d.emit(estimate(3));
+        expect(rows.slice(before).map((r) => r.kind)).toEqual(['notice']);
+    });
+
     it('is written to the thread ONCE, when it closes', async () => {
         const { d, thread } = open();
         d.emit(thought('a'));
