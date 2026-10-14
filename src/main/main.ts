@@ -27,6 +27,8 @@ import { raisesApprovals, SessionHost, providerBinary } from './session-host.js'
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
+import { QuestionWindow } from './question-window.js';
+import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
@@ -390,6 +392,8 @@ function packageManagerHere(): 'winget' | 'brew' | 'apt' | 'dnf' | null {
     return null;
 }
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
+/** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
+let questionWindow: QuestionWindow | null = null;
 /** Who else wants the feature snapshot on change: the remote host's event stream. */
 const featureListeners = new Set<(data: FeatureData) => void>();
 
@@ -1228,6 +1232,17 @@ async function boot(): Promise<void> {
             now: Date.now,
         },
     };
+    // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
+    // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one
+    // workflow: a question asked opens it; one answered in either place leaves both.
+    questionWindow = new QuestionWindow({
+        items: () => composed.deckItems(),
+        open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow }),
+        answer: async (item, selections, note) => { await handleFeatureAction(composed, { kind: 'deck.answerForm', item, selections, note }, featureState, featurePorts); },
+    });
+    composed.attention.onChange(() => questionWindow?.changed());
+    // Questions already waiting when Genie starts come up too.
+    questionWindow.changed();
     ipcMain.handle(FEATURE_CHANNELS.browserBounds, (_event, raw: unknown) => {
         const b = raw as { x: number; y: number; width: number; height: number };
         if (!browserPane || typeof b?.width !== 'number') return;

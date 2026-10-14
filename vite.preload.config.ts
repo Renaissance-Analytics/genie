@@ -15,7 +15,7 @@ export default defineConfig({
         ssr: true,
         sourcemap: true,
         // Genie's preload, and the doctor window's (it exposes `genieDoctor`, never Genie's bridge).
-        lib: { entry: { preload: 'src/main/preload.ts', 'doctor-preload': 'src/main/doctor-preload.ts' }, formats: ['cjs'], fileName: (_format, name) => `${name}.cjs` },
+        lib: { entry: { preload: 'src/main/preload.ts', 'doctor-preload': 'src/main/doctor-preload.ts', 'question-preload': 'src/main/question-preload.ts' }, formats: ['cjs'], fileName: (_format, name) => `${name}.cjs` },
         rollupOptions: { external: ['electron', /^node:/] },
     },
 });
