@@ -8,10 +8,13 @@ import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateF
 import type { FlowAdding, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
+import type { RepairReport } from '../core/toolchain-repair.js';
+import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
+import type { InstallOutcome } from './toolchain-ops.js';
 import type { ComposedServices } from './compose.js';
 import { createService, createSite, removeService, removeSite, setActiveService, siteDefaults, startService, startSite, stopService, stopSite } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InstallPreview, ToolchainSection } from '../renderer/features.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -34,6 +37,14 @@ export interface FeaturePorts {
         probe(): Promise<ToolStatus[]>;
         update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
         now(): number;
+        /** What is running right now — the update guard's input. An update is refused while this is not wired. */
+        activity?(): Promise<ToolchainActivity>;
+        /** T1: install one missing tool. The consent is the person's; the installer checks it too. */
+        install?(tool: string, consent: boolean): Promise<InstallOutcome>;
+        /** How a missing tool would be installed here, shown before anything runs. */
+        preview?(tool: string): Promise<InstallPreview>;
+        /** T2: Check and repair. */
+        repair?(): Promise<RepairReport>;
     };
 }
 
@@ -42,6 +53,13 @@ export interface FeatureState {
     knowledgeQuery: string;
     browserUrl?: string | null;
     toolchainCheckedAt?: number | null;
+    /** The Toolchain surface's own state beyond the scan (renderer/features.ts `ToolchainSection`). */
+    toolchainInstalls?: Readonly<Record<string, InstallPreview>> | null;
+    toolchainBusy?: string | null;
+    toolchainFindings?: RepairReport['findings'] | null;
+    toolchainRepairedAt?: number | null;
+    toolchainWarning?: ToolchainSection['warning'] | null;
+    toolchainResult?: string | null;
     siteAdding?: SiteAdding | null;
     flowAdding?: FlowAdding | null;
     serviceAdding?: ServiceAdding | null;
@@ -50,6 +68,68 @@ export interface FeatureState {
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
     servedLink?: { id: string; url: string } | null;
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
+}
+
+/** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
+export function toolchainSection(state: FeatureState): ToolchainSection | null {
+    if (state.toolStatuses === null) return null;
+    return {
+        tools: state.toolStatuses,
+        checkedAt: state.toolchainCheckedAt ?? null,
+        ...(state.toolchainInstalls ? { installs: state.toolchainInstalls } : {}),
+        ...(state.toolchainBusy ? { busy: state.toolchainBusy } : {}),
+        ...(state.toolchainFindings ? { findings: state.toolchainFindings } : {}),
+        ...(typeof state.toolchainRepairedAt === 'number' ? { repairedAt: state.toolchainRepairedAt } : {}),
+        ...(state.toolchainWarning ? { warning: state.toolchainWarning } : {}),
+        ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
+    };
+}
+
+/** What main keeps of a toolchain action's answer for the next snapshot (the inverse of `toolchainSection`). */
+export function toolchainStateFrom(section: ToolchainSection | null): Partial<FeatureState> {
+    return {
+        toolStatuses: section?.tools ?? null,
+        toolchainCheckedAt: section?.checkedAt ?? null,
+        toolchainInstalls: section?.installs ?? null,
+        toolchainFindings: section?.findings ?? null,
+        toolchainRepairedAt: section?.repairedAt ?? null,
+        toolchainWarning: section?.warning ?? null,
+        toolchainResult: section?.result ?? null,
+    };
+}
+
+type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
+
+/** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
+async function rescanToolchain(next: FeatureState, tc: ToolchainPort): Promise<void> {
+    const tools = await tc.probe();
+    next.toolStatuses = tools;
+    next.toolchainCheckedAt = tc.now();
+    if (tc.preview) {
+        const missing = tools.filter((t) => t.tone === 'not-installed');
+        next.toolchainInstalls = Object.fromEntries(await Promise.all(missing.map(async (t) => [t.tool, await tc.preview!(t.tool)] as const)));
+    }
+}
+
+function describeInstall(tool: string, outcome: Exclude<InstallOutcome, { kind: 'refused' }>): string {
+    switch (outcome.kind) {
+        case 'installed':
+            return `${tool}${outcome.version ? ` ${outcome.version}` : ''} is installed.${outcome.note ? ` (${outcome.note})` : ''}`;
+        case 'already-installed':
+            return `${tool} was already installed${outcome.version ? ` (${outcome.version})` : ''}; nothing was run.`;
+        case 'not-installed':
+            return `${tool} was not installed: ${outcome.reason}.`;
+    }
+}
+
+function describeUpdate(tool: string, outcome: RepairOutcome): string {
+    switch (outcome.kind) {
+        case 'repaired':
+            return `${tool} updated${outcome.from ? ` from ${outcome.from}` : ''} to ${outcome.to}.${outcome.note ? ` (${outcome.note})` : ''}`;
+        case 'unchanged':
+        case 'unverified':
+            return `${tool}: ${outcome.reason}.`;
+    }
 }
 
 /** How much of a process's log rides each snapshot: the end of it. All of it is the agents' `processes logs`. */
@@ -77,7 +157,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         hosting: { sites: services.sites.list(), processes: withLogTails(services, ports.processes ? ports.processes.list() : services.supervisor.list()), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
         services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null },
-        toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
+        toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
         settings: { values: services.settings.snapshot() },
@@ -237,19 +317,58 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const tc = ports.toolchain;
             if (!tc) throw new Error('no toolchain runner is wired into this Genie; the scan cannot run');
             if (shouldCheckUpdates(state.toolchainCheckedAt ?? null, tc.now(), action.force === true)) {
-                next.toolStatuses = await tc.probe();
-                next.toolchainCheckedAt = tc.now();
+                await rescanToolchain(next, tc);
             }
             break;
         }
         case 'toolchain.update': {
             const tc = ports.toolchain;
             if (!tc) throw new Error('no toolchain runner is wired into this Genie; the update cannot run');
+            // THE UPDATE-RISK GUARD (core/toolchain-risk.ts), read here in main from what is running NOW — never from the
+            // renderer, and never optional: a guard that can be left unwired is not one.
+            if (!tc.activity) throw new Error('the update guard is not wired into this Genie, so nothing is updated');
+            const known = (state.toolStatuses ?? []).find((t) => t.tool === action.tool);
+            const risk = updateRisk(action.tool, await tc.activity(), { installed: known ? known.installed !== null : true });
+            if (risk.risk === 'blocked') throw new Error(risk.reason);
+            if (risk.risk === 'warn' && action.confirmed !== true) {
+                next.toolchainWarning = { tool: action.tool, reason: risk.reason, affected: risk.affected };
+                break;
+            }
+            next.toolchainWarning = null;
             const outcome = await tc.update(action.tool);
             if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            next.toolchainResult = describeUpdate(action.tool, outcome);
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
-            next.toolStatuses = await tc.probe();
-            next.toolchainCheckedAt = tc.now();
+            await rescanToolchain(next, tc);
+            break;
+        }
+        case 'toolchain.install': {
+            // Consent first, before anything is asked of the machine: no consent, nothing runs.
+            if (action.consent !== true) throw new Error(`Genie installs nothing without your go-ahead; ${action.tool} was not installed`);
+            const tc = ports.toolchain;
+            if (!tc?.install) throw new Error('no installer is wired into this Genie; nothing was installed');
+            const outcome = await tc.install(action.tool, true);
+            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            next.toolchainResult = describeInstall(action.tool, outcome);
+            // A prerequisite now present is no longer a finding.
+            if (outcome.kind !== 'not-installed' && next.toolchainFindings) {
+                next.toolchainFindings = next.toolchainFindings.filter((f) => !(f.result.kind === 'needs-install' && f.result.tool === action.tool));
+            }
+            await rescanToolchain(next, tc);
+            break;
+        }
+        case 'toolchain.repair': {
+            const tc = ports.toolchain;
+            if (!tc?.repair) throw new Error('Check and repair is not wired into this Genie; nothing was checked');
+            const report = await tc.repair();
+            next.toolchainFindings = report.findings;
+            next.toolchainRepairedAt = report.checkedAt;
+            const repaired = report.findings.filter((f) => f.result.kind === 'repaired').length;
+            next.toolchainResult =
+                report.findings.length === 0
+                    ? "Nothing to repair: each tool runs its newest copy, PHP has a CA bundle, and nothing PHP needs is missing."
+                    : `${report.findings.length} problem${report.findings.length === 1 ? '' : 's'} found, ${repaired} repaired.`;
+            await rescanToolchain(next, tc);
             break;
         }
         case 'deck.answer':

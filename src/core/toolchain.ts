@@ -20,6 +20,8 @@ export interface HostTool {
     readonly packages: Partial<Record<PackageManager, string>>;
     /** A tool with its own updater (rustup) or distribution (npm -g) ignores the OS package manager. */
     readonly ownUpdater?: { readonly manager: 'rustup' | 'npm'; readonly command: string };
+    /** The npm package an `npm`-distributed tool installs as (`npm install -g <it>`); absent = npm cannot install it. */
+    readonly npmPackage?: string;
 }
 
 export const HOST_TOOLS: readonly HostTool[] = [
@@ -32,9 +34,55 @@ export const HOST_TOOLS: readonly HostTool[] = [
     { name: 'rustc', probe: { binary: 'rustc', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'cargo', probe: { binary: 'cargo', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git' } },
-    { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @anthropic-ai/claude-code@latest' } },
-    { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @openai/codex@latest' } },
+    { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @anthropic-ai/claude-code@latest' }, npmPackage: '@anthropic-ai/claude-code' },
+    { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @openai/codex@latest' }, npmPackage: '@openai/codex' },
+    // Docker Desktop: what every hosted service engine runs on. No apt/dnf row on purpose: a distro's `docker.io` is not
+    // Docker Desktop, and installing it does not put the person in the `docker` group — a row that "installs" Docker and
+    // leaves it unusable is worse than none.
+    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop' } },
 ];
+
+/**
+ * PREREQUISITES — not tools anyone picks a version of, but what a tool needs to start at all. Windows only so far: every
+ * windows.php.net build links the Visual C++ runtime, which a fresh Windows does not have, so PHP installs and then
+ * cannot start (Genie 1's genie#209). Installable through the same consented path as a tool; never probed by version.
+ */
+export interface Prerequisite {
+    readonly name: string;
+    readonly label: string;
+    readonly platform: Platform;
+    readonly packages: Partial<Record<PackageManager, string>>;
+}
+
+export const PREREQUISITES: readonly Prerequisite[] = [
+    { name: 'vcredist', label: 'Microsoft Visual C++ runtime', platform: 'win32', packages: { winget: 'Microsoft.VCRedist.2015+.x64' } },
+];
+
+/**
+ * The Visual C++ runtime files a windows.php.net build loads, under `%SystemRoot%\System32` — all three, because they
+ * fail differently: without `vcruntime140.dll` nothing starts; without the other two PHP starts and `intl` fails to load,
+ * far from its cause (read out of the import tables by Genie 1). System32 specifically, never PATH: another app's
+ * private copy is not a runtime Genie can promise.
+ */
+export const VC_RUNTIME_DLLS: readonly string[] = ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll'];
+
+export function vcRuntimeFiles(systemRoot: string): string[] {
+    const root = systemRoot.replace(/[\\/]+$/, '');
+    return VC_RUNTIME_DLLS.map((dll) => `${root}\\System32\\${dll}`);
+}
+
+/**
+ * On Windows these are `.cmd`/`.bat` shims (npm.cmd, composer.bat, claude.cmd from npm), and `execFile` without a shell
+ * cannot start a batch file: the probe answered ENOENT and every one of them read `not-installed` however installed it
+ * was, and `npm install -g …` never ran. They go through `cmd.exe /d /s /c` — with arguments that are Genie's own
+ * constants (`--version`, a package id from the tables above), never a person's or an agent's text.
+ */
+const WINDOWS_SHIMS: ReadonlySet<string> = new Set(['npm', 'npx', 'composer', 'claude', 'codex']);
+
+export function platformArgv(binary: string, args: readonly string[], platform: Platform): [string, string[]] {
+    if (platform === 'win32' && WINDOWS_SHIMS.has(binary)) return ['cmd.exe', ['/d', '/s', '/c', binary, ...args]];
+    return [binary, [...args]];
+}
 
 const VERSION = /(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.]+)?)/;
 
@@ -115,10 +163,56 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
             return { command: `winget upgrade --id ${pkg} --silent --accept-package-agreements --accept-source-agreements`, manager: pm };
         case 'brew':
             return { command: `brew upgrade ${pkg}`, manager: pm };
+        // `pkexec`, not `sudo`: Genie runs commands with no terminal, so `sudo` could never ask for the password and a
+        // Linux update failed before it started. pkexec asks through the desktop's own polkit prompt.
         case 'apt':
-            return { command: `sudo apt-get install --only-upgrade -y ${pkg}`, manager: pm };
+            return { command: `pkexec apt-get install --only-upgrade -y ${pkg}`, manager: pm };
         case 'dnf':
-            return { command: `sudo dnf upgrade -y ${pkg}`, manager: pm };
+            return { command: `pkexec dnf upgrade -y ${pkg}`, manager: pm };
+    }
+}
+
+/**
+ * HOW A MISSING TOOL WOULD BE INSTALLED HERE — the exact argv, shown to the person BEFORE anything runs (their click on
+ * it is the consent), from Genie's own tables and never a guess. The package manager Genie 1 used per platform: winget
+ * on Windows, Homebrew on macOS, apt or dnf on Linux through `pkexec` (one polkit prompt; `apt-get update` rides in the
+ * same prompt, because installing against a stale index is the classic "no installation candidate"). npm-distributed
+ * agent CLIs install with npm. `elevated` says a system prompt will appear — never a surprise.
+ */
+export type InstallPlan =
+    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm'; readonly elevated: boolean }
+    | { readonly refused: string };
+
+/** A Debian package name; anything else never reaches `sh -c`. */
+const PACKAGE_NAME = /^[a-z0-9][a-z0-9.+-]*$/;
+
+export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
+    const tool = HOST_TOOLS.find((t) => t.name === input.tool);
+    const prereq = PREREQUISITES.find((p) => p.name === input.tool);
+    if (!tool && !prereq) return { refused: `${input.tool} is not a tool Genie manages` };
+    if (prereq && prereq.platform !== input.platform) return { refused: `the ${prereq.label} is only needed on ${prereq.platform}` };
+    if (tool?.npmPackage) {
+        const [binary, args] = platformArgv('npm', ['install', '-g', tool.npmPackage], input.platform);
+        return { argv: [binary, ...args], label: `npm install -g ${tool.npmPackage}`, manager: 'npm', elevated: false };
+    }
+    if (tool?.ownUpdater?.manager === 'npm') return { refused: `${input.tool} comes with Node; install node and it is there` };
+    if (tool?.ownUpdater?.manager === 'rustup') return { refused: `${input.tool} is installed with rustup (rustup.rs); once it is there, Genie keeps it updated` };
+    const pm = input.packageManager;
+    if (pm === null) return { refused: `no package manager found on this machine to install ${input.tool} with` };
+    const pkg = (tool?.packages ?? prereq?.packages ?? {})[pm];
+    if (!pkg) return { refused: `${pm} cannot install ${input.tool} on this machine` };
+    switch (pm) {
+        case 'winget': {
+            const argv = ['winget', 'install', '--id', pkg, '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'];
+            return { argv, label: argv.join(' '), manager: pm, elevated: false };
+        }
+        case 'brew':
+            return { argv: ['brew', 'install', pkg], label: `brew install ${pkg}`, manager: pm, elevated: false };
+        case 'apt':
+            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will hand to a shell` };
+            return { argv: ['pkexec', 'sh', '-c', `apt-get update && apt-get install -y ${pkg}`], label: `apt-get update && apt-get install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
+        case 'dnf':
+            return { argv: ['pkexec', 'dnf', 'install', '-y', pkg], label: `dnf install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
     }
 }
 

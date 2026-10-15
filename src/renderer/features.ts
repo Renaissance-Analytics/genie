@@ -2,6 +2,7 @@ import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
 import type { ToolStatus } from '../core/toolchain.js';
+import type { RepairFinding } from '../core/toolchain-repair.js';
 import type { DeckItem } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { MemoryClass, Scope } from '../main/knowledge-store.js';
@@ -109,12 +110,31 @@ export interface PluginsSection {
     readonly panels: readonly PluginPanelView[];
 }
 
+/** How a MISSING tool would be installed here — the exact command, shown before anything runs — or why it cannot be. */
+export type InstallPreview = { readonly label: string; readonly elevated: boolean } | { readonly refused: string };
+
+/**
+ * The Toolchain surface. `tools`/`checkedAt` are the scan; the rest appear only once there is something to say: how each
+ * missing tool would be installed, what is running right now (`busy`), the last Check and repair's findings with each
+ * one's measured result, an update that needs the person's go-ahead (`warning`), and the last action's outcome.
+ */
+export interface ToolchainSection {
+    readonly tools: readonly ToolStatus[];
+    readonly checkedAt: number | null;
+    readonly installs?: Readonly<Record<string, InstallPreview>>;
+    readonly busy?: string;
+    readonly findings?: readonly RepairFinding[];
+    readonly repairedAt?: number;
+    readonly warning?: { readonly tool: string; readonly reason: string; readonly affected: readonly string[] };
+    readonly result?: string;
+}
+
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly SiteInfo[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
-    readonly toolchain: { tools: readonly ToolStatus[]; checkedAt: number | null } | null;
+    readonly toolchain: ToolchainSection | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     readonly browser: { url: string | null; routes: readonly GenRoute[] };
@@ -180,7 +200,11 @@ export type FeatureAction =
     | { kind: 'services.stop'; serviceId: string }
     | { kind: 'services.remove'; serviceId: string; deleteData: boolean }
     | { kind: 'toolchain.check'; force?: boolean }
-    | { kind: 'toolchain.update'; tool: string }
+    /** `confirmed`: the person read the warning (Docker's restart) and chose to go ahead. A REFUSAL is never confirmable. */
+    | { kind: 'toolchain.update'; tool: string; confirmed?: boolean }
+    /** Install a missing tool (or the Windows VC++ runtime). `consent` is the person's click on the command shown. */
+    | { kind: 'toolchain.install'; tool: string; consent: boolean }
+    | { kind: 'toolchain.repair' }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string }
     /**

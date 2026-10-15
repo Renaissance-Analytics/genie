@@ -223,6 +223,11 @@ export class ProcessSupervisor {
             .map((e) => this.#status(e));
     }
 
+    /** The command a process runs, as started — what the toolchain's update guard reads to see who runs on Node. */
+    command(id: string): string | undefined {
+        return this.#entries.get(id)?.spec.command;
+    }
+
     /**
      * The process's output so far, across its runs — kept by the supervisor, so it is there after the
      * process exited or crashed. `undefined` only for a process the supervisor does not know.

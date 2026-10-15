@@ -87,6 +87,8 @@ export interface ComposeInput {
      */
     readonly v1Services?: { readonly database: string };
     readonly caddyBin: string | null;
+    /** What every site's php-cgi worker is given on top of the pty host's env: Genie's CA ini directory (toolchain-ops.ts). */
+    readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
     readonly allocatePort?: () => number;
@@ -522,6 +524,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             mkdirSync(join(path, '..'), { recursive: true });
             writeFileSync(path, content, 'utf8');
         },
+        ...(input.phpWorkerEnv ? { phpWorkerEnv: input.phpWorkerEnv } : {}),
     });
     const routes = () => sites.routes();
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
