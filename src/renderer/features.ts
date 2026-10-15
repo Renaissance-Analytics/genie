@@ -277,8 +277,13 @@ export type FeatureAction =
      * alone answers its question). `note` is the overall note — '' from the form, which no longer shows one.
      */
     | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; notes: string[]; note: string }
-    /** Dismiss an agent's question WITHOUT an answer (Deck or question window): it leaves both, and the agent is told. */
-    | { kind: 'deck.dismiss'; item: DeckItem }
+    /**
+     * Dismiss an agent's question WITHOUT an answer (Deck or question window): it leaves both, and the agent is told —
+     * with the person's notes, one per question as the form holds them ('' where none; absent = no notes).
+     */
+    | { kind: 'deck.dismiss'; item: DeckItem; notes?: string[] }
+    /** "Dismiss all stale": exactly the questions the person SAW marked stale; main dismisses those still stale. */
+    | { kind: 'deck.dismissStale'; ids: string[] }
     /** "Dismiss all older than 1 day": every agent question asked longer ago than this, each agent told. */
     | { kind: 'deck.dismissOlder'; olderThanMs: number }
     /** The person adds a memory. */

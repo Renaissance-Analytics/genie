@@ -21,8 +21,9 @@ import { unansweredCount } from '../../core/deck-resolve.js';
  *
  * ## Dismiss
  *
- * Beside Answer: the question is put aside WITHOUT an answer and its agent is told so (attention-store.ts). Offered only
- * where the surface wires it.
+ * Beside Answer: the question is put aside WITHOUT an answer and its agent is told so (attention-store.ts) — with the
+ * notes written in the form, so a person can say why, or what to do instead (the owner, 2026-10-15: "I NEED THE ABILITY TO
+ * ADD NOTES TO ANY AND ALL QUESTIONS"). A note is never required to dismiss. Offered only where the surface wires it.
  */
 export interface QuestionDraft {
     /** Chosen labels, one array per question. */
@@ -39,8 +40,8 @@ export interface QuestionFormProps {
     /** "Later" in the question window (the question stays in the Deck). Absent = no such button (the Deck's form is always open). */
     readonly onCancel?: (() => void) | undefined;
     readonly cancelLabel?: string;
-    /** Dismiss without an answer; absent = not offered here. */
-    readonly onDismiss?: (() => void) | undefined;
+    /** Dismiss without an answer, with the notes written so far (one per question); absent = not offered here. */
+    readonly onDismiss?: ((notes: string[]) => void) | undefined;
     /** Why main refused the last answer — said beside the buttons. */
     readonly refusal?: string | null;
     /** A starting draft (tests render a filled-in form with it). */
@@ -112,7 +113,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                 <button type="submit" data-action="deck-submit" disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</button>
                 {onCancel ? <button type="button" data-action="question-cancel" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button> : null}
                 {onDismiss ? (
-                    <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={onDismiss} title="Put this question aside without an answer; the agent is told" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</button>
+                    <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={() => onDismiss([...notes])} title="Put this question aside without an answer; the agent is told, with any note you wrote" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</button>
                 ) : null}
                 {remaining > 0 ? (
                     <span data-question-remaining={remaining} className="text-[11px] text-[var(--fg-3)]">

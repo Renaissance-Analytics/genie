@@ -1,5 +1,5 @@
 import type { ListItem } from './attention.js';
-import { plainLabel, type DeckItem } from './deck.js';
+import { plainLabel, type DeckItem, type StaleReason } from './deck.js';
 import { HUMAN } from './inbox.js';
 import type { Finished, PendingQuestion } from '../main/attention-store.js';
 import type { InboxMessage } from '../main/inbox-store.js';
@@ -33,6 +33,32 @@ export interface DeckSourceInput {
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
     /** Workspace id → its NAME as the rail says it (core/workspace-name.ts). An id not here gets no name — never the id. */
     readonly workspaceNames?: Readonly<Record<string, string>>;
+    /**
+     * Is the asking agent still WAITING — its session as Genie runs it (or its Take Over terminal): `null` when it has
+     * none, `undefined` when LIVENESS IS NOT KNOWN yet (the roster and the session host have not reported once). Only a
+     * known answer is judged (`questionStale`); `undefined`, or no port at all, judges nothing — "we have not heard" is
+     * never "the agent is gone".
+     */
+    readonly asker?: (agentId: string) => AskerState | null | undefined;
+}
+
+/** The asking agent's session now: is it running, and since when (epoch ms; `null` = no start recorded). */
+export interface AskerState {
+    readonly running: boolean;
+    readonly startedAt: number | null;
+}
+
+/**
+ * DOES ITS AGENT STILL WAIT FOR THIS QUESTION? (the owner, 2026-10-15: old items — "Keep, but mark stale"). It does not
+ * when the agent is gone from the roster, when it has no running session (its session ended), or when the session
+ * running now started AFTER the question was asked — an earlier run asked it, and the run now has never heard of it.
+ * A session with no recorded start is not judged on that last count: "we have not heard" is not "it was earlier".
+ */
+export function questionStale(askedAt: number, known: boolean, session: AskerState | null): StaleReason | null {
+    if (!known) return 'agent-gone';
+    if (session === null || !session.running) return 'session-ended';
+    if (session.startedAt !== null && Number.isFinite(askedAt) && askedAt < session.startedAt) return 'earlier-run';
+    return null;
 }
 
 const option = (id: string, label: string) => ({ id, label, tone: 'neutral' as const });
@@ -63,6 +89,9 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
     const items: DeckItem[] = [];
 
     for (const q of input.questions) {
+        const at = Date.parse(q.askedAt);
+        const live = input.asker?.(q.agentId);
+        const stale = live === undefined ? null : questionStale(at, input.agents[q.agentId] !== undefined, live);
         items.push({
             id: q.id,
             source: 'agent-question',
@@ -73,13 +102,15 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             title: questionTitle(q.questions),
             blocking: true,
             priority: q.priority,
-            at: Date.parse(q.askedAt),
+            at,
             // EVERY agent question is a form (the owner, 2026-10-14): ForceTheQuestion opens its window on top, and every
             // question carries its own note. A one-click inline answer had no note and never reached the window.
             answer: { kind: 'form', fields: q.questions.length, questions: q.questions },
             forwardedFrom: null,
             // Updated by its agent: a form keyed by this starts a clean draft (a draft for the old content is dropped).
             ...(q.revision ? { revision: q.revision } : {}),
+            // Its agent no longer waits: kept, and marked (the Deck greys it and offers Dismiss / Dismiss all stale).
+            ...(stale ? { stale } : {}),
         });
     }
 

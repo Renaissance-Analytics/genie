@@ -155,16 +155,19 @@ describe('the feature actions the Deck and the window send', () => {
 });
 
 describe('the window’s Dismiss reaches main', () => {
-    it('the preload invokes question:dismiss, main handles it, and the controller dismisses — once', async () => {
+    it('the preload invokes question:dismiss WITH the form’s notes, main handles it, and the controller dismisses — once, with them', async () => {
         const { electronQuestionWindow } = await import('../src/main/question-window-electron.js');
         await import('../src/main/question-preload.js');
-        let dismissed = 0;
-        const ctl = { dismiss: async () => { dismissed += 1; return { ok: true }; } } as unknown as QuestionWindow;
+        const dismissed: unknown[] = [];
+        const ctl = { dismiss: async (notes: unknown) => { dismissed.push(notes); return { ok: true }; } } as unknown as QuestionWindow;
         electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl });
-        await ipc.exposed.get('genieQuestion')!.dismiss!();
-        expect(ipc.invoked).toEqual([['question:dismiss']]);
+        await ipc.exposed.get('genieQuestion')!.dismiss!(['not now']);
+        expect(ipc.invoked).toEqual([['question:dismiss', ['not now']]]);
         expect(ipc.handlers.has('question:dismiss')).toBe(true);
-        expect(await ipc.handlers.get('question:dismiss')!({})).toEqual({ ok: true });
-        expect(dismissed).toBe(1);
+        expect(await ipc.handlers.get('question:dismiss')!({}, ['not now'])).toEqual({ ok: true });
+        // A note that is not a string is no note — never a crash, never "[object Object]" in the agent's mail.
+        expect(await ipc.handlers.get('question:dismiss')!({}, ['ok', 7])).toEqual({ ok: true });
+        // COUNTED: two dismisses reached the controller, each with exactly its notes.
+        expect(dismissed).toEqual([['not now'], ['ok', '']]);
     });
 });
