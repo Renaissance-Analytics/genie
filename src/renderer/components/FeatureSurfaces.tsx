@@ -610,7 +610,8 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                         <Tabs.Panel key={g} value={g}>
                             {g === 'general' && update ? <UpdatesBlock {...update} /> : null}
                             <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>
-                                {SETTINGS.filter((s) => s.group === g).map((def) => (
+                                {/* An INTERNAL setting (`hidden`) is remembered, never drawn — the tabs honour it as search does. */}
+                                {SETTINGS.filter((s) => s.group === g && !s.hidden).map((def) => (
                                     <li key={def.key} data-setting={def.key} className="flex items-center gap-4 px-5 py-3">
                                         <div className="flex-1">
                                             <div className="text-sm font-medium">{def.label}</div>

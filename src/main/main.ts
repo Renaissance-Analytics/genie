@@ -3,12 +3,12 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { BrowserWindow, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
 import { FilesWindows } from './files-windows.js';
-import { hostname } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
@@ -17,7 +17,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
-import { quitPlan } from '../core/quit.js';
+import { quitPlan, quitSequence } from '../core/quit.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -38,7 +38,9 @@ import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray } from './tray.js';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { showOnBoot } from '../core/tray-resident.js';
+import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate } from './toolchain-prober.js';
@@ -127,8 +129,12 @@ let host: SessionHost | null = null;
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 let updates: UpdateHost | null = null;
-/** Set once the running set has been recorded for §7.6, so quit does not overwrite it with an empty list after the drain stopped everyone. */
-let runningRecorded = false;
+/**
+ * ONE QUIT (core/quit.ts `quitSequence`): asked at most once, the running set recorded at most once (§7.6 — an
+ * upgrade's drain records it itself, so the quit does not overwrite it with the empty list it leaves), the shutdown
+ * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
+ */
+const quit = quitSequence();
 
 /**
  * A Take Over window: the OS frame (there is no Genie chrome to replace it), one terminal.
@@ -259,7 +265,7 @@ async function reapV1Runtime(includeShells: boolean): Promise<void> {
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(show: boolean): BrowserWindow {
     const win = new BrowserWindow({
         // The frame — hidden OS title bar, the native window buttons drawn over our 36 px bar on
         // Windows/Linux, a minimum size — is core/window.ts, where a test holds it. The owner's
@@ -281,12 +287,33 @@ function createWindow(): BrowserWindow {
     });
 
     // Paint when there is something to paint. A visible empty frame that then fills in is the
-    // app looking broken for the length of a load.
-    win.once('ready-to-show', () => win.show());
+    // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
+    // keeps it in the tray: the tray's Open shows it.
+    if (show) win.once('ready-to-show', () => win.show());
 
     void win.loadFile(join(here, '../renderer/index.html'));
     return win;
 }
+
+/**
+ * Bring the main window back: from the tray, a second launch, the tray notice. A hidden window
+ * needs `show()` — `focus()` alone does nothing to a window that is not on screen.
+ */
+function revealMainWindow(): void {
+    if (!window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+}
+
+/** The OS side of "launch at sign-in" (main/tray-residence.ts holds the decisions). */
+const loginItemPort: LoginItemPort = {
+    setLoginItemSettings: (s) => app.setLoginItemSettings({ openAtLogin: s.openAtLogin, ...(s.path !== undefined ? { path: s.path } : {}), ...(s.args !== undefined ? { args: [...s.args] } : {}) }),
+    getLoginItemSettings: (o) => app.getLoginItemSettings({ ...(o.path !== undefined ? { path: o.path } : {}), ...(o.args !== undefined ? { args: [...o.args] } : {}) }),
+    exists: (file) => existsSync(file),
+    writeFile: (file, content) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content, 'utf8'); },
+    removeFile: (file) => unlinkSync(file),
+};
 
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
@@ -544,7 +571,7 @@ async function boot(): Promise<void> {
             live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
             stopAll: () => {
                 // Record who was running and who was MID-TURN BEFORE the sessions end (§7.6; the owner, 2026-10-13).
-                runningRecorded = true;
+                quit.markRecorded();
                 void recordShutdown();
                 host?.stopAll();
             },
@@ -1312,11 +1339,35 @@ async function boot(): Promise<void> {
     // A saved setting changes the agent's RECORD, not its session: the Agent view reads it from the detail.
     registry.subscribeAgentRecords(pushAgent);
 
-    window = createWindow();
+    // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
+    // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
+    window = createWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
+    wireCloseToTray(window, {
+        platform: process.platform,
+        quitting: () => quit.quitting,
+        settings: composed.settings,
+        notify: (notice) => {
+            if (!Notification.isSupported()) return;
+            const n = new Notification({ title: notice.title, body: notice.body });
+            n.on('click', revealMainWindow);
+            n.show();
+        },
+    });
+    // Windows ends a session (shutdown, restart, sign-out) WITHOUT a before-quit (Electron documents it): quit on the
+    // way out so the shutdown runs, without a question nothing could answer.
+    window.on('session-end', () => { quit.force(); app.quit(); });
+    // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
+    void wireLoginItem(composed.settings, loginItemPort, {
+        platform: process.platform,
+        packaged: app.isPackaged,
+        execPath: process.execPath,
+        appImage: process.env.APPIMAGE ?? null,
+        configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
+    });
     tray = createTray({
-        onOpen: () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } },
+        onOpen: revealMainWindow,
         onSettings: () => {
-            if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+            revealMainWindow();
             broadcast('genie:navigate', 'genie://settings');
         },
         onCheckUpdates: () => { void updates?.check(); },
@@ -1325,11 +1376,9 @@ async function boot(): Promise<void> {
     browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
 }
 
+// A second launch shows the first one's window — hidden in the tray included.
 app.on('second-instance', () => {
-    if (window) {
-        if (window.isMinimized()) window.restore();
-        window.focus();
-    }
+    revealMainWindow();
 });
 
 /**
@@ -1354,30 +1403,31 @@ function recordShutdown(): Promise<unknown> {
     return Promise.all([registry.markRunningAtQuit(running), registry.markInterruptedAtQuit(midTurn)]);
 }
 
-let quitConfirmed = false;
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
 app.on('before-quit', (event) => {
+    // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds. The steps and their
+    // once-only guarantees are core/quit.ts `quitSequence`; a cancelled quit changes nothing — the window keeps hiding.
+    const step = quit.beforeQuit({
+        ready: host !== null && registry !== null,
+        plan: () => {
+            const running = registry!.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true });
+        },
+        ask: (plan) => dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 }) !== 0,
+    });
+    if (step === 'cancel') { event.preventDefault(); return; }
     autoCheckStop?.();
     autoCheckStop = null;
-    // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds.
-    if (!quitConfirmed && host && registry) {
-        const running = registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
-        const plan = quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true });
-        if (plan.confirm) {
-            const choice = dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 });
-            if (choice === 0) { event.preventDefault(); return; }
-        }
-        quitConfirmed = true;
-    }
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
-    if (!runningRecorded && registry && host) {
-        runningRecorded = true;
+    if (step === 'record') {
         event.preventDefault();
         // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
         const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
         void Promise.all([recordShutdown(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
+    // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
+    if (step === 'pass') return;
     host?.stopAll();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
@@ -1397,6 +1447,16 @@ app.whenReady().then(boot).catch((error: unknown) => {
     app.quit();
 });
 
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+/*
+ * TRAY-RESIDENT: the last window closing is not a quit. The main window hides instead of closing (Windows, Linux), and
+ * macOS keeps an app without windows running by convention — Genie quits from the tray's Quit, the app menu's Quit, or
+ * the OS ending the session. A handler that does nothing is what stops Electron's default quit here.
+ */
+app.on('window-all-closed', () => { /* Genie stays in the tray */ });
+
+// macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
+powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
+    event?.preventDefault();
+    quit.force();
+    app.quit();
 });
