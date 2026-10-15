@@ -55,7 +55,7 @@ describe('the snapshot', () => {
         expect(snap.knowledge).toEqual({ hits: [], query: '', adding: null, lastAdd: null });
         // The toolchain is the one section that needs a scan — null until one has run.
         expect(snap.toolchain).toBeNull();
-        expect(snap.browser).toEqual({ url: null, routes: [] });
+        expect(snap.browser).toEqual({ url: null, routes: [], canGoBack: false, canGoForward: false });
     });
 });
 

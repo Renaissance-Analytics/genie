@@ -105,9 +105,9 @@ describe('S5: a multi-label site reaches every place a name goes', () => {
         expect(sans.filter((s) => s.includes('*'))).toEqual([]);
     });
 
-    it('the in-app browser opens it: the full name resolves to the site’s loopback target, Host kept', async () => {
+    it('the in-app browser opens it at its own https origin under the FULL name (S7), never the loopback target', async () => {
         await createSite(services, { workspaceId: 'example', repoPath: join(ws, 'repos', 'web'), form: proxy('web.example', 5173) });
-        expect(classifyNavigation('https://web.example.gen/login', services.routes())).toEqual({ kind: 'site', host: 'web.example.gen', url: 'http://127.0.0.1:5173/login', hostHeader: 'web.example.gen' });
+        expect(classifyNavigation('https://web.example.gen/login', services.routes())).toEqual({ kind: 'site', host: 'web.example.gen', url: 'https://web.example.gen/login' });
         const snap = await handleFeatureAction(services, { kind: 'browser.navigate', url: 'web.example.gen' }, state());
         expect(snap.browser.url).toBe('https://web.example.gen/');
     });

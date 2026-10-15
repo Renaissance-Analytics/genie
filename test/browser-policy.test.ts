@@ -6,25 +6,36 @@ import { browserRoute, classifyNavigation, type GenRoute } from '../src/core/bro
  * where a `.gen` navigation actually goes. The engine is Electron's own `WebContentsView` (there
  * is no second engine inside Electron, so that is not a decision); the policy is Genie's.
  *
- * Two rules carry the weight. A `.gen` host is served by the front door, so the browser rewrites
- * it to the site's loopback target and keeps the `.gen` name in the address bar. And the browser
- * opens WEB content only — `file:`, `javascript:`, `chrome:` and the app's own `genie:` scheme are
- * refused by name, because a browser pane that could load `file:///` is a file reader with a
- * renderer attached.
+ * Two rules carry the weight. A `.gen` host is a site at ITS OWN https origin (S7): the pane loads
+ * `https://<name>.gen/…` — never the site's loopback target, whose 127.0.0.1 cookie jar every site
+ * shared. And the browser opens WEB content only — `file:`, `javascript:`, `chrome:` and the app's
+ * own `genie:` scheme are refused by name, because a browser pane that could load `file:///` is a
+ * file reader with a renderer attached.
  */
 
 const routes: GenRoute[] = [{ host: 'tynn.gen', target: '127.0.0.1:4101' }];
 
 describe('what a navigation is', () => {
-    it('a .gen site Genie serves → `site`, rewritten to its loopback target with the Host kept', () => {
-        expect(classifyNavigation('http://tynn.gen/dashboard?x=1', routes)).toEqual({
-            kind: 'site',
-            host: 'tynn.gen',
-            url: 'http://127.0.0.1:4101/dashboard?x=1',
-            hostHeader: 'tynn.gen',
-        });
-        // https on a .gen name is the same site — the front door is loopback http.
-        expect(classifyNavigation('https://TYNN.gen/', routes)).toMatchObject({ kind: 'site', url: 'http://127.0.0.1:4101/' });
+    it('a .gen site Genie serves → `site`, loaded at https://<name>.gen with its path and query — not its loopback target', () => {
+        expect(classifyNavigation('https://tynn.gen/dashboard?x=1', routes)).toEqual({ kind: 'site', host: 'tynn.gen', url: 'https://tynn.gen/dashboard?x=1' });
+        // http and a port on a .gen name are the same site at the same origin: the front door serves https on 443.
+        expect(classifyNavigation('http://TYNN.gen:8080/a#b', routes)).toEqual({ kind: 'site', host: 'tynn.gen', url: 'https://tynn.gen/a#b' });
+        expect(classifyNavigation('tynn.gen', routes)).toEqual({ kind: 'site', host: 'tynn.gen', url: 'https://tynn.gen/' });
+    });
+
+    it('two sites open at two origins whose HOSTS differ — cookies are kept per host, so a port apart is not apart', () => {
+        const two: GenRoute[] = [{ host: 'site-a.gen', target: '127.0.0.1:4101' }, { host: 'site-b.gen', target: '127.0.0.1:4102' }];
+        const [a, b] = ['site-a.gen', 'site-b.gen'].map((h) => new URL((classifyNavigation(h, two) as { url: string }).url));
+        expect([a!.origin, b!.origin]).toEqual(['https://site-a.gen', 'https://site-b.gen']);
+        expect(a!.hostname).not.toBe(b!.hostname);
+        // Control: the same input is the same origin (the check above is not "everything differs").
+        expect(new URL((classifyNavigation('https://site-a.gen/x', two) as { url: string }).url).origin).toBe(a!.origin);
+    });
+
+    it('control: a URL that is not .gen is loaded exactly as written — nothing about it is changed', () => {
+        for (const url of ['https://example.com/docs?q=1#h', 'http://example.org/', 'http://localhost:5173/', 'http://127.0.0.1:4101/']) {
+            expect(classifyNavigation(url, routes)).toEqual({ kind: 'web', url });
+        }
     });
 
     it('a .gen site nobody serves → `no-site`, naming it, so the pane can offer to create it', () => {

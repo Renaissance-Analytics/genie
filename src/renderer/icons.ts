@@ -81,6 +81,8 @@ export const ICON_NAMES: readonly string[] = [
     // The right column's strip below 1100 px: the door to the column.
     'panel-right',
     'info', 'circle-help', 'file-text', 'globe', 'check',
+    // The Genie Browser's address bar on a .gen site (its own https origin, Genie's certificate).
+    'lock',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

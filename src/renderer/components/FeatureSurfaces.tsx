@@ -1231,22 +1231,52 @@ function BrowserBox({ url, onBounds }: { url: string | null; onBounds: (b: { x: 
     return <div ref={ref} data-browser-view data-browser-url={url ?? undefined} data-route-encoded={browserRoute.format({ ...(url ? { url } : {}) })} className="min-h-0 flex-1" />;
 }
 
+const chromeButton = 'shrink-0 rounded-md p-1.5 text-[var(--fg-2)] hover:bg-[var(--bg-1)] disabled:opacity-40 disabled:hover:bg-transparent';
+
 export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps) {
-    const { url, routes } = data.browser;
+    const { url, routes, canGoBack, canGoForward } = data.browser;
     const nav = url ? classifyNavigation(url, routes) : null;
     return (
         <div data-surface="browser" className="flex h-full min-h-0 flex-col">
-            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-5">
+                <button type="button" data-browser-nav="back" aria-label="Back" title="Back" disabled={!canGoBack} onClick={() => onAction({ kind: 'browser.back' })} className={chromeButton}>
+                    <Icon name="chevron-left" size="xs" />
+                </button>
+                <button type="button" data-browser-nav="forward" aria-label="Forward" title="Forward" disabled={!canGoForward} onClick={() => onAction({ kind: 'browser.forward' })} className={chromeButton}>
+                    <Icon name="chevron-right" size="xs" />
+                </button>
+                <button type="button" data-browser-nav="reload" aria-label="Reload" title="Reload" disabled={url === null} onClick={() => onAction({ kind: 'browser.reload' })} className={chromeButton}>
+                    <Icon name="rotate-cw" size="xs" />
+                </button>
+                {/* Keyed by the url: the field shows the page the view reports (a link, a redirect, back), not a stale entry. */}
                 <form
-                    className="flex-1"
+                    key={url ?? ''}
+                    className="ml-1.5 flex-1"
                     onSubmit={(e) => { e.preventDefault(); onAction({ kind: 'browser.navigate', url: (new FormData(e.currentTarget).get('url') as string) ?? '' }); }}
                 >
-                    <Input name="url" type="url" data-browser-address defaultValue={url ?? ''} placeholder="tynn.gen or https://…" leading={<Icon name="globe" size="xs" />} />
+                    <Input name="url" type="url" data-browser-address defaultValue={url ?? ''} placeholder="tynn.gen or https://…" leading={nav?.kind === 'site' ? <Icon name="lock" size="xs" /> : <Icon name="globe" size="xs" />} />
                 </form>
                 {nav?.kind === 'site' ? <Badge variant="soft" size="sm" color="emerald">{nav.host}</Badge> : null}
                 {nav?.kind === 'no-site' ? <Badge variant="soft" size="sm" color="amber">no site at {nav.host}</Badge> : null}
                 {nav?.kind === 'refused' ? <Badge variant="soft" size="sm" color="red">{nav.reason}</Badge> : null}
             </div>
+            {/* This machine's sites, each opened at its own https origin. */}
+            {routes.length > 0 ? (
+                <div data-browser-sites className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-5 py-1.5">
+                    {routes.map((r) => (
+                        <button
+                            key={r.host}
+                            type="button"
+                            data-browser-site={r.host}
+                            aria-current={nav?.kind === 'site' && nav.host === r.host ? 'page' : undefined}
+                            onClick={() => onAction({ kind: 'browser.navigate', url: `https://${r.host}/` })}
+                            className={`rounded-md px-2 py-0.5 font-mono text-[12px] hover:bg-[var(--bg-1)] ${nav?.kind === 'site' && nav.host === r.host ? 'bg-[var(--bg-1)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}
+                        >
+                            {r.host}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
             {/* The page itself is a WebContentsView owned by the main process, positioned over this box. */}
             <BrowserBox url={url} onBounds={onBrowserBounds ?? NO_BOUNDS} />
         </div>

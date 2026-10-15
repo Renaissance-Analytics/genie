@@ -27,7 +27,7 @@ const FEATURES: FeatureData = {
     toolchain: null,
     inbox: null,
     settings: { values: null },
-    browser: { url: null, routes: [] },
+    browser: { url: null, routes: [], canGoBack: false, canGoForward: false },
     remote: null,
     integrations: null,
     plugins: null,
@@ -117,7 +117,7 @@ describe('measured empties are a different claim', () => {
 
     it('the browser surface with no url shows the address bar only; with a url it names the page', () => {
         expect(render('genie://browser')).toContain('data-browser-address');
-        const html = render('genie://browser?url=http%3A%2F%2Ftynn.gen%2F', { browser: { url: 'http://tynn.gen/', routes: [{ host: 'tynn.gen', target: '127.0.0.1:4101' }] } });
+        const html = render('genie://browser?url=https%3A%2F%2Ftynn.gen%2F', { browser: { url: 'https://tynn.gen/', routes: [{ host: 'tynn.gen', target: '127.0.0.1:4101' }], canGoBack: false, canGoForward: false } });
         expect(html).toContain('tynn.gen');
     });
 });

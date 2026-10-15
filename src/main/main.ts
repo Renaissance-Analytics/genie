@@ -1403,6 +1403,10 @@ async function boot(): Promise<void> {
             const shown = await browserPane.show(data.browser.url);
             if (!shown.ok) console.error('[genie] browser:', shown.reason);
         }
+        // The pane's own history; where it lands comes back through browserPane.onChange below.
+        if (action.kind === 'browser.back') browserPane?.back();
+        if (action.kind === 'browser.forward') browserPane?.forward();
+        if (action.kind === 'browser.reload') browserPane?.reload();
         // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
         featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null };
         return data;
@@ -1462,7 +1466,18 @@ async function boot(): Promise<void> {
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
     }, trayIconPath());
-    browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
+    // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
+    // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
+    const browserTrust = composed.browserTrust();
+    if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
+    browserPane = new BrowserPane(electronBrowserView(window, { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }), () => composed.routes());
+    // What the page did (a link, a redirect, back/forward) is the address bar and the history buttons — pushed, not polled.
+    // A hidden pane reports no url; the surface keeps the last page it showed.
+    browserPane.onChange((state) => {
+        if (state.url === null) return;
+        featureState = { ...featureState, browserUrl: state.url, browserCanGoBack: state.canGoBack, browserCanGoForward: state.canGoForward };
+        pushFeatures();
+    });
 }
 
 // A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead.

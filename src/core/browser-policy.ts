@@ -1,4 +1,5 @@
 import { resolveRoute, type GenRoute } from './gen-router.js';
+import { siteOrigin } from './browser-origins.js';
 
 export type { GenRoute };
 
@@ -8,10 +9,12 @@ export type { GenRoute };
  *
  * The engine is Electron's own `WebContentsView`; the policy is Genie's, and it has two rules:
  *
- * 1. A `.gen` host is served by the front door, so the pane loads the site's LOOPBACK target and
- *    keeps the `.gen` name in the address bar and the `Host` header — the site sees the name it
- *    was created under. A `.gen` name nobody serves is `no-site`, so the pane can offer to create
- *    it. The front door's own rule (only loopback targets) is reused, not re-decided.
+ * 1. A `.gen` host is a site at ITS OWN https origin: the pane loads `https://<name>.gen/…` itself
+ *    (core/browser-origins.ts routes that session's `.gen` names to the front door and trusts
+ *    Genie's CA for them), so each site has its own cookie jar and a secure context. An `http://`
+ *    `.gen` URL is upgraded, and a port is dropped (the front door serves 443). A `.gen` name
+ *    nobody serves is `no-site`, so the pane can offer to create it. The front door's own rule
+ *    (only loopback targets) is reused, not re-decided.
  * 2. The pane opens WEB content only. `file:`, `javascript:`, `chrome:`, `data:`, `about:` and the
  *    app's own `genie:` scheme are refused BY NAME — a browser pane that could load `file:///` is a
  *    file reader with a renderer attached, and `genie:` inside a web pane would nest the app in
@@ -19,7 +22,7 @@ export type { GenRoute };
  */
 
 export type Navigation =
-    | { kind: 'site'; host: string; url: string; hostHeader: string }
+    | { kind: 'site'; host: string; url: string }
     | { kind: 'no-site'; host: string }
     | { kind: 'web'; url: string }
     | { kind: 'refused'; scheme: string; reason: string };
@@ -47,10 +50,8 @@ export function classifyNavigation(input: string, routes: readonly GenRoute[]): 
     }
     const route = resolveRoute(url.host, routes);
     if (route.kind === 'site') {
-        const target = new URL(url.toString());
-        target.protocol = 'http:';
-        target.host = route.target;
-        return { kind: 'site', host: route.host, url: target.toString(), hostHeader: route.host };
+        // The site's own origin, path and query kept: never its loopback target (that origin is shared by every site).
+        return { kind: 'site', host: route.host, url: `${siteOrigin(route.host)}${url.pathname}${url.search}${url.hash}` };
     }
     if (route.kind === 'no-site') return { kind: 'no-site', host: route.host };
     return { kind: 'web', url: url.toString() };
