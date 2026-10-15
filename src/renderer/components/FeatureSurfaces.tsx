@@ -397,16 +397,16 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
                 <Empty>No service engines yet. Add an engine — Postgres, MySQL, MariaDB, Redis, Mongo — dedicated to a workspace or shared by the workstation.</Empty>
             ) : (
                 <ul className="divide-y divide-[var(--border-1)]">
-                    {services.instances.map(({ instance: i, status }) => {
+                    {services.instances.map(({ instance: i, status, note }) => {
                         const activeSibling = services.instances.find((o) => o.instance.engine === i.engine && o.instance.active && sameScope(o.instance, i))?.instance;
                         const warning = !i.active && activeSibling ? switchActiveWarning({ engine: i.engine, from: activeSibling.version, to: i.version }) : null;
                         const scope = i.scope;
                         return (
-                            <li key={i.id} data-service={i.id} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
+                            <li key={i.id} data-service={i.id} data-service-status={status} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
                                     <span className="font-mono">{i.engine} {i.version}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
-                                    <Badge variant="soft" size="sm">{status}</Badge>
+                                    <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
                                     <span className="ml-auto flex gap-3 text-[13px]">
@@ -422,6 +422,7 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
+                                {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
                             </li>
                         );
                     })}

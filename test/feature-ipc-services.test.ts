@@ -26,8 +26,11 @@ function fakeDocker() {
     const calls: (readonly string[])[] = [];
     const images = new Set<string>();
     const containers = new Map<string, 'created' | 'running' | 'exited'>();
+    // The daemon: when it is down, every command answers what the real CLI answers then.
+    const daemon = { down: false };
     const run: DockerRunner = async (args) => {
         calls.push(args);
+        if (daemon.down) return { stdout: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?', exitCode: 1 };
         const [cmd, sub] = args;
         if (cmd === 'image' && sub === 'inspect') return { stdout: images.has(args[2]!) ? '[{}]' : '', exitCode: images.has(args[2]!) ? 0 : 1 };
         if (cmd === 'pull') { images.add(args[1]!); return { stdout: '', exitCode: 0 }; }
@@ -41,7 +44,7 @@ function fakeDocker() {
         if (cmd === 'rm') { containers.delete(args[2]!); return { stdout: '', exitCode: 0 }; }
         return { stdout: '', exitCode: 0 };
     };
-    return { run, calls, images, containers };
+    return { run, calls, images, containers, daemon };
 }
 
 let dir: string;
@@ -49,11 +52,28 @@ let docker: ReturnType<typeof fakeDocker>;
 let services: ComposedServices;
 const state = (over: Partial<FeatureState> = {}): FeatureState => ({ toolStatuses: null, knowledgeQuery: '', ...over });
 const form = { workspaceId: 'tynn', engine: 'postgres', major: '17', scope: 'dedicated' as const };
+// Genie's boot over the same userData and the same (fake) Docker — what a restart is. The readiness probe and the
+// port probe are fakes that COUNT; everything else is the real composition.
+const answered: string[] = [];
+const boot = (over: Partial<Parameters<typeof composeServices>[0]> = {}) =>
+    composeServices({
+        userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run,
+        workspaces: () => [{ id: 'tynn', path: join(dir, 'tynn') }, { id: 'fancy', path: join(dir, 'fancy') }],
+        portFree: async () => true,
+        engineAnswers: async (i) => { answered.push(`${i.engine} ${i.version}`); return true; },
+        ...over,
+    });
+const restart = async (over: Partial<Parameters<typeof composeServices>[0]> = {}) => {
+    await services.shutdown();
+    services = await boot(over);
+    return services;
+};
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-services-'));
     docker = fakeDocker();
     opened.length = 0;
+    answered.length = 0;
     // Two registered envelopes; a site created from Hosting is kept in its workspace's project.json.
     for (const ws of ['tynn', 'fancy']) {
         await mkdir(join(dir, ws), { recursive: true });
@@ -149,5 +169,75 @@ describe('an engine that exists', () => {
         expect(removed.services!.instances.map((v) => v.instance.version)).toEqual(['16']);
         expect(docker.calls.some((c) => c[0] === 'volume')).toBe(false);
         await expect(handleFeatureAction(services, { kind: 'services.stop', serviceId: id }, state())).rejects.toThrow(/no service/);
+    });
+});
+
+describe('after a restart', () => {
+    const redis = { workspaceId: 'tynn', engine: 'redis', major: '7', scope: 'dedicated' as const };
+
+    it('a registered engine that is not running is STARTED and waited for; one the PERSON stopped stays stopped — counted', async () => {
+        await restart();
+        await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
+        const added = await handleFeatureAction(services, { kind: 'services.create', form: redis, consent: true }, state());
+        const redisId = added.services!.instances.find((v) => v.instance.engine === 'redis')!.instance.id;
+        await handleFeatureAction(services, { kind: 'services.stop', serviceId: redisId }, state());
+        await services.shutdown();
+        // The machine restarted: Docker is back, the containers are not running.
+        for (const name of docker.containers.keys()) docker.containers.set(name, 'exited');
+        const mark = docker.calls.length;
+        services = await boot();
+        const report = await services.engineReconcile;
+        expect(docker.calls.slice(mark).filter((c) => c[0] === 'start').map((c) => c.join(' '))).toEqual(['start genie-tynn-postgres-17']);
+        expect(answered).toEqual(['postgres 17']);
+        expect(report.engines.map((e) => e.outcome)).toEqual(['started', 'person-stopped']);
+        const snap = await featureSnapshot(services, state());
+        expect(snap.services!.instances.map((v) => [v.instance.engine, v.status])).toEqual([['postgres', 'running'], ['redis', 'exited']]);
+        // The person's Start clears the stop: the NEXT restart starts it too.
+        await handleFeatureAction(services, { kind: 'services.start', serviceId: redisId }, state());
+        for (const name of docker.containers.keys()) docker.containers.set(name, 'exited');
+        const mark2 = docker.calls.length;
+        await restart();
+        await services.engineReconcile;
+        expect(docker.calls.slice(mark2).filter((c) => c[0] === 'start').map((c) => c.join(' ')).sort()).toEqual(['start genie-tynn-postgres-17', 'start genie-tynn-redis-7']);
+    });
+
+    it('with Docker NOT running every engine SAYS so — never `absent` — and nothing is started; positive control: Docker back up reads the real state', async () => {
+        await restart();
+        await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
+        await services.shutdown();
+        docker.daemon.down = true;
+        const mark = docker.calls.length;
+        services = await boot();
+        const snap = await featureSnapshot(services, state());
+        expect(snap.services!.instances.map((v) => v.status)).toEqual(['docker-not-running']);
+        expect(snap.services!.instances[0]!.note).toBe('Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again');
+        const report = await services.engineReconcile;
+        expect(report.docker).toEqual({ ok: false, reason: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' });
+        expect(report.engines.map((e) => e.outcome)).toEqual(['docker-not-running']);
+        expect(docker.calls.slice(mark).filter((c) => c[0] === 'start')).toHaveLength(0);
+        docker.daemon.down = false;
+        const back = await featureSnapshot(services, state());
+        expect(back.services!.instances.map((v) => v.status)).toEqual(['running']);
+        expect(back.services!.instances[0]).not.toHaveProperty('note');
+    });
+
+    it('a site created after a restart never lands on an engine’s RECORDED port (the old allocator counted from 4100 again)', async () => {
+        await restart();
+        const added = await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
+        const enginePort = added.services!.instances[0]!.instance.publishedPort;
+        await restart();
+        expect(services.engines.list()[0]!.publishedPort).toBe(enginePort);
+        const sites = [1, 2, 3].map((n) => services.sites.create({ name: `site${n}`, workspaceId: 'tynn', repoPath: '/w/tynn', serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } }).port);
+        expect(sites).not.toContain(enginePort);
+        expect(new Set(sites).size).toBe(3);
+    });
+
+    it('a port something else on the machine holds is not handed to a site (the bind probe says busy) — with the free one as control', async () => {
+        await restart({ portFree: async (port) => port !== 4101 });
+        const site = services.sites.create({ name: 'busy', workspaceId: 'tynn', repoPath: '/w/tynn', serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } });
+        expect(site.port).toBe(4102);
+        await restart();
+        const control = services.sites.create({ name: 'free', workspaceId: 'tynn', repoPath: '/w/tynn', serve: { mode: 'proxy' }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } });
+        expect(control.port).toBe(4101);
     });
 });

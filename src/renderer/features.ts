@@ -48,12 +48,15 @@ export interface ServiceAdding {
     readonly consent: { image: string; note: string; form: ServiceForm } | null;
 }
 
-export type ServiceStatus = 'running' | 'exited' | 'absent';
+/** Docker's state for the container, or `docker-not-running` when Docker itself is not there to ask (never read as `absent`). */
+export type ServiceStatus = 'running' | 'exited' | 'absent' | 'docker-not-running';
 
 /** One engine instance with its status as Docker reported it on this snapshot — never remembered. */
 export interface ServiceView {
     readonly instance: ServiceInstance;
     readonly status: ServiceStatus;
+    /** Only with `docker-not-running`: Docker's own reason (the daemon is down, or Docker is not installed). */
+    readonly note?: string;
 }
 
 /** An Add-a-memory form open in the Knowledge surface. */

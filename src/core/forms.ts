@@ -137,6 +137,11 @@ export function serviceFormDefaults(input: { workspaceId: string }): ServiceForm
 export function validateServiceForm(form: ServiceForm): Problem[] {
     const problems: Problem[] = [];
     const def = SERVICE_CATALOG.find((e) => e.engine === form.engine);
+    // An adopt-only engine (MinIO: its images are gone) is one Genie runs when Genie 1 left it, never one a person adds.
+    if (def?.adoptOnly) {
+        problems.push({ field: 'engine', message: `${form.engine} can only be taken over from Genie 1 — its images are no longer published.` });
+        return problems;
+    }
     if (!def) {
         problems.push({ field: 'engine', message: `${form.engine} is not an engine Genie manages.` });
         return problems;

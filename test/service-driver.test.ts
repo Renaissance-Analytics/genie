@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ServiceDriver, type DockerRunner } from '../src/main/service-driver.js';
+import { DOCKER_CALL_TIMEOUT_MS, DOCKER_PULL_TIMEOUT_MS, ServiceDriver, dockerRunnerOver, type DockerRunner } from '../src/main/service-driver.js';
 
 /**
  * SERVICE ENGINES — the Docker driver (§6.6). Everything goes through an injected runner, so the tests
@@ -93,5 +93,46 @@ describe('volumes', () => {
         expect(docker.calls.map((c) => c.join(' '))).toEqual(['rm -f genie-tynn-postgres-17']);
         await d.remove('genie-tynn-postgres-17', { deleteData: true });
         expect(docker.calls.at(-1)).toEqual(['volume', 'rm', 'genie-tynn-postgres-17-data']);
+    });
+});
+
+describe('the production runner: only a pull gets the long bound', () => {
+    // The runner's 20 s default cut every Postgres/MySQL pull mid-download, and the cut read as a failed add.
+    function fakeExec(answer: (args: readonly string[]) => Promise<{ stdout: string; exitCode: number }> = async () => ({ stdout: '', exitCode: 0 })) {
+        const calls: { binary: string; args: readonly string[]; timeoutMs: number | undefined }[] = [];
+        const exec = async (binary: string, args: readonly string[], options?: { timeoutMs?: number }) => {
+            calls.push({ binary, args, timeoutMs: options?.timeoutMs });
+            return answer(args);
+        };
+        return { exec, calls };
+    }
+
+    it('a pull runs with the 15-minute bound; inspect, create, start and version keep the short one — COUNTED per command', async () => {
+        const f = fakeExec(async (args) => (args[0] === 'image' || args[0] === 'container' ? { stdout: '', exitCode: 1 } : { stdout: '', exitCode: 0 }));
+        const d = new ServiceDriver(dockerRunnerOver(f.exec));
+        await d.available();
+        await d.ensureImage('postgres:17', { consent: true });
+        await d.create(pg);
+        await d.start('genie-tynn-postgres-17');
+        expect(DOCKER_PULL_TIMEOUT_MS).toBe(15 * 60_000);
+        expect(f.calls.every((c) => c.binary === 'docker')).toBe(true);
+        const long = f.calls.filter((c) => c.timeoutMs === DOCKER_PULL_TIMEOUT_MS).map((c) => c.args.join(' '));
+        const short = f.calls.filter((c) => c.timeoutMs === DOCKER_CALL_TIMEOUT_MS).map((c) => c.args[0]);
+        expect(long).toEqual(['pull postgres:17']);
+        expect(short).toEqual(['version', 'image', 'container', 'create', 'start']);
+        // Nothing ran on an unbounded call.
+        expect(long.length + short.length).toBe(f.calls.length);
+    });
+
+    it('a missing docker binary answers exit 127 (never a throw) and availability reads it as NOT INSTALLED; a cut call answers 124 with the runner’s words', async () => {
+        const missing = fakeExec(async () => { throw Object.assign(new Error('spawn docker ENOENT'), { code: 'ENOENT' }); });
+        const run = dockerRunnerOver(missing.exec);
+        expect(await run(['container', 'inspect', 'x'])).toEqual({ stdout: 'spawn docker ENOENT', exitCode: 127 });
+        expect(await new ServiceDriver(run).available()).toEqual({ ok: false, reason: 'Docker is not installed on this machine; service engines need it' });
+        const hung = fakeExec(async () => { throw Object.assign(new Error('docker did not answer within 20000 ms'), { code: 'ETIMEDOUT' }); });
+        expect(await dockerRunnerOver(hung.exec)(['start', 'x'])).toEqual({ stdout: 'docker did not answer within 20000 ms', exitCode: 124 });
+        // Positive control: the daemon-down answer is still told apart from not-installed.
+        const down = fakeExec(async () => ({ stdout: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock', exitCode: 1 }));
+        expect(await new ServiceDriver(dockerRunnerOver(down.exec)).available()).toEqual({ ok: false, reason: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' });
     });
 });

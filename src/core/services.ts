@@ -13,6 +13,21 @@
  * the last — an app and a tool reached DIFFERENT databases, with nothing reporting it. Here exactly
  * one instance per engine emits: the active one, else the highest version, deterministically.
  * `custom` engines emit only what they declare.
+ *
+ * ## Engines taken over from Genie 1 (`adopted: 'v1'`)
+ *
+ * The owner, after the first real upgrade: "the upgrade should have shut down everything that was
+ * genie 1 so that everything running was genie 2 and what needed to be migrated, was migrated."
+ * Genie 1's engines hold every workspace's data, and every workspace's `.env` already names them —
+ * Genie 1 WROTE those files (its env-sync, genie#242). So Genie 2 takes the containers over IN
+ * PLACE (core/v1-services.ts plans it): same container, same volume, same credentials, same port.
+ * An adopted instance is never created, pulled or re-keyed by Genie 2 — every engine bakes its
+ * credential into its data directory on first init, so a fresh one would lock the apps out.
+ *
+ * Genie 1's engines are MULTI-TENANT where Genie 2's are not: one Postgres, a database + role per
+ * workspace (`ws_<slug>`), each with its own password. That is a `slice` per workspace, and the
+ * env an adopted instance emits is Genie 1's own — the exact names and values its env-wiring
+ * produced in host form — so what Genie 2 hands a process equals what is already in the `.env`.
  */
 
 export type ServiceScope = { kind: 'shared' } | { kind: 'dedicated'; workspaceId: string };
@@ -23,6 +38,17 @@ export interface EngineDef {
     readonly internalPort: number;
     readonly majors: readonly string[];
     readonly sharing: 'shared-or-dedicated' | 'shared-only';
+    /**
+     * The image tag for a major, when it is not the major itself — Mailpit publishes `v1.30`, and
+     * there is no bare `1.30` (Genie 1 measured that 404 on its first live run).
+     */
+    readonly tag?: (major: string) => string;
+    /**
+     * Known only so Genie 1's containers can be TAKEN OVER — never offered, never created. MinIO
+     * withdrew its public images (Genie 1 measured 401 from quay.io and Docker Hub, genie#758), so a
+     * new one cannot start; an existing one still serves its workspaces' buckets.
+     */
+    readonly adoptOnly?: true;
     /** The container's own credential env, from the instance's credentials. */
     readonly containerEnv: (c: Credentials) => Record<string, string>;
     /** The host-form env a workspace gets. */
@@ -45,6 +71,34 @@ export interface ServiceInstance {
     readonly active: boolean;
     /** `custom` engines: the env they declare, verbatim. */
     readonly env?: Readonly<Record<string, string>>;
+    /** The container's own name, when Genie 2 did not derive it (an adopted Genie 1 container: `genie-svc-…`). */
+    readonly containerName?: string;
+    /** The image the container runs, as observed — Genie 1's own Postgres image, not the stock one. */
+    readonly image?: string;
+    /** The data volume, as observed; Genie 1 named its volumes, so `<container>-data` is not assumed. */
+    readonly volume?: string;
+    /** Taken over from Genie 1 in place: never created, pulled, or re-keyed by Genie 2. */
+    readonly adopted?: 'v1';
+    /** The engine's own superuser, as Genie 1 minted it. Kept (it is baked into the volume); never handed to a workspace. */
+    readonly admin?: { readonly user: string; readonly password: string };
+    /** Per workspace id: that workspace's slice of this engine — what its env is built from. */
+    readonly slices?: Readonly<Record<string, AdoptedSlice>>;
+    /** Every surface the container publishes, by Genie 1's surface name (Mailpit's `ui`, MinIO's `console`). */
+    readonly publishedPorts?: Readonly<Record<string, number>>;
+}
+
+/** One workspace's slice of an adopted engine, as Genie 1 provisioned it. */
+export interface AdoptedSlice {
+    /** Genie 1's `ws_<slug>`: the database, the role, the Redis ACL user, the mail tag. */
+    readonly identifier: string;
+    /** The workspace's own password on the engine (Genie 1's `dev_services` row). */
+    readonly password: string;
+    /** Redis: the key prefix the ACL restricts the user to (`<identifier>:`). */
+    readonly prefix?: string;
+    /** MinIO: the bucket, which is also the access key (`ws-<slug>`). */
+    readonly bucket?: string;
+    /** This version is the one whose connection the workspace gets (Genie 1's `active`). */
+    readonly active?: boolean;
 }
 
 const sqlEnv = (driver: string, defaultUser: string) => (host: string, port: number, c: Credentials): Record<string, string> => {
@@ -97,7 +151,24 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         containerEnv: () => ({}),
         hostEnv: (host, port) => ({ REVERB_HOST: host, REVERB_PORT: String(port), REVERB_SCHEME: 'http' }),
     },
+    {
+        // Catch-all SMTP. The published port is SMTP; the web inbox (8025) is published too on an adopted
+        // Genie 1 Mailpit and recorded in `publishedPorts.ui`.
+        engine: 'mailpit', image: 'axllent/mailpit', tag: (major) => `v${major}`, internalPort: 1025, majors: ['1.30'], sharing: 'shared-or-dedicated',
+        containerEnv: () => ({ MP_DATABASE: '/data/mailpit.db' }),
+        hostEnv: (host, port) => ({ MAIL_MAILER: 'smtp', MAIL_HOST: host, MAIL_PORT: String(port) }),
+    },
+    {
+        engine: 'minio', image: 'quay.io/minio/minio', internalPort: 9000, majors: ['latest'], sharing: 'shared-only', adoptOnly: true,
+        containerEnv: () => ({}),
+        hostEnv: (host, port) => ({ AWS_ENDPOINT: `http://${host}:${port}`, AWS_DEFAULT_REGION: 'us-east-1', AWS_USE_PATH_STYLE_ENDPOINT: 'true' }),
+    },
 ];
+
+/** The image reference for an engine at a major — `tag` where the registry's tags are not the bare major. */
+export function imageFor(def: EngineDef, major: string): string {
+    return `${def.image}:${def.tag ? def.tag(major) : major}`;
+}
 
 const HOST = '127.0.0.1';
 
@@ -111,22 +182,85 @@ function compareVersions(a: string, b: string): number {
     return 0;
 }
 
-/** The host-form env for a workspace: exactly one instance per engine, active first, else highest version. */
-export function serviceEnvFor(instances: readonly ServiceInstance[]): Record<string, string> {
+/**
+ * The host-form env for a workspace: exactly one instance per engine, active first, else highest version.
+ *
+ * `workspaceId` is whose env this is. An adopted Genie 1 engine serves a workspace only through that
+ * workspace's SLICE — a shared Postgres holding three workspaces' databases has nothing to say to a
+ * fourth — and its "active" is the slice's, because one shared engine is active for one workspace and
+ * not for another. Without a `workspaceId` no adopted instance emits.
+ */
+export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string): Record<string, string> {
+    const sliceOf = (i: ServiceInstance): AdoptedSlice | undefined => (workspaceId === undefined ? undefined : i.slices?.[workspaceId]);
     const byEngine = new Map<string, ServiceInstance[]>();
-    for (const i of instances) byEngine.set(i.engine, [...(byEngine.get(i.engine) ?? []), i]);
+    for (const i of instances) {
+        let view = i;
+        if (i.adopted === 'v1') {
+            const slice = sliceOf(i);
+            if (!slice) continue;
+            view = { ...i, active: slice.active === true };
+        }
+        byEngine.set(view.engine, [...(byEngine.get(view.engine) ?? []), view]);
+    }
+    const chosen = new Map<string, ServiceInstance>();
+    for (const [engine, list] of byEngine) {
+        if (engine === 'custom') continue;
+        chosen.set(engine, list.find((i) => i.active) ?? [...list].sort((a, b) => compareVersions(b.version, a.version))[0]!);
+    }
     const env: Record<string, string> = {};
     for (const [engine, list] of byEngine) {
         if (engine === 'custom') {
             for (const i of list) Object.assign(env, i.env ?? {});
             continue;
         }
-        const chosen = list.find((i) => i.active) ?? [...list].sort((a, b) => compareVersions(b.version, a.version))[0]!;
+        const one = chosen.get(engine)!;
+        if (one.adopted === 'v1') {
+            // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
+            Object.assign(env, v1HostEnv(engine, one.publishedPort, sliceOf(one)!, { primaryRelational: engine !== 'mysql' || !chosen.has('postgres') }));
+            continue;
+        }
         const def = SERVICE_CATALOG.find((e) => e.engine === engine);
         if (!def) continue;
-        Object.assign(env, def.hostEnv(HOST, chosen.publishedPort, chosen.credentials));
+        Object.assign(env, def.hostEnv(HOST, one.publishedPort, one.credentials));
     }
     return env;
+}
+
+/**
+ * GENIE 1's env for one workspace's slice, in HOST form — byte for byte what Genie 1's
+ * `serviceEnv` over `provisionedForHost` produced (main/dev-server/services/env-wiring.ts), which is
+ * what its env-sync wrote into the workspace's `.env`. Names and values both: a Genie 2 that renamed
+ * one (`MYSQL_TCP_PORT` for `MYSQL_PORT`) or dropped one (`REDIS_USERNAME`) would hand a process an
+ * env that disagrees with the file the app reads, and the exported variable wins (dotenv is
+ * immutable) — which is how Genie 1's genie#242 broke apps in the first place.
+ */
+export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean }): Record<string, string> {
+    const id = slice.identifier;
+    const pw = slice.password;
+    const p = String(port);
+    switch (engine) {
+        case 'postgres':
+            return {
+                PGHOST: HOST, PGPORT: p, PGUSER: id, PGPASSWORD: pw, PGDATABASE: id,
+                ...(options.primaryRelational ? { DATABASE_URL: `postgresql://${id}:${pw}@${HOST}:${p}/${id}`, DB_CONNECTION: 'pgsql', DB_HOST: HOST, DB_PORT: p, DB_DATABASE: id, DB_USERNAME: id, DB_PASSWORD: pw } : {}),
+            };
+        case 'mysql':
+            return {
+                MYSQL_HOST: HOST, MYSQL_PORT: p, MYSQL_USER: id, MYSQL_PASSWORD: pw, MYSQL_DATABASE: id,
+                ...(options.primaryRelational ? { DATABASE_URL: `mysql://${id}:${pw}@${HOST}:${p}/${id}`, DB_CONNECTION: 'mysql', DB_HOST: HOST, DB_PORT: p, DB_DATABASE: id, DB_USERNAME: id, DB_PASSWORD: pw } : {}),
+            };
+        case 'redis':
+            return { REDIS_URL: `redis://${id}:${pw}@${HOST}:${p}`, REDIS_HOST: HOST, REDIS_PORT: p, REDIS_USERNAME: id, REDIS_PASSWORD: pw, REDIS_PREFIX: slice.prefix ?? `${id}:` };
+        case 'minio': {
+            const bucket = slice.bucket ?? '';
+            return { AWS_ENDPOINT: `http://${HOST}:${p}`, AWS_ACCESS_KEY_ID: bucket, AWS_SECRET_ACCESS_KEY: pw, AWS_BUCKET: bucket, AWS_DEFAULT_REGION: 'us-east-1', AWS_USE_PATH_STYLE_ENDPOINT: 'true' };
+        }
+        case 'mailpit':
+            // The plus address Mailpit auto-tags (genie#552), and the same tag for an app that sets its own From.
+            return { MAIL_MAILER: 'smtp', MAIL_HOST: HOST, MAIL_PORT: p, MAIL_FROM_ADDRESS: `genie+${id}@mail.gen`, GENIE_MAIL_TAG: id };
+        default:
+            return {};
+    }
 }
 
 export function switchActiveWarning(input: { engine: string; from: string; to: string }): string {
@@ -145,11 +279,12 @@ export interface ContainerPlan {
 export function containerPlan(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
+    if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
     if (!def.majors.includes(input.major)) throw new Error(`${input.engine} ${input.major} is not a major Genie knows (${def.majors.join(', ')})`);
     if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}-${input.major}`;
     return {
-        image: `${def.image}:${input.major}`,
+        image: imageFor(def, input.major),
         name: `genie-${key}`,
         volume: `genie-${key}-data`,
         publish: `${HOST}:${input.publishedPort}:${def.internalPort}`,

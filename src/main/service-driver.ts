@@ -12,6 +12,35 @@ import { containerPlan, SERVICE_CATALOG, type Credentials, type ServiceScope } f
 
 export type DockerRunner = (args: readonly string[]) => Promise<{ stdout: string; exitCode: number }>;
 
+/** How long one `docker` call may take. A pull downloads an image (postgres:17 is ~150 MB): minutes, not seconds. */
+export const DOCKER_PULL_TIMEOUT_MS = 15 * 60_000;
+/** Every other docker call — inspect, create, start, stop, version — answers in seconds or the daemon is wedged. */
+export const DOCKER_CALL_TIMEOUT_MS = 20_000;
+
+/** The exit code a runner answers when the `docker` binary is not on this machine (the shell's own "command not found"). */
+export const DOCKER_NOT_INSTALLED_EXIT = 127;
+
+export function dockerTimeoutMs(args: readonly string[]): number {
+    return args[0] === 'pull' ? DOCKER_PULL_TIMEOUT_MS : DOCKER_CALL_TIMEOUT_MS;
+}
+
+type Exec = (binary: string, args: readonly string[], options?: { timeoutMs?: number }) => Promise<{ stdout: string; exitCode: number }>;
+
+/**
+ * The production `docker` runner over a command runner (execFileRunner): ONLY a pull gets the long bound — the
+ * runner's 20 s default killed every Postgres/MySQL pull mid-download, and a cut pull reads as a failed add. A
+ * missing binary answers exit 127 and a timeout answers 124 with the runner's words, never a throw: callers
+ * read the exit code, and `available()` reads 127 as "not installed".
+ */
+export function dockerRunnerOver(exec: Exec): DockerRunner {
+    return (args) =>
+        exec('docker', args, { timeoutMs: dockerTimeoutMs(args) }).catch((e: unknown) => {
+            const code = (e as { code?: unknown } | null)?.code;
+            const message = e instanceof Error ? e.message : String(e);
+            return { stdout: message, exitCode: code === 'ENOENT' ? DOCKER_NOT_INSTALLED_EXIT : code === 'ETIMEDOUT' ? 124 : 1 };
+        });
+}
+
 const DATA_DIRS: Record<string, string> = {
     postgres: '/var/lib/postgresql/data',
     mysql: '/var/lib/mysql',
@@ -19,6 +48,8 @@ const DATA_DIRS: Record<string, string> = {
     redis: '/data',
     mongo: '/data/db',
     reverb: '/data',
+    mailpit: '/data',
+    minio: '/data',
 };
 
 export class ServiceDriver {
@@ -31,6 +62,7 @@ export class ServiceDriver {
     async available(): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
         try {
             const r = await this.#run(['version', '--format', '{{.Server.Version}}']);
+            if (r.exitCode === DOCKER_NOT_INSTALLED_EXIT) return { ok: false, reason: 'Docker is not installed on this machine; service engines need it' };
             if (r.exitCode !== 0 || /cannot connect/i.test(r.stdout)) {
                 return { ok: false, reason: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' };
             }
@@ -85,8 +117,12 @@ export class ServiceDriver {
         }
     }
 
-    async remove(name: string, options: { deleteData: boolean }): Promise<void> {
+    /**
+     * `volume` is the instance's own when it has one: an adopted Genie 1 container named its volume itself, and a
+     * `delete data` that guessed `<container>-data` would remove nothing and say it had.
+     */
+    async remove(name: string, options: { deleteData: boolean; volume?: string }): Promise<void> {
         await this.#run(['rm', '-f', name]);
-        if (options.deleteData) await this.#run(['volume', 'rm', `${name}-data`]);
+        if (options.deleteData) await this.#run(['volume', 'rm', options.volume ?? `${name}-data`]);
     }
 }

@@ -184,7 +184,7 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
             <p className="text-sm text-[var(--fg-3)]">An engine in a container on this machine, reached over 127.0.0.1 on a port Genie picks. Its credentials go into the workspace’s environment.</p>
             <Row label="Engine">
                 <select name="engine" defaultValue={defaults.engine} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-                    {SERVICE_CATALOG.map((d) => (
+                    {SERVICE_CATALOG.filter((d) => !d.adoptOnly).map((d) => (
                         <option key={d.engine} value={d.engine}>
                             {d.engine} — {d.sharing === 'shared-only' ? 'shared, one per workstation' : `versions ${d.majors.join(', ')}`}
                         </option>

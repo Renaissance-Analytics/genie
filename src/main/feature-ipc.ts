@@ -64,8 +64,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance).
         hosting: { sites: services.sites.list(), processes: ports.processes ? ports.processes.list() : services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
-        // Status is READ from Docker for every instance on every snapshot — never remembered.
-        services: { instances: await Promise.all(services.engines.list().map(async (instance) => ({ instance, status: (await services.engines.status(instance.id)).state }))), adding: state.serviceAdding ?? null },
+        // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
+        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
@@ -250,13 +250,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.engines.setActive(action.workspaceId, action.engine, action.version);
             break;
         case 'services.start':
-            await services.engines.start(action.serviceId);
+            await services.startEngine(action.serviceId);
             break;
         case 'services.stop':
-            await services.engines.stop(action.serviceId);
+            await services.stopEngine(action.serviceId);
             break;
         case 'services.remove':
-            await services.engines.remove(action.serviceId, { deleteData: action.deleteData });
+            await services.removeEngine(action.serviceId, { deleteData: action.deleteData });
             break;
         case 'toolchain.check': {
             const tc = ports.toolchain;
