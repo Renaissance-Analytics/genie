@@ -32,7 +32,35 @@ describe('main.ts wiring', () => {
         expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/window\.show\(\);/);
         expect(block(src, "app.on('second-instance'")).toMatch(/revealMainWindow\(\)/);
         expect(src).toMatch(/onOpen: revealMainWindow,/);
-        expect(src).toMatch(/onQuit: \(\) => app\.quit\(\),/);
+        // The tray's Quit is the one quit entry `Genie --quit` also runs (quit-flag below).
+        expect(src).toMatch(/onQuit: requestQuit,/);
+    });
+
+    it('`Genie --quit`: the second-instance handler runs the SAME quit entry as the tray, and a plain second launch still reveals', () => {
+        const src = main();
+        // The one entry: the tray's Quit and --quit both reach app.quit() through it, so before-quit decides the rest.
+        expect(block(src, 'function requestQuit', '\n}\n')).toMatch(/app\.quit\(\);/);
+        const handler = block(src, "app.on('second-instance'");
+        expect(handler).toMatch(/\(_event, argv, _workingDirectory, additionalData\) =>/);
+        expect(handler).toMatch(/if \(secondInstanceAction\(argv, additionalData\) === 'quit'\) \{\s*\n\s*requestQuit\(\);\s*\n\s*return;\s*\n\s*\}/);
+        expect(handler).toMatch(/revealMainWindow\(\);/);
+        // Not a second, private quit path: the handler never calls app.quit itself.
+        expect(handler).not.toMatch(/app\.quit\(/);
+    });
+
+    it('`--quit` rides the single-instance lock, and a launch that is not `boot` exits without booting, quitting or a window', () => {
+        const src = main();
+        expect(src).toMatch(/const launch = launchDecision\(\{\s*\n\s*argv: process\.argv,\s*\n\s*primary: app\.requestSingleInstanceLock\(asksToQuit\(process\.argv\) \? \{ \.\.\.QUIT_DATA \} : undefined\),\s*\n\s*\}\);/);
+        // EXIT, not quit: a quit would run this process's before-quit, which clears the RUNNING Genie's genie-running file.
+        expect(block(src, "if (launch.kind === 'exit')", '\n}\n')).toMatch(/app\.exit\(0\);/);
+        expect(block(src, "if (launch.kind === 'exit')", '\n}\n')).not.toMatch(/app\.quit\(/);
+        // Only a boot launch boots; only boot() creates the main window.
+        expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
+        expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);
+        expect(block(src, 'async function boot', '\n}\n')).toMatch(/window = createWindow\(/);
+        expect(src.match(/window = createWindow\(/g)).toHaveLength(1);
+        // And a launch that never booted owns nothing to shut down.
+        expect(block(src, "app.on('before-quit'")).toMatch(/^app\.on\('before-quit', \(event\) => \{\s*\n\s*if \(launch\.kind !== 'boot'\) return;/);
     });
 
     it('before-quit runs the one quit sequence: cancel prevents, record waits, the shutdown runs once', () => {
