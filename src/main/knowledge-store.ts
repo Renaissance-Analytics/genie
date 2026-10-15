@@ -176,40 +176,64 @@ export class KnowledgeStore {
     static open(userData: string, now: () => string = () => new Date().toISOString()): KnowledgeStore {
         const dir = runtimeDir(userData);
         mkdirSync(dir, { recursive: true });
-        return new KnowledgeStore(new DatabaseSync(join(dir, 'knowledge.db')), now);
+        const db = new DatabaseSync(join(dir, 'knowledge.db'));
+        try {
+            return new KnowledgeStore(db, now);
+        } catch (error) {
+            // A store that could not be set up is not handed out, so nobody would ever close it: close it here. An open
+            // handle left behind keeps the file locked on Windows (EBUSY on its removal) for the life of the process.
+            try { db.close(); } catch { /* already closed */ }
+            throw error;
+        }
     }
 
     close(): void {
         this.#db.close();
     }
 
+    /**
+     * The schema, as ONE transaction. WAL first, on its own: SQLite refuses to change the journal mode inside a
+     * transaction. Then every table and index together — so a new store is created whole or not at all (a failure part
+     * way leaves nothing behind, where it used to leave the tables before it), and it is ONE durable commit: in WAL mode
+     * every commit is a sync of the log to disk, and the statements one by one were six of them on every new store
+     * (B13; test/knowledge-store-commits.test.ts counts them in the log). On an existing store
+     * every statement is `IF NOT EXISTS` and writes nothing.
+     */
     #migrate(): void {
-        this.#db.exec(`
-            PRAGMA journal_mode = WAL;
-            CREATE TABLE IF NOT EXISTS nodes (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                slug TEXT NOT NULL,
-                body TEXT NOT NULL,
-                class TEXT NOT NULL,
-                tags TEXT NOT NULL,
-                scope_kind TEXT NOT NULL,
-                scope_id TEXT,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS nodes_slug ON nodes(slug);
-            CREATE INDEX IF NOT EXISTS nodes_created ON nodes(created_at);
-            CREATE TABLE IF NOT EXISTS edges (
-                from_id TEXT NOT NULL,
-                to_ref TEXT NOT NULL,
-                kind TEXT NOT NULL CHECK (kind IN ('wiki', 'explicit')),
-                UNIQUE (from_id, to_ref, kind)
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, title, body, tags);
-            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        `);
+        this.#db.exec('PRAGMA journal_mode = WAL');
+        this.#db.exec('BEGIN');
+        try {
+            this.#db.exec(`
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    class TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    scope_kind TEXT NOT NULL,
+                    scope_id TEXT,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS nodes_slug ON nodes(slug);
+                CREATE INDEX IF NOT EXISTS nodes_created ON nodes(created_at);
+                CREATE TABLE IF NOT EXISTS edges (
+                    from_id TEXT NOT NULL,
+                    to_ref TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK (kind IN ('wiki', 'explicit')),
+                    UNIQUE (from_id, to_ref, kind)
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(id UNINDEXED, title, body, tags);
+                CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            `);
+            this.#db.exec('COMMIT');
+        } catch (error) {
+            // Some errors end the transaction themselves; a ROLLBACK then has nothing to roll back.
+            try { this.#db.exec('ROLLBACK'); } catch { /* no transaction left open */ }
+            throw error;
+        }
     }
 
     /** What the import from Genie 1 recorded, or `null` when it has never run against this store. */

@@ -2,15 +2,15 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { AgentRecord } from '../src/core/identity.js';
-import { composeServices } from '../src/main/compose.js';
 import { FlowStore } from '../src/main/flow-store.js';
 import { runtimeDir } from '../src/main/paths.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { runV1ScheduleImport } from '../src/main/v1-schedules.js';
+import { composeTracker } from './support/compose-tracker.js';
+import { inOneTransaction, openFixtureDb } from './support/sqlite-fixture.js';
 
 /**
  * GENIE 1's SCHEDULED TASKS COME THROUGH THE UPGRADE (hosting ship line P4). Genie 1 kept a scheduled task as a
@@ -94,20 +94,30 @@ const rows: Row[] = [
     { id: 't-scout', workspace_id: WS.id, label: 'scout', cwd: WS.path, type: 'terminal', meta: { agent_id: 'inbox-scout' } },
 ];
 
+/**
+ * Genie 1's database, built as a FIXTURE (test/support/sqlite-fixture.ts, B13): unsynced, in one transaction. It was
+ * 23 synced autocommits per call — ~70 disk syncs, nine calls in this file — and under the full suite's parallel load
+ * that alone timed tests here out. The reader opens it read-only either way; the rows are the same.
+ */
 function writeV1(file: string, specs: readonly Row[]): void {
-    const db = new DatabaseSync(file);
-    db.exec(WORKSPACES);
-    db.exec(TERMINAL_SPECS);
-    db.exec(WORKSPACE_AGENTS);
-    const ws = db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path) VALUES (?, ?, ?, 'agi', ?)");
-    for (const id of new Set(specs.map((r) => r.workspace_id).filter((id): id is string => id !== null))) ws.run(id, `p-${id}`, id, `/w/${id}`);
-    const ins = db.prepare('INSERT INTO terminal_specs (id, workspace_id, label, cwd, created_at, type, meta_json, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    for (const r of specs) ins.run(r.id, r.workspace_id, r.label, r.cwd, '2026-07-01T09:00:00.000Z', r.type ?? 'process', JSON.stringify(r.meta), r.enabled ?? 1);
-    const agent = db.prepare('INSERT INTO workspace_agents (id, workspace_id, tui, name, terminal_spec_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)');
-    agent.run('u-atlas', WS.id, 'claude', 'atlas', null);
-    agent.run('agent:t-scout', WS.id, 'codex', 'scout', 't-scout');
-    agent.run('u-ghost', WS.id, 'claude', 'ghost', null);
-    db.close();
+    const db = openFixtureDb(file);
+    try {
+        inOneTransaction(db, () => {
+            db.exec(WORKSPACES);
+            db.exec(TERMINAL_SPECS);
+            db.exec(WORKSPACE_AGENTS);
+            const ws = db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path) VALUES (?, ?, ?, 'agi', ?)");
+            for (const id of new Set(specs.map((r) => r.workspace_id).filter((id): id is string => id !== null))) ws.run(id, `p-${id}`, id, `/w/${id}`);
+            const ins = db.prepare('INSERT INTO terminal_specs (id, workspace_id, label, cwd, created_at, type, meta_json, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+            for (const r of specs) ins.run(r.id, r.workspace_id, r.label, r.cwd, '2026-07-01T09:00:00.000Z', r.type ?? 'process', JSON.stringify(r.meta), r.enabled ?? 1);
+            const agent = db.prepare('INSERT INTO workspace_agents (id, workspace_id, tui, name, terminal_spec_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)');
+            agent.run('u-atlas', WS.id, 'claude', 'atlas', null);
+            agent.run('agent:t-scout', WS.id, 'codex', 'scout', 't-scout');
+            agent.run('u-ghost', WS.id, 'claude', 'ghost', null);
+        });
+    } finally {
+        db.close();
+    }
 }
 
 /** Genie 2's roster after its own v1 agent import: atlas and scout came over; ghost did not. */
@@ -118,6 +128,8 @@ const roster = [
 
 let home: string;
 let v1File: string;
+/** Every composition a test starts is shut down before `home` is removed — one still composing when a test timed out included (B13). */
+const composed = composeTracker();
 const flowsFile = () => join(runtimeDir(home), 'flows.json');
 const onDisk = (): { flows?: Array<Record<string, unknown>>; v1Import?: Record<string, unknown> } => (existsSync(flowsFile()) ? JSON.parse(readFileSync(flowsFile(), 'utf8')) : {});
 const importInto = async (store: FlowStore, database: string = v1File) => runV1ScheduleImport(store, { database, workspaces: [WS], roster });
@@ -127,7 +139,10 @@ beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'genie2-v1-schedules-'));
     v1File = join(home, 'v1-genie.db');
 });
-afterEach(() => rmSync(home, { recursive: true, force: true }));
+afterEach(async () => {
+    await composed.shutdownAll();
+    rmSync(home, { recursive: true, force: true });
+});
 
 describe("Genie 1's scheduled tasks, imported once as DISARMED flows", () => {
     it('maps each task faithfully: a command into genie/terminal_run in its folder, a nudge into genie/agent_prompt to the full address — every one disarmed, local time', async () => {
@@ -283,7 +298,7 @@ describe('boot — the composition root imports them before the scheduler plans,
     it('composeServices with Genie 1’s database: the flows are there, disarmed, and nothing is due', async () => {
         writeV1(v1File, rows);
         const records = roster.map((r) => ({ ...r, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null })) as unknown as AgentRecord[];
-        const services = await composeServices({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => records, workspaces: () => [WS], v1Schedules: { database: v1File } });
+        const services = await composed.compose({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => records, workspaces: () => [WS], v1Schedules: { database: v1File } });
         try {
             expect(services.flows.list().map((f) => [f.id, f.armed]).sort()).toEqual([
                 ['flow_v1_s-nudge', false],

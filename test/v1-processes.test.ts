@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runtimeDir } from '../src/main/paths.js';
 import { ProcessBook, type ProcessBookDeps } from '../src/main/process-book.js';
 import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.js';
+import { inOneTransaction, openFixtureDb } from './support/sqlite-fixture.js';
 
 /**
  * GENIE 1's BACKGROUND PROCESSES COME THROUGH THE UPGRADE (2026-10-14). Genie 1 kept the person's
@@ -91,15 +91,21 @@ const rows: Row[] = [
     { id: 't-shell', workspace_id: WS.id, label: 'a terminal', cwd: WS.path, type: 'terminal', meta: { command: 'npm start', autostart: true } },
 ];
 
+/** Genie 1's database, built as a FIXTURE (test/support/sqlite-fixture.ts, B13): unsynced, in one transaction — not a synced commit per row. */
 function writeV1(file: string, specs: readonly Row[]): void {
-    const db = new DatabaseSync(file);
-    db.exec(WORKSPACES);
-    db.exec(TERMINAL_SPECS);
-    const ws = db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path) VALUES (?, ?, ?, 'agi', ?)");
-    for (const id of new Set(specs.map((r) => r.workspace_id).filter((id): id is string => id !== null))) ws.run(id, `p-${id}`, id, `/w/${id}`);
-    const ins = db.prepare('INSERT INTO terminal_specs (id, workspace_id, label, cwd, shell, created_at, type, meta_json, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    for (const r of specs) ins.run(r.id, r.workspace_id, r.label, r.cwd, r.shell ?? null, '2026-07-01T09:00:00.000Z', r.type ?? 'process', JSON.stringify(r.meta), r.enabled ?? 1);
-    db.close();
+    const db = openFixtureDb(file);
+    try {
+        inOneTransaction(db, () => {
+            db.exec(WORKSPACES);
+            db.exec(TERMINAL_SPECS);
+            const ws = db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path) VALUES (?, ?, ?, 'agi', ?)");
+            for (const id of new Set(specs.map((r) => r.workspace_id).filter((id): id is string => id !== null))) ws.run(id, `p-${id}`, id, `/w/${id}`);
+            const ins = db.prepare('INSERT INTO terminal_specs (id, workspace_id, label, cwd, shell, created_at, type, meta_json, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            for (const r of specs) ins.run(r.id, r.workspace_id, r.label, r.cwd, r.shell ?? null, '2026-07-01T09:00:00.000Z', r.type ?? 'process', JSON.stringify(r.meta), r.enabled ?? 1);
+        });
+    } finally {
+        db.close();
+    }
 }
 
 const started: ProcessSpec[] = [];

@@ -7,13 +7,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
 import { GEN_CA_SUBJECT, TRUST_DECK_ID, trustInstallStep } from '../src/core/gen-ca.js';
 import { hostsFileBlock } from '../src/core/gen-router.js';
-import { composeServices, type ComposedServices, type FrontDoorStatus } from '../src/main/compose.js';
+import type { ComposedServices, FrontDoorStatus } from '../src/main/compose.js';
 import type { ElevationOutcome, PrivilegedStep, Step } from '../src/main/elevate.js';
 import type { FrontDoorPort, FrontDoorPorts, PortProbe } from '../src/main/front-door-port.js';
 import { thumbprintOf, type TrustStorePort } from '../src/main/gen-ca.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 import { issueCa } from '../src/main/x509.js';
+import { composeTracker } from './support/compose-tracker.js';
 
 /**
  * THE EXTERNAL FRONT DOOR'S STATE — beyond "Caddy is running": whether the hosts file carries the
@@ -79,6 +80,8 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 40));
 
 let dir: string;
 let services: ComposedServices | null = null;
+/** Every composition a test starts is shut down before its folder is removed — one still composing when a test timed out included (B13). */
+const composed = composeTracker();
 let pty: ReturnType<typeof fakePty>;
 let hosts: ReturnType<typeof fakeHosts>;
 let store: ReturnType<typeof fakeStore>;
@@ -108,7 +111,7 @@ async function elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutco
 }
 
 async function compose(caddyBin: string | null = CADDY): Promise<ComposedServices> {
-    return composeServices({
+    return composed.compose({
         userData: dir, pty: pty.port, v1Settings: () => null, caddyBin, frontDoorPort: 0,
         hostsIo: hosts.port,
         trustStore: store.port,
@@ -136,7 +139,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    await services?.shutdown();
+    await composed.shutdownAll();
     services = null;
     await rm(dir, { recursive: true, force: true });
 });

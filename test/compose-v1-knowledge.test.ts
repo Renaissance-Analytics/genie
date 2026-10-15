@@ -2,8 +2,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import type { ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { composeTracker } from './support/compose-tracker.js';
 
 /**
  * GENIE 1's KNOWLEDGE GRAPH COMES THROUGH THE UPGRADE (2026-10-14). The owner: "the knowledge graph is
@@ -45,10 +46,12 @@ const v1 = {
 
 let dir: string;
 let services: ComposedServices | null;
+/** Every composition a test starts is shut down before its folder is removed — one still composing when a test timed out included (B13). */
+const composed = composeTracker();
 
 const boot = async (v1Knowledge: () => typeof v1 | null): Promise<ComposedServices> => {
     // `v1Knowledge` is the reader boot wires to Genie 1's database; the cast keeps this file loadable on a tree without it.
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, v1Knowledge } as never);
+    services = await composed.compose({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, v1Knowledge } as never);
     return services;
 };
 const all = (s: ComposedServices) => s.knowledge.list({ scopes: 'all', limit: 200 }).nodes;
@@ -59,7 +62,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    await services?.shutdown();
+    await composed.shutdownAll();
+    services = null;
     await rm(dir, { recursive: true, force: true });
 });
 
