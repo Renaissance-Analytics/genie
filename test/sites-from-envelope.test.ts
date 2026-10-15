@@ -3,10 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import type { ComposedServices, composeServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { composeTracker } from './support/compose-tracker.js';
 
 /**
  * A WORKSPACE'S SITES LIVE IN ITS ENVELOPE (§6.6, the regression from v1). Every `.agi` envelope's
@@ -40,6 +41,8 @@ let dir: string;
 let acme: string;
 let sleepy: string;
 let services: ComposedServices | null = null;
+/** Every composition a test starts is shut down before its folder is removed — one still composing when a test timed out included (B13). */
+const composed = composeTracker();
 let workspaces: Array<{ id: string; path: string; asleep?: boolean }> = [];
 const listeners = new Set<() => void>();
 
@@ -77,7 +80,7 @@ async function envelope(path: string, manifest: unknown, repos: string[]): Promi
 }
 
 async function launch(): Promise<ComposedServices> {
-    services = await composeServices({
+    services = await composed.compose({
         userData: join(dir, 'genie-home'), pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0,
         hostsIo, elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         workspaces: () => workspaces,
@@ -111,7 +114,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    await services?.shutdown();
+    await composed.shutdownAll();
     services = null;
     await rm(dir, { recursive: true, force: true });
 });

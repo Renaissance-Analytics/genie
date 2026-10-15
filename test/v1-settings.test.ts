@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readV1Settings, V1_OPEN_OPTIONS } from '../src/main/v1-settings.js';
+import { openFixtureDb } from './support/sqlite-fixture.js';
 
 /**
  * READING v1's SETTINGS — the owner's ruling (2026-10-10): "settings that still exist in Genie 2
@@ -20,6 +21,10 @@ import { readV1Settings, V1_OPEN_OPTIONS } from '../src/main/v1-settings.js';
  *   can have. The test writes through an open writer and reads from a second connection.
  * - **Cannot-see is `null`, measured-none is an empty map.** No database, or a database with no
  *   `settings` table, answers `null`; a settings table with no rows answers `{}`. §5.
+ *
+ * The fixtures are written unsynced (test/support/sqlite-fixture.ts, B13): a fixture has no power cut to survive, and
+ * a synced commit under the full suite's parallel load waited long enough to time this file out. The rows are in the
+ * file and the WAL either way — what the reader is tested for does not depend on it.
  */
 describe('readV1Settings', () => {
     let dir: string;
@@ -27,7 +32,7 @@ describe('readV1Settings', () => {
     afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); });
 
     function v1db(file: string): DatabaseSync {
-        const db = new DatabaseSync(file);
+        const db = openFixtureDb(file);
         db.exec('PRAGMA journal_mode = WAL');
         db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
         return db;
@@ -73,7 +78,7 @@ describe('readV1Settings', () => {
     it('answers null — cannot see — for a missing file, and for a database with no settings table', () => {
         expect(readV1Settings(join(dir, 'nothing-here.db'))).toBeNull();
         const file = join(dir, 'other.db');
-        const db = new DatabaseSync(file);
+        const db = openFixtureDb(file);
         db.exec('CREATE TABLE agents (id TEXT)');
         db.close();
         expect(readV1Settings(file)).toBeNull();
