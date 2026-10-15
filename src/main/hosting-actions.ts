@@ -79,15 +79,30 @@ function siteInputOf(s: HostingServices, input: { workspaceId: string; repoPath:
         name: normalizeSiteName(f.name),
         workspaceId: input.workspaceId,
         repoPath: input.repoPath,
-        serve: f.mode === 'proxy' ? { mode: 'proxy' } : f.mode === 'static' ? { mode: 'static', root: f.root ?? 'dist', spa: f.spa } : { mode: 'php', root: f.root ?? 'public' },
+        // A php site's PIN (T4) is `serve.version` — project.json `hostServe.version` — carried by Add and Edit alike.
+        serve: f.mode === 'proxy' ? { mode: 'proxy' } : f.mode === 'static' ? { mode: 'static', root: f.root ?? 'dist', spa: f.spa } : { mode: 'php', root: f.root ?? 'public', ...(f.phpVersion ? { version: f.phpVersion } : {}) },
         ...(f.mode === 'proxy' && f.devServer && f.hostPort === null ? { devServer: f.devServer } : {}),
         ...(f.mode === 'proxy' && f.hostPort !== null ? { hostPort: f.hostPort } : {}),
     };
 }
 
+/**
+ * A PIN Genie cannot run, refused with the START's own reason (site-manager.ts `phpCgiFor`) — before anything is written
+ * or anyone is asked. Only a pin the form CHANGES is checked: an Edit of something else keeps the site's pin as it is,
+ * even one whose version is not installed here (its start says why; the edit does not drop it). A pin that is not a
+ * version at all is the form validation's to name.
+ */
+function pinProblems(s: HostingServices, form: SiteForm, currentPin: string | null): Problem[] {
+    const pin = form.mode === 'php' && form.phpVersion ? form.phpVersion : null;
+    if (pin === null || pin === currentPin) return [];
+    const cgi = s.sites.phpCgiFor(pin);
+    return cgi.ok ? [] : [{ field: 'phpVersion', message: cgi.reason }];
+}
+
 /** Create a site from the form: validated (every problem at once), served with the workspace's service env, kept in its envelope. */
 export async function createSite(s: HostingServices, input: { workspaceId: string; repoPath: string; form: SiteForm }): Promise<CreateSiteOutcome> {
     const problems = validateSiteForm(input.form, s.sites.list().map((x) => x.host));
+    if (!problems.some((p) => p.field === 'phpVersion')) problems.push(...pinProblems(s, input.form, null));
     if (problems.length > 0) return { kind: 'problems', problems };
     // Kept in the workspace's envelope (project.json `sites`), so it is there on the next launch.
     const site = await s.envelopeSites.create(siteInputOf(s, input));
@@ -121,6 +136,8 @@ export function siteEditTarget(s: HostingServices, siteId: string): SiteEditTarg
         hostPort: spec.hostPort ?? null,
         root: spec.serve.mode === 'proxy' ? null : spec.serve.root,
         spa: spec.serve.mode === 'static' ? spec.serve.spa : false,
+        // The pin it is declared with (project.json `hostServe.version`): an Edit starts from it, so saving never drops it.
+        ...(spec.serve.mode === 'php' ? { phpVersion: spec.serve.version ?? null } : {}),
     };
     return { site, ...where, form };
 }
@@ -130,7 +147,12 @@ export function siteEditTarget(s: HostingServices, siteId: string): SiteEditTarg
  * taken and its own free. The agents' `sites update` asks it BEFORE putting the change to the person.
  */
 export function siteEditProblems(s: HostingServices, siteId: string, form: SiteForm): Problem[] {
-    return validateSiteForm(form, s.sites.list().filter((x) => x.id !== siteId).map((x) => x.host));
+    const problems = validateSiteForm(form, s.sites.list().filter((x) => x.id !== siteId).map((x) => x.host));
+    // A NEW pin must be one Genie runs — refused with the start's reason; the site's own pin, unchanged, is kept as it is.
+    const spec = s.sites.spec(siteId);
+    const currentPin = spec?.serve.mode === 'php' ? (spec.serve.version ?? null) : null;
+    if (!problems.some((p) => p.field === 'phpVersion')) problems.push(...pinProblems(s, form, currentPin));
+    return problems;
 }
 
 export type UpdateSiteOutcome ={ readonly kind: 'problems'; readonly problems: Problem[] } | { readonly kind: 'updated'; readonly site: SiteInfo };

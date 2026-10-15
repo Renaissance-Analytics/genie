@@ -25,7 +25,11 @@ import type { ProcessSupervisor } from './process-supervisor.js';
 export type SiteServe =
     | { readonly mode: 'proxy' }
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
-    | { readonly mode: 'php'; readonly root: string };
+    /** `version`: the PHP the site is pinned to (Genie 1's `hostServe.version`); absent = the php-cgi on PATH. */
+    | { readonly mode: 'php'; readonly root: string; readonly version?: string };
+
+/** Which php-cgi a php site's worker runs: the command to start it with, or why it cannot start (main/php-versions.ts). */
+export type PhpCgiResolution = { readonly ok: true; readonly command: string } | { readonly ok: false; readonly reason: string };
 
 export interface CreateSiteInput {
     readonly name: string;
@@ -87,6 +91,12 @@ export interface SiteManagerDeps {
      * reaches the next site started without a relaunch. The site's own env wins over it.
      */
     readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
+    /**
+     * The php-cgi for a site's pin (T4): unpinned → the one on PATH; pinned → that Genie-managed version's binary, or the
+     * reason it cannot start. Read at each start, so a version installed or removed is seen by the next one. Absent = no
+     * managed PHP in this Genie: an unpinned site runs `php-cgi`, a pinned one is refused — never served on another PHP.
+     */
+    readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
 }
 
 interface SiteRecord {
@@ -184,6 +194,16 @@ export class SiteManager {
         return this.#info(record);
     }
 
+    /**
+     * The php-cgi a php site pinned to `pin` would start — THE rule a start applies, read now — or the reason it would be
+     * refused. hosting-actions.ts asks it before a pin is saved, so an Add or an agent's update is refused with the
+     * start's own reason before anything is written or anyone is asked.
+     */
+    phpCgiFor(pin: string | undefined): PhpCgiResolution {
+        if (this.#deps.resolvePhpCgi) return this.#deps.resolvePhpCgi(pin);
+        return pin === undefined || pin === '' ? { ok: true, command: 'php-cgi' } : { ok: false, reason: `this site is pinned to PHP ${pin}, and this Genie has no managed PHP versions to run it on` };
+    }
+
     /** What the site was declared with — the Edit form's starting values. `null` for an unknown or unservable site. */
     spec(id: string): CreateSiteInput | null {
         return this.#sites.get(id)?.input ?? null;
@@ -262,6 +282,14 @@ export class SiteManager {
             if (caddy === null) {
                 throw new Error(`a ${input.serve.mode} site is served by Genie's bundled Caddy, which this install does not have; reinstall Genie or serve the repo's own dev server (proxy) instead`);
             }
+            // The PHP first: a pin Genie cannot honour refuses the start with nothing running and no port taken (never
+            // another PHP).
+            let cgiCommand = 'php-cgi';
+            if (input.serve.mode === 'php') {
+                const cgi = this.phpCgiFor(input.serve.version);
+                if (!cgi.ok) throw new Error(`${host} was not started: ${cgi.reason}`);
+                cgiCommand = cgi.command;
+            }
             const port = this.#deps.allocatePort();
             const processIds: string[] = [];
             let spec: ServeSpec;
@@ -272,7 +300,7 @@ export class SiteManager {
                 const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
                 const phpEnv = this.#deps.phpWorkerEnv?.() ?? {};
                 const fcgiEnv = Object.keys(phpEnv).length > 0 ? { ...phpEnv, ...(baseEnv ?? {}) } : baseEnv;
-                proc(`${id}-fcgi`, `${host} php worker`, `php-cgi -b 127.0.0.1:${fcgiPort}`, fcgiEnv);
+                proc(`${id}-fcgi`, `${host} php worker`, `${cgiCommand} -b 127.0.0.1:${fcgiPort}`, fcgiEnv);
                 processIds.push(`${id}-fcgi`);
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {

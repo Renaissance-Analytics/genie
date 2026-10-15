@@ -9,6 +9,7 @@ import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
+import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
@@ -34,6 +35,8 @@ export interface SiteAdding {
     readonly repoPath: string;
     readonly defaults: SiteFormDefaults;
     readonly problems: readonly Problem[];
+    /** The PHP versions Genie manages here, newest first — the form's PHP version choices (php sites; empty = PATH PHP only). */
+    readonly phpVersions?: readonly string[];
 }
 
 /** An Edit-a-site form open in the Hosting surface: the site as it is declared now, problems from the last refused save. */
@@ -42,6 +45,8 @@ export interface SiteEditing {
     readonly host: string;
     readonly defaults: SiteForm;
     readonly problems: readonly Problem[];
+    /** The PHP versions Genie manages here, as Add offers them — so an Edit shows the site's pin and never drops it. */
+    readonly phpVersions?: readonly string[];
 }
 
 /** A site row: the site, and the end of each of its processes' output (the supervisor's tail — there after a crash). */
@@ -147,6 +152,8 @@ export interface ToolchainSection {
     readonly repairedAt?: number;
     readonly warning?: { readonly tool: string; readonly reason: string; readonly affected: readonly string[] };
     readonly result?: string;
+    /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
+    readonly php?: PhpVersionsView;
 }
 
 export interface FeatureData {
@@ -243,6 +250,10 @@ export type FeatureAction =
     /** Install a missing tool (or the Windows VC++ runtime). `consent` is the person's click on the command shown. */
     | { kind: 'toolchain.install'; tool: string; consent: boolean }
     | { kind: 'toolchain.repair' }
+    /** Install one managed PHP version (windows.php.net, checksum-verified). `consent` is the person's click. */
+    | { kind: 'toolchain.installPhp'; version: string; consent: boolean }
+    /** Remove a managed PHP version — refused while a site is pinned to it. */
+    | { kind: 'toolchain.removePhp'; version: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string }
     /**

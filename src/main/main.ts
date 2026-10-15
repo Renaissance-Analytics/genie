@@ -47,6 +47,7 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { HOST_TOOLS, planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -450,6 +451,8 @@ const packageManager = (): Promise<PackageManager | null> => (detectedPackageMan
 const longRunner: CommandRunner = (binary, args) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000 });
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
+/** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
+const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() });
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
@@ -1040,6 +1043,8 @@ async function boot(): Promise<void> {
         caddyBin: caddyCopy?.path ?? null,
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
+        // A php site's pin (T4): unpinned runs PATH php-cgi as before; pinned runs that Genie-managed version or is refused.
+        resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpVersionsBase()),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
         // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
@@ -1344,6 +1349,18 @@ async function boot(): Promise<void> {
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
         now: Date.now,
     });
+    const phpVersionsPorts = (): PhpVersionsPorts => ({
+        ...phpVersionsBase(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        // The VC++ runtime through T1's own consented install (winget); the click on Install PHP is the consent.
+        ensureVcRuntime: async () => {
+            const r = await installTool('vcredist', true, toolchainOps());
+            return r.kind === 'installed' || r.kind === 'already-installed' ? { ok: true } : { ok: false, reason: r.reason };
+        },
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -1364,6 +1381,12 @@ async function boot(): Promise<void> {
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
             repair: () => checkAndRepair(toolchainOps()),
+            // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
+            php: {
+                list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
+                install: (version, consent) => installPhpVersion(version, consent, phpVersionsPorts()),
+                remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+            },
         },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It

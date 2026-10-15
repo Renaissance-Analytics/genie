@@ -20,7 +20,11 @@ import { isGenHost, siteNameProblem } from './gen-name.js';
 export type EnvelopeServe =
     | { readonly mode: 'proxy' }
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
-    | { readonly mode: 'php'; readonly root: string };
+    /** `version`: Genie 1's `hostServe.version` — the PHP the site is PINNED to (core/php-versions.ts); absent = the PATH PHP. */
+    | { readonly mode: 'php'; readonly root: string; readonly version?: string };
+
+/** A pin as Genie 1 wrote it (`cleanEngineVersion`, sites-config.ts): `8`, `8.3` or `8.3.35`. */
+const PIN = /^\d+(?:\.\d+){0,2}$/;
 
 export type EnvelopeStack = 'laravel' | 'node' | 'django' | 'go';
 
@@ -161,8 +165,11 @@ function mapEntry(manifest: Record<string, unknown>, key: string, entry: Record<
         if (!isRecord(hs)) return refuse('its hostServe is not an object');
         if (hs.mode === 'static' || hs.mode === 'php') {
             if (typeof hs.root !== 'string' || hs.root.length === 0) return refuse(`its hostServe ${hs.mode} names no root folder`);
-            if (hs.mode === 'php' && typeof hs.version === 'string') {
-                return refuse(`it pins PHP ${hs.version}; Genie 2 serves php through the php-cgi on this machine and cannot honour a pinned version, so it is not started rather than served on another PHP`);
+            if (hs.mode === 'php' && hs.version !== undefined) {
+                // The pin is carried to the site, and its start runs that managed PHP or fails naming it (site-manager.ts).
+                // A value that is not a version is refused here: served on some other PHP is what a pin exists to prevent.
+                if (typeof hs.version !== 'string' || !PIN.test(hs.version)) return refuse(`its hostServe.version ${JSON.stringify(hs.version)} is not a PHP version (8, 8.3 or 8.3.35)`);
+                return { ...base, serve: { mode: 'php', root: hs.root, version: hs.version } };
             }
             return { ...base, serve: hs.mode === 'static' ? { mode: 'static', root: hs.root, spa: hs.spa === true } : { mode: 'php', root: hs.root } };
         }
@@ -225,7 +232,7 @@ export function siteEntryFor(manifest: Record<string, unknown>, site: NewSiteEnt
     // exactly what Genie 1's own default wrote; one label `docs` is { name: 'docs', genName: 'docs.gen' } as before.
     const entry: Record<string, unknown> = { repo, runMode: 'host', kind: 'http', enabled: true, name: site.name.split('.')[0]!, genName: `${site.name}.gen` };
     if (site.serve.mode === 'static') entry.hostServe = { mode: 'static', root: site.serve.root, spa: site.serve.spa };
-    else if (site.serve.mode === 'php') entry.hostServe = { mode: 'php', root: site.serve.root };
+    else if (site.serve.mode === 'php') entry.hostServe = { mode: 'php', root: site.serve.root, ...(site.serve.version ? { version: site.serve.version } : {}) };
     else if (site.hostPort !== undefined) entry.hostPort = site.hostPort;
     else if (site.devServer) entry.command = argvOf(site.devServer.command);
     else return { ok: false, reason: 'a proxy site needs a dev server or a hostPort' };
