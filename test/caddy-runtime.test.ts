@@ -66,7 +66,9 @@ describe('the Caddy that RUNS is a per-user copy, refreshed only when the bundle
         expect(r).toEqual({ path: join(base, sha16('caddy v2.11.7 bytes'), 'caddy'), copied: true, error: null });
         expect(await readFile(r.path, 'utf8')).toBe('caddy v2.11.7 bytes');
         expect(isInside(r.path, install)).toBe(false);
-        expect(((await stat(r.path)).mode & 0o111) !== 0).toBe(true);
+        // Executable, where the host's filesystem has an execute bit to read: Windows has none (Node's stat reports none
+        // for any file, chmod or not), so the Windows VM's run cannot see it — the Linux run is where this is proven.
+        if (process.platform !== 'win32') expect(((await stat(r.path)).mode & 0o111) !== 0).toBe(true);
         expect(copies).toHaveLength(1);
     });
 
