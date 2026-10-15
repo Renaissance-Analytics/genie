@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
+import { folderName } from '../core/workspace-name.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
 import type { ServiceInstance } from '../core/services.js';
@@ -134,6 +135,11 @@ export interface ComposeInput {
     readonly workspaces?: () => readonly WorkspaceRef[];
     /** Fires when the registered workspaces change — one added, removed, hibernated or woken. */
     readonly onWorkspacesChange?: (listener: () => void) => () => void;
+    /**
+     * A workspace's NAME from its folder — the rail's namer (main.ts reads project.json's `name`, else the folder), so the
+     * Deck and the question window say the same name the rail does, never the id. The folder's name by default.
+     */
+    readonly workspaceName?: (path: string) => string;
 }
 
 /**
@@ -620,6 +626,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 unreadDms: inbox.unread(HUMAN),
                 finished: attention.finished(),
                 agents: Object.fromEntries(agents()),
+                workspaceNames: Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)])),
             }),
         ],
         inboxReminders: ({ now, idle }) =>

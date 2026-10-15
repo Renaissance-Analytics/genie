@@ -16,7 +16,7 @@ import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
  * carries its own note, which travels with the answer.
  */
 const q = (id: string, at: number, agentName = 'kai'): DeckItem => ({
-    id, source: 'agent-question', agentId: `agent_${id}`, agentName, workspaceId: 'tynn', title: 'Which?', blocking: false, priority: 'normal', at,
+    id, source: 'agent-question', agentId: `agent_${id}`, agentName, workspaceId: 'ws_01HTYNN', workspaceName: 'Tynn.ai', title: 'Pick', blocking: false, priority: 'normal', at,
     answer: { kind: 'form', fields: 1, questions: [{ header: 'Pick', question: 'Which **one**?', options: [{ label: 'A', description: 'the first' }, { label: 'B' }] }] },
     forwardedFrom: null,
 } as unknown as DeckItem);
@@ -27,6 +27,7 @@ function harness(initial: DeckItem[]) {
     let closedCb: (() => void) | null = null;
     let open = false;
     const answered: string[] = [];
+    const dismissed: string[] = [];
     const sent: { selections: string[][]; notes: string[] }[] = [];
     let refuse: string | null = null;
     const ctl = new QuestionWindow({
@@ -44,9 +45,14 @@ function harness(initial: DeckItem[]) {
             sent.push({ selections, notes });
             items = items.filter((i) => i.id !== item.id);
         },
+        dismiss: async (item) => {
+            if (refuse) throw new Error(refuse);
+            dismissed.push(item.id);
+            items = items.filter((i) => i.id !== item.id);
+        },
     });
     return {
-        ctl, log, answered, sent,
+        ctl, log, answered, dismissed, sent,
         set: (next: DeckItem[]) => { items = next; ctl.changed(); },
         personCloses: () => { open = false; closedCb?.(); },
         isOpen: () => open,
@@ -127,12 +133,37 @@ describe('the ForceTheQuestion window', () => {
     });
 });
 
+describe('Dismiss in the window', () => {
+    it('dismisses the shown question through the same action as the Deck, ONCE, and shows the next; closes when none are left', async () => {
+        const h = harness([q('a', 10), q('b', 20)]);
+        h.ctl.changed();
+        expect(await h.ctl.dismiss()).toEqual({ ok: true });
+        // COUNTED: exactly one dismiss, of the question on screen; nothing answered.
+        expect(h.dismissed).toEqual(['a']);
+        expect(h.answered).toEqual([]);
+        expect(h.log.at(-1)).toBe('show b +0');
+        await h.ctl.dismiss();
+        expect(h.log.at(-1)).toBe('close');
+    });
+
+    it('a refused dismiss comes back with the reason and the question stays on screen', async () => {
+        const h = harness([q('a', 10)]);
+        h.ctl.changed();
+        h.refuseWith('no pending question a');
+        expect(await h.ctl.dismiss()).toEqual({ ok: false, reason: 'no pending question a' });
+        expect(h.ctl.showing).toBe('a');
+    });
+});
+
 describe('what the window shows', () => {
     const view = { item: q('a', 10, 'kai'), waiting: 2 };
-    const html = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal={null} onAnswer={() => {}} onLater={() => {}} />);
-    it('who asks, from where, how many more; the question as Markdown; each option with its description; Answer and Later', () => {
+    const html = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal={null} onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} />);
+    it('who asks, from where (the workspace NAME, not its id), how many more; the question as Markdown; each option with its description; Answer, Later and Dismiss', () => {
         expect(html).toContain('kai asks you');
-        expect(html).toContain('data-question-workspace="tynn"');
+        expect(html).toMatch(/data-question-workspace="ws_01HTYNN"[^>]*>Tynn\.ai</);
+        // The id is an attribute for tests, never text a person reads.
+        expect(html).not.toContain('>ws_01HTYNN<');
+        expect(html).toMatch(/data-action="question-dismiss"[^>]*>Dismiss</);
         expect(html).toContain('data-question-waiting="2"');
         expect(html).toMatch(/<strong>one<\/strong>/);
         expect(html).toContain('the first');
@@ -140,7 +171,7 @@ describe('what the window shows', () => {
         expect(html).toMatch(/data-action="question-cancel"[^>]*>Later</);
     });
     it('a refusal is said BESIDE the Answer button (role="alert"), once — not at the top of the scrolled window', () => {
-        const refused = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal="Pick needs an option or a note" onAnswer={() => {}} onLater={() => {}} />);
+        const refused = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal="Pick needs an option or a note" onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} />);
         // COUNTED: one saying of it, and it comes after the button the person pressed.
         expect(refused.split('Pick needs an option or a note').length - 1).toBe(1);
         expect(refused).toMatch(/data-action="deck-submit"[^]*role="alert"[^>]*>Pick needs an option or a note</);

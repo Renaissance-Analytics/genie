@@ -145,11 +145,13 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
     const forceTheQuestion: Registration = {
         definition: new ToolDefinition(
             'ForceTheQuestion',
-            'Ask the user 1–4 questions (2–4 options each, free text always offered). Returns immediately; the answer arrives through `agentinbox receive`. Never blocks. A repeat of the same question is rejoined, not duplicated. Name the actor in options the user reads: "Agent: …" / "You: …".',
+            'Ask the user 1–4 questions (2–4 options each, free text always offered). Returns immediately with a questionId — KEEP IT; the answer arrives through `agentinbox receive`. Never blocks. A repeat of the same question is rejoined, not duplicated. Name the actor in options the user reads: "Agent: …" / "You: …". Your own pending question can be changed: action "update" with questionId and the new questions (and priority) replaces it in place, keeping its place in the queue; action "cancel" with questionId withdraws it — the person is not asked any more and nothing is mailed. If the person dismisses it instead, your inbox says so.',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
+                    action: { type: 'string', enum: ['ask', 'update', 'cancel'], description: 'ask (the default) files new questions; update replaces your pending question questionId; cancel withdraws it.' },
+                    questionId: { type: 'string', description: 'The questionId an ask returned. Required for update and cancel.' },
                     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
                     questions: {
                         type: 'array',
@@ -172,13 +174,32 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                         },
                     },
                 },
-                required: ['questions'],
+                // Nothing is required by the schema: an ask needs questions, a cancel needs only questionId. The handler
+                // says which is missing, by name.
+                required: [],
             },
             'Force the question',
         ),
+        /*
+         * ONE TOOL, THREE ACTIONS — ask (the default), update, cancel (the owner, 2026-10-15: "agents need to have the
+         * ability to update or cancel requests"). An optional `action` rather than new tools: an existing ask call —
+         * `{ questions }` and nothing else — is still an ask, unchanged; the questionId an ask returns is the handle for
+         * the other two, in the same tool the agent already reaches for; and the tool list every agent is handed stays
+         * the same twelve names. Only the agent that asked, in its own workspace, may update or cancel.
+         */
         handler: withCaller(async (caller, args) => {
+            const action = str(args.action) ?? 'ask';
             const questions = Array.isArray(args.questions) ? (args.questions as unknown as Question[]) : [];
             const priority = str(args.priority) as 'low' | 'normal' | 'high' | 'urgent' | undefined;
+            const owner = { agentId: caller.agentId, workspaceId: caller.workspaceId };
+            if (action === 'cancel' || action === 'update') {
+                const questionId = str(args.questionId);
+                if (!questionId) return err(`${action} needs the questionId your ask returned`);
+                if (action === 'cancel') return ok(await deps.attention.withdraw(owner, questionId));
+                if (!Array.isArray(args.questions)) return err('update needs the new questions (all of them; they replace the old ones)');
+                return ok(await deps.attention.update({ ...owner, questionId, questions, ...(priority ? { priority } : {}) }));
+            }
+            if (action !== 'ask') return err(`unknown action "${action}": use ask, update or cancel`);
             const r = await deps.attention.ask(
                 { agentId: caller.agentId, agentName: caller.agentName, workspaceId: caller.workspaceId, questions, ...(priority ? { priority } : {}) },
                 { userActive: deps.userActive(), dnd: deps.dnd?.() },

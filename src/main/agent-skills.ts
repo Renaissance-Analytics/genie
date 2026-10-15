@@ -33,7 +33,7 @@ export const GENIE_SKILLS: readonly GenieSkill[] = [
 Genie's MCP server (\`genie\`) comes with your session. Its tools:
 
 - \`imDone\` when you hand work back, with a handoff: what you did, what is unfinished, what the next run picks up.
-- \`ForceTheQuestion\` when only the person can make a decision. It returns at once; the answer arrives in your inbox.
+- \`ForceTheQuestion\` when only the person can make a decision. It returns at once with a questionId (keep it); the answer arrives in your inbox. Use that id to update or cancel your question.
 - \`agentinbox\` to reach another agent. Never edit another agent's files to talk to it.
 - \`lists\` for your own checklist and for things only a person can do.
 - \`openFileForUser\` to put a file in front of the person.
@@ -53,6 +53,8 @@ Workspace rules are in \`RULES.md\`; they may be stricter than this.
 
 - Call \`imDone\` every time you hand work back, with a handoff note. It replaces your last one.
 - Use \`ForceTheQuestion\` for a decision only the person can make: up to four questions, two to four options each, all in one call. The person reads the options, so you are "I" and they are "you"; when an option is about who acts, put the actor first ("Agent: …" / "You: …"). It never blocks: the answer arrives in your inbox.
+- Keep the questionId it returns. If the question changes, call \`ForceTheQuestion\` with \`action: "update"\`, that questionId and the new questions: it is replaced where it waits. If you no longer need the answer, call it with \`action: "cancel"\` and the questionId: the person is not asked any more. Only you can change your own questions.
+- The person may dismiss a question without answering; your inbox then says it was dismissed. Stop waiting and decide without it.
 - A question is never a \`lists\` item. Use \`lists\` for your own checklist and for things only a person can do.
 - Use \`openFileForUser\` to put a result in front of the person.
 - As a session, your reply already reaches the person in the chat; just answer. In a terminal, pass your \`GENIE_TERMINAL_ID\` with each call.

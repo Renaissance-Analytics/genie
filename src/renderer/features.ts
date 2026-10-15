@@ -188,6 +188,10 @@ export type FeatureAction =
      * alone answers its question). `note` is the overall note — '' from the form, which no longer shows one.
      */
     | { kind: 'deck.answerForm'; item: DeckItem; selections: string[][]; notes: string[]; note: string }
+    /** Dismiss an agent's question WITHOUT an answer (Deck or question window): it leaves both, and the agent is told. */
+    | { kind: 'deck.dismiss'; item: DeckItem }
+    /** "Dismiss all older than 1 day": every agent question asked longer ago than this, each agent told. */
+    | { kind: 'deck.dismissOlder'; olderThanMs: number }
     /** The person adds a memory. */
     | { kind: 'knowledge.add'; title: string; body: string; class?: MemoryClass; scope: Scope; tags?: string[] }
     /** Attachments are host paths from the host's own picker; the store keeps BYTE COPIES, never the path. */

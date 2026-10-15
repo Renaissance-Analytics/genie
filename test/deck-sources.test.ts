@@ -54,14 +54,15 @@ describe('agent questions', () => {
     // EVERY agent question is a form (the owner, 2026-10-14): ForceTheQuestion opens its window, and every question has its own note.
     it('every agent question is a FORM carrying its questions — a single plain one too; multi-part and multi-select as before', () => {
         const [single] = deckItemsFrom({ questions: [question()], userList: [], unreadDms: [], finished: [], agents: names });
-        expect(single).toMatchObject({ source: 'agent-question', agentId: 'agent_a', agentName: 'atlas', workspaceId: 'tynn', blocking: true, priority: 'normal', title: 'Which engine?', forwardedFrom: null });
+        expect(single).toMatchObject({ source: 'agent-question', agentId: 'agent_a', agentName: 'atlas', workspaceId: 'tynn', blocking: true, priority: 'normal', title: 'Engine', forwardedFrom: null });
         expect(single!.answer).toEqual({ kind: 'form', fields: 1, questions: [question().questions[0]!] });
         expect(single!.at).toBe(Date.parse('2026-10-11T05:00:00.000Z'));
 
         const [multi] = deckItemsFrom({ questions: [question({ questions: [question().questions[0]!, { header: 'Where', question: 'Where?', options: [{ label: 'x' }, { label: 'y' }] }] })], userList: [], unreadDms: [], finished: [], agents: names });
         // The item CARRIES its questions, so the Deck can draw the form where the item is read (§4.5).
         expect(multi!.answer).toEqual({ kind: 'form', fields: 2, questions: [question().questions[0]!, { header: 'Where', question: 'Where?', options: [{ label: 'x' }, { label: 'y' }] }] });
-        expect(multi!.title).toBe('Which engine? (+1 more)');
+        // Titled by the HEADER (the owner, 2026-10-15: the question as a title was unreadable) — the question is the body.
+        expect(multi!.title).toBe('Engine + 1 more');
 
         const [select] = deckItemsFrom({ questions: [question({ questions: [{ ...question().questions[0]!, multiSelect: true }] })], userList: [], unreadDms: [], finished: [], agents: names });
         expect(select!.answer).toEqual({ kind: 'form', fields: 1, questions: [{ ...question().questions[0]!, multiSelect: true }] });

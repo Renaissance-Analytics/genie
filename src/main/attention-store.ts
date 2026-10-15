@@ -9,6 +9,7 @@ import {
     type ListKind,
     type Question,
 } from '../core/attention.js';
+import { questionTitle } from '../core/deck-sources.js';
 import type { AgentId } from '../core/identity.js';
 import { HUMAN } from '../core/inbox.js';
 import type { InboxStore } from './inbox-store.js';
@@ -37,6 +38,21 @@ import { readJson, reportFlush, writeJsonAtomic } from './store.js';
  * of filing a second one. The answer is not returned by the tool — it is mailed to the asker
  * through the inbox FROM the human, so the agent's ordinary `receive` picks it up and the human
  * is on record as having decided.
+ *
+ * ## Nothing waits forever
+ *
+ * A question leaves in one of four ways, and every one is said to whoever is waiting on it:
+ *
+ * - **answered** by the person — the answer is mailed to the agent;
+ * - **dismissed** by the person, without an answer (one, or "all older than 1 day") — the agent is mailed
+ *   "<header>: dismissed by the person, without an answer", so it stops waiting and decides on its own;
+ * - **withdrawn** by the agent that asked (ForceTheQuestion `action: 'cancel'`) — nothing is mailed: the agent knows;
+ * - **updated** by the agent that asked (`action: 'update'`) — not a leaving: same id, same place in the queue, new
+ *   content, and a new `revision` so a half-filled form for the old content is dropped.
+ *
+ * Only the asking agent, in its own workspace, may withdraw or update its question. Before this, nothing removed a
+ * question but an answer, and the Deck kept eight from the day before that the person had never been shown (the owner,
+ * 2026-10-15: "some look really old").
  */
 
 export interface HandoffSaved {
@@ -99,6 +115,20 @@ export interface PendingQuestion {
     readonly questions: readonly Question[];
     readonly priority: 'low' | 'normal' | 'high' | 'urgent';
     readonly askedAt: string;
+    /** How many times its agent updated it; absent (a question never updated, or filed before updates existed) = 0. */
+    readonly revision?: number;
+}
+
+/** The asking agent, as the MCP caller resolves it: a question is withdrawn or updated only by the agent that asked it. */
+export interface QuestionOwner {
+    readonly agentId: AgentId;
+    readonly workspaceId: string;
+}
+
+export interface UpdateInput extends QuestionOwner {
+    readonly questionId: string;
+    readonly questions: readonly Question[];
+    readonly priority?: 'low' | 'normal' | 'high' | 'urgent';
 }
 
 export interface Answer {
@@ -264,6 +294,82 @@ export class AttentionStore {
             ...(overall ? [`\nNote: ${overall}`] : []),
         ].join('\n');
         await this.#inbox.send({ from: HUMAN, to: q.agentId, text });
+    }
+
+    /**
+     * The person DISMISSES a question without answering it. It leaves the Deck and the question window, and the asker is
+     * mailed — from the human, like an answer — that it was dismissed, so it stops waiting. Once: a second dismiss of the
+     * same id finds nothing and throws, mailing nobody.
+     */
+    async dismiss(questionId: string): Promise<void> {
+        const q = this.#data.questions.find((x) => x.id === questionId);
+        if (!q) throw new Error(`no pending question ${questionId}`);
+        this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        await this.#flush();
+        await this.#mailDismissed(q);
+    }
+
+    /**
+     * "Dismiss all older than 1 day": every question asked more than `ms` ago leaves, each asker mailed once. Returns
+     * how many. One write for all of them, so the Deck and the window move once.
+     */
+    async dismissOlderThan(ms: number): Promise<number> {
+        const cutoff = Date.parse(this.#now()) - ms;
+        const old = this.#data.questions.filter((q) => Date.parse(q.askedAt) < cutoff);
+        if (old.length === 0) return 0;
+        this.#data.questions = this.#data.questions.filter((q) => !old.includes(q));
+        await this.#flush();
+        for (const q of old) await this.#mailDismissed(q);
+        return old.length;
+    }
+
+    /**
+     * The ASKING agent withdraws its question (ForceTheQuestion `action: 'cancel'`): it leaves the Deck and the window and
+     * the person is not asked any more. Nothing is mailed — the agent that withdrew it knows. Another agent's question,
+     * or one from another workspace, is refused with no change (and is not distinguished from a missing one).
+     */
+    async withdraw(owner: QuestionOwner, questionId: string): Promise<{ ok: true; questionId: string; withdrawn: true }> {
+        this.#owned(owner, questionId);
+        this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        await this.#flush();
+        return { ok: true, questionId, withdrawn: true };
+    }
+
+    /**
+     * The ASKING agent replaces its question's content (and, if given, its priority). Same id, same `askedAt` — so it
+     * keeps its place in the queue — and `revision` + 1, so a form holding a draft for the old content starts clean.
+     * Validated like an ask; an update identical to another of the agent's pending questions is refused.
+     */
+    async update(input: UpdateInput): Promise<{ ok: true; questionId: string; revision: number }> {
+        const q = this.#owned(input, input.questionId);
+        const refusal = validateQuestions(input.questions);
+        if (refusal !== null) throw new Error(refusal);
+        const key = questionKey(input.agentId, input.questions);
+        const twin = this.#data.questions.find((x) => x.key === key && x.id !== q.id);
+        if (twin) throw new Error(`that is the same as your pending question ${twin.id}; cancel one of them instead`);
+        const revision = (q.revision ?? 0) + 1;
+        const next: PendingQuestion = { ...q, key, questions: input.questions, priority: input.priority ?? q.priority, revision };
+        this.#data.questions = this.#data.questions.map((x) => (x.id === q.id ? next : x));
+        await this.#flush();
+        return { ok: true, questionId: q.id, revision };
+    }
+
+    #owned(owner: QuestionOwner, questionId: string): PendingQuestion {
+        const q = this.#data.questions.find((x) => x.id === questionId);
+        // One refusal for "missing" and "not yours": an agent learns nothing about another agent's questions from it.
+        if (!q || q.agentId !== owner.agentId || q.workspaceId !== owner.workspaceId) {
+            throw new Error(`no pending question ${questionId} asked by you in this workspace`);
+        }
+        return q;
+    }
+
+    async #mailDismissed(q: PendingQuestion): Promise<void> {
+        await this.#inbox.send({
+            from: HUMAN,
+            to: q.agentId,
+            text: `${questionTitle(q.questions)}: dismissed by the person, without an answer.
+(Your question ${q.id}. Nothing was chosen; decide without it, or ask again if it still matters.)`,
+        });
     }
 
     async #saveHandoff(input: ImDoneInput): Promise<HandoffSaved | HandoffNotSaved> {

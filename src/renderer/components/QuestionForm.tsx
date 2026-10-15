@@ -11,6 +11,18 @@ import { unansweredCount } from '../../core/deck-resolve.js';
  * an answer to every question or I couldn't submit … That was not obvious due to the button being enabled"). A refusal
  * from main is said beside the buttons, where the person clicked — never only at the top of a scrolled window. The Deck
  * shows it in place; the question window shows it the moment an agent asks — one component, so the two never differ.
+ *
+ * ## It is READ before it is answered
+ *
+ * The owner, 2026-10-15, on the Deck: "I can't read this." The question is prose an agent wrote in Markdown, so it is
+ * rendered (ContentRenderer), in the sans face at 13px with room between lines, at a reading width — never monospace,
+ * never cut off. The options read at the same size as the question. The header chip labels a question among several; a
+ * surface whose title already IS the one header (the Deck) leaves it out.
+ *
+ * ## Dismiss
+ *
+ * Beside Answer: the question is put aside WITHOUT an answer and its agent is told so (attention-store.ts). Offered only
+ * where the surface wires it.
  */
 export interface QuestionDraft {
     /** Chosen labels, one array per question. */
@@ -24,16 +36,20 @@ export interface QuestionFormProps {
     /** The item being sent: its submit is disabled meanwhile. */
     readonly answering: string | null;
     readonly onSubmit: (selections: string[][], notes: string[]) => void;
-    readonly onCancel: () => void;
-    /** "Cancel" in the Deck; "Later" in the modal (the question stays in the Deck). */
+    /** "Later" in the question window (the question stays in the Deck). Absent = no such button (the Deck's form is always open). */
+    readonly onCancel?: (() => void) | undefined;
     readonly cancelLabel?: string;
+    /** Dismiss without an answer; absent = not offered here. */
+    readonly onDismiss?: (() => void) | undefined;
     /** Why main refused the last answer — said beside the buttons. */
     readonly refusal?: string | null;
     /** A starting draft (tests render a filled-in form with it). */
     readonly initial?: QuestionDraft;
+    /** Show each question's header chip. The Deck hides it for a single question: the row's title is that header. */
+    readonly showHeaders?: boolean;
 }
 
-export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', refusal = null, initial }: QuestionFormProps) {
+export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', onDismiss, refusal = null, initial, showHeaders = true }: QuestionFormProps) {
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const count = questions?.length ?? 0;
     const [selections, setSelections] = useState<string[][]>(() => Array.from({ length: count }, (_, i) => [...(initial?.selections[i] ?? [])]));
@@ -51,18 +67,20 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
         onSubmit(selections.map((s) => [...s]), [...notes]);
     };
     return (
-        <form data-deck-form={item.id} onSubmit={submit} className="flex flex-col gap-3 text-xs">
+        <form data-deck-form={item.id} onSubmit={submit} className="flex max-w-[72ch] flex-col gap-4 font-sans text-[13px]">
             {questions.map((q, i) => (
-                <fieldset key={i} data-deck-question={i} className="flex flex-col gap-1.5">
-                    <legend className="w-full">
-                        <span className="rounded-sm bg-[var(--bg-3)] px-1.5 py-px font-mono text-[10px] uppercase tracking-wide text-[var(--fg-3)]">{q.header}</span>
-                    </legend>
-                    {/* The question is Markdown (§6.3): agents write bold, lists and links into it. */}
-                    <div data-question-text={i}>
-                        <ContentRenderer value={q.question} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-1)]" />
+                <fieldset key={i} data-deck-question={i} className="flex flex-col gap-2">
+                    {showHeaders ? (
+                        <legend className="mb-1 w-full">
+                            <span data-question-header={i} className="rounded-sm bg-[var(--bg-3)] px-1.5 py-px text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-3)]">{q.header}</span>
+                        </legend>
+                    ) : null}
+                    {/* The question is Markdown (§6.3): agents write bold, lists and links into it. Prose: sans, 13px, 1.6. */}
+                    <div data-question-text={i} className="min-w-0 break-words">
+                        <ContentRenderer value={q.question} format="markdown" lineSpacing={1.6} className="font-sans text-[13px] text-[var(--fg-1)]" />
                     </div>
                     {q.options.map((o) => (
-                        <label key={o.label} className="flex items-start gap-2 text-[12px] text-[var(--fg-2)]">
+                        <label key={o.label} className="flex items-start gap-2 text-[13px] leading-snug text-[var(--fg-2)]">
                             <input
                                 type={q.multiSelect ? 'checkbox' : 'radio'}
                                 name={`q${i}`}
@@ -73,7 +91,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                             />
                             <span>
                                 {o.label}
-                                {o.description ? <span className="block text-[11px] text-[var(--fg-4)]">{o.description}</span> : null}
+                                {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}
                             </span>
                         </label>
                     ))}
@@ -86,13 +104,16 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                         value={notes[i] ?? ''}
                         onChange={(e) => write(i, e.currentTarget.value)}
                         placeholder="Add a note (optional if you picked an option)"
-                        className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px]"
+                        className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 font-sans text-[13px]"
                     />
                 </fieldset>
             ))}
             <div className="flex flex-wrap items-center gap-2">
                 <button type="submit" data-action="deck-submit" disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</button>
-                <button type="button" data-action="question-cancel" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button>
+                {onCancel ? <button type="button" data-action="question-cancel" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button> : null}
+                {onDismiss ? (
+                    <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={onDismiss} title="Put this question aside without an answer; the agent is told" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</button>
+                ) : null}
                 {remaining > 0 ? (
                     <span data-question-remaining={remaining} className="text-[11px] text-[var(--fg-3)]">
                         {`${remaining} of ${count} still ${remaining === 1 ? 'needs' : 'need'} an option or a note`}

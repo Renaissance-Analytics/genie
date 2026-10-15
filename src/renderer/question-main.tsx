@@ -15,6 +15,7 @@ interface QuestionBridge {
     current(): Promise<View | null>;
     answer(selections: string[][], notes: string[]): Promise<{ ok: true } | { ok: false; reason: string }>;
     later(): Promise<void>;
+    dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>;
     onShow(listener: (view: View) => void): () => void;
 }
 declare global {
@@ -44,6 +45,15 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
                     .finally(() => setSending(false));
             }}
             onLater={() => { void bridge.later(); }}
+            onDismiss={() => {
+                setSending(true);
+                setRefusal(null);
+                // Said beside the buttons like a refused answer — a Dismiss that did nothing must not look like one that worked.
+                void bridge.dismiss()
+                    .then((r) => { if (!r.ok) setRefusal(r.reason); })
+                    .catch((error: unknown) => { setRefusal(error instanceof Error ? error.message : String(error)); })
+                    .finally(() => setSending(false));
+            }}
         />
     );
 }

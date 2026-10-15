@@ -1,5 +1,5 @@
 import type { ListItem } from './attention.js';
-import type { DeckItem } from './deck.js';
+import { plainLabel, type DeckItem } from './deck.js';
 import { HUMAN } from './inbox.js';
 import type { Finished, PendingQuestion } from '../main/attention-store.js';
 import type { InboxMessage } from '../main/inbox-store.js';
@@ -17,6 +17,11 @@ import type { InboxMessage } from '../main/inbox-store.js';
  *   with no handoff is the agent's row going idle, not a Deck row.
  *
  * An agent the roster no longer knows is still shown, under its id — never dropped silently.
+ *
+ * A question's TITLE is its short `header` ("Engine", or "Engine + 2 more") as plain text — never the question itself.
+ * The question is Markdown and long; as a title it was cut off mid-sentence with its `**` and backticks showing (the
+ * owner, 2026-10-15: "I can't read this"). The question is read in the body, rendered (QuestionForm). Every item carries
+ * its workspace's NAME when it is known — the rail's name, never the id.
  */
 
 export interface DeckSourceInput {
@@ -26,26 +31,46 @@ export interface DeckSourceInput {
     readonly finished: readonly Finished[];
     /** Who the agent ids are, for names and workspaces. */
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
+    /** Workspace id → its NAME as the rail says it (core/workspace-name.ts). An id not here gets no name — never the id. */
+    readonly workspaceNames?: Readonly<Record<string, string>>;
 }
 
 const option = (id: string, label: string) => ({ id, label, tone: 'neutral' as const });
+
+/** The title of an agent's questions: the first one's header, as plain text, and how many more ride with it. */
+export function questionTitle(questions: readonly { header: string; question: string }[]): string {
+    const first = questions[0];
+    if (!first) return 'A question';
+    // A header is required (≤ 12 chars), but one that is only Markdown marks says nothing: the question's first words then.
+    const firstLine = first.question.split(/\r?\n/).find((l) => l.trim().length > 0) ?? '';
+    const head = plainLabel(first.header) || truncate(plainLabel(firstLine), 60) || 'A question';
+    return questions.length === 1 ? head : `${head} + ${questions.length - 1} more`;
+}
+
+function truncate(text: string, max: number): string {
+    return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
 
 export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
     const who = (agentId: string) => {
         const a = input.agents[agentId];
         return { agentId, agentName: a?.name ?? agentId, workspaceId: a?.workspaceId ?? null };
     };
+    const named = (workspaceId: string | null): { workspaceName?: string } => {
+        const name = workspaceId === null ? undefined : input.workspaceNames?.[workspaceId];
+        return name === undefined ? {} : { workspaceName: name };
+    };
     const items: DeckItem[] = [];
 
     for (const q of input.questions) {
-        const first = q.questions[0]!;
         items.push({
             id: q.id,
             source: 'agent-question',
             agentId: q.agentId,
             agentName: q.agentName,
             workspaceId: q.workspaceId,
-            title: q.questions.length === 1 ? first.question : `${first.question} (+${q.questions.length - 1} more)`,
+            ...named(q.workspaceId),
+            title: questionTitle(q.questions),
             blocking: true,
             priority: q.priority,
             at: Date.parse(q.askedAt),
@@ -53,6 +78,8 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             // question carries its own note. A one-click inline answer had no note and never reached the window.
             answer: { kind: 'form', fields: q.questions.length, questions: q.questions },
             forwardedFrom: null,
+            // Updated by its agent: a form keyed by this starts a clean draft (a draft for the old content is dropped).
+            ...(q.revision ? { revision: q.revision } : {}),
         });
     }
 
@@ -65,6 +92,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             agentId: item.askedBy,
             agentName: asked.agentName,
             workspaceId,
+            ...named(workspaceId),
             title: item.text,
             blocking: false,
             priority: 'normal',
@@ -82,6 +110,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             id: m.id,
             source: 'unread-dm',
             ...sender,
+            ...named(sender.workspaceId),
             title: `${sender.agentName}: ${firstLine}`,
             blocking: false,
             priority: 'low',
@@ -100,6 +129,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             agentId: f.agentId,
             agentName: f.agentName ?? agent.agentName,
             workspaceId: agent.workspaceId,
+            ...named(agent.workspaceId),
             title: `${f.agentName ?? agent.agentName} finished: ${f.handoff}`,
             blocking: false,
             priority: 'normal',
