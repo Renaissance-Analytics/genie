@@ -56,6 +56,35 @@ import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOC
  * (`stateless`: connection and channel state live in memory): each workspace's slice is an app —
  * `ws_<slug>` as id and key, a generated secret — in a config file Genie writes and the container reads
  * (core/websockets.ts). Its env is Genie 1's `GENIE_WS_*` / `REVERB_*` / `VITE_*` names, through the same slice path.
+ *
+ * ## Which engine of a KIND a workspace uses (`chooseEngines`)
+ *
+ * A workspace can see several engines of one kind — its own dedicated Postgres, a shared one, Genie 1's taken-over one,
+ * a custom image that declared it IS a Postgres — and exactly one of them gives it `DB_*`. The rule, in order:
+ * the workspace's OWN active engine; then a shared one active for it (its slice's `active`, or an unsliced shared
+ * engine's own flag); then its own engine, highest version; then a shared one, highest version. A shared engine the
+ * workspace DETACHED from (`detached`) is never a candidate: its slice and data stay, its env does not come. So adding
+ * a dedicated engine moves the workspace onto it without anyone choosing — the bug the moic agent reported
+ * (2026-10-15): Genie 1's shared `postgres-17` kept handing moic its `DB_*` beside moic's own engine, because a custom
+ * image was never a Postgres and the first ACTIVE instance in services.json won whoever owned it.
+ *
+ * ## Variants (`pgvector`)
+ *
+ * The postgres engine also comes as `pgvector`: the official `pgvector/pgvector:pg<major>` image, which is the stock
+ * Postgres image of that major plus the extension (Genie 1 built its own Postgres image ON it — repos/genie
+ * main/dev-server/services/catalog.ts GENIE_POSTGRES_IMAGE). Same engine, same env, same slices; its container is named
+ * with the variant so a stock 17 and a pgvector 17 never collide. `vector` is NOT a trusted extension (pgvector's
+ * vector.control sets no `trusted`; its maintainer declined it in pgvector#288 and #1017), so a workspace ROLE on a
+ * shared engine cannot `CREATE EXTENSION vector` itself: Genie creates it, as the engine's superuser, in the
+ * workspace's own database when the slice is made (core/service-provision.ts) — Genie 1's genie#526 answer. An app's
+ * `CREATE EXTENSION IF NOT EXISTS vector` is then a no-op that succeeds.
+ *
+ * ## Custom engines of a known kind
+ *
+ * A custom image may say which engine it IS (`kind`: postgres, mysql, mariadb, redis, mongo). It is then a candidate
+ * for that kind like any dedicated engine, and when chosen it emits that engine's env — `DB_*`, `PG*`, `DATABASE_URL` —
+ * with its LIVE published port and the credentials the person gave the image (`POSTGRES_USER` / `POSTGRES_PASSWORD` /
+ * `POSTGRES_DB`, read the way the official images read them). It is never sliced: a custom image is dedicated.
  */
 
 export type ServiceScope = { kind: 'shared' } | { kind: 'dedicated'; workspaceId: string };
@@ -104,6 +133,22 @@ export interface EngineDef {
     readonly config?: { readonly target: string; readonly command: readonly string[] };
     /** Nothing to persist (Sockudo keeps connection and channel state in memory): no data volume is created. */
     readonly stateless?: true;
+    /** The same engine from another image (postgres → `pgvector`): same env, port, data directory and slices. */
+    readonly variants?: Readonly<Record<string, EngineVariant>>;
+}
+
+/** An engine's other image — everything else about the engine is the engine's own. */
+export interface EngineVariant {
+    readonly image: string;
+    /** The image tag for a major (pgvector publishes `pg17`). */
+    readonly tag: (major: string) => string;
+    /** What it adds, for a person and an agent reading the catalog. */
+    readonly summary: string;
+    /**
+     * Extensions Genie creates, as the engine's superuser, in each workspace's database on a SHARED engine — the ones a
+     * workspace role cannot create itself (not `trusted`). A dedicated engine's user is the image's superuser and needs none.
+     */
+    readonly extensions?: readonly string[];
 }
 
 export interface Credentials {
@@ -176,6 +221,12 @@ export interface ServiceInstance {
     readonly slices?: Readonly<Record<string, AdoptedSlice>>;
     /** Every surface the container publishes BESIDE the primary, by Genie 1's surface name (Mailpit's `ui`, MinIO's `console`). */
     readonly publishedPorts?: Readonly<Record<string, number>>;
+    /** The engine's variant (`pgvector`), from its catalog entry's `variants`; absent = the engine's own image. */
+    readonly variant?: string;
+    /** `custom` engines: the engine the image IS (`postgres`…), so its env is that engine's — one of CUSTOM_KINDS. */
+    readonly kind?: string;
+    /** A SHARED engine: the workspaces it gives no env to, by their choice. Their slices and data stay in it. */
+    readonly detached?: readonly string[];
 }
 
 /** One workspace's slice of a multi-tenant engine — as Genie 1 provisioned it, or as Genie 2 did (core/service-provision.ts). */
@@ -219,6 +270,11 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         engine: 'postgres', image: 'postgres', internalPort: 5432, majors: ['14', '15', '16', '17'], sharing: 'shared-or-dedicated',
         containerEnv: (c) => ({ POSTGRES_USER: c.user ?? 'genie', POSTGRES_PASSWORD: c.password ?? '', POSTGRES_DB: c.database ?? 'app' }),
         hostEnv: sqlEnv('pgsql', 'genie'),
+        // Docker Hub publishes pgvector/pgvector:pg14…pg18 (read 2026-10-15); the stock image of that major plus pgvector,
+        // on the official entrypoint — so POSTGRES_* , psql and pg_isready are the stock image's.
+        variants: {
+            pgvector: { image: 'pgvector/pgvector', tag: (major) => `pg${major}`, summary: 'PostgreSQL with pgvector — the `vector` type and its ivfflat and hnsw indexes', extensions: ['vector'] },
+        },
     },
     {
         engine: 'mysql', image: 'mysql', internalPort: 3306, majors: ['8', '9'], sharing: 'shared-or-dedicated',
@@ -300,21 +356,131 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
     },
 ];
 
-/** The image reference for an engine at a major — `tag` where the registry's tags are not the bare major. */
-export function imageFor(def: EngineDef, major: string): string {
+/** The image reference for an engine at a major — `tag` where the registry's tags are not the bare major; a variant's own image. */
+export function imageFor(def: EngineDef, major: string, variant?: string): string {
+    if (variant !== undefined) {
+        const v = def.variants?.[variant];
+        if (!v) throw new Error(`${def.engine} has no variant ${JSON.stringify(variant)}${def.variants ? ` (${Object.keys(def.variants).join(', ')})` : ''}`);
+        return `${v.image}:${v.tag(major)}`;
+    }
     return `${def.image}:${def.tag ? def.tag(major) : major}`;
+}
+
+/** The extensions Genie creates in a workspace's database on a shared engine of this variant (none for most). */
+export function variantExtensions(engine: string, variant: string | undefined): readonly string[] {
+    if (variant === undefined) return [];
+    return SERVICE_CATALOG.find((e) => e.engine === engine)?.variants?.[variant]?.extensions ?? [];
 }
 
 const HOST = '127.0.0.1';
 
+/** Dotted numbers compared numerically; anything else (a custom engine's NAME) by text, so the order is still total. */
 function compareVersions(a: string, b: string): number {
     const pa = a.split('.').map(Number);
     const pb = b.split('.').map(Number);
+    if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a.localeCompare(b);
     for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
         const d = (pa[i] ?? 0) - (pb[i] ?? 0);
         if (d !== 0) return d;
     }
     return 0;
+}
+
+/** The engines a custom image may declare it IS: each one's env is the catalog engine's, from the image's own env. */
+export const CUSTOM_KINDS: readonly string[] = ['postgres', 'mysql', 'mariadb', 'redis', 'mongo'];
+
+/** The kind an instance is chosen as: its engine — or, for a custom image that declared one, that kind. A custom image without one is `custom`. */
+export function engineKindOf(i: Pick<ServiceInstance, 'engine' | 'kind'>): string {
+    return i.engine === 'custom' && i.kind !== undefined ? i.kind : i.engine;
+}
+
+/**
+ * A custom image's credentials, read from the env the person gave it the way the official image of its kind reads them:
+ * Postgres's user defaults to `postgres` and its database to the user; MySQL's/MariaDB's to root with the root password
+ * unless a user is named; Mongo's root user. What the image was not told is not invented.
+ */
+export function customKindCredentials(kind: string, env: Readonly<Record<string, string>>): Credentials {
+    const pick = (...names: string[]): string | undefined => names.map((n) => env[n]).find((v) => v !== undefined && v !== '');
+    switch (kind) {
+        case 'postgres': {
+            const user = pick('POSTGRES_USER') ?? 'postgres';
+            return { user, password: pick('POSTGRES_PASSWORD') ?? '', database: pick('POSTGRES_DB') ?? user };
+        }
+        case 'mysql':
+        case 'mariadb': {
+            const named = pick('MARIADB_USER', 'MYSQL_USER');
+            return {
+                user: named ?? 'root',
+                password: (named ? pick('MARIADB_PASSWORD', 'MYSQL_PASSWORD') : pick('MARIADB_ROOT_PASSWORD', 'MYSQL_ROOT_PASSWORD')) ?? '',
+                database: pick('MARIADB_DATABASE', 'MYSQL_DATABASE') ?? '',
+            };
+        }
+        case 'redis': {
+            const password = pick('REDIS_PASSWORD');
+            return password ? { password } : {};
+        }
+        case 'mongo': {
+            const user = pick('MONGO_INITDB_ROOT_USERNAME');
+            return user ? { user, password: pick('MONGO_INITDB_ROOT_PASSWORD') ?? '' } : {};
+        }
+        default:
+            return {};
+    }
+}
+
+/** One engine a workspace could use for a kind, as `chooseEngines` sees it. */
+export interface EngineCandidate {
+    readonly instance: ServiceInstance;
+    /** The workspace's own (dedicated) engine, rather than a shared one. */
+    readonly own: boolean;
+    /** Active FOR THIS WORKSPACE: its slice's flag on a multi-tenant engine, the engine's own otherwise. */
+    readonly active: boolean;
+    /** A shared engine this workspace detached from: listed (so it can be attached again), never chosen. */
+    readonly detached: boolean;
+}
+
+/** Per kind: every candidate and the one chosen (`null` = none, e.g. every shared one detached). */
+export interface EngineChoice {
+    readonly kind: string;
+    readonly chosen: ServiceInstance | null;
+    readonly candidates: readonly EngineCandidate[];
+}
+
+/**
+ * WHICH ENGINE OF EACH KIND A WORKSPACE USES — the one rule env emission, the agents' `list` and the Services tab all
+ * read (see the header). `workspaceId` absent: no multi-tenant engine is a candidate and every dedicated one is (the
+ * old, workspace-less call). A custom image without a kind is not a candidate for anything: it always emits its own names.
+ */
+export function chooseEngines(instances: readonly ServiceInstance[], workspaceId?: string): EngineChoice[] {
+    const byKind = new Map<string, EngineCandidate[]>();
+    for (const i of instances) {
+        if (i.engine === 'custom' && i.kind === undefined) continue;
+        let active: boolean;
+        let detached = false;
+        if (i.slices !== undefined) {
+            const slice = workspaceId === undefined ? undefined : i.slices[workspaceId];
+            if (!slice) continue;
+            active = slice.active === true;
+        } else {
+            active = i.active;
+        }
+        if (i.scope.kind === 'dedicated') {
+            if (workspaceId !== undefined && i.scope.workspaceId !== workspaceId) continue;
+        } else if (workspaceId !== undefined && i.detached?.includes(workspaceId)) {
+            detached = true;
+        }
+        const kind = engineKindOf(i);
+        byKind.set(kind, [...(byKind.get(kind) ?? []), { instance: i, own: i.scope.kind === 'dedicated', active, detached }]);
+    }
+    const rank = (c: EngineCandidate): number => (c.active ? (c.own ? 0 : 1) : c.own ? 2 : 3);
+    const out: EngineChoice[] = [];
+    for (const [kind, candidates] of byKind) {
+        const eligible = candidates.filter((c) => !c.detached);
+        // Stable: equal rank and version keep services.json's order.
+        const best = [...eligible].sort((a, b) => rank(a) - rank(b) || compareVersions(b.instance.version, a.instance.version))[0];
+        out.push({ kind, chosen: best?.instance ?? null, candidates });
+    }
+    return out;
 }
 
 /** Genie 1's `envToken` (env-wiring.ts): `custom-echo` → `CUSTOM_ECHO`, for a custom engine's endpoint variables. */
@@ -335,40 +501,32 @@ export function customEnvToken(value: string): string {
  * file stays free of node imports for the renderer): the tag and prefix the namespace engines emit.
  */
 export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string } = {}): Record<string, string> {
-    const sliceOf = (i: ServiceInstance): AdoptedSlice | undefined => (workspaceId === undefined ? undefined : i.slices?.[workspaceId]);
-    const byEngine = new Map<string, ServiceInstance[]>();
+    const env: Record<string, string> = {};
+    // Every custom engine emits its own names (each is namespaced by its own name) and its env, as Genie 1's did —
+    // whether or not it is the workspace's engine of its kind.
     for (const i of instances) {
-        let view = i;
-        if (i.slices !== undefined) {
-            const slice = sliceOf(i);
-            if (!slice) continue;
-            view = { ...i, active: slice.active === true };
-        }
-        byEngine.set(view.engine, [...(byEngine.get(view.engine) ?? []), view]);
+        if (i.engine !== 'custom') continue;
+        if (i.scope.kind === 'dedicated' && workspaceId !== undefined && i.scope.workspaceId !== workspaceId) continue;
+        const token = customEnvToken(`custom-${i.version}`);
+        Object.assign(env, { [`GENIE_SERVICE_${token}_HOST`]: HOST, [`GENIE_SERVICE_${token}_PORT`]: String(i.publishedPort) }, i.env ?? {});
     }
     const chosen = new Map<string, ServiceInstance>();
-    for (const [engine, list] of byEngine) {
-        if (engine === 'custom') continue;
-        chosen.set(engine, list.find((i) => i.active) ?? [...list].sort((a, b) => compareVersions(b.version, a.version))[0]!);
-    }
-    const env: Record<string, string> = {};
-    for (const [engine, list] of byEngine) {
-        if (engine === 'custom') {
-            // Every custom engine emits (each is namespaced by its own name), as Genie 1's did.
-            for (const i of list) {
-                const token = customEnvToken(`custom-${i.version}`);
-                Object.assign(env, { [`GENIE_SERVICE_${token}_HOST`]: HOST, [`GENIE_SERVICE_${token}_PORT`]: String(i.publishedPort) }, i.env ?? {});
-            }
-            continue;
-        }
-        const one = chosen.get(engine)!;
-        if (one.slices !== undefined) {
-            // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
-            Object.assign(env, v1HostEnv(engine, one.publishedPort, sliceOf(one)!, { primaryRelational: (engine !== 'mysql' && engine !== 'mariadb') || !chosen.has('postgres') }));
-            continue;
-        }
-        const def = SERVICE_CATALOG.find((e) => e.engine === engine);
+    for (const c of chooseEngines(instances, workspaceId)) if (c.chosen) chosen.set(c.kind, c.chosen);
+    for (const [kind, one] of chosen) {
+        const def = SERVICE_CATALOG.find((e) => e.engine === kind);
         if (!def) continue;
+        if (one.engine === 'custom') {
+            // A custom image that IS this kind: the kind's env, its LIVE port, the credentials its own env gave the image.
+            Object.assign(env, def.hostEnv(HOST, one.publishedPort, customKindCredentials(kind, one.env ?? {}), options.namespace));
+            continue;
+        }
+        if (one.slices !== undefined) {
+            const slice = workspaceId === undefined ? undefined : one.slices[workspaceId];
+            if (!slice) continue;
+            // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
+            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres') }));
+            continue;
+        }
         Object.assign(env, def.hostEnv(HOST, one.publishedPort, one.credentials, options.namespace));
     }
     return env;
@@ -446,6 +604,8 @@ export interface CustomEngineSpec {
     readonly image: string;
     readonly internalPort: number;
     readonly env: Readonly<Record<string, string>>;
+    /** The engine it IS (one of CUSTOM_KINDS), so the workspace gets that engine's env from it. */
+    readonly kind?: string;
 }
 
 export interface ContainerPlan {
@@ -467,17 +627,20 @@ export interface ContainerPlan {
     readonly mounts?: readonly { readonly source: string; readonly target: string }[];
 }
 
-/** The container Genie derives for an instance (`genie-<shared|workspace>-<engine>-<version>`), unless it has its own (an adopted one's). */
-export function containerNameOf(i: Pick<ServiceInstance, 'engine' | 'version' | 'scope' | 'containerName'>): string {
+/**
+ * The container Genie derives for an instance (`genie-<shared|workspace>-<engine>[-<variant>]-<version>`), unless it has
+ * its own (an adopted one's). The variant is in the name, so a stock 17 and a pgvector 17 are two containers.
+ */
+export function containerNameOf(i: Pick<ServiceInstance, 'engine' | 'version' | 'scope' | 'containerName'> & { readonly variant?: string | undefined }): string {
     if (i.containerName) return i.containerName;
-    return `genie-${i.scope.kind === 'shared' ? 'shared' : i.scope.workspaceId}-${i.engine}-${i.version}`;
+    return `genie-${i.scope.kind === 'shared' ? 'shared' : i.scope.workspaceId}-${i.engine}${i.variant ? `-${i.variant}` : ''}-${i.version}`;
 }
 
 /**
  * The volume a "delete data" removes: the instance's own (Genie 1 named its volumes), else `<container>-data`; none for
  * a custom image, and none for a stateless engine (the WebSocket server: its apps are a config file, not data).
  */
-export function dataVolumeOf(i: Pick<ServiceInstance, 'engine' | 'version' | 'scope' | 'containerName' | 'volume'>): string | null {
+export function dataVolumeOf(i: Pick<ServiceInstance, 'engine' | 'version' | 'scope' | 'containerName' | 'volume'> & { readonly variant?: string | undefined }): string | null {
     if (i.volume) return i.volume;
     if (i.engine === 'custom') return null;
     if (isStateless(i.engine)) return null;
@@ -501,13 +664,16 @@ export function containerPlan(input: {
     custom?: CustomEngineSpec;
     /** The host path of the file an engine that reads its tenants from one is given (Sockudo's apps). */
     configFile?: string;
+    /** The engine's variant (`pgvector`): its image, everything else the engine's. */
+    variant?: string;
 }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
     if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
     if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
     if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
-    const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}-${input.major}`;
+    if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
+    const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}${input.variant ? `-${input.variant}` : ''}-${input.major}`;
     if (def.custom) {
         const c = input.custom;
         if (!c) throw new Error(`${input.engine} needs its image, port and env`);
@@ -535,7 +701,7 @@ export function containerPlan(input: {
     // The config engine's command is fixed (its binary on the mounted file); SeaweedFS's comes with its entrypoint.
     const command = def.config ? def.config.command : launch ? launch.command : def.command && password ? def.command(password) : undefined;
     return {
-        image: imageFor(def, input.major),
+        image: imageFor(def, input.major, input.variant),
         name: `genie-${key}`,
         // A stateless engine (Sockudo) has nothing to keep: no volume is created, and none is there for "delete data".
         volume: def.stateless ? null : `genie-${key}-data`,

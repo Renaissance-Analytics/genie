@@ -4,9 +4,9 @@ import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
-import { DEFAULT_CUSTOM_NAME, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
+import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, engineKindOf, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
 import {
-    createService, createSite, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite,
+    createService, createSite, detachService, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite, useService,
     type HostingServices, type OpenInBrowser,
 } from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
@@ -36,10 +36,13 @@ import type { SiteInfo } from './site-manager.js';
  * - `logs` is the end of an engine's output with every credential Genie holds for that engine masked in it: a shared
  *   engine's log can carry another workspace's statements (a failed `ALTER ROLE … PASSWORD` is logged whole) — and a
  *   WebSockets engine's, every workspace's app secret (each is its slice's password).
+ * - WHICH engine of a kind the workspace uses (`use`) and stopping a shared one giving it its env (`detach`) wait for the
+ *   person's approval, which names the engine and what the workspace uses before and after. A detach keeps the slice and
+ *   the data; `use` on that engine attaches again. Another workspace's engine is refused without asking.
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
-export type HostingApproval = 'services.add' | 'services.remove' | 'sites.update' | 'sites.remove';
+export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'sites.update' | 'sites.remove';
 
 export interface HostingToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
@@ -108,18 +111,25 @@ function visibleTo(i: ServiceInstance, workspaceId: string): boolean {
     return i.adopted === 'v1' ? i.slices?.[workspaceId] !== undefined : true;
 }
 
-/** An engine without its credentials: an answer never carries one (`env` is where a process's connection lives). */
-function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<EngineStatusView, 'status' | 'note'>): Record<string, unknown> {
+/**
+ * An engine without its credentials: an answer never carries one (`env` is where a process's connection lives).
+ * `inUse` = this is the engine of its kind the workspace's env comes from (core/services.ts `chooseEngines`).
+ */
+function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<EngineStatusView, 'status' | 'note'>, inUse?: ReadonlySet<string>): Record<string, unknown> {
     // A multi-tenant engine (adopted, or a new shared one) is active per workspace: its slice's.
     const active = i.slices !== undefined ? i.slices[workspaceId]?.active === true : i.active;
     return {
         id: i.id,
         engine: i.engine,
+        ...(i.variant ? { variant: i.variant } : {}),
+        ...(i.kind ? { kind: i.kind } : {}),
         version: i.version,
         scope: i.scope.kind,
         host: '127.0.0.1',
         port: i.publishedPort,
         active,
+        ...(inUse ? { inUse: inUse.has(i.id) } : {}),
+        ...(i.detached?.includes(workspaceId) ? { detached: true } : {}),
         // The workspace's own WebSocket app — its id and its PUBLIC key. Never its secret (that is `env`'s, masked).
         ...(sliceIsDroppable(i.engine) && i.slices?.[workspaceId] ? { app: { id: i.slices[workspaceId]!.identifier, key: i.slices[workspaceId]!.identifier } } : {}),
         // The surfaces beside the primary port, by name — and Mailpit's web inbox as the address to open.
@@ -129,6 +139,17 @@ function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<Engi
         ...(i.adopted ? { takenOverFromGenie1: true } : {}),
         ...(status ? { status: status.status, ...(status.note ? { note: status.note } : {}) } : {}),
     };
+}
+
+/** The ids of the engines this workspace's env comes from, one per kind (core/services.ts `chooseEngines`). */
+function inUseBy(s: HostingServices, workspaceId: string): Set<string> {
+    return new Set(s.engines.choices(workspaceId).flatMap((c) => (c.chosen ? [c.chosen.id] : [])));
+}
+
+/** An engine as the person reads it in an approval: `postgres (pgvector) 17, shared`, `custom pgvector`, `postgres 17 (Genie 1’s)`. */
+function labelOf(i: ServiceInstance): string {
+    const name = i.engine === 'custom' ? `custom ${i.version}${i.kind ? ` (a ${i.kind})` : ''}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`;
+    return `${name}${i.adopted ? ' (Genie 1’s)' : i.scope.kind === 'shared' ? ', shared' : ''}`;
 }
 
 /** An agent's `env` argument for a custom image: an object of string values, or why not. */
@@ -167,27 +188,32 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             'services',
             'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), WebSockets (Sockudo, Pusher protocol; Laravel reads it through its reverb driver), Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
                 + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, REVERB_*, MEILISEARCH_*, AWS_*…). '
-                + 'Actions: `catalog` — the engines and versions Genie offers, with each image. '
-                + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox). '
+                + 'Actions: `catalog` — the engines and versions Genie offers, with each image and variant (postgres: `pgvector`). '
+                + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox); `inUse` marks the one of each kind the env comes from. '
                 + '`env` — the variables a process here gets: names and values, secrets masked. '
                 + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
-                + '`add` {engine, version, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. '
-                + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?} — always dedicated; the person sees the image before anything is pulled. '
+                + '`add` {engine, version, variant?, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. A workspace’s own engine is the one its env comes from, before any shared one. '
+                + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
+                + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
+                + '`use` {id} — make this engine the one of its kind this workspace’s env comes from (attaches a detached shared one again); the person approves it. '
+                + '`detach` {id} — a SHARED engine (Genie 1’s included) stops giving this workspace its env; its database and data stay; the person approves it. '
                 + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
                 + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab). On the shared WebSockets engine it removes only THIS workspace’s app.',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'add', 'start', 'stop', 'remove'] },
+                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'add', 'use', 'detach', 'start', 'stop', 'remove'] },
                     engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
                     version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
+                    variant: { type: 'string', description: 'add: a variant `catalog` lists for that engine — postgres: "pgvector" (pgvector/pgvector:pg<version>).' },
+                    kind: { type: 'string', enum: ['postgres', 'mysql', 'mariadb', 'redis', 'mongo'], description: 'add (custom): the engine the image IS, so this workspace gets that engine’s env (DB_*, PG*, DATABASE_URL…) from it with its live port.' },
                     scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine).' },
                     image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
                     port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
                     env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
                     name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}".` },
-                    id: { type: 'string', description: 'logs / start / stop / remove: the engine’s id, from `list`.' },
+                    id: { type: 'string', description: 'logs / use / detach / start / stop / remove: the engine’s id, from `list`.' },
                     tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
                     deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
                 },
@@ -214,12 +240,14 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                             versions: d.majors,
                             scopes: d.sharing === 'shared-only' ? ['shared'] : d.sharing === 'dedicated-only' ? ['dedicated'] : ['dedicated', 'shared'],
                             images: d.majors.map((m) => imageFor(d, m)),
-                            ...(d.custom ? { note: 'any image you name, with its port and env — the person sees the image and approves it before anything is pulled' } : {}),
+                            ...(d.variants ? { variants: Object.entries(d.variants).map(([variant, v]) => ({ variant, summary: v.summary, images: d.majors.map((m) => imageFor(d, m, variant)) })) } : {}),
+                            ...(d.custom ? { note: 'any image you name, with its port and env — the person sees the image and approves it before anything is pulled', kinds: [...CUSTOM_KINDS] } : {}),
                         })),
                     });
                 case 'list': {
                     const views = (await s.engineStatuses()).filter((v) => visibleTo(v.instance, caller.workspaceId));
-                    return ok({ ok: true, services: views.map((v) => serviceView(v.instance, caller.workspaceId, v)) });
+                    const inUse = inUseBy(s, caller.workspaceId);
+                    return ok({ ok: true, services: views.map((v) => serviceView(v.instance, caller.workspaceId, v, inUse)) });
                 }
                 case 'env': {
                     const { variables, masked } = maskEnv(s.engines.envFor(caller.workspaceId));
@@ -242,27 +270,60 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const env = custom ? customEnvArg(args.env) : {};
                     if (typeof env === 'string') return err(env);
                     if (custom && args.port !== undefined && typeof args.port !== 'number') return err('`port` is a number');
+                    if (args.variant !== undefined && typeof args.variant !== 'string') return err('`variant` is a name `catalog` lists (postgres: pgvector)');
+                    if (args.kind !== undefined && typeof args.kind !== 'string') return err(`\`kind\` is one of ${CUSTOM_KINDS.join(', ')}`);
+                    if (!custom && args.kind !== undefined) return err('`kind` is for a custom image: a catalog engine already is one');
+                    const variant = str(args.variant);
+                    const kind = str(args.kind);
                     const form: ServiceForm = {
                         workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' ? 'shared' : 'dedicated',
-                        ...(custom ? { custom: { name: version, image: str(args.image) ?? '', port: typeof args.port === 'number' ? args.port : null, env } } : {}),
+                        ...(variant !== undefined ? { variant } : {}),
+                        ...(custom ? { custom: { name: version, image: str(args.image) ?? '', port: typeof args.port === 'number' ? args.port : null, env, ...(kind !== undefined ? { kind } : {}) } } : {}),
                     };
                     // The form's own validation, BEFORE anyone is asked: a request Genie would refuse is never put to the person.
                     const problems = validateServiceForm(form);
                     if (problems.length > 0) return err(problems.map((p) => p.message).join(' '), { problems });
                     const def = SERVICE_CATALOG.find((d) => d.engine === engine)!;
-                    const image = form.custom ? form.custom.image : imageFor(def, version);
+                    const image = form.custom ? form.custom.image : imageFor(def, version, variant);
                     const where = form.scope === 'shared' ? 'shared by every workspace on this machine' : 'for this workspace only';
                     // A custom image is named to the person BEFORE anything runs — the image, its port, and its env NAMES (never values).
                     const what = form.custom
-                        ? `a custom image ${image} named "${version}" (listening on ${form.custom.port} inside)${Object.keys(env).length > 0 ? `, env ${Object.keys(env).join(', ')}` : ''}`
-                        : `${engine} ${version}`;
+                        ? `a custom image ${image} named "${version}" (listening on ${form.custom.port} inside)${kind !== undefined ? `, as this workspace’s ${kind}` : ''}${Object.keys(env).length > 0 ? `, env ${Object.keys(env).join(', ')}` : ''}`
+                        : `${engine}${variant !== undefined ? ` (${variant})` : ''} ${version}`;
                     const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`);
                     if (verdict !== 'allowed') return err(`adding ${form.custom ? `the custom image ${image}` : `${engine} ${version}`} was denied by the person; nothing was pulled or created`);
                     // The person's approval, which named the image, IS the pull's consent.
                     const r = await createService(s, form, true);
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems });
                     if (r.kind === 'needs-consent') return err(`${r.image} was not pulled: ${r.note}`);
-                    return ok({ ok: true, outcome: r.kind, service: serviceView(r.instance, caller.workspaceId, await statusOf(r.instance.id)), note: ENV_NOTE });
+                    return ok({ ok: true, outcome: r.kind, service: serviceView(r.instance, caller.workspaceId, await statusOf(r.instance.id), inUseBy(s, caller.workspaceId)), note: ENV_NOTE });
+                }
+                case 'use':
+                case 'detach': {
+                    const i = own(str(args.id));
+                    if (typeof i === 'string') return err(i);
+                    const kind = engineKindOf(i);
+                    const before = s.engines.choices(caller.workspaceId).find((c) => c.kind === kind)?.chosen ?? null;
+                    // Refused WITHOUT asking — the registry's own refusals, checked first, so nothing Genie would refuse is put to the person.
+                    if (action === 'detach' && i.scope.kind !== 'shared') return err(`${labelOf(i)} is this workspace’s own engine: stop or remove it to stop using it; nothing was done`);
+                    if (action === 'use' && i.scope.kind === 'shared' && i.slices === undefined && !i.active) return err(`${labelOf(i)} is shared with one connection for every workspace and is not its engine’s active version; it cannot be chosen for one workspace; nothing was done`);
+                    if (action === 'use' && i.engine === 'custom' && i.kind === undefined) return err(`the custom image ${i.version} has not said which engine it is (add it again with \`kind\`), so it cannot be this workspace’s engine of a kind; nothing was done`);
+                    if (action === 'use' && before?.id === i.id && !i.detached?.includes(caller.workspaceId)) return ok({ ok: true, using: serviceView(i, caller.workspaceId, await statusOf(i.id), inUseBy(s, caller.workspaceId)), note: `this workspace already uses ${labelOf(i)} for ${kind}; the person was not asked` });
+                    if (action === 'detach' && i.detached?.includes(caller.workspaceId)) return ok({ ok: true, detached: i.id, note: `this workspace is already detached from ${labelOf(i)}; the person was not asked` });
+                    const now = before ? labelOf(before) : `no ${kind}`;
+                    const detail = action === 'use'
+                        ? `${kind} for this workspace: ${now} → ${labelOf(i)} (127.0.0.1:${i.publishedPort}) — its terminals and sites get ${labelOf(i)}’s connection; nothing is deleted, and the other engine keeps its data`
+                        : `stop the shared ${labelOf(i)} (127.0.0.1:${i.publishedPort}) giving this workspace its ${kind} connection — its database and data stay in it, and \`use\` attaches it again`;
+                    const verdict = await deps.approve(caller, 'services.use', detail);
+                    if (verdict !== 'allowed') return err(`${action === 'use' ? `using ${labelOf(i)}` : `detaching from ${labelOf(i)}`} was denied by the person; nothing was changed`);
+                    const choice = action === 'use' ? await useService(s, caller.workspaceId, i.id) : await detachService(s, caller.workspaceId, i.id);
+                    return ok({
+                        ok: true,
+                        kind,
+                        using: choice.chosen ? serviceView(choice.chosen, caller.workspaceId, await statusOf(choice.chosen.id), inUseBy(s, caller.workspaceId)) : null,
+                        ...(choice.chosen ? {} : { note: `this workspace now has no ${kind}: its processes get no ${kind} variables from Genie. A .env Genie wrote earlier still names the old engine until it is edited` }),
+                        ...(choice.chosen ? { note: ENV_NOTE } : {}),
+                    });
                 }
                 case 'start': {
                     const i = own(str(args.id));
@@ -299,7 +360,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     return ok({ ok: true, removed: i.id, dataKept: true });
                 }
                 default:
-                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, start, stop, remove`);
+                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, use, detach, start, stop, remove`);
             }
         }),
     };

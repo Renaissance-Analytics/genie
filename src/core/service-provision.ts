@@ -154,7 +154,32 @@ function seaweedSteps(admin: EngineAdmin, bucket: string, password: string): Pro
     ];
 }
 
-function postgresSteps(admin: EngineAdmin, name: string, password: string): ProvisionStep[] {
+/** What an extension name may look like, whatever list it came from: it becomes a quoted identifier run as superuser (Genie 1's extensions.ts EXTENSION_NAME). */
+const EXTENSION_NAME = /^[a-z][a-z0-9_-]{0,62}$/;
+
+export function assertExtensionName(value: string): string {
+    if (!EXTENSION_NAME.test(value)) throw new Error(`refusing to create the extension ${JSON.stringify(value)}: it is not a bare extension name`);
+    return value;
+}
+
+/**
+ * `CREATE EXTENSION` for what the engine's VARIANT carries (pgvector's `vector`), as the engine's SUPERUSER, in the
+ * WORKSPACE's database — Genie 1's postgresExtensionSteps (repos/genie main/dev-server/services/provision.ts, genie#526),
+ * ported. Superuser because `vector` is not a trusted extension (pgvector's vector.control sets no `trusted`; pgvector#288,
+ * #1017): the workspace role cannot create it, and must not be made a superuser of an engine other workspaces share.
+ * In the workspace's database, because an extension lives in one database. LAST, after the grants, so the database is
+ * the workspace's. `IF NOT EXISTS`: a second provisioning converges, and the app's own `CREATE EXTENSION IF NOT EXISTS
+ * vector` afterwards is a no-op that succeeds.
+ */
+function postgresExtensionSteps(admin: EngineAdmin, database: string, extensions: readonly string[]): ProvisionStep[] {
+    const uri = `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/${database}`;
+    return extensions.map((extension) => {
+        const name = assertExtensionName(extension);
+        return { label: `extension ${name}`, argv: ['psql', uri, '-v', 'ON_ERROR_STOP=1', '-q', '-tAc', `CREATE EXTENSION IF NOT EXISTS "${name}"`] };
+    });
+}
+
+function postgresSteps(admin: EngineAdmin, name: string, password: string, extensions: readonly string[] = []): ProvisionStep[] {
     // A URI rather than the unix socket: no assumption about the image's pg_hba.conf; base64url needs no escaping.
     const uri = `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/postgres`;
     const psql = (sql: string): string[] => ['psql', uri, '-v', 'ON_ERROR_STOP=1', '-q', '-tAc', sql];
@@ -182,6 +207,7 @@ END $$;`),
             // workspace A's role can open workspace B's database.
             argv: psql(`REVOKE CONNECT ON DATABASE "${name}" FROM PUBLIC; GRANT ALL PRIVILEGES ON DATABASE "${name}" TO "${name}"; ALTER DATABASE "${name}" OWNER TO "${name}";`),
         },
+        ...postgresExtensionSteps(admin, name, extensions),
     ];
 }
 
@@ -218,14 +244,18 @@ function redisSteps(admin: EngineAdmin, name: string, password: string): Provisi
     ];
 }
 
-/** The commands that carve one workspace's slice out of a shared engine, as its superuser. */
-export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<AdoptedSlice, 'identifier' | 'password' | 'bucket'>): ProvisionStep[] {
+/**
+ * The commands that carve one workspace's slice out of a shared engine, as its superuser. `extensions`: Postgres only —
+ * what the engine's variant carries and a workspace role cannot create (core/services.ts `variantExtensions`).
+ */
+export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<AdoptedSlice, 'identifier' | 'password' | 'bucket'>, options: { readonly extensions?: readonly string[] } = {}): ProvisionStep[] {
     const name = assertSliceIdentifier(slice.identifier);
     const password = assertGeneratedPassword(slice.password, 'workspace');
     assertGeneratedPassword(admin.password, 'admin');
+    if ((options.extensions ?? []).length > 0 && engine !== 'postgres') throw new Error(`${engine} has no extensions; only a Postgres creates them`);
     switch (engine) {
         case 'postgres':
-            return postgresSteps(admin, name, password);
+            return postgresSteps(admin, name, password, options.extensions ?? []);
         case 'mysql':
             return mysqlSteps('mysql', admin, name, password);
         case 'mariadb':

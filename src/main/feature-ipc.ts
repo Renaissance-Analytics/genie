@@ -15,7 +15,7 @@ import type { InstallOutcome } from './toolchain-ops.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
 import {
-    createService, createSite, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite,
+    createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite, useService,
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
@@ -424,6 +424,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'services.setActive':
             await setActiveService(services, action.workspaceId, action.engine, action.version);
+            break;
+        case 'services.use':
+            // The PERSON's choice, from the Services tab: no approval (an agent's `use` waits for this person's).
+            await useService(services, action.workspaceId, action.serviceId);
+            break;
+        case 'services.detach':
+            await detachService(services, action.workspaceId, action.serviceId);
             break;
         case 'services.start':
             await startService(services, action.serviceId);

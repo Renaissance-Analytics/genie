@@ -581,12 +581,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     let registry: ServiceRegistry | null = null;
     const portAllocator = input.allocatePort
         ? null
-        : new PortAllocator({ first: 4101, reserved: () => registry?.list().flatMap((i) => [i.publishedPort, ...Object.values(i.publishedPorts ?? {})]) ?? [], isFree: input.portFree ?? loopbackPortFree, log: (line) => console.error(line) });
+        // Reserved: every live engine's ports AND the ones a removed engine is remembered by (handed back on re-add).
+        : new PortAllocator({ first: 4101, reserved: () => registry?.reservedPorts() ?? [], isFree: input.portFree ?? loopbackPortFree, log: (line) => console.error(line) });
     const allocatePort = input.allocatePort ?? (() => portAllocator!.next());
     // Only a pull gets the long bound (service-driver.ts); every other docker call keeps the short one.
     const docker: DockerRunner = input.docker ?? dockerRunnerOver(execFileRunner);
     const driver = new ServiceDriver(docker);
-    const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url') });
+    const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url'), portFree: input.portFree ?? loopbackPortFree });
     registry = engines;
     // Genie 1's engines, taken over in place (and its sandboxes stopped) BEFORE anything reads a workspace's env, primes
     // a port or reconciles: the adopted engines' ports are then reserved, and the reconcile sees them as registered.

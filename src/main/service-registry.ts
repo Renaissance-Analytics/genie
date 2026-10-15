@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
-import { containerNameOf, dataVolumeOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type ServiceInstance, type ServiceScope } from '../core/services.js';
+import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, variantExtensions, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type EngineChoice, type ServiceInstance, type ServiceScope } from '../core/services.js';
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
@@ -48,6 +48,16 @@ import { readJson, writeJsonAtomic } from './store.js';
  *
  * `onChange` fires after every write and every start or stop, whoever asked — the person's Services tab or an agent's
  * `services` tool — so the tab redraws when an agent acts (main.ts pushes the feature snapshot on it).
+ *
+ * WHICH ENGINE OF A KIND A WORKSPACE USES is `chooseEngines` (core/services.ts): its own engine before a shared one, an
+ * active one before an inactive one. `use` makes one engine THE workspace's of its kind — by id, never by version (a
+ * dedicated 17 and a shared 17 are two engines) — and `detach` stops a shared engine handing the workspace its env,
+ * keeping its slice and data (`use` on it attaches again).
+ *
+ * PORTS SURVIVE A REMOVE: the loopback port(s) an engine had are remembered under its container name when it is removed
+ * (`ports` in services.json, reserved like a live engine's — `reservedPorts`), and an engine added again under the same
+ * name gets them back if nothing else holds them. The allocator's scan already gave the same records the same ports across
+ * restarts (core/port-allocator.ts, H1); this carries that across remove + re-add, which leaves no record to scan.
  */
 
 export interface RegistryDeps {
@@ -60,6 +70,14 @@ export interface RegistryDeps {
     readonly sleep?: (ms: number) => Promise<void>;
     /** Where an engine's config file is read and written (Sockudo's apps). Defaults to the disk. */
     readonly files?: ConfigFiles;
+    /** Is a remembered port still free on 127.0.0.1? Absent = trusted (the record reserved it for this name). */
+    readonly portFree?: (port: number) => Promise<boolean>;
+}
+
+/** The ports an engine had, kept under its container name after it was removed. */
+export interface RememberedPorts {
+    readonly port: number;
+    readonly surfaces?: Readonly<Record<string, number>>;
 }
 
 export interface ConfigFiles {
@@ -108,6 +126,8 @@ export interface V1ServicesImportRecord {
 interface RegistryFile {
     instances: ServiceInstance[];
     v1Import?: V1ServicesImportRecord;
+    /** By container name: the ports a removed engine had, handed back when one of that name is added again. */
+    ports?: Record<string, RememberedPorts>;
 }
 
 export type AddResult =
@@ -142,9 +162,24 @@ export class ServiceRegistry {
 
     /** A workspace's own engines plus the shared ones — what its processes and terminals get. */
     envFor(workspaceId: string): Record<string, string> {
-        const mine = this.#data.instances.filter((i) => i.scope.kind === 'shared' || (i.scope.kind === 'dedicated' && i.scope.workspaceId === workspaceId));
         // The namespace engines' tag and prefix are the workspace's derived name — the same `ws_<slug>` its slices use.
-        return serviceEnvFor(mine, workspaceId, { namespace: workspaceSqlIdentifier(workspaceId) });
+        return serviceEnvFor(this.#visibleTo(workspaceId), workspaceId, { namespace: workspaceSqlIdentifier(workspaceId) });
+    }
+
+    /** Per kind: the engines this workspace could use and the one it does — what `envFor` emits from (core/services.ts `chooseEngines`). */
+    choices(workspaceId: string): EngineChoice[] {
+        return chooseEngines(this.#visibleTo(workspaceId), workspaceId);
+    }
+
+    #visibleTo(workspaceId: string): ServiceInstance[] {
+        return this.#data.instances.filter((i) => i.scope.kind === 'shared' || (i.scope.kind === 'dedicated' && i.scope.workspaceId === workspaceId));
+    }
+
+    /** Every port an engine holds or a removed engine is remembered by — what the loopback allocator must never hand out. */
+    reservedPorts(): number[] {
+        const live = this.#data.instances.flatMap((i) => [i.publishedPort, ...Object.values(i.publishedPorts ?? {})]);
+        const kept = Object.values(this.#data.ports ?? {}).flatMap((p) => [p.port, ...Object.values(p.surfaces ?? {})]);
+        return [...live, ...kept];
     }
 
     /** The Genie 1 take-over's record, or `null` before any boot has looked. */
@@ -171,27 +206,35 @@ export class ServiceRegistry {
      * before the answer — on a new engine and on one that already exists alike.
      *
      * `custom` = a custom image (validated by core/forms.ts before it gets here): `major` is the name the person gave
-     * it, and the image, port and env are theirs.
+     * it, and the image, port and env are theirs — and its `kind`, when it declared one.
+     *
+     * `variant` = the engine from its variant's image (postgres → `pgvector`); a separate engine from the stock one of the
+     * same major, with its own container and volume.
      */
-    async add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec }): Promise<AddResult> {
+    async add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec; variant?: string }): Promise<AddResult> {
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
         if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
         if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
         if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
         if (def.custom && !input.custom) throw new Error(`${input.engine} needs its image, port and env`);
+        if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
+        if (input.custom?.kind !== undefined && !CUSTOM_KINDS.includes(input.custom.kind)) throw new Error(`a custom image cannot be a ${JSON.stringify(input.custom.kind)} (${CUSTOM_KINDS.join(', ')})`);
 
         // BEFORE the adopt-only refusal: asking for the MinIO Genie 1 left is answered with it, not refused.
-        const existing = this.#data.instances.find((i) => i.engine === input.engine && i.version === input.major && sameScope(i.scope, input.scope));
+        const existing = this.#data.instances.find((i) => i.engine === input.engine && i.version === input.major && (i.variant ?? null) === (input.variant ?? null) && sameScope(i.scope, input.scope));
         if (existing) return { kind: 'exists', instance: input.workspaceId !== undefined ? await this.#useSlice(existing.id, input.workspaceId) : existing };
         if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not added: its images are no longer published`);
 
-        const image = await this.#driver.ensureImage(input.custom ? input.custom.image : imageFor(def, input.major), { consent: input.consent });
+        const image = await this.#driver.ensureImage(input.custom ? input.custom.image : imageFor(def, input.major, input.variant), { consent: input.consent });
         if (image.kind === 'needs-consent') return { kind: 'needs-consent', image: image.image, note: image.note ?? '' };
 
-        const publishedPort = this.#deps.allocatePort();
+        // The ports this name had before it was removed, if nothing else holds them now; else new ones.
+        const name = containerNameOf({ scope: input.scope, engine: input.engine, version: input.major, ...(input.variant ? { variant: input.variant } : {}) });
+        const remembered = await this.#rememberedPorts(name, def.surfaces?.map((s) => s.name) ?? []);
+        const publishedPort = remembered?.port ?? this.#deps.allocatePort();
         // Each surface beside the primary gets its own loopback port — Mailpit's web inbox.
         const surfacePorts: Record<string, number> = {};
-        for (const surface of def.surfaces ?? []) surfacePorts[surface.name] = this.#deps.allocatePort();
+        for (const surface of def.surfaces ?? []) surfacePorts[surface.name] = remembered?.surfaces?.[surface.name] ?? this.#deps.allocatePort();
         const database = input.scope.kind === 'dedicated' ? input.scope.workspaceId : 'app';
         // A shared Postgres/MySQL/MariaDB/Redis/SeaweedFS holds only its superuser; every workspace's credential is a slice.
         const tenancy = input.scope.kind === 'shared' && SLICED_ENGINES.has(def.engine) ? SHARED_TENANCY[def.engine] : undefined;
@@ -208,7 +251,7 @@ export class ServiceRegistry {
         let configFile: string | undefined;
         if (def.config) {
             appSlices = input.workspaceId !== undefined ? { [input.workspaceId]: this.#newSlice(input.workspaceId, input.engine, {}) } : {};
-            configFile = this.#configPath(containerNameOf({ scope: input.scope, engine: input.engine, version: input.major }));
+            configFile = this.#configPath(name);
             await this.#files.writeText(configFile, renderSockudoConfig({ port: def.internalPort, apps: Object.values(appSlices).map(websocketAppOf) }));
         }
         const created = await this.#driver.create({
@@ -217,11 +260,14 @@ export class ServiceRegistry {
             ...(def.surfaces ? { surfacePorts } : {}),
             ...(input.custom ? { custom: input.custom } : {}),
             ...(configFile ? { configFile } : {}),
+            ...(input.variant ? { variant: input.variant } : {}),
         });
         if (!created.ok) throw new Error(created.reason);
         await this.#driver.start(created.name);
 
-        const siblings = this.#data.instances.filter((i) => i.engine === input.engine && sameScope(i.scope, input.scope));
+        // The first engine of its KIND in this scope is active: a custom image that is a Postgres counts as one.
+        const kind = engineKindOf({ engine: input.engine, ...(input.custom?.kind !== undefined ? { kind: input.custom.kind } : {}) });
+        const siblings = this.#data.instances.filter((i) => engineKindOf(i) === kind && sameScope(i.scope, input.scope));
         const instance: ServiceInstance = {
             id: `svc_${randomUUID()}`,
             engine: input.engine,
@@ -230,15 +276,37 @@ export class ServiceRegistry {
             publishedPort,
             credentials,
             active: siblings.length === 0,
+            ...(input.variant ? { variant: input.variant } : {}),
             ...(admin ? { admin, slices: {} } : {}),
             ...(appSlices ? { slices: appSlices } : {}),
             ...(def.surfaces ? { publishedPorts: surfacePorts } : {}),
-            ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env } } : {}),
+            ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env }, ...(input.custom.kind !== undefined ? { kind: input.custom.kind } : {}) } : {}),
         };
         this.#data.instances.push(instance);
+        // Handed back: no longer remembered (the instance itself now records them).
+        if (this.#data.ports?.[name]) this.#data = { ...this.#data, ports: Object.fromEntries(Object.entries(this.#data.ports).filter(([k]) => k !== name)) };
         await this.#flush();
         if (admin && input.workspaceId !== undefined) return { kind: 'added', instance: await this.#useSlice(instance.id, input.workspaceId) };
         return { kind: 'added', instance };
+    }
+
+    /**
+     * The ports remembered for this container name, if they can be handed back: none held by a live engine, each still
+     * free on 127.0.0.1 (`portFree`). Otherwise the memory is dropped — it no longer describes a port this name can have —
+     * and the caller allocates afresh.
+     */
+    async #rememberedPorts(name: string, surfaceNames: readonly string[]): Promise<RememberedPorts | null> {
+        const r = this.#data.ports?.[name];
+        if (!r) return null;
+        const held = new Set(this.#data.instances.flatMap((i) => [i.publishedPort, ...Object.values(i.publishedPorts ?? {})]));
+        const wanted = [r.port, ...surfaceNames.flatMap((s) => (r.surfaces?.[s] !== undefined ? [r.surfaces[s]!] : []))];
+        let usable = true;
+        for (const port of wanted) {
+            if (held.has(port) || (this.#deps.portFree && !(await this.#deps.portFree(port).catch(() => false)))) { usable = false; break; }
+        }
+        if (usable) return r;
+        this.#data = { ...this.#data, ports: Object.fromEntries(Object.entries(this.#data.ports ?? {}).filter(([k]) => k !== name)) };
+        return null;
     }
 
     /**
@@ -352,7 +420,7 @@ export class ServiceRegistry {
 
     /** Does this workspace already have an active instance of this engine (its own, or its slice of a shared one)? */
     #hasActive(workspaceId: string, engine: string): boolean {
-        return this.#data.instances.some((x) => x.engine === engine
+        return this.#data.instances.some((x) => engineKindOf(x) === engine
             && (x.slices !== undefined ? x.slices[workspaceId]?.active === true : x.scope.kind === 'dedicated' && x.scope.workspaceId === workspaceId && x.active));
     }
 
@@ -373,7 +441,8 @@ export class ServiceRegistry {
             await sleep(bound.pollMs);
         }
         for (const slice of slices) {
-            for (const step of provisionSteps(i.engine, admin, slice)) await this.#step(name, what, slice.identifier, step);
+            // A pgvector engine's `vector`, created as the superuser in the workspace's database: its role cannot (core/service-provision.ts).
+            for (const step of provisionSteps(i.engine, admin, slice, { extensions: variantExtensions(i.engine, i.variant) })) await this.#step(name, what, slice.identifier, step);
         }
     }
 
@@ -388,18 +457,69 @@ export class ServiceRegistry {
         return switchActiveWarning({ engine, from: current.version, to });
     }
 
+    /**
+     * By engine and version, as the Services tab's "Make active" has always asked: the workspace's OWN engine of that
+     * version if it has one, else the shared one — never both (they are two engines; `use` takes one). None: says so.
+     */
     async setActive(workspaceId: string, engine: string, version: string): Promise<void> {
-        // Choosing a shared multi-tenant engine this workspace has no slice of IS using it: the slice is made first.
-        const unsliced = this.#data.instances.find((i) => i.engine === engine && i.version === version && i.scope.kind === 'shared' && i.slices !== undefined && !i.slices[workspaceId]);
-        if (unsliced) await this.#useSlice(unsliced.id, workspaceId);
-        this.#data.instances = this.#data.instances.map((i) => {
-            if (i.engine !== engine) return i;
-            // A multi-tenant engine's "active" is the workspace's SLICE: one shared Postgres is active for one workspace and not another.
-            const slice = i.slices?.[workspaceId];
-            if (slice) return { ...i, slices: { ...i.slices, [workspaceId]: { ...slice, active: i.version === version } } };
-            return i.scope.kind === 'dedicated' && i.scope.workspaceId === workspaceId ? { ...i, active: i.version === version } : i;
-        });
+        const matches = this.#visibleTo(workspaceId).filter((i) => engineKindOf(i) === engine && i.version === version);
+        const target = matches.find((i) => i.scope.kind === 'dedicated') ?? matches[0];
+        if (!target) throw new Error(`this workspace has no ${engine} ${version} to use; nothing was changed`);
+        await this.use(workspaceId, target.id);
+    }
+
+    /**
+     * Make `id` THE engine of its kind this workspace uses (core/services.ts `chooseEngines`): its own engines of the kind
+     * and its slices of shared ones become inactive, this one active — and attached again if the workspace had detached
+     * from it. A shared multi-tenant engine it has no slice of is USED by this: the slice is made first. Answers what
+     * the workspace now uses for that kind.
+     */
+    async use(workspaceId: string, id: string): Promise<EngineChoice> {
+        const target = this.#find(id);
+        const label = `${target.engine}${target.variant ? ` (${target.variant})` : ''} ${target.version}`;
+        if (target.scope.kind === 'dedicated' && target.scope.workspaceId !== workspaceId) throw new Error(`${label} is another workspace's engine; nothing was changed`);
+        if (target.engine === 'custom' && target.kind === undefined) throw new Error(`the custom image ${target.version} has not said which engine it is, so it is not a choice for one; it always gives its own GENIE_SERVICE_* names. Add it again with a kind (postgres, mysql…); nothing was changed`);
+        if (target.scope.kind === 'shared' && target.slices === undefined && !target.active) throw new Error(`${label} is shared with one connection for every workspace and is not its engine's active version; it cannot be chosen for one workspace. Nothing was changed`);
+        if (target.scope.kind === 'shared' && target.slices !== undefined && !target.slices[workspaceId]) await this.#useSlice(id, workspaceId);
+        const kind = engineKindOf(target);
+        this.#data = {
+            ...this.#data,
+            instances: this.#data.instances.map((i) => {
+                if (engineKindOf(i) !== kind) return i;
+                const chosen = i.id === id;
+                let next: ServiceInstance = i;
+                const slice = i.slices?.[workspaceId];
+                // A multi-tenant engine's "active" is the workspace's SLICE: one shared Postgres is active for one workspace and not another.
+                if (slice) next = { ...next, slices: { ...next.slices, [workspaceId]: { ...slice, active: chosen } } };
+                else if (i.scope.kind === 'dedicated' && i.scope.workspaceId === workspaceId) next = { ...next, active: chosen };
+                // An unsliced shared engine's flag is every workspace's: when another SHARED one is chosen, this workspace stops using it by detaching.
+                else if (!chosen && i.scope.kind === 'shared' && target.scope.kind === 'shared') next = withDetached(next, workspaceId, true);
+                if (chosen && i.scope.kind === 'shared') next = withDetached(next, workspaceId, false);
+                return next;
+            }),
+        };
         await this.#flush();
+        return this.#choiceOf(workspaceId, kind);
+    }
+
+    /**
+     * Stop a SHARED engine handing this workspace its env — Genie 1's taken-over Postgres included. Its slice, its role and
+     * its data stay exactly where they are (`use` attaches again); only the connection is no longer given. The workspace
+     * then uses its own engine of the kind if it has one, else none. A workspace's own engine is stopped or removed, not
+     * detached.
+     */
+    async detach(workspaceId: string, id: string): Promise<EngineChoice> {
+        const target = this.#find(id);
+        if (target.scope.kind !== 'shared') throw new Error(`${target.engine} ${target.version} is this workspace's own engine: stop or remove it to stop using it; nothing was changed`);
+        const slice = target.slices?.[workspaceId];
+        const updated: ServiceInstance = withDetached(slice ? { ...target, slices: { ...target.slices, [workspaceId]: { ...slice, active: false } } } : target, workspaceId, true);
+        this.#data = { ...this.#data, instances: this.#data.instances.map((x) => (x.id === id ? updated : x)) };
+        await this.#flush();
+        return this.#choiceOf(workspaceId, engineKindOf(target));
+    }
+
+    #choiceOf(workspaceId: string, kind: string): EngineChoice {
+        return this.choices(workspaceId).find((c) => c.kind === kind) ?? { kind, chosen: null, candidates: [] };
     }
 
     status(id: string): Promise<{ state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' }> {
@@ -446,6 +566,11 @@ export class ServiceRegistry {
         // The apps' secrets go with the engine: nothing is left on disk that could sign for an app no engine serves.
         if (SERVICE_CATALOG.find((e) => e.engine === i.engine)?.config) await this.#files.remove(this.#configPath(name));
         this.#data.instances = this.#data.instances.filter((x) => x.id !== id);
+        // Its ports, kept under its container name: added again by that name, it gets them back (an adopted one is Genie 1's
+        // container, never re-added under its name, so nothing is kept for it).
+        if (!i.adopted) {
+            this.#data = { ...this.#data, ports: { ...(this.#data.ports ?? {}), [name]: { port: i.publishedPort, ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}) } } };
+        }
         await this.#flush();
     }
 
@@ -469,6 +594,14 @@ export class ServiceRegistry {
         await writeJsonAtomic(this.#file, this.#data);
         this.#changed();
     }
+}
+
+/** The instance with `workspaceId` added to (or taken off) its `detached` list; the field is dropped when it empties. */
+function withDetached(i: ServiceInstance, workspaceId: string, detached: boolean): ServiceInstance {
+    const rest = (i.detached ?? []).filter((w) => w !== workspaceId);
+    const list = detached ? [...rest, workspaceId] : rest;
+    const { detached: _old, ...base } = i;
+    return list.length > 0 ? { ...base, detached: list } : base;
 }
 
 function sameScope(a: ServiceScope, b: ServiceScope): boolean {
