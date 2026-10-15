@@ -56,9 +56,10 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         expect(serveCaddyfile({ sitePort: 4101, serve: { mode: 'proxy' } })).toBeNull();
     });
 
-    it('static: bind 127.0.0.1:<port>, root inside the repo, file_server; SPA adds the index.html fallback', () => {
+    it('static: its port bound to 127.0.0.1, root inside the repo, file_server; SPA adds the index.html fallback', () => {
         const plain = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: false } })!;
-        expect(plain).toContain('127.0.0.1:4101');
+        expect(plain).toContain('http://:4101 {');
+        expect(plain).toContain('bind 127.0.0.1');
         expect(plain).toContain('root * /repo/dist');
         expect(plain).toContain('file_server');
         expect(plain).not.toContain('try_files');
@@ -84,16 +85,20 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
             const globals = /^\{([\s\S]*?)\n\}/.exec(out)?.[1] ?? '';
             expect(globals).toMatch(/^\s*auto_https off\s*$/m);
             expect(globals).toMatch(/^\s*admin off\s*$/m);
-            // COUNTED: exactly one site block, on the plain-HTTP loopback address.
-            expect(out.match(/^http:\/\/127\.0\.0\.1:4101 \{$/gm) ?? []).toHaveLength(1);
-            expect(out).not.toMatch(/^127\.0\.0\.1:4101 \{$/m);
+            // COUNTED: exactly one site block, plain HTTP on its port, answering ANY Host (the front door forwards the
+            // site's own name), bound to loopback.
+            expect(out.match(/^http:\/\/:4101 \{$/gm) ?? []).toHaveLength(1);
+            expect(out.match(/^\s*bind 127\.0\.0\.1$/gm) ?? []).toHaveLength(1);
+            // A host in the address is a Host matcher: it answered the front door's `Host: <name>.gen` with an empty 200.
+            expect(out).not.toMatch(/^(http:\/\/)?127\.0\.0\.1:4101 \{$/m);
         }
     });
 
     it('never binds beyond loopback, and refuses a root that escapes the repo', () => {
         const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })!;
-        // A bare `:4101 {` is an all-interfaces bind; only `127.0.0.1:4101 {` may appear.
-        expect(out).not.toMatch(/0\.0\.0\.0|(^|[^0-9.]):4101\s*\{/m);
+        // The address names no interface, so the `bind` line is what keeps it on loopback: exactly one, and only that.
+        expect(out).not.toMatch(/0\.0\.0\.0/);
+        expect(out.match(/^\s*bind\s+\S+$/gm) ?? []).toEqual(['\tbind 127.0.0.1']);
         expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: '../etc', spa: false } })).toThrow(/inside the repo/);
         expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: '/etc', spa: false } })).toThrow(/inside the repo/);
     });
