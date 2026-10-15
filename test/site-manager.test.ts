@@ -90,7 +90,9 @@ describe('a static site — Genie’s Caddy against a Caddyfile Genie wrote', ()
         expect(site).toMatchObject({ host: 'dash.gen', port: 4101, state: 'running' });
         expect(written).toHaveLength(1);
         expect(written[0]!.path).toBe(CADDYFILE('site_dash'));
-        expect(written[0]!.content).toContain('127.0.0.1:4101');
+        // Its port, any Host (the front door forwards the site's own name), bound to loopback (serve-config.ts).
+        expect(written[0]!.content).toContain('http://:4101 {');
+        expect(written[0]!.content).toContain('bind 127.0.0.1');
         expect(written[0]!.content).toContain('try_files {path} /index.html');
         expect(pty.opened[0]).toMatchObject({ cwd: '/repos/fancy', command: `/opt/genie/runtime/caddy run --config ${CADDYFILE('site_dash')} --adapter caddyfile` });
     });

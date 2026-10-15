@@ -87,13 +87,18 @@ function rootInside(repoPath: string, root: string): string {
  * 127.0.0.1:2019, which the front door holds), and an explicit `http://` address (else a host-qualified address is
  * served over HTTPS, while the front door proxies in plain HTTP). Measured on the owner's machine, 2026-10-14: one
  * site's Caddy held :80 and :2019, so the other sites and the front door could not start.
+ *
+ * The address names NO host (`http://:<port>`) and `bind 127.0.0.1` keeps it on loopback. A host in the address is a
+ * Host MATCHER: `http://127.0.0.1:<port>` answered only requests whose Host was `127.0.0.1`, and the front door forwards
+ * the site's own name (`Host: accepta.gen`, which apps need to build their URLs) — so every static and PHP site answered
+ * the front door with Caddy's empty 200 (measured in the Windows test VM, 2026-10-14).
  */
 export function serveCaddyfile(input: CaddyfileInput): string | null {
     const { serve } = input;
     if (serve.mode === 'proxy') return null;
     if (!input.repoPath) throw new Error('a static or php site needs the repo path');
     const root = rootInside(input.repoPath, serve.root);
-    const lines = ['{', '\tauto_https off', '\tadmin off', '}', '', `http://127.0.0.1:${input.sitePort} {`, `\troot * ${root}`];
+    const lines = ['{', '\tauto_https off', '\tadmin off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
     if (serve.mode === 'static') {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');
