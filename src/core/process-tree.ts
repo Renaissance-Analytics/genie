@@ -64,8 +64,17 @@ export interface ProcessTree {
      * Never throws. The result says what happened, because `stop()` has to be able to tell
      * "reaped three" from "reaped nothing because the scan failed" — a stop that cannot
      * distinguish those is the promise the previous build broke.
+     *
+     * `oursBeforeKill` is the caller's own walk of this process's descendants, taken BEFORE the
+     * provider's kill (`descendantsOf(process.pid)`). Given, it is what "still ours" is checked
+     * against, and no walk happens here. It exists because a walk taken AFTER the kill cannot see
+     * what the kill orphaned: on Windows prism-acp spawns its provider through `cmd.exe`
+     * (`shell: true`) and kills only that `cmd.exe`, so the provider itself is left alive with a
+     * dead parent — no longer reachable from this pid, so never "ours" to a later walk, and never
+     * reaped (genie2 acceptance on the installed app, 2026-10-15: the agent's provider outlived
+     * every quit). Absent, the walk is done here, now, as before.
      */
-    killTree(pids: readonly number[]): ReapResult;
+    killTree(pids: readonly number[], oursBeforeKill?: readonly number[]): ReapResult;
 }
 
 export interface ReapResult {
@@ -105,7 +114,7 @@ export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () =>
             }
         },
 
-        killTree(pids) {
+        killTree(pids, oursBeforeKill) {
             // Nothing to do, and no reason to walk the machine to find that out.
             if (pids.length === 0) return { killed: 0, refused: false };
 
@@ -120,9 +129,11 @@ export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () =>
                 };
             }
 
-            let live: number[];
+            // The caller's pre-kill walk when it took one (see the interface); otherwise walk now. Either way the
+            // same rules below apply to it: implausibly many is refused, and only a pid in it is killed.
+            let live: readonly number[];
             try {
-                live = io.descendants(selfPid());
+                live = oursBeforeKill ?? io.descendants(selfPid());
             } catch {
                 return {
                     killed: 0,
@@ -144,9 +155,9 @@ export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () =>
             const ours = new Set(live);
             let killed = 0;
             for (const pid of pids) {
-                // Still ours, RIGHT NOW. A pid that has exited and had its number reused would
-                // otherwise be somebody else's process — and on this machine that is another
-                // agent's work.
+                // Ours, by a walk taken no earlier than just before the provider's kill. A pid that has
+                // exited and had its number reused would otherwise be somebody else's process — and on
+                // this machine that is another agent's work.
                 if (!ours.has(pid)) continue;
 
                 io.killOne(pid);

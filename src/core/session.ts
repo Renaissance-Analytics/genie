@@ -590,6 +590,24 @@ export class AgentSession {
      * the integration level — a return value is not evidence.
      */
     stop(signal: NodeJS.Signals = 'SIGTERM'): void {
+        /*
+         * WHO IS OURS, asked BEFORE the provider's kill — the kill is what orphans.
+         *
+         * On Windows prism-acp spawns the provider through `cmd.exe` (`shell: true`, for npm's `.cmd` shims) and its
+         * kill is `child.kill()`: TerminateProcess on that `cmd.exe` and nothing else. The provider under it lives on
+         * with a dead parent, and a walk from this pid taken AFTER the kill no longer reaches it — so the reap below
+         * judged it "not ours" and left it running. Seen on the installed app (Windows VM acceptance, 2026-10-15): an
+         * agent provider that ignores its stdin closing outlived every quit, its command line in the quoted form only a
+         * `cmd.exe /s /c` launch leaves, and the `cmd.exe` above it gone.
+         *
+         * One walk, the same one `killTree` used to take after the kill, so a stop costs what it did. No walk when the
+         * session owns nothing (rule 4 in core/process-tree.ts). A walk that found nothing (it could not run, or
+         * everything already exited) is not handed on: `killTree` then walks for itself, as it always did.
+         */
+        const tree = this.#options.processTree ?? systemProcessTree;
+        const walked = this.#ownedPids.length > 0 ? tree.descendantsOf(process.pid) : [];
+        const oursBeforeKill = walked.length > 0 ? walked : undefined;
+
         this.#driver?.kill(signal);
 
         /**
@@ -612,8 +630,7 @@ export class AgentSession {
         this.#approval = null;
         this.#parkedAt = null;
 
-        const tree = this.#options.processTree ?? systemProcessTree;
-        tree.killTree(this.#ownedPids);
+        tree.killTree(this.#ownedPids, oursBeforeKill);
 
         this.#alive = false;
         this.#turnState = 'stopped';
