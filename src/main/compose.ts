@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -38,6 +38,7 @@ import { FeedbackStore } from './feedback-store.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
+import { GenLeafContexts } from './browser-trust.js';
 import { FRONT_DOOR_PORTS, bindFailure, heldReason, realFrontDoorPorts, type FrontDoorBlocked, type FrontDoorPort, type FrontDoorPorts } from './front-door-port.js';
 import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
 import { InboxStore } from './inbox-store.js';
@@ -232,6 +233,11 @@ export interface ComposedServices {
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
     readonly frontDoorPort: number;
+    /**
+     * S7: the root the Genie Browser's session trusts for `.gen` hosts (and nothing else) — Genie's CA, PEM — or why
+     * there is none, in which case `.gen` sites do not open in the in-app browser and the reason is logged.
+     */
+    browserTrust(): { readonly caPem: string; readonly thumbprint: string } | { readonly caPem: null; readonly reason: string };
     /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
     readonly externalFrontDoor: FrontDoorStatus;
     /** Fires when the front door state changes (a hosts sync landed, the root got trusted). */
@@ -292,12 +298,24 @@ const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in exter
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/**
+ * Genie's `.gen` CA, opened ONCE for both doors: the external Caddy serves its leaf, and the in-app browser's tunnel
+ * (S7) serves the same leaf and trusts the same root. A CA that cannot be set up is a reason, never a throw.
+ */
+function openGenCa(input: { caDir: string; v1CaDirs: readonly string[]; issuer: CertIssuer | undefined; now: () => number }): { ca: GenCa; error: null } | { ca: null; error: string } {
+    try {
+        return { ca: GenCa.open({ dir: input.caDir, v1Dirs: input.v1CaDirs, now: input.now, ...(input.issuer ? { issuer: input.issuer } : {}), log: (line) => console.log(line) }), error: null };
+    } catch (error) {
+        console.error(`[gen-ca] ${message(error)}`);
+        return { ca: null, error: message(error) };
+    }
+}
+
 function startExternalFrontDoor(input: {
     caddyBin: string | null;
     caddyDir: string;
-    caDir: string;
-    v1CaDirs: readonly string[];
-    issuer: CertIssuer | undefined;
+    /** Opens the shared CA on first call (main: once, for both doors). */
+    genCa: () => { ca: GenCa; error: null } | { ca: null; error: string };
     trustStore: TrustStorePort;
     platform: NodeJS.Platform;
     now: () => number;
@@ -327,14 +345,10 @@ function startExternalFrontDoor(input: {
         close: () => {},
     });
     if (caddyBin === null) return off(NO_CADDY);
-    let ca: GenCa;
-    try {
-        ca = GenCa.open({ dir: input.caDir, v1Dirs: input.v1CaDirs, now: input.now, ...(input.issuer ? { issuer: input.issuer } : {}), log: (line) => console.log(line) });
-    } catch (error) {
-        // Without a CA there is no certificate to serve: say so, and start nothing that would serve a broken one.
-        console.error(`[gen-ca] ${message(error)}`);
-        return off(`Genie’s certificate authority could not be set up (${message(error)}); https://<name>.gen in external browsers is off, the in-app browser still works`);
-    }
+    // Without a CA there is no certificate to serve: say so, and start nothing that would serve a broken one.
+    const opened = input.genCa();
+    if (opened.ca === null) return off(`Genie’s certificate authority could not be set up (${opened.error}); https://<name>.gen is off in external browsers and in the in-app browser`);
+    const ca = opened.ca;
     const caddyfile = join(caddyDir, 'Caddyfile');
     // Earlier betas remembered `caddy trust` (Caddy's own root) with this marker. Trust is read from the OS store now,
     // and that root is no longer served; the marker would only mislead whoever reads the folder.
@@ -645,7 +659,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             ...sites.routes().map((r) => r.host),
         ]),
     ];
-    const frontDoor = new GenRouterServer(routes);
+    // S7: the in-app browser opens https://<name>.gen through this door's CONNECT tunnel, terminated with Genie's leaf.
+    // The CA is opened on first need — the external front door's start, or the browser's first .gen page — and once.
+    let genCaOpened: ReturnType<typeof openGenCa> | null = null;
+    const genCa = () => (genCaOpened ??= openGenCa({ caDir: join(runtimeDir(input.userData), 'gen-ca'), v1CaDirs: input.v1CaDirs ?? [], issuer: input.certIssuer, now }));
+    let leafContexts: GenLeafContexts | null = null;
+    const frontDoor = new GenRouterServer(routes, {
+        tls: (host) => {
+            const opened = genCa();
+            if (opened.ca === null) throw new Error(`Genie’s certificate authority could not be set up (${opened.error})`);
+            leafContexts ??= new GenLeafContexts(opened.ca, routes);
+            return leafContexts.forHost(host);
+        },
+    });
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     const approvals = new ApprovalQueue({ now });
@@ -671,9 +697,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorCtl = startExternalFrontDoor({
         caddyBin: input.caddyBin,
         caddyDir: join(runtimeDir(input.userData), 'caddy'),
-        caDir: join(runtimeDir(input.userData), 'gen-ca'),
-        v1CaDirs: input.v1CaDirs ?? [],
-        issuer: input.certIssuer,
+        genCa,
         // Read-only: one PowerShell Test-Path per Root store on Windows, the System keychain on macOS, the bundles on Linux.
         trustStore: input.trustStore ?? osTrustStore(process.platform, (command, args) => execFileRunner(command, args, { timeoutMs: 20_000 })),
         platform: process.platform,
@@ -754,6 +778,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         remote,
         feedback,
         frontDoorPort,
+        browserTrust: () => {
+            const opened = genCa();
+            return opened.ca ? { caPem: readFileSync(opened.ca.certPath, 'utf8'), thumbprint: opened.ca.thumbprint } : { caPem: null, reason: opened.error };
+        },
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,
         syncHosts: frontDoorCtl.syncHosts,

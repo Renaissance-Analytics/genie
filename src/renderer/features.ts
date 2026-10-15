@@ -158,7 +158,8 @@ export interface FeatureData {
     readonly toolchain: ToolchainSection | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
-    readonly browser: { url: string | null; routes: readonly GenRoute[] };
+    /** The Genie Browser: the page it shows (each .gen site at its own https origin), this machine's sites, and its history. */
+    readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean };
     readonly remote: RemoteSection | null;
     readonly integrations: IntegrationsSection | null;
     readonly plugins: PluginsSection | null;
@@ -173,7 +174,7 @@ export const EMPTY_FEATURES: FeatureData = {
     toolchain: null,
     inbox: null,
     settings: { values: null },
-    browser: { url: null, routes: [] },
+    browser: { url: null, routes: [], canGoBack: false, canGoForward: false },
     remote: null,
     integrations: null,
     plugins: null,
@@ -261,6 +262,10 @@ export type FeatureAction =
     | { kind: 'settings.set'; key: string; value: boolean | string }
     | { kind: 'settings.reset'; key: string }
     | { kind: 'browser.navigate'; url: string }
+    /** The Genie Browser's history and reload — the view's own (main applies them to the pane). */
+    | { kind: 'browser.back' }
+    | { kind: 'browser.forward' }
+    | { kind: 'browser.reload' }
     | { kind: 'remote.issuePin' }
     | { kind: 'remote.revokeDevice'; deviceId: string }
     | { kind: 'remote.lock' }

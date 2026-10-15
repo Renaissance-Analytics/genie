@@ -57,6 +57,9 @@ export interface FeatureState {
     toolStatuses: readonly ToolStatus[] | null;
     knowledgeQuery: string;
     browserUrl?: string | null;
+    /** The Genie Browser's history as its view last reported it (main/browser-pane.ts). */
+    browserCanGoBack?: boolean;
+    browserCanGoForward?: boolean;
     toolchainCheckedAt?: number | null;
     /** The Toolchain surface's own state beyond the scan (renderer/features.ts `ToolchainSection`). */
     toolchainInstalls?: Readonly<Record<string, InstallPreview>> | null;
@@ -177,7 +180,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
         settings: { values: services.settings.snapshot() },
-        browser: { url: state.browserUrl ?? null, routes: services.routes() },
+        browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
         plugins: { dir: services.pluginsDir, developerMode: services.settings.snapshot().developer_mode === true, entries: services.plugins.list(), panels: services.plugins.panels() as never },
         remote: {
@@ -577,9 +580,16 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);
-            next.browserUrl = nav.kind === 'web' ? nav.url : nav.kind === 'site' ? `https://${nav.host}/` : `https://${nav.host}/`;
+            // A site is its own https origin, path kept (core/browser-policy.ts); a name nobody serves is shown at its root.
+            next.browserUrl = nav.kind === 'no-site' ? `https://${nav.host}/` : nav.url;
             break;
         }
+        // Back, forward and reload act on the pane's own history in main (main.ts); the URL they land on comes back from
+        // the view's navigation report, never guessed here.
+        case 'browser.back':
+        case 'browser.forward':
+        case 'browser.reload':
+            break;
     }
     return featureSnapshot(services, next, ports);
 }
