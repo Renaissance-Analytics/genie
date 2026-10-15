@@ -626,8 +626,9 @@ function DesktopApp({ bridge }: AppProps) {
     const [deckFormRefusal, setDeckFormRefusal] = useState<{ itemId: string; reason: string } | null>(null);
 
     /**
-     * The chat subject comes from the ROUTE, so a link can open a conversation — and so a
-     * pinned chat's subject does not follow the view when you navigate elsewhere.
+     * The chat subject comes from the ROUTE, so a link can open a conversation. Navigation carries it (`carryChat`):
+     * it stays on its agent inside a workspace and across surfaces of no workspace, and moves to an agent of the
+     * workspace you arrive at when that is another one (`core/chat-scope.ts`).
      */
     const chatSubject = parsed.chat;
     // The chat's tabs: every conversation you open is remembered, newest first (eight), across restarts.
@@ -731,7 +732,9 @@ function DesktopApp({ bridge }: AppProps) {
             chatThreads={chatThreads(snapshot.agents, openedThreads, chatSubject)}
             chatSession={chatDetail?.session ?? null}
             pinned={pinned}
-            onNavigate={(r) => navigate(carryChat(r, parsed))}
+            // The chat rides every navigation (#258) — but arriving at ANOTHER workspace moves it to an agent of that
+            // workspace (core/chat-scope.ts), so the composer never quietly keeps a project the person left (beta.26).
+            onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) => {
