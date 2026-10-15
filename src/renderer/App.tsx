@@ -13,7 +13,7 @@ import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../cor
 import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
-import { EMPTY_FEATURES, type FeatureData } from './features.js';
+import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { soundFor, toastFor } from '../core/alerts.js';
@@ -735,9 +735,15 @@ function DesktopApp({ bridge }: AppProps) {
             features={features}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) => {
-                void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
-                    // A refusal is a fact the surface shows; it is never swallowed. Until the surfaces
-                    // carry an error line, the console is where it lands.
+                void (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
+                    // A refused or failed toolchain action comes back IN the snapshot and is drawn on its row
+                    // (ToolchainSurface); the console keeps its line as well.
+                    const refusal = toolchainRefusalOf(action, data);
+                    if (refusal) console.error('[genie] feature action refused:', refusal.reason);
+                    setFeatures(data);
+                }).catch((error: unknown) => {
+                    // A refusal is a fact the surface shows; it is never swallowed. The surfaces that do not yet
+                    // carry an error line for a thrown refusal leave it here, in the console.
                     console.error('[genie] feature action refused:', (error as Error).message);
                 });
             }}

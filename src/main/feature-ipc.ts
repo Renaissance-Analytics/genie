@@ -19,7 +19,7 @@ import {
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData, InstallPreview, ToolchainSection } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -76,6 +76,8 @@ export interface FeatureState {
     toolchainRepairedAt?: number | null;
     toolchainWarning?: ToolchainSection['warning'] | null;
     toolchainResult?: string | null;
+    /** Refused or failed toolchain actions, one per row, each cleared by that row's next action. */
+    toolchainRefusals?: readonly ToolchainRefusal[] | null;
     toolchainPhp?: PhpVersionsView | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
@@ -102,6 +104,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(typeof state.toolchainRepairedAt === 'number' ? { repairedAt: state.toolchainRepairedAt } : {}),
         ...(state.toolchainWarning ? { warning: state.toolchainWarning } : {}),
         ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
+        ...(state.toolchainRefusals && state.toolchainRefusals.length > 0 ? { refusals: state.toolchainRefusals } : {}),
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
     };
 }
@@ -116,6 +119,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainRepairedAt: section?.repairedAt ?? null,
         toolchainWarning: section?.warning ?? null,
         toolchainResult: section?.result ?? null,
+        toolchainRefusals: section?.refusals ?? null,
         toolchainPhp: section?.php ?? null,
     };
 }
@@ -137,6 +141,22 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
         const missing = tools.filter((t) => t.tone === 'not-installed');
         next.toolchainInstalls = Object.fromEntries(await Promise.all(missing.map(async (t) => [t.tool, await tc.preview!(t.tool)] as const)));
     }
+}
+
+const sameRow = (r: ToolchainRefusal, tool: string, version: string | undefined): boolean => r.tool === tool && r.version === version;
+
+/** A row's next action starts clean: its old refusal goes; every other row's stays. */
+function clearRefusal(next: FeatureState, tool: string, version?: string): void {
+    next.toolchainRefusals = (next.toolchainRefusals ?? []).filter((r) => !sameRow(r, tool, version));
+}
+
+/**
+ * Say a refused or failed toolchain action ON ITS ROW, verbatim. It used to be thrown, which the renderer could put
+ * nowhere but its console: the person clicked Update and nothing happened, with no word of who was busy.
+ */
+function refuse(next: FeatureState, tool: string, reason: string, version?: string): void {
+    clearRefusal(next, tool, version);
+    next.toolchainRefusals = [...(next.toolchainRefusals ?? []), { tool, reason, ...(version !== undefined ? { version } : {}) }];
 }
 
 function describeInstall(tool: string, outcome: Exclude<InstallOutcome, { kind: 'refused' }>): string {
@@ -236,7 +256,7 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
     return { phpVersions: (await php.list(sitePins(services))).managed.map((m) => m.version) };
 }
 
-/** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason. */
+/** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
     const next: FeatureState = { ...state };
     switch (action.kind) {
@@ -433,32 +453,55 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'toolchain.update': {
             const tc = ports.toolchain;
             if (!tc) throw new Error('no toolchain runner is wired into this Genie; the update cannot run');
+            clearRefusal(next, action.tool);
             // THE UPDATE-RISK GUARD (core/toolchain-risk.ts), read here in main from what is running NOW — never from the
             // renderer, and never optional: a guard that can be left unwired is not one.
-            if (!tc.activity) throw new Error('the update guard is not wired into this Genie, so nothing is updated');
+            if (!tc.activity) {
+                refuse(next, action.tool, 'the update guard is not wired into this Genie, so nothing is updated');
+                break;
+            }
             const known = (state.toolStatuses ?? []).find((t) => t.tool === action.tool);
             const risk = updateRisk(action.tool, await tc.activity(), { installed: known ? known.installed !== null : true });
-            if (risk.risk === 'blocked') throw new Error(risk.reason);
+            if (risk.risk === 'blocked') {
+                refuse(next, action.tool, risk.reason);
+                break;
+            }
             if (risk.risk === 'warn' && action.confirmed !== true) {
                 next.toolchainWarning = { tool: action.tool, reason: risk.reason, affected: risk.affected };
                 break;
             }
             next.toolchainWarning = null;
             const outcome = await tc.update(action.tool);
-            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            if (outcome.kind === 'refused') {
+                refuse(next, action.tool, outcome.reason);
+                break;
+            }
             next.toolchainResult = describeUpdate(action.tool, outcome);
+            // It ran and did not take (the re-probe shows the same version, or nothing): said on the row as well.
+            if (outcome.kind !== 'repaired') refuse(next, action.tool, outcome.reason);
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
             await rescanToolchain(next, tc, sitePins(services));
             break;
         }
         case 'toolchain.install': {
+            clearRefusal(next, action.tool);
             // Consent first, before anything is asked of the machine: no consent, nothing runs.
-            if (action.consent !== true) throw new Error(`Genie installs nothing without your go-ahead; ${action.tool} was not installed`);
+            if (action.consent !== true) {
+                refuse(next, action.tool, `Genie installs nothing without your go-ahead; ${action.tool} was not installed`);
+                break;
+            }
             const tc = ports.toolchain;
-            if (!tc?.install) throw new Error('no installer is wired into this Genie; nothing was installed');
+            if (!tc?.install) {
+                refuse(next, action.tool, 'no installer is wired into this Genie; nothing was installed');
+                break;
+            }
             const outcome = await tc.install(action.tool, true);
-            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            if (outcome.kind === 'refused') {
+                refuse(next, action.tool, outcome.reason);
+                break;
+            }
             next.toolchainResult = describeInstall(action.tool, outcome);
+            if (outcome.kind === 'not-installed') refuse(next, action.tool, outcome.reason);
             // A prerequisite now present is no longer a finding.
             if (outcome.kind !== 'not-installed' && next.toolchainFindings) {
                 next.toolchainFindings = next.toolchainFindings.filter((f) => !(f.result.kind === 'needs-install' && f.result.tool === action.tool));
@@ -467,12 +510,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.installPhp': {
+            clearRefusal(next, 'php', action.version);
             // Consent first: no consent, nothing is downloaded.
-            if (action.consent !== true) throw new Error(`Genie installs nothing without your go-ahead; PHP ${action.version} was not installed`);
+            if (action.consent !== true) {
+                refuse(next, 'php', `Genie installs nothing without your go-ahead; PHP ${action.version} was not installed`, action.version);
+                break;
+            }
             const tc = ports.toolchain;
-            if (!tc?.php) throw new Error('no PHP version manager is wired into this Genie; nothing was installed');
+            if (!tc?.php) {
+                refuse(next, 'php', 'no PHP version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
             const outcome = await tc.php.install(action.version, true);
-            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            if (outcome.kind === 'refused') {
+                refuse(next, 'php', outcome.reason, action.version);
+                break;
+            }
+            if (outcome.kind === 'not-installed') refuse(next, 'php', outcome.reason, action.version);
             next.toolchainResult =
                 outcome.kind === 'installed' ? `PHP ${outcome.version} is installed; a php site can be pinned to it.`
                 : outcome.kind === 'already-installed' ? `PHP ${outcome.version} was already installed; nothing was downloaded.`
@@ -482,9 +536,16 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'toolchain.removePhp': {
             const tc = ports.toolchain;
-            if (!tc?.php) throw new Error('no PHP version manager is wired into this Genie; nothing was removed');
+            clearRefusal(next, 'php', action.version);
+            if (!tc?.php) {
+                refuse(next, 'php', 'no PHP version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
             const outcome = tc.php.remove(action.version, sitePins(services));
-            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            if (outcome.kind === 'refused') {
+                refuse(next, 'php', outcome.reason, action.version);
+                break;
+            }
             next.toolchainResult = `PHP ${outcome.version} was removed.`;
             next.toolchainPhp = await tc.php.list(sitePins(services));
             break;

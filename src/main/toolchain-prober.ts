@@ -1,4 +1,5 @@
 import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
+import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED.
@@ -43,6 +44,42 @@ export async function probeTools(run: CommandRunner, latest: LatestIndex, platfo
             return toolStatus({ tool: tool.name, installed, latest: idx?.version ?? null, source: idx?.source ?? null });
         }),
     );
+}
+
+/** What the "latest" lookup needs: the runner, a JSON fetch for the two web indexes, and the platform it runs on. */
+export interface LatestIndexPorts {
+    readonly run: CommandRunner;
+    readonly fetchJson: (url: string) => Promise<unknown>;
+    readonly platform: Platform;
+}
+
+/**
+ * Where "latest" comes from, per tool. An unreachable or unreadable source yields null — the honest `unknown`.
+ *
+ * Every command goes through `platformArgv`, the same routing the probe and the update use: on Windows npm is
+ * `npm.cmd`, which `execFile` cannot start, so a bare `npm outdated -g` rejected, the catch below turned it into null,
+ * and claude-code and codex read `unknown` forever and never offered Update.
+ */
+export function latestIndex(ports: LatestIndexPorts): LatestIndex {
+    const run = (binary: string, args: readonly string[]) => {
+        const [b, a] = platformArgv(binary, args, ports.platform);
+        return ports.run(b, a);
+    };
+    return async (tool) => {
+        try {
+            if (tool === 'node') return latestFromNodeIndex(await ports.fetchJson('https://nodejs.org/dist/index.json'));
+            if (tool === 'php') return phpLatestFromReleases(await ports.fetchJson('https://www.php.net/releases/index.php?json'));
+            const def = HOST_TOOLS.find((t) => t.name === tool);
+            if (!def) return null;
+            // npm-distributed tools (claude-code, codex): `npm outdated -g` names them by the registry's own package.
+            if (def.ownUpdater?.manager === 'npm' && def.npmPackage) return latestFromNpmOutdated((await run('npm', ['outdated', '-g', '--json'])).stdout, def.npmPackage);
+            if (ports.platform === 'win32' && def.packages.winget) return latestFromWingetUpgrade((await run('winget', ['upgrade', '--id', def.packages.winget])).stdout, def.packages.winget);
+            if (ports.platform === 'darwin' && def.packages.brew) return latestFromBrewOutdated((await run('brew', ['outdated', '--json'])).stdout, def.packages.brew);
+            return null;
+        } catch {
+            return null;
+        }
+    };
 }
 
 const WINDOW_MS = 6 * 3_600_000;

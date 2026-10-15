@@ -143,6 +143,18 @@ export type InstallPreview = { readonly label: string; readonly elevated: boolea
  * missing tool would be installed, what is running right now (`busy`), the last Check and repair's findings with each
  * one's measured result, an update that needs the person's go-ahead (`warning`), and the last action's outcome.
  */
+/**
+ * A toolchain action that was REFUSED (the update guard naming who is busy, consent missing) or ran and did not take
+ * (an install that still does not answer, an update the re-probe shows unchanged), with the reason verbatim. It is
+ * drawn on the row it was for — a PHP version's in PHP versions — and cleared by the next action for that row.
+ */
+export interface ToolchainRefusal {
+    readonly tool: string;
+    /** A Genie-managed PHP version's action (install/remove PHP x.y.z); absent for a tool row. */
+    readonly version?: string;
+    readonly reason: string;
+}
+
 export interface ToolchainSection {
     readonly tools: readonly ToolStatus[];
     readonly checkedAt: number | null;
@@ -152,6 +164,8 @@ export interface ToolchainSection {
     readonly repairedAt?: number;
     readonly warning?: { readonly tool: string; readonly reason: string; readonly affected: readonly string[] };
     readonly result?: string;
+    /** Each refused or failed action, one per row, until that row's next action. Absent when there is none. */
+    readonly refusals?: readonly ToolchainRefusal[];
     /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
     readonly php?: PhpVersionsView;
 }
@@ -293,3 +307,14 @@ export type FeatureAction =
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
+
+/**
+ * The refusal THIS toolchain action left on its row, if any — what the renderer also writes to its console, so the
+ * console keeps the line it always had. Another row's older refusal is not this action's and is not repeated.
+ */
+export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): ToolchainRefusal | null {
+    const refusals = data.toolchain?.refusals ?? [];
+    if (action.kind === 'toolchain.update' || action.kind === 'toolchain.install') return refusals.find((r) => r.tool === action.tool && r.version === undefined) ?? null;
+    if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
+    return null;
+}

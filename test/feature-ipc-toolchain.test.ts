@@ -72,21 +72,27 @@ afterEach(async () => {
 describe('T3 — the update guard, at the click', () => {
     it('updating claude-code while a Claude session runs is REFUSED naming it, and the updater is never called', async () => {
         activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
-        await expect(handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports())).rejects.toThrow(/atlas is running on Claude Code/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
         expect(updates).toEqual([]);
+        // The refusal comes back IN the action's result, on claude-code's row — not only as a thrown error the renderer
+        // could put nowhere but the console. Counted: exactly one, and it is claude-code's.
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'claude-code', reason: expect.stringMatching(/atlas is running on Claude Code/) }]);
     });
 
     it('updating node while a Genie-run dev server is on it is REFUSED naming it; updater never called', async () => {
         activity = { ...IDLE, processes: [{ label: 'shop.gen dev server', command: 'npm run dev' }] };
-        await expect(handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), ports())).rejects.toThrow(/shop\.gen dev server is running on Node/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), ports());
         expect(updates).toEqual([]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'node', reason: expect.stringMatching(/shop\.gen dev server is running on Node/) }]);
     });
 
-    it('CONTROL: idle → the same updates run, once each, and the snapshot is the re-probe', async () => {
-        await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
-        await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), ports());
+    it('CONTROL: idle → the same updates run, once each, and the snapshot is the re-probe — with no refusal on any row', async () => {
+        const a = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
+        const b = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), ports());
         expect(updates).toEqual(['claude-code', 'node']);
         expect(probes).toBe(2);
+        expect(a.toolchain!.refusals).toBeUndefined();
+        expect(b.toolchain!.refusals).toBeUndefined();
     });
 
     it('docker with engines running: first a WARNING naming them (no update); "Update anyway" then updates', async () => {
@@ -101,16 +107,18 @@ describe('T3 — the update guard, at the click', () => {
 
     it('a REFUSAL is not confirmable: confirmed:true on a blocked update is still refused', async () => {
         activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
-        await expect(handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code', confirmed: true }, scanned(), ports())).rejects.toThrow(/atlas/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code', confirmed: true }, scanned(), ports());
         expect(updates).toEqual([]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'claude-code', reason: expect.stringMatching(/atlas/) }]);
     });
 
     it('with no guard wired the update is refused, not run unguarded', async () => {
         const unguarded = ports();
         const { activity: _omit, ...rest } = unguarded.toolchain!;
         void _omit;
-        await expect(handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), { toolchain: rest })).rejects.toThrow(/update guard is not wired/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), { toolchain: rest });
         expect(updates).toEqual([]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'node', reason: expect.stringMatching(/update guard is not wired/) }]);
     });
 });
 
@@ -121,8 +129,9 @@ describe('T1 — install, with consent, from the surface', () => {
     });
 
     it('WITHOUT consent: refused, and the installer is never called', async () => {
-        await expect(handleFeatureAction(services, { kind: 'toolchain.install', tool: 'php', consent: false }, scanned(), ports())).rejects.toThrow(/without your go-ahead/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.install', tool: 'php', consent: false }, scanned(), ports());
         expect(installs).toEqual([]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'php', reason: expect.stringMatching(/without your go-ahead/) }]);
     });
 
     it('with consent: installed once, then re-probed — the row is the measured version, the result line says so', async () => {
@@ -142,5 +151,52 @@ describe('T2 — Check and repair, one action, a result per finding', () => {
         expect(snap.toolchain!.repairedAt).toBe(7_000);
         const after = await handleFeatureAction(services, { kind: 'toolchain.install', tool: 'vcredist', consent: true }, { ...scanned(), ...toolchainStateFrom(snap.toolchain) }, ports());
         expect(after.toolchain!.findings!.map((f) => f.kind)).toEqual(['path-shadow']);
+    });
+});
+
+describe('a refused or failed toolchain action is SAID on its row (the person saw nothing; it reached only the console)', () => {
+    it('the refusal survives into the next snapshot (toolchainStateFrom) and is cleared by the NEXT action for THAT tool only', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
+        const refused = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
+        const kept = { ...scanned(), ...toolchainStateFrom(refused.toolchain) };
+        // Another tool's action (node, which runs) leaves claude-code's refusal where it is — counted, still exactly one.
+        activity = IDLE;
+        const other = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, kept, ports());
+        expect(other.toolchain!.refusals).toEqual([{ tool: 'claude-code', reason: expect.stringMatching(/atlas/) }]);
+        // A rescan does not clear it either: nothing was done for claude-code.
+        const rescanned = await handleFeatureAction(services, { kind: 'toolchain.check', force: true }, { ...kept, ...toolchainStateFrom(other.toolchain) }, ports());
+        expect(rescanned.toolchain!.refusals).toHaveLength(1);
+        // claude-code's next action clears it (atlas has stopped, so the update runs).
+        const retried = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, { ...kept, ...toolchainStateFrom(rescanned.toolchain) }, ports());
+        expect(updates).toEqual(['node', 'claude-code']);
+        expect(retried.toolchain!.refusals).toBeUndefined();
+    });
+
+    it('two tools refused at once: each row keeps its own reason (counted: two, one per tool)', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }], processes: [{ label: 'shop.gen dev server', command: 'npm run dev' }] };
+        const first = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
+        const second = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, { ...scanned(), ...toolchainStateFrom(first.toolchain) }, ports());
+        expect(second.toolchain!.refusals!.map((r) => r.tool)).toEqual(['claude-code', 'node']);
+    });
+
+    it('an install that ran and FAILED (not-installed) is said on the row too, verbatim; the result line still says it', async () => {
+        const failing = ports();
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.install', tool: 'php', consent: true }, scanned(), {
+            toolchain: { ...failing.toolchain!, install: async (tool, consent) => { installs.push([tool, consent]); return { kind: 'not-installed', reason: 'winget install --id PHP.PHP.8.4 exited 1, and php still does not answer' }; } },
+        });
+        expect(installs).toEqual([['php', true]]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'php', reason: 'winget install --id PHP.PHP.8.4 exited 1, and php still does not answer' }]);
+        expect(snap.toolchain!.result).toBe('php was not installed: winget install --id PHP.PHP.8.4 exited 1, and php still does not answer.');
+    });
+
+    it('an update whose re-probe shows nothing changed is said on the row; CONTROL: a repaired update of the same tool leaves no row line', async () => {
+        const stuck = ports();
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'docker' }, scanned(), {
+            toolchain: { ...stuck.toolchain!, update: async (tool) => { updates.push(tool); return { kind: 'unchanged', installed: '27.3.1', reason: 'the update command exited 1 but docker still reports 27.3.1; nothing was changed' }; } },
+        });
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'docker', reason: 'the update command exited 1 but docker still reports 27.3.1; nothing was changed' }]);
+        const ok = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'docker' }, { ...scanned(), ...toolchainStateFrom(snap.toolchain) }, ports());
+        expect(updates).toEqual(['docker', 'docker']);
+        expect(ok.toolchain!.refusals).toBeUndefined();
     });
 });

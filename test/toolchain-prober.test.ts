@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { probeTools, runUpdate, shouldCheckUpdates, type CommandRunner } from '../src/main/toolchain-prober.js';
+import { latestIndex, probeTools, runUpdate, shouldCheckUpdates, type CommandRunner } from '../src/main/toolchain-prober.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED so the test
@@ -114,5 +114,52 @@ describe('an update, judged by the version measured after', () => {
         const spy: CommandRunner = async (binary, args) => { calls.push([binary, args]); return { stdout: binary === 'git' ? 'git version 2.51.0' : '', exitCode: 0 }; };
         await runUpdate('git', { platform: 'darwin', packageManager: 'brew' }, spy, null);
         expect(calls.find(([b]) => b === 'brew')).toEqual(['brew', ['upgrade', 'git']]);
+    });
+});
+
+describe('the "latest" lookup (latestIndex) — npm is npm.cmd on Windows', () => {
+    const OUTDATED = JSON.stringify({ '@anthropic-ai/claude-code': { current: '2.1.0', wanted: '2.1.0', latest: '2.2.0' }, '@openai/codex': { current: '0.40.0', wanted: '0.40.0', latest: '0.41.0' } });
+    const spyRunner = (calls: Array<[string, readonly string[]]>): CommandRunner => async (binary, args) => {
+        calls.push([binary, [...args]]);
+        // npm outdated exits 1 when something IS outdated; the JSON is the answer either way.
+        return { stdout: OUTDATED, exitCode: 1 };
+    };
+    const noFetch = async (): Promise<unknown> => { throw new Error('no network in this test'); };
+
+    it('on win32, claude-code and codex ask npm THROUGH cmd.exe — exactly one call each, with the exact argv; both read a latest', async () => {
+        const calls: Array<[string, readonly string[]]> = [];
+        const latest = latestIndex({ run: spyRunner(calls), fetchJson: noFetch, platform: 'win32' });
+        expect(await latest('claude-code')).toEqual({ version: '2.2.0', source: 'npm registry' });
+        expect(await latest('codex')).toEqual({ version: '0.41.0', source: 'npm registry' });
+        expect(calls).toEqual([
+            ['cmd.exe', ['/d', '/s', '/c', 'npm', 'outdated', '-g', '--json']],
+            ['cmd.exe', ['/d', '/s', '/c', 'npm', 'outdated', '-g', '--json']],
+        ]);
+        // COUNTED: npm was never handed to execFile bare on Windows (that is the ENOENT that read `unknown` forever).
+        expect(calls.filter(([b]) => b === 'npm')).toHaveLength(0);
+    });
+
+    it('CONTROL on linux: the same lookups run npm directly, once each', async () => {
+        const calls: Array<[string, readonly string[]]> = [];
+        const latest = latestIndex({ run: spyRunner(calls), fetchJson: noFetch, platform: 'linux' });
+        expect(await latest('claude-code')).toEqual({ version: '2.2.0', source: 'npm registry' });
+        expect(await latest('codex')).toEqual({ version: '0.41.0', source: 'npm registry' });
+        expect(calls).toEqual([
+            ['npm', ['outdated', '-g', '--json']],
+            ['npm', ['outdated', '-g', '--json']],
+        ]);
+    });
+
+    it('winget is a real .exe: on win32 a package-managed tool asks winget directly, not through cmd.exe', async () => {
+        const calls: Array<[string, readonly string[]]> = [];
+        const run: CommandRunner = async (binary, args) => { calls.push([binary, [...args]]); return { stdout: '', exitCode: 0 }; };
+        await latestIndex({ run, fetchJson: noFetch, platform: 'win32' })('git');
+        expect(calls).toHaveLength(1);
+        expect(calls[0]![0]).toBe('winget');
+    });
+
+    it('a runner that throws (npm absent) is the honest null — never a crash', async () => {
+        const run: CommandRunner = async () => { throw Object.assign(new Error('spawn cmd.exe ENOENT'), { code: 'ENOENT' }); };
+        expect(await latestIndex({ run, fetchJson: noFetch, platform: 'win32' })('claude-code')).toBeNull();
     });
 });

@@ -4,7 +4,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
-import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing } from '../features.js';
+import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
@@ -659,6 +659,11 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
         }
     }, [tc, onAction]);
     const missing = tc ? tc.tools.filter((t) => t.tone === 'not-installed') : [];
+    // A refused or failed action, drawn on the row it was for (who or what is busy, verbatim); a PHP version's goes to
+    // PHP versions, and one for a tool with no row (a prerequisite such as vcredist) is said above the rows, never dropped.
+    const refusals = tc?.refusals ?? [];
+    const toolRefusal = (tool: string) => refusals.find((r) => r.tool === tool && r.version === undefined) ?? null;
+    const rowless = refusals.filter((r) => r.version === undefined && !(tc?.tools ?? []).some((t) => t.tool === r.tool));
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
@@ -692,7 +697,10 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                     ))}
                 </ul>
             ) : null}
-            {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} /> : null}
+            {rowless.map((r) => (
+                <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
+            ))}
+            {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -705,8 +713,9 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                     <ul className="divide-y divide-[var(--border-1)]">
                         {tc.tools.map((t) => {
                             const plan = t.tone === 'not-installed' ? tc.installs?.[t.tool] : undefined;
+                            const refusal = toolRefusal(t.tool);
                             return (
-                                <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex items-center gap-3 px-5 py-2">
+                                <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
                                     <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{t.tone}</Badge>
@@ -721,6 +730,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                                     ) : plan ? (
                                         <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
                                     ) : null}
+                                    {refusal ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
                                 </li>
                             );
                         })}
@@ -736,11 +746,14 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
  * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
  * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
  */
-function PhpVersions({ php, busy, onAction }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = php.available.filter((a) => !a.installed);
     return (
         <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
             <h3 className="px-5 pt-3 text-sm font-medium">PHP versions</h3>
+            {refusals.map((r) => (
+                <p key={r.version} data-php-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
             <p data-php-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
                 {php.system ? `Unpinned php sites run PHP ${php.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'}
             </p>
