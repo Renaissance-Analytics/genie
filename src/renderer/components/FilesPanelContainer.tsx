@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
+import { openOrError, settle } from '../../core/files-reads.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
 
@@ -38,6 +39,10 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     onRouteChange?: ((file: string | null, filter: 'changed' | null) => void) | undefined;
 }) {
     const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
+    // The tree's read failed: the reason, shown in the tree's place (never skeletons forever).
+    const [treeError, setTreeError] = useState<string | null>(null);
+    // Every open SETTLES into something the panel can say — the file, or why not. A rejected ask left `open` as it was.
+    const read = useCallback((path: string) => openOrError(() => files.open(workspace.id, path), path), [files, workspace.id]);
     const [state, setState] = useState<FilesPanelState | null>(null);
     const [tabs, setTabs] = useState<readonly string[]>([]);
     const [open, setOpen] = useState<OpenFile | null>(null);
@@ -70,12 +75,18 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     }, [state, dirtyPath, paused, onPause, onResume]);
 
     // A code pane (§4.6) opens its one file on mount.
-    useEffect(() => { if (single) { setTabs([single]); void files.open(workspace.id, single).then((r) => setOpen(r)); } }, [single, files, workspace.id]);
+    useEffect(() => { if (single) { setTabs([single]); void read(single).then(setOpen); } }, [single, read]);
 
     const refresh = useCallback(() => {
-        void files.tree(workspace.id).then((t) => setTree(t));
+        // Single mode draws no tree (§4.6), so it does not walk one: on a large workspace that walk is the whole disk
+        // under the root, re-run on every change the watcher sees.
+        if (!single) {
+            void settle(() => files.tree(workspace.id)).then((r) => {
+                if (r.ok) { setTree(r.value); setTreeError(null); } else setTreeError(r.error);
+            });
+        }
         void files.state(workspace.id).then((s) => setState(s));
-    }, [files, workspace.id]);
+    }, [files, workspace.id, single]);
 
     useEffect(() => {
         refresh();
@@ -86,16 +97,16 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // A dirty buffer is NEVER auto-reloaded (§4.3); a clean one follows the disk.
     useEffect(() => {
         if (!open || buffer !== null) return;
-        return files.onChange((id) => { if (id === workspace.id) void files.open(workspace.id, open.path).then(setOpen); });
-    }, [files, workspace.id, open, buffer]);
+        return files.onChange((id) => { if (id === workspace.id) void read(open.path).then(setOpen); });
+    }, [files, workspace.id, open, buffer, read]);
 
     const openPath = useCallback((path: string) => {
         setRequested(path);
         setTabs((t) => (t.includes(path) ? t : [...t, path]));
         setBuffer(null);
         setConflict(null);
-        void files.open(workspace.id, path).then(setOpen);
-    }, [files, workspace.id]);
+        void read(path).then(setOpen);
+    }, [read]);
     const select = useCallback((path: string) => {
         openPath(path);
         onRouteChange?.(path, filter === 'changed' ? 'changed' : null);
@@ -117,14 +128,14 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             const next = t.filter((p) => p !== path);
             if (open?.path === path) {
                 const fallback = next[next.length - 1];
-                if (fallback) void files.open(workspace.id, fallback).then(setOpen);
+                if (fallback) void read(fallback).then(setOpen);
                 else setOpen(null);
                 setRequested(fallback ?? null);
                 onRouteChange?.(fallback ?? null, filter === 'changed' ? 'changed' : null);
             }
             return next;
         });
-    }, [files, workspace.id, open, onRouteChange, filter]);
+    }, [read, open, onRouteChange, filter]);
 
     const shown: OpenFile | null = open?.ok && buffer && buffer.path === open.path ? { ...open, text: buffer.text } : open;
     const save = (expected: string | null) => {
@@ -161,5 +172,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         : undefined;
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} />;
 }
