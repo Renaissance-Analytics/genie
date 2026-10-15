@@ -4,7 +4,7 @@ import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
-import { DEFAULT_CUSTOM_NAME, imageFor, SERVICE_CATALOG, type ServiceInstance } from '../core/services.js';
+import { DEFAULT_CUSTOM_NAME, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
 import {
     createService, createSite, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite,
     type HostingServices, type OpenInBrowser,
@@ -31,8 +31,11 @@ import type { SiteInfo } from './site-manager.js';
  * - A custom image is added only through the same approval, with the IMAGE named to the person (and the env names, never
  *   their values) — an agent never runs an image the person did not see.
  * - `env` names every variable with its value, secrets masked — the processes get the real ones, the transcript does not.
+ * - A shared WebSockets engine serves every workspace, but each workspace's APP on it is its own: `remove` on it drops
+ *   this workspace's app (approved by the person) and leaves the engine and every other workspace's app running.
  * - `logs` is the end of an engine's output with every credential Genie holds for that engine masked in it: a shared
- *   engine's log can carry another workspace's statements (a failed `ALTER ROLE … PASSWORD` is logged whole).
+ *   engine's log can carry another workspace's statements (a failed `ALTER ROLE … PASSWORD` is logged whole) — and a
+ *   WebSockets engine's, every workspace's app secret (each is its slice's password).
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
@@ -74,14 +77,21 @@ export function maskSecrets(text: string, secrets: readonly string[]): string {
 /**
  * A workspace's service env for an agent to READ: every name, every value — except secrets. A variable whose name says
  * it is one is masked whole; a password inside any other value (a `DATABASE_URL`, a `MONGODB_URI`) is masked in place.
+ *
+ * PUBLIC BY CONTRACT: a value the env also gives a `VITE_` name is not a secret, whatever its other names say — Vite
+ * builds every `VITE_` variable into the page a browser downloads. That is how a WebSocket app's KEY reads (REVERB_APP_KEY
+ * and VITE_REVERB_APP_KEY carry the same public key; its SECRET is never given a VITE_ name), while Meilisearch's
+ * MEILISEARCH_KEY, which no VITE_ name carries, stays masked.
  */
 export function maskEnv(env: Readonly<Record<string, string>>): { variables: Record<string, string>; masked: string[] } {
-    const secrets = Object.entries(env).filter(([k, v]) => SECRET_NAME.test(k) && v !== '').map(([, v]) => v);
+    const published = new Set(Object.entries(env).filter(([k, v]) => k.startsWith('VITE_') && v !== '').map(([, v]) => v));
+    const isSecret = (name: string, value: string) => SECRET_NAME.test(name) && !name.startsWith('VITE_') && !published.has(value);
+    const secrets = Object.entries(env).filter(([k, v]) => v !== '' && isSecret(k, v)).map(([, v]) => v);
     const variables: Record<string, string> = {};
     const masked: string[] = [];
     for (const [name, value] of Object.entries(env)) {
         let out: string;
-        if (SECRET_NAME.test(name)) out = value === '' ? '' : MASK;
+        if (isSecret(name, value)) out = value === '' ? '' : MASK;
         else {
             out = value.replace(/(\/\/[^:/@\s]*:)[^@\s]+@/g, `$1${MASK}@`);
             for (const s of secrets) out = out.split(s).join(MASK);
@@ -110,6 +120,8 @@ function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<Engi
         host: '127.0.0.1',
         port: i.publishedPort,
         active,
+        // The workspace's own WebSocket app — its id and its PUBLIC key. Never its secret (that is `env`'s, masked).
+        ...(sliceIsDroppable(i.engine) && i.slices?.[workspaceId] ? { app: { id: i.slices[workspaceId]!.identifier, key: i.slices[workspaceId]!.identifier } } : {}),
         // The surfaces beside the primary port, by name — and Mailpit's web inbox as the address to open.
         ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}),
         ...(i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? { inbox: `http://127.0.0.1:${i.publishedPorts.ui}/` } : {}),
@@ -153,8 +165,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
     const services: Registration = {
         definition: new ToolDefinition(
             'services',
-            'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), Reverb, Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
-                + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, MEILISEARCH_*, AWS_*…). '
+            'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), WebSockets (Sockudo, Pusher protocol; Laravel reads it through its reverb driver), Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
+                + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, REVERB_*, MEILISEARCH_*, AWS_*…). '
                 + 'Actions: `catalog` — the engines and versions Genie offers, with each image. '
                 + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox). '
                 + '`env` — the variables a process here gets: names and values, secrets masked. '
@@ -162,13 +174,13 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 + '`add` {engine, version, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. '
                 + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?} — always dedicated; the person sees the image before anything is pulled. '
                 + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
-                + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab).',
+                + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab). On the shared WebSockets engine it removes only THIS workspace’s app.',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
                     action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'add', 'start', 'stop', 'remove'] },
-                    engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, reverb, meilisearch, seaweedfs, custom).' },
+                    engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
                     version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
                     scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine).' },
                     image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
@@ -271,6 +283,14 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     if (args.deleteData !== undefined && args.deleteData !== false) return err('an agent never deletes a service’s data; `remove` always keeps it. Deleting the data is the person’s, from the Services tab. Nothing was done');
                     const i = own(str(args.id));
                     if (typeof i === 'string') return err(i);
+                    // A shared WebSockets engine: this workspace's app is its own to drop; the engine is everyone's.
+                    if (i.scope.kind === 'shared' && sliceIsDroppable(i.engine)) {
+                        if (!i.slices?.[caller.workspaceId]) return err(`${i.engine} ${i.version} has no app for this workspace; nothing was done`);
+                        const appVerdict = await deps.approve(caller, 'services.remove', `this workspace’s app on the shared ${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its credentials stop working; the engine and every other workspace’s app keep running`);
+                        if (appVerdict !== 'allowed') return err(`removing this workspace’s ${i.engine} app was denied by the person; nothing was done`);
+                        await s.engines.releaseSlice(i.id, caller.workspaceId);
+                        return ok({ ok: true, removed: i.id, appRemoved: true });
+                    }
                     const notMine = mineOutright(i);
                     if (notMine) return err(notMine);
                     const verdict = await deps.approve(caller, 'services.remove', `${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its container is removed; its data volume is KEPT`);

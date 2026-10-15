@@ -20,8 +20,8 @@ describe('Add an engine', () => {
         expect(validateServiceForm({ workspaceId: 'tynn', engine: 'postgres', major: '12', scope: 'dedicated' })).toEqual([
             { field: 'major', message: 'postgres 12 is not a version Genie knows (14, 15, 16, 17).' },
         ]);
-        expect(validateServiceForm({ workspaceId: 'tynn', engine: 'reverb', major: '1', scope: 'dedicated' })).toEqual([
-            { field: 'scope', message: 'reverb is a shared service — one per workstation, never per workspace.' },
+        expect(validateServiceForm({ workspaceId: 'tynn', engine: 'websockets', major: '4.7.0', scope: 'dedicated' })).toEqual([
+            { field: 'scope', message: 'websockets is a shared service — one per workstation, never per workspace.' },
         ]);
     });
 

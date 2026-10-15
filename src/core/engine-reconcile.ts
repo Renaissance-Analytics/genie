@@ -143,7 +143,7 @@ export async function reconcileEngines(ports: ReconcilePorts, bound: ReadinessBo
  *   - postgres: an SSLRequest; the server answers one byte, `S` or `N`.
  *   - redis: `PING`; the server answers `+PONG`, or `-NOAUTH…`/`-ERR…` — any RESP reply is Redis answering.
  *   - mysql / mariadb: nothing sent; the server greets first (a handshake packet).
- *   - reverb: an HTTP request; any `HTTP/` status line.
+ *   - websockets (Sockudo): an HTTP request; any `HTTP/` status line (HTTP and the upgrade share its port).
  *   - mongo: no unauthenticated greeting without building BSON — a connection that is accepted and NOT
  *     closed by the peer within the probe's window (see the net port). Weaker; said, not hidden.
  */
@@ -165,7 +165,7 @@ export function readinessHandshake(engine: string): ReadinessHandshake {
         case 'mysql':
         case 'mariadb':
             return { send: null, expect: (r) => r.length > 4 };
-        case 'reverb':
+        case 'websockets':
             return { send: ascii('GET / HTTP/1.0\r\n\r\n'), expect: (r) => startsWith(r, 'HTTP/') };
         default:
             return { send: null, expect: null };

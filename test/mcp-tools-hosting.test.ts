@@ -111,14 +111,14 @@ describe('services: reading', () => {
         const r = await call('services', 't-example', { action: 'catalog' });
         expect(r.isError).toBe(false);
         const engines = r.json.engines as Array<{ engine: string; versions: string[]; images: string[]; scopes: string[] }>;
-        expect(engines.map((e) => e.engine)).toEqual(['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']);
+        expect(engines.map((e) => e.engine)).toEqual(['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'websockets', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']);
         expect(engines.find((e) => e.engine === 'meilisearch')!.images).toEqual(['getmeili/meilisearch:v1']);
         expect(engines.find((e) => e.engine === 'seaweedfs')).toMatchObject({ images: ['chrislusf/seaweedfs:4.48'], scopes: ['shared'] });
         expect(engines.find((e) => e.engine === 'custom')).toMatchObject({ versions: [], images: [], scopes: ['dedicated'] });
         expect(engines.find((e) => e.engine === 'postgres')).toMatchObject({ versions: ['14', '15', '16', '17'], scopes: ['dedicated', 'shared'] });
         expect(engines.find((e) => e.engine === 'postgres')!.images).toContain('postgres:17');
         expect(engines.find((e) => e.engine === 'mailpit')!.images).toEqual(['axllent/mailpit:v1.30']);
-        expect(engines.find((e) => e.engine === 'reverb')!.scopes).toEqual(['shared']);
+        expect(engines.find((e) => e.engine === 'websockets')!.scopes).toEqual(['shared']);
     });
 
     it('list: its own engines and the shared ones, with live status, and never another workspace’s — counted; no credential in the answer', async () => {
@@ -167,6 +167,20 @@ describe('services: reading', () => {
         expect(m.variables).toEqual({ MONGODB_URI: 'mongodb://genie:********@127.0.0.1:4101', REDIS_URL: 'redis://127.0.0.1:4102', AWS_SECRET_ACCESS_KEY: '********', MAIL_PORT: '4103' });
         expect(m.masked.sort()).toEqual(['AWS_SECRET_ACCESS_KEY', 'MONGODB_URI']);
     });
+
+    it('a key the env also publishes under a VITE_ name is PUBLIC (the browser downloads it) — a key no VITE_ name carries, and every secret, stays masked (counted)', () => {
+        const m = maskEnv({
+            REVERB_APP_KEY: 'ws_example', VITE_REVERB_APP_KEY: 'ws_example', GENIE_WS_APP_KEY: 'ws_example',
+            REVERB_APP_SECRET: 's3cr3t-app', GENIE_WS_APP_SECRET: 's3cr3t-app',
+            MEILISEARCH_KEY: 'm4ster-key',
+        });
+        expect(m.variables).toEqual({
+            REVERB_APP_KEY: 'ws_example', VITE_REVERB_APP_KEY: 'ws_example', GENIE_WS_APP_KEY: 'ws_example',
+            REVERB_APP_SECRET: '********', GENIE_WS_APP_SECRET: '********',
+            MEILISEARCH_KEY: '********',
+        });
+        expect(m.masked.sort()).toEqual(['GENIE_WS_APP_SECRET', 'MEILISEARCH_KEY', 'REVERB_APP_SECRET']);
+    });
 });
 
 describe('services: add goes through the person', () => {
@@ -196,10 +210,10 @@ describe('services: add goes through the person', () => {
         expect(services.engines.envFor('example-other')).not.toHaveProperty('DB_PORT');
     });
 
-    it('a request Genie would refuse is refused WITHOUT asking: an unknown version, a dedicated Reverb, MinIO — counted, the deck empty', async () => {
+    it('a request Genie would refuse is refused WITHOUT asking: an unknown version, a dedicated WebSockets engine, MinIO — counted, the deck empty', async () => {
         const refusals = [
             await call('services', 't-example', { action: 'add', engine: 'postgres', version: '12' }),
-            await call('services', 't-example', { action: 'add', engine: 'reverb', version: '1', scope: 'dedicated' }),
+            await call('services', 't-example', { action: 'add', engine: 'websockets', version: '4.7.0', scope: 'dedicated' }),
             await call('services', 't-example', { action: 'add', engine: 'minio', version: 'latest', scope: 'shared' }),
             await call('services', 't-example', { action: 'add', engine: 'postgres' }),
         ];
@@ -320,6 +334,28 @@ describe('services: logs (H6)', () => {
         expect(r.text).not.toContain(admin);
         expect((r.json.logs as string).match(/\*{8}/g)).toHaveLength(2);
         expect(r.json.logs).toContain('ready');
+    });
+
+    it('a WebSockets engine: EVERY workspace app’s secret masked in its log, counted — each app’s id stays visible (the control)', async () => {
+        const ws = { engine: 'websockets', major: '4.7.0', scope: 'shared' as const };
+        await handleFeatureAction(services, { kind: 'services.create', form: { ...ws, workspaceId: 'example' }, consent: true }, state());
+        await handleFeatureAction(services, { kind: 'services.create', form: { ...ws, workspaceId: 'example-other' }, consent: true }, state());
+        const engine = services.engines.list().find((i) => i.engine === 'websockets')!;
+        const mine = engine.slices!['example']!;
+        const theirs = engine.slices!['example-other']!;
+        // Two apps, two distinct secrets: there is something of each workspace's to leak.
+        expect([mine.identifier, theirs.identifier]).toEqual(['ws_example', 'ws_example_other']);
+        expect(mine.password).not.toBe(theirs.password);
+        docker.engineLog.text = `app ${mine.identifier} secret ${mine.password}\napp ${theirs.identifier} secret ${theirs.password}\nlistening on 0.0.0.0:6001\n`;
+
+        const r = await call('services', 't-example', { action: 'logs', id: engine.id });
+        expect(r.isError).toBe(false);
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toEqual([['logs', '--timestamps', '--tail', '500', 'genie-shared-websockets-4.7.0']]);
+        expect(r.text).not.toContain(mine.password);
+        expect(r.text).not.toContain(theirs.password);
+        expect((r.json.logs as string).match(/\*{8}/g)).toHaveLength(2);
+        // The ids are not secrets (each is its app's public key too): masked would be over-reach, and they are what a log is read for.
+        expect(r.json.logs).toBe('app ws_example secret ********\napp ws_example_other secret ********\nlistening on 0.0.0.0:6001\n');
     });
 
     it('another workspace’s engine: refused without a Docker call — the owner’s own read is the control', async () => {

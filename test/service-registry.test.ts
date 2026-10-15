@@ -81,11 +81,11 @@ describe('adding an engine', () => {
         expect(registry.envFor('tynn').PGPORT).toBe('54302');
     });
 
-    it('a shared engine is ONE per workstation: adding it twice answers the existing instance; reverb cannot be dedicated', async () => {
+    it('a shared engine is ONE per workstation: adding it twice answers the existing instance; websockets cannot be dedicated', async () => {
         const a = await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true });
         const b = await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true });
         expect(b).toMatchObject({ kind: 'exists', instance: { id: (a as { instance: { id: string } }).instance.id } });
-        await expect(registry.add({ engine: 'reverb', major: '1', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true })).rejects.toThrow(/shared/);
+        await expect(registry.add({ engine: 'websockets', major: '4.7.0', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true })).rejects.toThrow(/shared/);
     });
 });
 

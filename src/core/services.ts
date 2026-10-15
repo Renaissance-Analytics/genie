@@ -1,4 +1,5 @@
 import { assertGeneratedPassword, seaweedEntrypointScript } from './service-provision.js';
+import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOCKUDO_PORT, SOCKUDO_VERSION, websocketHostEnv } from './websockets.js';
 
 /**
  * SERVICE ENGINES (§6.6) — the pure half.
@@ -6,7 +7,7 @@ import { assertGeneratedPassword, seaweedEntrypointScript } from './service-prov
  * Shared and dedicated services in containers with PORT ISOLATION ONLY — the owner's host-native
  * decision: the app, its tools and its agents all run on the host and reach the engine over
  * `127.0.0.1:<published port>`. A shared engine is ONE workstation-level service, never one per
- * workspace; Reverb is shared by nature and a dedicated one is refused.
+ * workspace; the WebSocket server (Sockudo, core/websockets.ts) is shared by nature and a dedicated one is refused.
  *
  * ## One version per engine emits env
  *
@@ -48,6 +49,13 @@ import { assertGeneratedPassword, seaweedEntrypointScript } from './service-prov
  * workspace whose env is being built (`serviceEnvFor`'s `namespace`). Meilisearch's key is the engine's master key,
  * handed to every workspace that uses it — Genie 1's decision, kept, and said here because it is the one engine where
  * a workspace holds a credential that reaches another workspace's data.
+ *
+ * ## The WebSocket engine's slices are APPS (hosting ship line H8)
+ *
+ * A shared `websockets` engine has no superuser and nothing is created inside it, and it keeps NO data volume
+ * (`stateless`: connection and channel state live in memory): each workspace's slice is an app —
+ * `ws_<slug>` as id and key, a generated secret — in a config file Genie writes and the container reads
+ * (core/websockets.ts). Its env is Genie 1's `GENIE_WS_*` / `REVERB_*` / `VITE_*` names, through the same slice path.
  */
 
 export type ServiceScope = { kind: 'shared' } | { kind: 'dedicated'; workspaceId: string };
@@ -89,6 +97,13 @@ export interface EngineDef {
      * built FOR a workspace — what a namespace engine keeps workspaces apart by.
      */
     readonly hostEnv: (host: string, port: number, c: Credentials, namespace?: string) => Record<string, string>;
+    /**
+     * The engine reads its tenants from a FILE Genie writes (Sockudo's app list): bind-mounted read-only at `target`,
+     * and the container runs `command` on it. A container plan for such an engine needs that file's host path.
+     */
+    readonly config?: { readonly target: string; readonly command: readonly string[] };
+    /** Nothing to persist (Sockudo keeps connection and channel state in memory): no data volume is created. */
+    readonly stateless?: true;
 }
 
 export interface Credentials {
@@ -230,9 +245,15 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         hostEnv: (host, port, c) => ({ MONGODB_URI: c.user ? `mongodb://${c.user}:${c.password ?? ''}@${host}:${port}` : `mongodb://${host}:${port}`, MONGO_HOST: host, MONGO_PORT: String(port) }),
     },
     {
-        engine: 'reverb', image: 'particleacademy/genie-reverb', internalPort: 8080, majors: ['1'], sharing: 'shared-only',
+        // Genie 1's bundled server, Sockudo, at its pinned version (core/websockets.ts) — one per workstation, an app per
+        // workspace. NOT `reverb`: that names Laravel's server, which Genie does not run (Genie 1's v71 rename), and the
+        // `particleacademy/genie-reverb` image this entry used to name was never published (Docker Hub: 404).
+        engine: 'websockets', image: SOCKUDO_IMAGE, internalPort: SOCKUDO_PORT, majors: [SOCKUDO_VERSION], sharing: 'shared-only',
+        config: { target: SOCKUDO_CONFIG_TARGET, command: SOCKUDO_COMMAND },
+        stateless: true,
         containerEnv: () => ({}),
-        hostEnv: (host, port) => ({ REVERB_HOST: host, REVERB_PORT: String(port), REVERB_SCHEME: 'http' }),
+        // Never emits on its own: a workspace's connection is its app (a slice), `v1HostEnv` below.
+        hostEnv: () => ({}),
     },
     {
         // Catch-all SMTP on the primary port AND its web inbox (8025, Genie 1's `ui`) — an inbox nobody can open is
@@ -389,6 +410,9 @@ export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, opt
         case 'mailpit':
             // The plus address Mailpit auto-tags (genie#552), and the same tag for an app that sets its own From.
             return { MAIL_MAILER: 'smtp', MAIL_HOST: HOST, MAIL_PORT: p, ...mailTagEnv(id) };
+        case 'websockets':
+            // The workspace's own app on the shared server: Genie 1's env-wiring.ts + hosting.ts names (core/websockets.ts).
+            return websocketHostEnv(HOST, port, slice);
         default:
             return {};
     }
@@ -427,7 +451,10 @@ export interface CustomEngineSpec {
 export interface ContainerPlan {
     readonly image: string;
     readonly name: string;
-    /** The data volume; `null` for a custom image, which declares no data directory (Genie 1's had no volume either). */
+    /**
+     * The data volume; `null` for a custom image, which declares no data directory (Genie 1's had no volume either),
+     * and for a stateless engine (Sockudo), which has nothing to persist.
+     */
     readonly volume: string | null;
     /** `127.0.0.1:<published>:<internal>` — loopback only. The primary first, then every surface. */
     readonly publish: readonly string[];
@@ -436,6 +463,8 @@ export interface ContainerPlan {
     readonly entrypoint?: string;
     /** The container's command after the image, when the engine needs one (Redis's `--requirepass`). */
     readonly command?: readonly string[];
+    /** Host files bind-mounted read-only (Sockudo's app config). */
+    readonly mounts?: readonly { readonly source: string; readonly target: string }[];
 }
 
 /** The container Genie derives for an instance (`genie-<shared|workspace>-<engine>-<version>`), unless it has its own (an adopted one's). */
@@ -444,10 +473,14 @@ export function containerNameOf(i: Pick<ServiceInstance, 'engine' | 'version' | 
     return `genie-${i.scope.kind === 'shared' ? 'shared' : i.scope.workspaceId}-${i.engine}-${i.version}`;
 }
 
-/** The volume a "delete data" removes: the instance's own (Genie 1 named its volumes), else `<container>-data`; none for a custom image. */
+/**
+ * The volume a "delete data" removes: the instance's own (Genie 1 named its volumes), else `<container>-data`; none for
+ * a custom image, and none for a stateless engine (the WebSocket server: its apps are a config file, not data).
+ */
 export function dataVolumeOf(i: Pick<ServiceInstance, 'engine' | 'version' | 'scope' | 'containerName' | 'volume'>): string | null {
     if (i.volume) return i.volume;
     if (i.engine === 'custom') return null;
+    if (isStateless(i.engine)) return null;
     return `${containerNameOf(i)}-data`;
 }
 
@@ -466,6 +499,8 @@ export function containerPlan(input: {
     admin?: EngineAdmin;
     surfacePorts?: Readonly<Record<string, number>>;
     custom?: CustomEngineSpec;
+    /** The host path of the file an engine that reads its tenants from one is given (Sockudo's apps). */
+    configFile?: string;
 }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
@@ -488,6 +523,7 @@ export function containerPlan(input: {
     const tenancy = input.admin ? SHARED_TENANCY[def.engine] : undefined;
     if (input.admin && !tenancy) throw new Error(`${input.engine} is not carved into per-workspace slices; it has no admin-only container`);
     if (!input.admin && SHARED_TENANCY[def.engine]?.entrypoint) throw new Error(`${input.engine} needs its admin identity at creation: without it the engine serves every request unauthenticated`);
+    if (def.config && !input.configFile) throw new Error(`${input.engine} reads its workspaces' apps from a file Genie writes; the container cannot be planned without it`);
     const publish = [`${HOST}:${input.publishedPort}:${def.internalPort}`];
     for (const surface of def.surfaces ?? []) {
         const port = input.surfacePorts?.[surface.name];
@@ -496,14 +532,27 @@ export function containerPlan(input: {
     }
     const password = input.admin?.password ?? input.credentials?.password;
     const launch = tenancy?.entrypoint && input.admin ? tenancy.entrypoint(input.admin.password) : undefined;
-    const command = launch ? launch.command : def.command && password ? def.command(password) : undefined;
+    // The config engine's command is fixed (its binary on the mounted file); SeaweedFS's comes with its entrypoint.
+    const command = def.config ? def.config.command : launch ? launch.command : def.command && password ? def.command(password) : undefined;
     return {
         image: imageFor(def, input.major),
         name: `genie-${key}`,
-        volume: `genie-${key}-data`,
+        // A stateless engine (Sockudo) has nothing to keep: no volume is created, and none is there for "delete data".
+        volume: def.stateless ? null : `genie-${key}-data`,
         publish,
         env: tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {}),
         ...(launch ? { entrypoint: launch.entrypoint } : {}),
         ...(command ? { command } : {}),
+        ...(def.config && input.configFile ? { mounts: [{ source: input.configFile, target: def.config.target }] } : {}),
     };
+}
+
+/** Does this engine keep nothing on disk (no data volume is ever created for it)? */
+export function isStateless(engine: string): boolean {
+    return SERVICE_CATALOG.find((e) => e.engine === engine)?.stateless === true;
+}
+
+/** Is a workspace's slice of this engine only a name in a config — droppable without losing anything? */
+export function sliceIsDroppable(engine: string): boolean {
+    return APP_ENGINES.has(engine);
 }

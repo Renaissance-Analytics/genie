@@ -4,7 +4,7 @@ import { SERVICE_CATALOG, containerPlan, serviceEnvFor, switchActiveWarning, typ
 /**
  * SERVICE ENGINES (§6.6) — the pure half. Shared and dedicated services (Postgres, Redis, …) in
  * containers with port isolation only (the owner's host-native decision); a shared engine is ONE
- * workstation-level service, never one per workspace ("reverb is a whole app"). The env a workspace
+ * workstation-level service, never one per workspace (the WebSocket server is a whole app). The env a workspace
  * gets is HOST-FORM — `127.0.0.1:<published port>` — because host processes cannot resolve
  * container names. And the bug v1 shipped: a workspace holding pg16 AND pg17 gave `DATABASE_URL`
  * to the first and `PGHOST` to the last, so an app and a tool reached DIFFERENT databases. Exactly
@@ -25,7 +25,9 @@ const pg = (version: string, port: number, over: Partial<ServiceInstance> = {}):
 describe('the catalog', () => {
     it('names the engines Genie manages with their image, internal port and env template; each has at least one major', () => {
         const names = SERVICE_CATALOG.map((e) => e.engine);
-        for (const e of ['postgres', 'redis', 'mysql', 'mariadb', 'mongo', 'reverb', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(names).toContain(e);
+        for (const e of ['postgres', 'redis', 'mysql', 'mariadb', 'mongo', 'websockets', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(names).toContain(e);
+        // The dead `reverb` entry is gone, not kept beside its replacement (its image was never published).
+        expect(names).not.toContain('reverb');
         // Every engine but `custom`, whose image, port and env are the person's (the instance carries them).
         const typed = SERVICE_CATALOG.filter((e) => !e.custom);
         expect(typed).toHaveLength(SERVICE_CATALOG.length - 1);
@@ -37,9 +39,9 @@ describe('the catalog', () => {
         expect(SERVICE_CATALOG.find((e) => e.engine === 'custom')).toMatchObject({ image: '', majors: [], sharing: 'dedicated-only' });
     });
 
-    it('reverb is SHARED by nature — the catalog says so, and a dedicated reverb is refused', () => {
-        expect(SERVICE_CATALOG.find((e) => e.engine === 'reverb')!.sharing).toBe('shared-only');
-        expect(() => containerPlan({ engine: 'reverb', major: '1', scope: { kind: 'dedicated', workspaceId: 'tynn' }, publishedPort: 8080 })).toThrow(/shared/);
+    it('websockets (Sockudo) is SHARED by nature — the catalog says so, and a dedicated one is refused', () => {
+        expect(SERVICE_CATALOG.find((e) => e.engine === 'websockets')!.sharing).toBe('shared-only');
+        expect(() => containerPlan({ engine: 'websockets', major: '4.7.0', scope: { kind: 'dedicated', workspaceId: 'tynn' }, publishedPort: 8080, configFile: '/tmp/genie.toml' })).toThrow(/shared/);
     });
 });
 
