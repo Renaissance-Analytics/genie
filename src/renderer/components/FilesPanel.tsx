@@ -70,6 +70,8 @@ export interface FilesPanelProps {
     /** The board's `All | Changed N` filter: Changed shows the files grouped by who changed them, in the tree's place. */
     readonly filter?: 'all' | 'changed' | undefined;
     readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;
+    /** The tree could not be read: the reason, said in the tree's place instead of skeletons that never end. */
+    readonly treeError?: string | null | undefined;
 }
 
 /** How many files changed this session — the `Changed N` chip's number; `0` reads as plain `Changed`. */
@@ -127,7 +129,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -198,6 +200,8 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         ) : (
                             <p className="px-3 py-2 text-xs text-[var(--fg-3)]">Nothing changed in this workspace this session.</p>
                         )
+                    ) : tree === null && treeError !== null ? (
+                        <p data-tree-error="" className="px-3 py-2 text-xs text-[var(--danger)]">The file tree could not be read: {treeError}</p>
                     ) : tree === null ? (
                         <div data-files-skeleton className="flex flex-col gap-2 px-3 py-2">
                             {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-3 animate-pulse rounded bg-[var(--bg-2)]" style={{ width: `${55 + ((i * 17) % 40)}%` }} />)}
@@ -271,8 +275,14 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 </div>
                             )
                         ) : null}
-                        {tree === null ? null : open === null ? (
-                            <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
+                        {/* The open file NEVER waits for the tree: the tree is the workspace's whole walk (single mode never
+                            even draws it), and gating the body on it left a file that HAD been read as a blank pane. */}
+                        {open === null ? (
+                            single ? (
+                                <p data-file-opening={single} className="p-4 text-sm text-[var(--fg-3)]">Opening {single}…</p>
+                            ) : tree === null ? null : (
+                                <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
+                            )
                         ) : open.ok ? (
                             <div className="flex h-full min-h-0 flex-col">
                                 {/* THE CRUMB (the board): the path, segment by segment, over the editor. */}
