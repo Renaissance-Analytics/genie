@@ -3,6 +3,7 @@ import { formatRoute, parseRoute, pickThreadRoute } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
+import { chatScope } from '../core/chat-scope.js';
 import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
@@ -320,6 +321,9 @@ export function Shell({
     // The tabs, with the open conversation marked: the strip and the flyout show the same ones.
     const tabs = (chatThreads ?? threadsFor(snapshot.agents, [], parsed.chat)).map((t) => (chatThread ? { ...t, active: t.agentId === chatThread.agentId } : t));
     const chatRunning = chatThread !== null && chatSession !== null && chatSession !== undefined && chatSession.running && chatSession.turnState === 'working';
+    // Which workspace the chat talks to, against the one on screen (core/chat-scope.ts; the owner's beta.26 report): another
+    // workspace's agent is NAMED in the composer, and a workspace with no agent to message has no composer at all.
+    const scope = chatScope({ ...parsed, chat: chatThread?.agentId ?? parsed.chat }, snapshot.agents, snapshot.workspaces);
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -644,7 +648,8 @@ export function Shell({
                         commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}
                         onAnswerApproval={onAnswerApproval}
-                        onSend={(text, attachments) => onSend(chatThread?.agentId ?? '', text, attachments)}
+                        scope={scope}
+                        onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
                         onTogglePin={onTogglePin}
                         onClose={onCloseChat}
                         onPickThread={(id) => onNavigate(pickThreadRoute(parsed, id, pinned === 'chat'))}

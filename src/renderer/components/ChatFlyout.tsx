@@ -8,6 +8,7 @@ import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
+import type { ChatScope } from '../../core/chat-scope.js';
 import { FidelityDot } from './Dashboard.js';
 
 /**
@@ -96,6 +97,12 @@ export interface ChatFlyoutProps {
     onStop?: (() => void) | undefined;
     /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
+    /**
+     * The chat's agent against the workspace on screen (`core/chat-scope.ts`). `elsewhere`: the composer and the header
+     * NAME the agent's workspace. `blocked`: the workspace on screen has no agent to message — the reason replaces the
+     * composer. Absent = `here` (the doctor window, which has no workspace on screen).
+     */
+    scope?: ChatScope | undefined;
 }
 
 const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
@@ -113,7 +120,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, pinned, contextTokens, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage, scope,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
@@ -168,6 +175,13 @@ export function ChatFlyout({
      * report them** — an empty transcript there would read as an agent ignoring you.
      */
     const mailOnly = thread?.fidelity === 'observed';
+    /**
+     * WHO you are writing to, with WHERE when it is not the workspace on screen (the owner, beta.26: a message meant for
+     * prism went to moic). `Message lark — in beta.example` can not be read as the project you are looking at.
+     */
+    const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
+    const blocked = scope?.kind === 'blocked' ? scope.reason : null;
+    const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
 
     return (
         <aside
@@ -200,6 +214,12 @@ export function ChatFlyout({
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                     {thread ? thread.name : 'genie'}
                 </span>
+
+                {elsewhere ? (
+                    <span data-chat-scope="elsewhere" title={`${thread?.name ?? 'This agent'} is in ${elsewhere}, not the workspace on screen`} className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px font-mono text-[10px] text-[var(--warning)]">
+                        in {elsewhere}
+                    </span>
+                ) : null}
 
                 {mailOnly ? (
                     <span data-chat-chip="mail-only" className="rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[10px] text-[var(--fg-3)]">
@@ -386,13 +406,22 @@ export function ChatFlyout({
                  * `⌘↵` sends and a bare Enter is a newline, which is the component's own
                  * behaviour and the design's requirement.
                  */}
+                {/* No agent on screen to message: the reason, and nothing to type into — a message here would go to a
+                    project the person is not looking at (the owner, beta.26). */}
+                {blocked ? (
+                    <div data-chat-blocked="" role="status" className="flex items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[12px] text-[var(--fg-2)]">
+                        <Icon name="circle-alert" size="xs" />
+                        <span>{blocked}</span>
+                    </div>
+                ) : (
                 <PromptInput
                     budgetTokens={contextTokens}
                     commands={toPromptCmds(commands)}
-                    placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox` : approval ? `Reply to ${thread.name}, or answer with A / D` : `Message ${thread.name}`}
+                    placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
                     showHint
                     onSubmit={(text, picked) => { void readAttachments(picked).then((files) => onSend(text, files)); }}
                 />
+                )}
                 {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
                 {running ? (
                     <div className="mt-1.5 flex justify-end">

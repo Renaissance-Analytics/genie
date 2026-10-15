@@ -1,4 +1,5 @@
 import { formatRange, parseRange, type TimeRange } from './lanes.js';
+import { followChat, type ChatRosterAgent } from './chat-scope.js';
 /**
  * ROUTES — the application's state, written down.
  *
@@ -256,12 +257,18 @@ export function canonicalAgentRoute(current: string, resolvedId: string): string
  * pin it again"). It used to follow only when pinned; an unpinned chat vanished on the first navigation. The rail's
  * routes are literals, so this carries the current chat (and whether it is pinned) onto `next` when `next` names no chat
  * of its own. Closing the chat is a route without `chat=`, built from the current one — it never passes through here.
+ *
+ * BUT NOT ONTO ANOTHER WORKSPACE (the owner, beta.26: "I navigated to the prism workspace but the chat stayed on moic" —
+ * and a message went to the wrong agent). When `next` puts another workspace on screen, the chat moves to an agent of
+ * THAT workspace (`core/chat-scope.ts` `followChat`: the agent on screen, else the one last chatted with there — `opened`,
+ * the chat's remembered tabs, newest first — else its first). Inside one workspace, and on surfaces of no workspace, it
+ * stays. Without the roster nothing can be placed in a workspace, and the chat rides along unchanged.
  */
-export function carryChat(next: string, current: Route): string {
+export function carryChat(next: string, current: Route, roster: readonly ChatRosterAgent[] = [], opened: readonly string[] = []): string {
     if (current.chat === null) return next;
     const parsedNext = parseRoute(next);
     if (parsedNext.chat !== null) return next;
-    return formatRoute({ ...parsedNext, chat: current.chat, pin: current.pin });
+    return formatRoute({ ...parsedNext, chat: followChat(current.chat, parsedNext, roster, opened), pin: current.pin });
 }
 
 /**

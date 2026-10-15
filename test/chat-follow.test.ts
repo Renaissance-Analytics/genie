@@ -24,8 +24,10 @@ describe('picking a chat tab', () => {
 
 describe('the app uses them', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    it('every navigation carries the open chat, pinned or floating', () => {
-        expect(strip('../src/renderer/App.tsx').match(/onNavigate=\{\(r\)\s*=>\s*navigate\(carryChat\(r,\s*parsed\)\)\}/g) ?? []).toHaveLength(1);
+    // Changed for the beta.26 report (chat-follows-workspace.test.tsx): carryChat is handed the roster and the chat's
+    // remembered tabs, so arriving at ANOTHER workspace moves the chat to an agent of that workspace.
+    it('every navigation carries the open chat, pinned or floating, told the roster and the remembered tabs', () => {
+        expect(strip('../src/renderer/App.tsx').match(/onNavigate=\{\(r\)\s*=>\s*navigate\(carryChat\(r,\s*parsed,\s*snapshot\.agents,\s*openedThreads\)\)\}/g) ?? []).toHaveLength(1);
     });
     it('a chat tab is picked through pickThreadRoute, told whether the chat is pinned', () => {
         expect(strip('../src/renderer/Shell.tsx').match(/onPickThread=\{\(id\)\s*=>\s*onNavigate\(pickThreadRoute\(parsed,\s*id,\s*pinned === 'chat'\)\)\}/g) ?? []).toHaveLength(1);
