@@ -12,7 +12,7 @@ const WIDTH = 560;
 const HEIGHT = 520;
 
 export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null }): (onClosed: () => void) => QuestionWindowPort {
-    // The page's three calls, registered once: what to show (asked on load), an answer, Later.
+    // The page's four calls, registered once: what to show (asked on load), an answer, Later, Dismiss.
     let last: QuestionView | null = null;
     ipcMain.handle('question:current', () => last);
     ipcMain.handle('question:answer', (_e, selections: unknown, notes: unknown) => {
@@ -24,6 +24,7 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         return ctl.answer(sel, per);
     });
     ipcMain.handle('question:later', () => { input.controller()?.later(); });
+    ipcMain.handle('question:dismiss', () => input.controller()?.dismiss() ?? { ok: false, reason: 'Genie is not ready' });
 
     return (onClosed) => {
         const area = screen.getPrimaryDisplay().workArea;

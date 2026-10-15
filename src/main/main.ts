@@ -1015,6 +1015,8 @@ async function boot(): Promise<void> {
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
         workspaces: () => registry?.listWorkspaces() ?? [],
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
+        // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
+        workspaceName: workspaceNameFor,
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
@@ -1287,6 +1289,8 @@ async function boot(): Promise<void> {
         items: () => composed.deckItems(),
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow }),
         answer: async (item, selections, notes) => { await handleFeatureAction(composed, { kind: 'deck.answerForm', item, selections, notes, note: '' }, featureState, featurePorts); },
+        // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told.
+        dismiss: async (item) => { await handleFeatureAction(composed, { kind: 'deck.dismiss', item }, featureState, featurePorts); },
     });
     composed.attention.onChange(() => questionWindow?.changed());
     // Questions already waiting when Genie starts come up too.

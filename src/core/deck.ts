@@ -68,6 +68,56 @@ export interface DeckItem {
     answer: DeckAnswer;
     /** The host that raised it, when it was forwarded. `null` for a local question. */
     forwardedFrom: string | null;
+    /**
+     * The workspace's NAME as the rail says it (project.json `name`, else the folder — core/workspace-name.ts), never its
+     * id. Absent when the workspace is not known here; the surfaces then say no workspace rather than print a ULID.
+     */
+    workspaceName?: string | undefined;
+    /**
+     * How many times the asking agent has UPDATED this question (ForceTheQuestion `action: 'update'`). A form keyed by it
+     * starts a clean draft when the content changes under it; absent = never updated.
+     */
+    revision?: number | undefined;
+}
+
+/** A day, in ms — "Dismiss all older than 1 day" on the Deck's questions band. */
+export const DAY_MS = 86_400_000;
+
+/**
+ * An item the person may DISMISS without answering: an agent's ForceTheQuestion (a form). A tool approval (inline, its
+ * id `approval:<agent>`) is answered by Allow/Deny; a forwarded question belongs to the host that raised it.
+ */
+export function isDismissable(item: DeckItem): boolean {
+    return item.source === 'agent-question' && item.answer.kind === 'form' && item.forwardedFrom === null;
+}
+
+/** The dismissable questions asked more than `ms` before `now` — what "Dismiss all older than 1 day" would remove. */
+export function dismissableOlderThan(items: readonly DeckItem[], now: number, ms: number): readonly DeckItem[] {
+    return items.filter((i) => isDismissable(i) && now - i.at > ms);
+}
+
+/** `just now` / `5 min ago` / `2 h ago` / `3 d ago` — how long a question has waited, said the way a person reads it. */
+export function ageLabel(at: number, now: number): string {
+    const s = Math.max(0, Math.floor((now - at) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h} h ago`;
+    return `${Math.floor(h / 24)} d ago`;
+}
+
+/**
+ * A short label as PLAIN TEXT: an agent may put Markdown in a question's header (`**Engine**`, `` `db` ``), and a title
+ * is not rendered — so the marks are taken out rather than shown raw. Links keep their text.
+ */
+export function plainLabel(text: string): string {
+    return text
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/[*_`~]+/g, '')
+        .replace(/^\s*(?:#+|>|[-+]\s)\s*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 /**

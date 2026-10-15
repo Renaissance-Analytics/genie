@@ -444,6 +444,9 @@ export function Shell({
                             onAnswer={(item, optionId) => onAnswerDeckItem(item, optionId)}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckFormRefusal ?? null}
+                            // Dismiss without an answer — one, or every question older than a day; the agents are told (main).
+                            onDismiss={(item) => onFeature({ kind: 'deck.dismiss', item })}
+                            onDismissOlder={(olderThanMs) => onFeature({ kind: 'deck.dismissOlder', olderThanMs })}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {

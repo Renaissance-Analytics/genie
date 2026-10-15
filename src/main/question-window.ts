@@ -13,6 +13,9 @@ import { nextQuestion, waitingBehind } from '../core/question-queue.js';
  *   keeps waiting; the window does not reopen for it this session.
  * - Every change to the questions (asked, answered elsewhere) re-checks: a question answered in Pending Questions
  *   leaves the window too — the two are one workflow.
+ * - Dismiss (beside Later) puts the question aside for good, WITHOUT an answer: it leaves Pending Questions too, its
+ *   agent is told, and the next is shown. A question its agent withdrew leaves the same way; one its agent updated stays
+ *   on screen with the new content (the view carries its revision, so the form starts a clean draft).
  */
 export interface QuestionView {
     readonly item: DeckItem;
@@ -32,6 +35,8 @@ export interface QuestionWindowDeps {
     readonly open: (onClosed: () => void) => QuestionWindowPort;
     /** Sends an answer the way Pending Questions does (`deck.answerForm`): labels and one note per question. A refusal throws, with the reason. */
     readonly answer: (item: DeckItem, selections: string[][], notes: string[]) => Promise<void>;
+    /** Dismisses it the way Pending Questions does (`deck.dismiss`): removed, and its agent mailed. A refusal throws. */
+    readonly dismiss: (item: DeckItem) => Promise<void>;
 }
 
 export class QuestionWindow {
@@ -69,6 +74,20 @@ export class QuestionWindow {
         if (!item) { this.changed(); return { ok: false, reason: 'that question was already answered' }; }
         try {
             await this.#deps.answer(item, selections, notes);
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+        this.#current = null;
+        this.changed();
+        return { ok: true };
+    }
+
+    /** Dismiss: the shown question is removed WITHOUT an answer (its agent is told) and the next is shown, or the window closes. */
+    async dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const item = this.#deps.items().find((i) => i.id === this.#current);
+        if (!item) { this.changed(); return { ok: false, reason: 'that question was already answered' }; }
+        try {
+            await this.#deps.dismiss(item);
         } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }

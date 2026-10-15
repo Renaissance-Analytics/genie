@@ -1,6 +1,7 @@
 import { classifyNavigation } from '../core/browser-policy.js';
 import type { SyncResult } from '../core/integrations.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
+import { isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm } from '../core/forms.js';
@@ -282,6 +283,16 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             break;
         }
+        case 'deck.dismiss':
+            // An agent's question, put aside WITHOUT an answer: it leaves the Deck and the question window, and the asker is
+            // mailed that it was dismissed (attention-store.ts). An approval or a forwarded question is not dismissable.
+            if (!isDismissable(action.item)) throw new Error('only an agent’s question can be dismissed; an approval is answered with its own options');
+            await services.attention.dismiss(action.item.id);
+            break;
+        case 'deck.dismissOlder':
+            // "Dismiss all older than 1 day" — the store's clock decides what is old, each asker mailed once.
+            await services.attention.dismissOlderThan(action.olderThanMs);
+            break;
         case 'knowledge.openAdd':
             next.knowledgeAdding = { defaults: knowledgeFormDefaults(action.workspaceId ? { workspaceId: action.workspaceId } : {}), problems: [] };
             break;
