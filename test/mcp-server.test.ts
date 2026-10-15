@@ -4,7 +4,7 @@ import type { Registration } from '../src/main/mcp-tools.js';
 import { genieMcpServer, type GenieMcpServer } from '../src/main/mcp-server.js';
 
 /**
- * GENIE'S OWN MCP SERVER (§6.9): prism-mcp-server 0.1.0 on a loopback HTTP transport with a bearer minted at
+ * GENIE'S OWN MCP SERVER (§6.9): prism-mcp-server 0.2.0 on a loopback HTTP transport with a bearer minted at
  * listen, serving every Genie tool registration; `GENIE_MCP_URL` / `GENIE_MCP_TOKEN` are what the URL and
  * token become in every terminal's environment. "Native transport verified at boot" (§6.4) is `verify()`: a
  * real `server/discover` through the server's own door, answered with the one protocol revision it serves —
