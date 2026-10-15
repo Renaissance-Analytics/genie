@@ -8,6 +8,7 @@ import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
+import { ApprovalToasts } from './components/ApprovalToasts.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -182,6 +183,9 @@ const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel
  * A pinned chat sits in the dock's frame, under the view header (§4.4). Unpinned, the flyout positions itself over
  * the right edge and nothing moves, so there is no frame.
  */
+/** No Deck items yet: one array, so the toasts see the same list on every render until the snapshot brings one. */
+const NO_DECK_ITEMS: readonly DeckItem[] = [];
+
 function DockFrame({ pinned, style, children }: { pinned: boolean; style: CSSProperties; children: ReactNode }) {
     return pinned ? <div data-dock-frame="chat" className="z-10 bg-[var(--bg-0)]" style={style}>{children}</div> : <>{children}</>;
 }
@@ -640,6 +644,20 @@ export function Shell({
                         ))}
                     </aside>
                 ) : null}
+                {/*
+                 * THE APPROVAL TOASTS (the owner, 2026-10-15: "I should not have to go to the deck to respond to every single
+                 * thing an agent needs"): an agent's gated Genie workflow, answered from any screen with the Deck's own answer,
+                 * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
+                 * drawn over the Deck itself, which shows the same requests with the same buttons.
+                 */}
+                <ApprovalToasts
+                    items={snapshot.deckItems ?? NO_DECK_ITEMS}
+                    dnd={features.settings.values?.do_not_disturb === true}
+                    hidden={parsed.surface === 'deck'}
+                    onAnswer={onAnswerDeckItem}
+                    onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
+                    right={(pinned !== 'chat' && (chatThread || parsed.chat) ? Math.max(reserve, DOCK_WIDTH) : reserve) + 16}
+                />
                 {chatThread || parsed.chat ? (
                     <DockFrame pinned={pinned === 'chat'} style={dockFrame}>
                     <ChatFlyout
