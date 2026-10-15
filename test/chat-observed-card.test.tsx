@@ -8,7 +8,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * leaving an empty transcript that reads as an agent ignoring you. A declared agent's thread carries no such card.
  */
 const render = (thread: ChatThread) =>
-    renderToStaticMarkup(<ChatFlyout thread={thread} pinned={false} contextTokens={0} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={thread} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
 
 describe('the observed fact card', () => {
     it('names the agent and says what the chat is, above the thread, beside the mail-only chip', () => {

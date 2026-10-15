@@ -7,6 +7,7 @@ import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import { doctorDataTools } from './doctor-data.js';
 import { DoctorRun } from './doctor-run.js';
+import { doctorPrompt } from './doctor-prompt.js';
 import { genieRunningNow } from './genie-running-file.js';
 import { askAndWait, doctorTools, type DoctorOsa } from './doctor-mcp.js';
 import { genieMcpServer } from './mcp-server.js';
@@ -110,7 +111,8 @@ export async function runDoctor(): Promise<void> {
         turns: host.turnsFor(record.id),
         cost: null,
     }));
-    ipcMain.handle('doctor:prompt', (_e, text: unknown) => (typeof text === 'string' && text.trim() !== '' ? host.prompt(record.id, text, 'you') : false));
+    // Your message WITH its files (picked, dropped, pasted images): the same content-block path as Genie's composer.
+    ipcMain.handle('doctor:prompt', (_e, text: unknown, files: unknown) => doctorPrompt(host, record.id, text, files));
     ipcMain.handle('doctor:start', () => host.start(record, osaDir));
     ipcMain.handle('doctor:answer-approval', (_e, optionId: unknown) => (typeof optionId === 'string' ? host.answerApproval(record.id, optionId) : false));
     const win = new BrowserWindow({

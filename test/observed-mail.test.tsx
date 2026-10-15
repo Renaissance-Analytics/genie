@@ -75,7 +75,7 @@ describe('chatSendFor: where the composer sends', () => {
 
 describe('the flyout: your mail, read or not', () => {
     const render = (thread: ChatThread) =>
-        renderToStaticMarkup(<ChatFlyout thread={thread} pinned={false} contextTokens={0} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
+        renderToStaticMarkup(<ChatFlyout thread={thread} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
     const sent = new Date(2026, 9, 12, 14, 5).getTime();
     const read = new Date(2026, 9, 12, 14, 7).getTime();
 

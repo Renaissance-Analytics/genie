@@ -9,6 +9,7 @@ import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
+import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
 import { FidelityDot } from './Dashboard.js';
 
 /**
@@ -72,7 +73,11 @@ function clock(at: number): string {
 export interface ChatFlyoutProps {
     thread: ChatThread | null;
     pinned: boolean;
-    contextTokens: number;
+    /**
+     * The chat agent's REAL context usage and window (`core/composer.ts` `composerMeter`), for the composer's meter.
+     * `null` or absent = not reported, and then there is no meter — never a made-up window.
+     */
+    contextUsage?: ComposerMeter | null | undefined;
     /**
      * The approval to answer HERE, when this is where the composer is.
      *
@@ -119,7 +124,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, pinned, contextTokens, approval, commands, answeringApproval, onAnswerApproval,
+    thread, pinned, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
     onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage, scope,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -405,6 +410,13 @@ export function ChatFlyout({
                  *
                  * `⌘↵` sends and a bare Enter is a newline, which is the component's own
                  * behaviour and the design's requirement.
+                 *
+                 * 5.39.0 (react-fancy#32, asked for by this composer): a quiet footer — the paperclip and the send arrow
+                 * as icons, the shortcut in the send button's tooltip instead of an inline hint — and the meter only near
+                 * the limit, on the agent's REAL context (`contextUsage`), or not at all when that was never reported.
+                 * A long paste (500+ characters) is a pill where it was pasted, expanded in place when sent; a pasted
+                 * image is a pill too, and reaches `onSubmit` as a file — sent as an image block, its marker kept in
+                 * the text and the file named after it (`core/composer.ts`).
                  */}
                 {/* No agent on screen to message: the reason, and nothing to type into — a message here would go to a
                     project the person is not looking at (the owner, beta.26). */}
@@ -414,13 +426,27 @@ export function ChatFlyout({
                         <span>{blocked}</span>
                     </div>
                 ) : (
-                <PromptInput
-                    budgetTokens={contextTokens}
-                    commands={toPromptCmds(commands)}
-                    placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
-                    showHint
-                    onSubmit={(text, picked) => { void readAttachments(picked).then((files) => onSend(text, files)); }}
-                />
+                /*
+                 * `data-chat-composer`: Genie's own handle on the composer, and only on it (never on the notice above). The
+                 * smoke finds the composer by it — with paste pills on, react-fancy 5.39.0's input is a `contenteditable`
+                 * `role="textbox"`, not a `<textarea>`, so a selector for the library's element broke the day it changed.
+                 */
+                <div data-chat-composer="">
+                    <PromptInput
+                        {...(contextUsage
+                            ? { budgetTokens: contextUsage.size, usedTokens: contextUsage.used, meter: 'near-limit' as const }
+                            // The type requires a budget; with the meter hidden it is never drawn, and nothing is made up.
+                            : { budgetTokens: 0, meter: 'hidden' as const })}
+                        attachButton="icon"
+                        sendButton="icon"
+                        pasteThreshold={500}
+                        pasteImages
+                        previewChars={30}
+                        commands={toPromptCmds(commands)}
+                        placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
+                        onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files)); }}
+                    />
+                </div>
                 )}
                 {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
                 {running ? (

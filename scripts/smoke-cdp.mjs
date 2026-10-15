@@ -44,6 +44,16 @@ const shotPath = (name) => `${process.cwd()}/${name}`;
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const DEADLINE_MS = 60_000;
 
+/*
+ * The chat composer, found by Genie's own handle and by what it IS: an editable input inside `[data-chat-composer]`.
+ *
+ * Not `textarea`. With paste pills on, react-fancy 5.39.0's `PromptInput` renders a `contenteditable` `role="textbox"`
+ * and no `<textarea>` at all (react-fancy#32) — a selector for the library's element timed out on a composer that was
+ * on screen (PR #313, checks 21 and 28a). `[data-chat-composer]` is on the composer only: no flyout, or a flyout whose
+ * composer is replaced by the "no agent to message" notice, has no match, so the checks below still fail without it.
+ */
+const CHAT_COMPOSER_INPUT = '[data-chat-composer] :is([contenteditable="true"][role="textbox"], textarea:not([disabled]))';
+
 const failures = [];
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
@@ -380,7 +390,7 @@ if (typeof agentRow === 'string') {
         await cdp.evaluate(`document.querySelector('[data-action="chat"]').click(); true`);
         const composer = await waitFor(
             cdp,
-            `Boolean(document.querySelector('[data-chat]') && document.querySelector('textarea'))`,
+            `Boolean(document.querySelector('[data-chat]')?.querySelector(${JSON.stringify(CHAT_COMPOSER_INPUT)}))`,
             'the chat flyout and its composer',
         );
         check(composer, '21. clicking it opens the flyout with a real composer');
@@ -546,7 +556,7 @@ if (!approvalEnabled) {
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
     await cdp.evaluate(`document.querySelector('[data-action="chat"]')?.click(); true`);
-    const composer = await waitFor(cdp, `Boolean(document.querySelector('textarea'))`, 'the composer');
+    const composer = await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(CHAT_COMPOSER_INPUT)}))`, 'the composer');
     check(composer, '28a. the composer is open on the codex agent');
 
     /*

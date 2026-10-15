@@ -13,7 +13,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
 const thread = (over: Partial<ChatThread>): ChatThread => ({ agentId: 'a1', name: 'atlas', fidelity: 'declared', unread: null, messages: [], ...over });
 const approval: Approval = { question: 'Run php artisan migrate --force?', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] };
 const render = (t: ChatThread, a: Approval | null = null) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} contextTokens={200_000} approval={a} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onPickThread={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} approval={a} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onPickThread={() => {}} />);
 
 describe('the composer names who you are writing to', () => {
     it('Message <name>; with an approval parked, Reply to <name>, or answer with A / D', () => {

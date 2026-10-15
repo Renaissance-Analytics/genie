@@ -11,7 +11,7 @@ const thread: ChatThread = {
     messages: [{ id: 'd1', who: 'you', from: 'you', text: 'Use 4 workers instead.', delivered: false, at: 1_700_000_000_000 }],
 };
 const render = (t: ChatThread) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} contextTokens={200_000} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
 
 describe('an undelivered message', () => {
     it('is kept, marked with the agent’s name, and offers Restart <agent> and send', () => {
