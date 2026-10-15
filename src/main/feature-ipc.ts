@@ -4,7 +4,8 @@ import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm } from '../core/forms.js';
+import { flowNodes } from '../core/flow-form.js';
+import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -215,6 +216,19 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 
 const USER = { kind: 'user' } as const;
 
+/** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */
+function agentProblems(services: ComposedServices, document: unknown): Problem[] {
+    return flowNodes(document).flatMap((n) => {
+        const agent = n.kind === 'genie/agent_prompt' && typeof n.config?.agent === 'string' ? n.config.agent.trim() : '';
+        if (!agent) return [];
+        const found = services.resolveAddress(agent);
+        if (found.kind === 'none') return [{ field: 'agent', message: `Node ${n.id}: no agent answers to ${agent}.` }];
+        if (found.kind === 'human') return [{ field: 'agent', message: `Node ${n.id}: ${agent} is you, not an agent.` }];
+        if (found.kind === 'ambiguous') return [{ field: 'agent', message: `Node ${n.id}: ${agent} names more than one agent (${found.forms.join(', ')}); use the full form.` }];
+        return [];
+    });
+}
+
 /** The Add-a-site form's PHP version choices: the versions Genie manages, newest first (none wired = no choices, the PATH PHP). */
 async function phpChoices(services: ComposedServices, ports: FeaturePorts): Promise<{ phpVersions?: string[] }> {
     const php = ports.toolchain?.php;
@@ -240,6 +254,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'flows.remove':
             if (!(await services.flows.remove(action.flowId))) throw new Error(`no flow ${action.flowId}`);
             break;
+        case 'flows.runNow': {
+            // Started, not awaited: a prompted agent's turn can take minutes. The outcome lands in the flow's run history,
+            // and the store's change pushes the snapshot that shows it.
+            if (!services.flows.get(action.flowId)) throw new Error(`no flow ${action.flowId}`);
+            void services.flowScheduler.runNow(action.flowId).catch((error: unknown) => console.error(`[flows] run now: ${error instanceof Error ? error.message : String(error)}`));
+            break;
+        }
         // (the old no-op cases for flows.add / hosting.addSite were removed: a switch takes the first match)
         case 'hosting.addSite':
             // Named Genie 1's way, `<folder>.<workspace>` — the agents' `sites add` and `detect` get the same defaults.
@@ -298,7 +319,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'flows.create': {
-            const problems = validateFlowForm(action.form);
+            const problems = [...validateFlowForm(action.form), ...agentProblems(services, action.form.document)];
             if (problems.length > 0) {
                 const open = state.flowAdding ?? { defaults: action.form, problems: [] };
                 next.flowAdding = { ...open, problems };

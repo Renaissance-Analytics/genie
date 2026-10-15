@@ -17,6 +17,7 @@ import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
+import { runV1ScheduleImport } from './v1-schedules.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
@@ -35,6 +36,7 @@ import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
 import { FeedbackStore } from './feedback-store.js';
+import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
@@ -87,6 +89,16 @@ export interface ComposeInput {
      * sites and the process book start, because both read the engines' env. Absent = no Genie 1 to take over from.
      */
     readonly v1Services?: { readonly database: string };
+    /**
+     * Genie 1's database, for bringing its SCHEDULED TASKS over as disarmed flows (main/v1-schedules.ts) — at boot until
+     * flows.json records an import that saw Genie 1. Absent = no Genie 1 to import from.
+     */
+    readonly v1Schedules?: { readonly database: string };
+    /**
+     * The live agent sessions a flow's `genie/agent_prompt` prompts (main.ts wires the session host), late-bound like the
+     * roster. Absent = no agent is running, so a scheduled prompt fails with that reason.
+     */
+    readonly agentSessions?: AgentSessionsPort;
     readonly caddyBin: string | null;
     /** What every site's php-cgi worker is given on top of the pty host's env: Genie's CA ini directory (toolchain-ops.ts). */
     readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
@@ -522,6 +534,9 @@ function startExternalFrontDoor(input: {
     };
 }
 
+/** How long a quit waits for in-flight flow runs before it goes on. */
+const FLOW_SETTLE_ON_QUIT_MS = 5_000;
+
 export async function composeServices(input: ComposeInput): Promise<ComposedServices> {
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
@@ -548,15 +563,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
     if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
     const flows = await FlowStore.open(input.userData, now);
-    const flowScheduler = new FlowScheduler({
-        store: flows,
-        now,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        // Executors arrive with the Flows canvas work; until then a fired flow is recorded as run with
-        // nothing executed, which the store's lastRun shows honestly.
-        run: async () => {},
-    });
-    flowScheduler.plan();
+    // Genie 1's scheduled tasks, once (flow-store.ts records it), DISARMED — before the scheduler plans, which arms nothing
+    // they bring. Their agents are the roster the v1 agent import already registered.
+    if (input.v1Schedules) await runV1ScheduleImport(flows, { database: input.v1Schedules.database, workspaces: input.workspaces?.() ?? [], roster: input.roster?.() ?? [] });
 
     const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
@@ -743,6 +752,39 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
+    // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
+    // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
+    // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
+    // fail, so a composition that throws leaves no timer behind.
+    const workspaceRef = (id: string): WorkspaceRef | undefined => workspacesNow().find((w) => w.id === id);
+    const asleep = (id: string): boolean => workspaceRef(id)?.asleep === true;
+    const sessions: AgentSessionsPort = input.agentSessions ?? { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
+    const flowScheduler = new FlowScheduler({
+        store: flows,
+        now,
+        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        run: createFlowRunner({
+            now,
+            asleep,
+            ports: (flow) => ({
+                promptAgent: agentPrompter({
+                    sessions,
+                    resolve: (text) => resolveOnRoster(text, roster()),
+                    agent: (id) => agents().get(id) ?? null,
+                    asleep,
+                    by: `flow "${flow.name}"`,
+                }),
+                // One supervised process per flow: every run's output lands in the same kept log, after the runs before it.
+                runCommand: supervisedCommand(
+                    { supervisor, workspacePath: (id) => workspaceRef(id)?.path ?? null, envFor: (id) => engines.envFor(id) },
+                    { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
+                ),
+                // The person armed it (an agent never can), so what it writes is theirs.
+                addKnowledge: async (entry) => ({ id: knowledge.add({ ...entry, source: 'user' }).id }),
+            }),
+        }),
+    });
+    flowScheduler.plan();
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
     const stopLiveness = supervisor.watchLiveness();
@@ -895,7 +937,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 frontDoorCtl.close();
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
-                await flowScheduler.settled();
+                // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
+                // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.
+                let quitWait: ReturnType<typeof setTimeout> | undefined;
+                await Promise.race([flowScheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
+                clearTimeout(quitWait);
                 await remoteDevices.flushed();
                 await feedback.flushed();
                 await portAllocator?.settled();

@@ -135,6 +135,16 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
     );
 }
 
+const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back' } as const;
+const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber' } as const;
+
+/**
+ * FLOWS (§6.6). Each row: armed or not, the workspace, the last run's outcome and when; Run now (the
+ * person's one run, armed or not), Arm / Disarm, Delete. Under a row that has run, "Runs" opens the
+ * history — the last runs, newest first, each with its outcome (ran / failed / held back), whether it
+ * was the schedule or a Run now, and the reason a run failed or was held back. A native `<details>`,
+ * as the processes' log.
+ */
 export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
     const flows = data.flows;
     return (
@@ -159,21 +169,53 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                 <Empty>No flows yet. Add your first flow — a schedule, a trigger, the work it runs.</Empty>
             ) : (
                 <ul className="divide-y divide-[var(--border-1)]">
-                    {flows.flows.map((f) => (
-                        <li key={f.id} data-flow={f.id} className="flex items-center gap-3 px-5 py-2">
-                            <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
-                            <span className="font-medium">{f.name}</span>
-                            <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
-                            {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
-                            <span className="ml-auto flex gap-2">
-                                {f.armed ? (
-                                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</button>
+                    {flows.flows.map((f) => {
+                        const runs = f.runs ?? [];
+                        const last = runs.at(-1);
+                        return (
+                            <li key={f.id} data-flow={f.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+                                <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
+                                <span className="font-medium">{f.name}</span>
+                                <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
+                                {f.importedFrom ? <Badge variant="soft" size="sm">from Genie 1</Badge> : null}
+                                {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
+                                {last ? (
+                                    <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
+                                        <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[last.outcome]}</Badge>
+                                        {new Date(last.at).toLocaleString()}
+                                    </span>
                                 ) : (
-                                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.arm', flowId: f.id })}>Arm</button>
+                                    <span className="text-xs text-[var(--fg-4)]">not run yet</span>
                                 )}
-                            </span>
-                        </li>
-                    ))}
+                                <span className="ml-auto flex gap-3">
+                                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</button>
+                                    {f.armed ? (
+                                        <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</button>
+                                    ) : (
+                                        <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.arm', flowId: f.id })}>Arm</button>
+                                    )}
+                                    <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAction({ kind: 'flows.remove', flowId: f.id })}>Delete</button>
+                                </span>
+                                {runs.length > 0 ? (
+                                    <details data-flow-runs={f.id} className="basis-full">
+                                        <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
+                                            Runs · last {runs.length}
+                                        </summary>
+                                        <ol className="mt-1 flex flex-col gap-1">
+                                            {[...runs].reverse().map((r, i) => (
+                                                <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
+                                                    <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
+                                                    <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
+                                                    <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : 'on schedule'}</span>
+                                                    {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
+                                                </li>
+                                            ))}
+                                        </ol>
+                                    </details>
+                                ) : null}
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
         </div>

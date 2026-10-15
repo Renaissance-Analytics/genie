@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { AgentRecord } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction } from '../src/main/feature-ipc.js';
@@ -68,7 +69,7 @@ describe('actions', () => {
     });
 
     it('flows.arm / disarm / remove act as the USER, so arming succeeds; the snapshot reflects it', async () => {
-        const doc = { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '*/5 * * * *', timezone: 'UTC' } }], edges: [] };
+        const doc = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '*/5 * * * *', timezone: 'UTC' } }], edges: [] } };
         const f = await services.flows.create({ workspaceId: 'tynn', name: 'tick', document: doc, by: { kind: 'agent', id: 'agent_a', name: 'atlas' } });
         expect(f.armed).toBe(false);
         let snap = await handleFeatureAction(services, { kind: 'flows.arm', flowId: f.id });
@@ -151,14 +152,58 @@ describe('submitting the forms', () => {
     });
 
     it('flows.create creates an UNARMED flow from a valid form as the user; an invalid form rejects naming the node', async () => {
-        const form = { workspaceId: 'tynn', name: 'nightly', document: { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 2 * * *', timezone: 'UTC' } }], edges: [] }, armed: true };
+        const form = { workspaceId: 'tynn', name: 'nightly', document: { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 2 * * *', timezone: 'UTC' } }], edges: [] } }, armed: true };
         const snap = await handleFeatureAction(services, { kind: 'flows.create', form });
         expect(snap.flows!.flows.map((f) => [f.name, f.armed, f.createdBy.kind])).toEqual([['nightly', true, 'user']]);
         // a refused flow submit keeps the form open naming the node; nothing is created.
-        const refused = await handleFeatureAction(services, { kind: 'flows.create', form: { ...form, document: { ...form.document, nodes: [{ ...form.document.nodes[0]!, config: { cron: 'nope' } }] } } });
+        const refused = await handleFeatureAction(services, { kind: 'flows.create', form: { ...form, document: { ...form.document, graph: { ...form.document.graph, nodes: [{ ...form.document.graph.nodes[0]!, config: { cron: 'nope' } }] } } } });
         expect(refused.flows!.adding!.problems[0]!.message).toMatch(/Node t/);
         expect(refused.flows!.flows).toHaveLength(1);
         // and a successful submit closes the form.
         expect(snap.flows!.adding).toBeNull();
+    });
+
+    it('flows.create refuses, beside the agent field, an agent nobody on the roster answers to — nothing is created; one on the roster is accepted (control)', async () => {
+        const refused = await handleFeatureAction(services, { kind: 'flows.create', form: flowForm('standup', { kind: 'genie/agent_prompt', config: { agent: 'claude:nobody', prompt: 'hello' } }) });
+        expect(refused.flows!.adding!.problems).toEqual([{ field: 'agent', message: 'Node s: no agent answers to claude:nobody.' }]);
+        expect(refused.flows!.flows).toHaveLength(0);
+
+        onRoster('agent_atlas', 'atlas', 'tynn');
+        const made = await handleFeatureAction(services, { kind: 'flows.create', form: flowForm('standup', { kind: 'genie/agent_prompt', config: { agent: 'claude:atlas', prompt: 'post the standup' } }) });
+        expect(made.flows!.flows.map((f) => f.name)).toEqual(['standup']);
+    });
+});
+
+/** An Add-a-flow submit: a schedule feeding one step, as the form builds it (core/flow-form.ts). */
+function flowForm(name: string, step: Record<string, unknown>) {
+    return {
+        workspaceId: 'tynn',
+        name,
+        armed: false,
+        document: { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 's', position: { x: 240, y: 0 }, ...step }], edges: [{ id: 'e1', source: 't', target: 's' }] } },
+    };
+}
+
+describe('Run now (hosting ship line P4)', () => {
+    it('flows.runNow runs a DISARMED flow’s step through the composed runner and its outcome lands in the history; it stays disarmed', async () => {
+        const document = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 'k', kind: 'genie/knowledge_add', position: { x: 240, y: 0 }, config: { workspace: 'tynn', title: 'Flow ran' } }], edges: [{ id: 'e1', source: 't', target: 'k' }] } };
+        const f = await services.flows.create({ workspaceId: 'tynn', name: 'note it', document, by: { kind: 'user' } });
+        await handleFeatureAction(services, { kind: 'flows.runNow', flowId: f.id });
+        await services.flowScheduler.settled();
+        const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
+        const row = snap.flows!.flows.find((x) => x.id === f.id)!;
+        expect(row.runs.map((r) => [r.trigger, r.outcome])).toEqual([['manual', 'ran']]);
+        expect(row.armed).toBe(false);
+        // The step really executed: the node is in the graph, in the flow's workspace.
+        expect(snap.knowledge.hits!.map((h) => h.title)).toEqual(['Flow ran']);
+    });
+
+    it('a failing step is recorded FAILED with the reason; an unknown flow is refused', async () => {
+        const document = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 'r', kind: 'genie/terminal_run', position: { x: 240, y: 0 }, config: { workspace: 'ws-not-registered', command: 'npm test' } }], edges: [{ id: 'e1', source: 't', target: 'r' }] } };
+        const f = await services.flows.create({ workspaceId: 'tynn', name: 'elsewhere', document, by: { kind: 'user' } });
+        await handleFeatureAction(services, { kind: 'flows.runNow', flowId: f.id });
+        await services.flowScheduler.settled();
+        expect(services.flows.get(f.id)!.runs).toEqual([expect.objectContaining({ trigger: 'manual', outcome: 'failed', reason: 'workspace ws-not-registered is not registered here; "npm test" was not run' })]);
+        await expect(handleFeatureAction(services, { kind: 'flows.runNow', flowId: 'flow_missing' })).rejects.toThrow(/no flow flow_missing/);
     });
 });

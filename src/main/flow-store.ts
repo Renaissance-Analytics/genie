@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { importWorkflow } from '@particle-academy/fancy-flow/schema';
-import { parseCron } from '../core/cron.js';
+import { parseCron, timeZoneProblem } from '../core/cron.js';
+import { canonicalFlowDocument, flowNodes } from '../core/flow-form.js';
+import type { V1SchedulePlan } from '../core/v1-schedules.js';
+import { importFlowDocument } from './flow-kinds.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -14,8 +16,19 @@ import { readJson, writeJsonAtomic } from './store.js';
  * NAMED ON THE CANVAS (`refusals`, with who, what and why), so the flow shows what was attempted
  * rather than silently staying off. Disarming is open to both: it only ever makes less happen.
  *
- * Documents are fancy-flow `WorkflowSchema` JSON, validated by the engine's own `importWorkflow`
- * — a document without `version: 1` is refused by every runtime, so it is refused here too.
+ * Documents are fancy-flow `WorkflowSchema` JSON — `{ $schema, version: 1, graph: { nodes, edges } }` — validated by
+ * the engine's own `importWorkflow` with Genie's step kinds registered (flow-kinds.ts). A document without
+ * `version: 1`, with a kind nobody registered, or with a step missing the config it needs is REFUSED with the
+ * engine's words (every engine issue refuses — flow-kinds.ts says why its warnings do too). A document in the old
+ * top-level shape (`nodes`/`edges` beside `version`) is migrated to the canonical one on the way in, and a
+ * flows.json written by an earlier beta is migrated when it is opened (and written back, so the file holds one shape).
+ *
+ * ## What each run did (hosting ship line P4)
+ *
+ * Every run — scheduled or the person's Run now — is recorded on its flow: when, which, and the
+ * OUTCOME: `ran`, `failed` with the reason, or `held` back with why (the target agent was busy, the
+ * workspace hibernated, the previous run still going). The history is bounded (`RUN_HISTORY_LIMIT`,
+ * newest last) so a flow that fires every minute cannot grow the file without end.
  */
 
 export type Actor = { readonly kind: 'agent'; readonly id: string; readonly name: string } | { readonly kind: 'user' };
@@ -34,11 +47,23 @@ export interface Schedule {
     readonly timezone: string | undefined;
 }
 
-export interface LastRun {
+export type RunOutcome = 'ran' | 'failed' | 'held';
+
+/** One run of a flow, as it ended. */
+export interface FlowRun {
+    /** When it started (ISO). */
     readonly at: string;
-    readonly ok: boolean;
-    readonly error?: string;
+    /** When it ended (ISO). A held-back run ends where it starts. */
+    readonly endedAt: string;
+    /** `schedule` = its timer fired; `manual` = the person's Run now. */
+    readonly trigger: 'schedule' | 'manual';
+    readonly outcome: RunOutcome;
+    /** Why it failed or was held back, in words. Absent for a run that ran. */
+    readonly reason?: string;
 }
+
+/** How many runs each flow keeps; the oldest goes first. */
+export const RUN_HISTORY_LIMIT = 20;
 
 export interface FlowRecord {
     readonly id: string;
@@ -50,17 +75,44 @@ export interface FlowRecord {
     readonly createdAt: string;
     readonly updatedAt: string;
     readonly refusals: readonly Refusal[];
-    readonly lastRun?: LastRun;
+    /** The last `RUN_HISTORY_LIMIT` runs, oldest first. */
+    readonly runs: readonly FlowRun[];
+    /** Set on a flow brought over from Genie 1 (core/v1-schedules.ts): which scheduled task it was. */
+    readonly importedFrom?: { readonly v1SpecId: string };
+}
+
+/** What the Genie 1 import did, kept IN flows.json — the store it filled — so "once" and the flows cannot disagree. */
+export interface V1ScheduleImportRecord {
+    readonly at: string;
+    /** false = the boot could not see v1's database: provisional, a later boot that can see it still imports. */
+    readonly sawV1: boolean;
+    readonly imported?: number;
+    /** v1 tasks whose flow was already here — left exactly as they were. */
+    readonly alreadyHere?: number;
+    readonly notes?: readonly string[];
 }
 
 interface FlowsFile {
     flows: FlowRecord[];
+    v1Import?: V1ScheduleImportRecord;
 }
 
 export type ArmResult = { ok: true; flow: FlowRecord } | { ok: false; reason: string };
 
 function actorName(by: Actor): string {
     return by.kind === 'agent' ? by.name : 'user';
+}
+
+/**
+ * A record as read from disk: `runs` always a list (an older file had a single `lastRun`, which is not carried — it
+ * never recorded an executed step), and its document in the canonical shape. The document is NOT re-validated here:
+ * a flow an earlier beta accepted stays the person's, and the runner refuses to run it, in the engine's words, if
+ * the engine refuses it.
+ */
+function normalised(raw: FlowRecord & { lastRun?: unknown }): FlowRecord {
+    const rest: FlowRecord & { lastRun?: unknown } = { ...raw, document: canonicalFlowDocument(raw.document) as Record<string, unknown>, runs: Array.isArray(raw.runs) ? raw.runs : [] };
+    delete rest.lastRun;
+    return rest;
 }
 
 export class FlowStore {
@@ -77,7 +129,14 @@ export class FlowStore {
 
     static async open(userData: string, now: () => number = Date.now): Promise<FlowStore> {
         const file = join(runtimeDir(userData), 'flows.json');
-        return new FlowStore(file, await readJson<FlowsFile>(file, { flows: [] }), now);
+        const data = await readJson<FlowsFile>(file, { flows: [] });
+        const raw = Array.isArray(data.flows) ? data.flows : [];
+        const flows = raw.map((f) => normalised(f));
+        const v1Import = data.v1Import !== null && typeof data.v1Import === 'object' ? data.v1Import : undefined;
+        const store = new FlowStore(file, { flows, ...(v1Import ? { v1Import } : {}) }, now);
+        // A document that moved into the canonical shape is written back now, so the file never holds two shapes.
+        if (flows.some((f, i) => f.document !== raw[i]!.document)) await store.#flush();
+        return store;
     }
 
     /** Fires after every change the scheduler should re-plan on. */
@@ -89,7 +148,6 @@ export class FlowStore {
     async create(input: { workspaceId: string; name: string; document: unknown; by: Actor; armed?: boolean }): Promise<FlowRecord> {
         const document = validated(input.document);
         const at = this.#iso();
-        const refusals: Refusal[] = [];
         // An agent's `armed: true` is not an error — it is simply not theirs to set.
         const armed = input.by.kind === 'user' && input.armed === true;
         const flow: FlowRecord = {
@@ -101,7 +159,8 @@ export class FlowStore {
             createdBy: input.by,
             createdAt: at,
             updatedAt: at,
-            refusals: [...refusals, ...scheduleRefusals(document, input.by, at)],
+            refusals: scheduleRefusals(document, input.by, at),
+            runs: [],
         };
         this.#data.flows.push(flow);
         await this.#flush();
@@ -155,10 +214,19 @@ export class FlowStore {
         return next;
     }
 
-    async recordRun(id: string, run: { ok: boolean; error?: string }): Promise<void> {
+    /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number }): Promise<FlowRun | null> {
         const flow = this.get(id);
-        if (!flow) return;
-        await this.#replace({ ...flow, lastRun: { at: this.#iso(), ok: run.ok, ...(run.error === undefined ? {} : { error: run.error }) } });
+        if (!flow) return null;
+        const entry: FlowRun = {
+            at: new Date(run.startedAt).toISOString(),
+            endedAt: this.#iso(),
+            trigger: run.trigger,
+            outcome: run.outcome,
+            ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
+        };
+        await this.#replace({ ...flow, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });
+        return entry;
     }
 
     async remove(id: string): Promise<boolean> {
@@ -167,6 +235,63 @@ export class FlowStore {
         if (this.#data.flows.length === before) return false;
         await this.#flush();
         return true;
+    }
+
+    /** What the Genie 1 import did, or undefined when it has not been attempted. */
+    v1Import(): V1ScheduleImportRecord | undefined {
+        return this.#data.v1Import;
+    }
+
+    /**
+     * GENIE 1's SCHEDULED TASKS, ONCE (core/v1-schedules.ts plans them). Every flow comes over DISARMED: the
+     * person arms what they still want. "Once" is recorded in this file in the same write as the flows, so an
+     * import that saw v1 is never repeated — a flow the person removed or changed stays as they left it. A
+     * plan of `null` (v1 not visible) is recorded provisionally and a later boot that can see v1 imports. A
+     * flow whose id is already here is left alone and counted.
+     */
+    async importFromV1(plan: V1SchedulePlan | null): Promise<{ alreadyDone: boolean; record: V1ScheduleImportRecord }> {
+        const prior = this.#data.v1Import;
+        if (prior?.sawV1 === true) return { alreadyDone: true, record: prior };
+        const at = this.#iso();
+        if (plan === null) {
+            if (prior) return { alreadyDone: true, record: prior };
+            const record: V1ScheduleImportRecord = { at, sawV1: false };
+            this.#data = { ...this.#data, v1Import: record };
+            await this.#flush();
+            return { alreadyDone: false, record };
+        }
+        const have = new Set(this.#data.flows.map((f) => f.id));
+        const fresh: FlowRecord[] = [];
+        const notes = [...plan.notes];
+        for (const p of plan.flows) {
+            if (have.has(p.id)) continue;
+            // A task the engine refuses is NOTED and left behind. It does not stop the others — nor, by failing the
+            // whole import, make every later boot retry it and fail again.
+            let document: Record<string, unknown>;
+            try {
+                document = validated(p.document);
+            } catch (error) {
+                notes.push(`"${p.name}" (v1 task ${p.v1SpecId}): ${error instanceof Error ? error.message : String(error)}; not imported`);
+                continue;
+            }
+            fresh.push({
+                id: p.id,
+                workspaceId: p.workspaceId,
+                name: p.name,
+                document,
+                armed: false,
+                createdBy: { kind: 'user' },
+                createdAt: at,
+                updatedAt: at,
+                refusals: [],
+                runs: [],
+                importedFrom: { v1SpecId: p.v1SpecId },
+            });
+        }
+        const record: V1ScheduleImportRecord = { at, sawV1: true, imported: fresh.length, alreadyHere: plan.flows.filter((p) => have.has(p.id)).length, notes };
+        this.#data = { ...this.#data, flows: [...this.#data.flows, ...fresh], v1Import: record };
+        await this.#flush();
+        return { alreadyDone: false, record };
     }
 
     #require(id: string): FlowRecord {
@@ -190,26 +315,25 @@ export class FlowStore {
     }
 }
 
-/** The engine's own validation. Errors are refused with the engine's words. */
+/**
+ * The engine's own validation (flow-kinds.ts): the document in the canonical shape, or refused with the engine's
+ * words — every issue it raised, each naming its node or edge.
+ */
 function validated(document: unknown): Record<string, unknown> {
-    const result = importWorkflow(document);
-    if (!result.ok) {
-        const errors = result.issues.filter((i) => i.level === 'error').map((i) => i.message);
-        throw new Error(`the flow document was refused by the engine: ${errors.join('; ') || 'not a usable workflow (check version: 1)'}`);
-    }
-    return document as Record<string, unknown>;
+    const result = importFlowDocument(document);
+    if (!result.ok) throw new Error(`the flow document was refused by the engine: ${result.problems.join('; ')}`);
+    return result.document as unknown as Record<string, unknown>;
 }
 
-function schedulesIn(document: Record<string, unknown>): Schedule[] {
-    const nodes = Array.isArray(document.nodes) ? (document.nodes as Array<Record<string, unknown>>) : [];
-    return nodes
+export function schedulesIn(document: Record<string, unknown>): Schedule[] {
+    return flowNodes(document)
         .filter((n) => typeof n.kind === 'string' && /(^|\/)schedule_trigger$/.test(n.kind))
         .map((n) => {
             const config = (n.config ?? {}) as Record<string, unknown>;
             return {
                 nodeId: String(n.id),
                 cron: typeof config.cron === 'string' ? config.cron : '',
-                timezone: typeof config.timezone === 'string' ? config.timezone : undefined,
+                timezone: typeof config.timezone === 'string' && config.timezone.trim() !== '' ? config.timezone : undefined,
             };
         });
 }
@@ -220,9 +344,8 @@ function scheduleRefusals(document: Record<string, unknown>, by: Actor, at: stri
         if (parseCron(s.cron) === null) {
             return [{ at, by: actorName(by), action: 'schedule' as const, reason: `node ${s.nodeId}: "${s.cron}" is not a cron expression Genie can evaluate (five fields: minute hour day month weekday)` }];
         }
-        if (s.timezone !== undefined && s.timezone !== 'UTC' && s.timezone !== 'Etc/UTC') {
-            return [{ at, by: actorName(by), action: 'schedule' as const, reason: `node ${s.nodeId}: timezone ${s.timezone} is not supported yet; schedules are evaluated in UTC` }];
-        }
+        const zone = timeZoneProblem(s.timezone);
+        if (zone !== null) return [{ at, by: actorName(by), action: 'schedule' as const, reason: `node ${s.nodeId}: ${zone}` }];
         return [];
     });
 }

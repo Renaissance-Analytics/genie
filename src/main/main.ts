@@ -1039,6 +1039,16 @@ async function boot(): Promise<void> {
         // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
         // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
         v1Services: { database: v1DatabaseFile() },
+        // Genie 1's scheduled tasks, read-only, brought over ONCE as DISARMED flows (main/v1-schedules.ts); the person arms them.
+        v1Schedules: { database: v1DatabaseFile() },
+        // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
+        // is held back, never queued inside its turn.
+        agentSessions: {
+            session: (id) => host?.probe(id as AgentId) ?? null,
+            rows: (id) => host?.rowsFor(id as AgentId) ?? [],
+            prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
+            subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
+        },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
         caddyBin: caddyCopy?.path ?? null,
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.

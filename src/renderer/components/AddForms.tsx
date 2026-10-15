@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Input } from '@particle-academy/react-fancy';
+import { flowFields, flowFormFromFields, type FlowStep } from '../../core/flow-form.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
@@ -119,19 +120,22 @@ export interface AddFlowFormProps {
     readonly onCancel: () => void;
 }
 
-function cronOf(form: FlowForm): string {
-    const doc = form.document as { nodes?: Array<{ kind: string; config?: Record<string, unknown> }> };
-    const trigger = doc.nodes?.find((n) => /(^|\/)schedule_trigger$/.test(n.kind));
-    return typeof trigger?.config?.cron === 'string' ? trigger.config.cron : '';
-}
+const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = [
+    { value: 'command', label: 'Run a command in the workspace' },
+    { value: 'agent', label: 'Prompt an agent' },
+    { value: 'log', label: 'Only note that it fired' },
+];
 
-function withCron(form: FlowForm, cron: string): FlowForm {
-    const doc = structuredClone(form.document) as { nodes?: Array<{ kind: string; config?: Record<string, unknown> }> };
-    for (const n of doc.nodes ?? []) if (/(^|\/)schedule_trigger$/.test(n.kind)) n.config = { ...(n.config ?? {}), cron };
-    return { ...form, document: doc };
-}
-
+/**
+ * "Add a flow": a schedule and what it RUNS — a command in the workspace (its output kept like a background
+ * process's log), a prompt to an agent (held back while the agent is mid-turn), or only a note that it fired.
+ * Only the chosen step's fields are drawn; the document is built from the fields on submit (core/flow-form.ts).
+ */
 export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowFormProps) {
+    const initial = flowFields(defaults.document);
+    const [step, setStep] = useState<FlowStep['kind']>(initial.step.kind);
+    const command = initial.step.kind === 'command' ? initial.step : { command: '', folder: '' };
+    const agent = initial.step.kind === 'agent' ? initial.step : { agent: '', prompt: '' };
     return (
         <form
             data-form="add-flow"
@@ -139,7 +143,9 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowF
             onSubmit={(e) => {
                 e.preventDefault();
                 const data = new FormData(e.currentTarget);
-                onSubmit({ ...withCron(defaults, String(data.get('cron') ?? '')), name: String(data.get('name') ?? ''), armed: data.get('armed') === 'on' });
+                const fields: Record<string, string> = {};
+                data.forEach((value, key) => { if (typeof value === 'string') fields[key] = value; });
+                onSubmit(flowFormFromFields(defaults, fields));
             }}
         >
             <p className="text-sm text-[var(--fg-3)]">A schedule and the work it runs. You can edit the full graph on the canvas afterwards.</p>
@@ -147,11 +153,44 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowF
                 <Input name="name" defaultValue={defaults.name} />
                 <ProblemLine field="name" problems={problems} />
             </Row>
-            <Row label="Schedule (cron, five fields, UTC)">
-                <Input name="cron" defaultValue={cronOf(defaults)} placeholder="0 * * * *" />
+            <Row label="Schedule (cron, five fields, this machine's local time)">
+                <Input name="cron" defaultValue={initial.cron} placeholder="0 * * * *" />
                 <ProblemLine field="cron" problems={problems} />
                 <ProblemLine field="timezone" problems={problems} />
             </Row>
+            <fieldset data-flow-step={step} className="flex flex-col gap-2">
+                <legend className="text-sm font-medium">What it runs</legend>
+                {STEP_CHOICES.map((c) => (
+                    <label key={c.value} className="flex items-center gap-2 text-sm">
+                        <input type="radio" name="step" value={c.value} checked={step === c.value} onChange={() => setStep(c.value)} />
+                        {c.label}
+                    </label>
+                ))}
+            </fieldset>
+            {step === 'command' ? (
+                <>
+                    <Row label="Command">
+                        <Input name="command" defaultValue={command.command} placeholder="php artisan schedule:run" />
+                        <ProblemLine field="command" problems={problems} />
+                    </Row>
+                    <Row label="Folder in the workspace (optional)">
+                        <Input name="folder" defaultValue={command.folder} placeholder="repos/app" />
+                        <ProblemLine field="folder" problems={problems} />
+                    </Row>
+                </>
+            ) : null}
+            {step === 'agent' ? (
+                <>
+                    <Row label="Agent">
+                        <Input name="agent" defaultValue={agent.agent} placeholder="claude:atlas" />
+                        <ProblemLine field="agent" problems={problems} />
+                    </Row>
+                    <Row label="Prompt">
+                        <textarea name="prompt" defaultValue={agent.prompt} rows={3} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm" />
+                        <ProblemLine field="prompt" problems={problems} />
+                    </Row>
+                </>
+            ) : null}
             <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="armed" defaultChecked={defaults.armed} />
                 Arm now — the schedule starts firing. Off by default; an agent can create a flow but only you can arm it.

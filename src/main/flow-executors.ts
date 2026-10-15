@@ -2,7 +2,8 @@ import type { ExecutorRegistry, NodeExecutor } from '@particle-academy/fancy-flo
 import type { MemoryClass, Scope } from './knowledge-store.js';
 
 /**
- * FLOW EXECUTORS — Genie's own node kinds for fancy-flow.
+ * FLOW EXECUTORS — what Genie's own node kinds DO in fancy-flow. What they ARE (name, ports, required config) is
+ * registered with the engine in flow-kinds.ts, which the store validates against and the runner imports through.
  *
  * Every effect sits behind an injected port (`FlowPorts`), so a flow runs in a test with no agent,
  * no pty and no store, and in production the ports are the session host, the supervisor and the
@@ -23,64 +24,6 @@ export interface FlowPorts {
     runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;
     addKnowledge(input: { title: string; body: string; class: MemoryClass; scope: Scope; tags: string[] }): Promise<{ id: string }>;
 }
-
-export interface GenieNodeKind {
-    readonly name: string;
-    readonly category: 'action';
-    readonly label: string;
-    readonly description: string;
-    readonly icon: string;
-    readonly inputs: ReadonlyArray<{ id: string; label?: string }>;
-    readonly outputs: ReadonlyArray<{ id: string; label?: string }>;
-    readonly configSchema: ReadonlyArray<Record<string, unknown>>;
-}
-
-export const GENIE_NODE_KINDS: readonly GenieNodeKind[] = [
-    {
-        name: 'genie/agent_prompt',
-        category: 'action',
-        label: 'Prompt an agent',
-        description: 'Send a prompt to a Genie agent and wait for its reply.',
-        icon: '🧞',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'reply' }],
-        configSchema: [
-            { type: 'text', key: 'agent', label: 'Agent', placeholder: 'claude:atlas', required: true, description: 'An inbox address: {provider}:{name} or {workspace}:{provider}:{name}.' },
-            { type: 'textarea', key: 'prompt', label: 'Prompt', required: true, description: 'Templates like {{in.text}} resolve into the node’s inputs.' },
-        ],
-    },
-    {
-        name: 'genie/terminal_run',
-        category: 'action',
-        label: 'Run a command',
-        description: 'Run a command in a workspace terminal and read its exit code and output.',
-        icon: '⌨',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'result' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'command', label: 'Command', required: true },
-            { type: 'text', key: 'cwd', label: 'Working directory', description: 'Relative to the workspace; empty = the workspace root.' },
-            { type: 'toggle', key: 'allowFailure', label: 'Continue on a non-zero exit', default: false },
-        ],
-    },
-    {
-        name: 'genie/knowledge_add',
-        category: 'action',
-        label: 'Add knowledge',
-        description: 'Write a node into Genie’s knowledge graph.',
-        icon: '🧠',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'node' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'title', label: 'Title', required: true },
-            { type: 'textarea', key: 'body', label: 'Body' },
-            { type: 'select', key: 'class', label: 'Class', options: [{ value: 'knowledge', label: 'knowledge' }, { value: 'episodic', label: 'episodic' }, { value: 'procedural', label: 'procedural' }, { value: 'profile', label: 'profile' }], default: 'knowledge' },
-            { type: 'text', key: 'tags', label: 'Tags', description: 'Comma-separated.' },
-        ],
-    },
-];
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
 export function renderTemplate(template: string, inputs: Record<string, unknown>): string {

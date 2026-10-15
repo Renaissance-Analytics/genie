@@ -81,26 +81,29 @@ describe('Add a site', () => {
 });
 
 describe('Add a flow', () => {
-    it('defaults to a version-1 document with one schedule trigger (every hour, UTC) feeding one log node, named for the workspace', () => {
+    it('defaults to a version-1 document with one schedule trigger (every hour, this machine’s LOCAL time — no timezone) feeding one log node, named for the workspace', () => {
         const d = flowFormDefaults({ workspaceId: 'tynn' });
         expect(d.name).toBe('tynn hourly');
         expect(d.document).toMatchObject({ version: 1 });
-        const doc = d.document as { nodes: Array<{ id: string; kind: string; config: Record<string, unknown> }>; edges: Array<{ source: string; target: string }> };
+        const doc = (d.document as { graph: { nodes: Array<{ id: string; kind: string; config: Record<string, unknown> }>; edges: Array<{ source: string; target: string }> } }).graph;
         expect(doc.nodes.map((n) => n.kind)).toEqual(['schedule_trigger', 'log']);
-        expect(doc.nodes[0]!.config).toEqual({ cron: '0 * * * *', timezone: 'UTC' });
+        expect(doc.nodes[0]!.config).toEqual({ cron: '0 * * * *' });
         expect(doc.edges).toEqual([{ id: 'e1', source: doc.nodes[0]!.id, target: doc.nodes[1]!.id }]);
         expect(d.armed).toBe(false);
     });
 
-    it('validation: a name is required; a cron Genie cannot evaluate is named with the node; a non-UTC timezone is named', () => {
+    it('validation: a name is required; a cron Genie cannot evaluate is named with the node; a timezone Genie does not know is named (a real IANA zone is fine)', () => {
         const d = flowFormDefaults({ workspaceId: 'tynn' });
         expect(validateFlowForm({ ...d, name: '' })).toEqual([{ field: 'name', message: 'A flow needs a name.' }]);
-        const bad = structuredClone(d.document) as { nodes: Array<{ config: Record<string, unknown> }> };
-        bad.nodes[0]!.config = { cron: 'every day', timezone: 'Europe/Amsterdam' };
+        const bad = structuredClone(d.document) as { graph: { nodes: Array<{ config: Record<string, unknown> }> } };
+        bad.graph.nodes[0]!.config = { cron: 'every day', timezone: 'Mars/Olympus_Mons' };
         expect(validateFlowForm({ ...d, document: bad })).toEqual([
             { field: 'cron', message: 'Node t: "every day" is not a cron expression Genie can evaluate (five fields: minute hour day month weekday).' },
-            { field: 'timezone', message: 'Node t: timezone Europe/Amsterdam is not supported yet; schedules are evaluated in UTC.' },
+            { field: 'timezone', message: "Node t: timezone Mars/Olympus_Mons is not one Genie knows — use an IANA name like Europe/Amsterdam, or leave it empty for this machine's local time." },
         ]);
+        const amsterdam = structuredClone(d.document) as { graph: { nodes: Array<{ config: Record<string, unknown> }> } };
+        amsterdam.graph.nodes[0]!.config = { cron: '0 9 * * *', timezone: 'Europe/Amsterdam' };
+        expect(validateFlowForm({ ...d, document: amsterdam })).toEqual([]);
     });
 
     it('the default form validates clean — the positive control', () => {
