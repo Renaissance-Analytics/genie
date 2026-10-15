@@ -37,6 +37,8 @@ const ports: FeaturePorts = {
         probe: async () => { probes += 1; return statuses(installed); },
         update: async (tool) => { updates.push(tool); installed = '22.24.0'; return { kind: 'repaired', from: '22.23.2', to: '22.24.0' }; },
         now: () => clock,
+        // The update guard is mandatory now (feature-ipc-toolchain.test.ts): nothing is running here.
+        activity: async () => ({ sessions: [], processes: [], engines: [] }),
     },
 };
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });

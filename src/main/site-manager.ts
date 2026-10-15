@@ -81,6 +81,12 @@ export interface SiteManagerDeps {
     readonly caddyBin: string | null;
     readonly configDir: string;
     readonly writeConfig: (path: string, content: string) => void;
+    /**
+     * What every php-cgi worker is given on top of the pty host's environment — Genie's CA ini directory
+     * (`PHP_INI_SCAN_DIR`) once Check and repair has written one (toolchain-ops.ts). Read at each start, so a repair
+     * reaches the next site started without a relaunch. The site's own env wins over it.
+     */
+    readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
 }
 
 interface SiteRecord {
@@ -199,7 +205,9 @@ export class SiteManager {
                 spec = { mode: 'php', root: input.serve.root, fcgiPort };
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
                 const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
-                proc(`${id}-fcgi`, `${host} php worker`, `php-cgi -b 127.0.0.1:${fcgiPort}`, baseEnv);
+                const phpEnv = this.#deps.phpWorkerEnv?.() ?? {};
+                const fcgiEnv = Object.keys(phpEnv).length > 0 ? { ...phpEnv, ...(baseEnv ?? {}) } : baseEnv;
+                proc(`${id}-fcgi`, `${host} php worker`, `php-cgi -b 127.0.0.1:${fcgiPort}`, fcgiEnv);
                 processIds.push(`${id}-fcgi`);
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {

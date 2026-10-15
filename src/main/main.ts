@@ -27,7 +27,7 @@ import { restartWithHandoff } from './restart-with-handoff.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
-import { featureSnapshot, handleFeatureAction, type FeatureState } from './feature-ipc.js';
+import { featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { QuestionWindow } from './question-window.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
@@ -43,8 +43,9 @@ import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-resid
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
-import { runUpdate } from './toolchain-prober.js';
-import { HOST_TOOLS } from '../core/toolchain.js';
+import { runUpdate, type CommandRunner } from './toolchain-prober.js';
+import { HOST_TOOLS, planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
+import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -421,6 +422,14 @@ function packageManagerHere(): 'winget' | 'brew' | 'apt' | 'dnf' | null {
     if (process.platform === 'darwin') return 'brew';
     return null;
 }
+
+/** The package manager that actually ANSWERS on this machine (apt or dnf on Linux), asked once per run. */
+let detectedPackageManager: Promise<PackageManager | null> | null = null;
+const packageManager = (): Promise<PackageManager | null> => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
+/** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
+const longRunner: CommandRunner = (binary, args) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000 });
+/** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
+const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
@@ -428,6 +437,9 @@ let questionWindow: QuestionWindow | null = null;
 const featureListeners = new Set<(data: FeatureData) => void>();
 
 async function boot(): Promise<void> {
+    // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
+    // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
+    restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
@@ -1001,6 +1013,8 @@ async function boot(): Promise<void> {
         v1Services: { database: v1DatabaseFile() },
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
+        // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
+        phpWorkerEnv: () => phpWorkerEnv(processEnv),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
         // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
@@ -1279,12 +1293,38 @@ async function boot(): Promise<void> {
     // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
     composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
     host.subscribe((agentId) => remind(agentId));
+    // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
+    // the surface's busy line, pushed — nobody polls an install.
+    const toolchainOps = (): ToolchainOpsPorts => ({
+        platform: process.platform as Platform,
+        run: longRunner,
+        env: processEnv,
+        fs: nodeToolchainFs(),
+        dataDir: toolchainDataDir(),
+        systemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+        packageManager,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+        now: Date.now,
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         toolchain: {
             probe: () => probeToolsLive(latestFor),
-            update: (tool) => runUpdate(tool, { platform: process.platform as 'win32' | 'darwin' | 'linux', packageManager: packageManagerHere() }, execFileRunner, null),
+            update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),
             now: Date.now,
+            // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
+            // processes with their command, running service engines by name.
+            activity: async () => ({
+                sessions: (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ label: a.name, provider: a.provider })),
+                processes: composed.supervisor.list().filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => ({ label: p.name, command: composed.supervisor.command(p.id) ?? '' })),
+                engines: (await composed.engineStatuses()).filter((e) => e.status === 'running').map((e) => e.instance.containerName ?? `${e.instance.engine} ${e.instance.version}`),
+            }),
+            install: (tool, consent) => installTool(tool, consent, toolchainOps()),
+            preview: async (tool) => {
+                const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
+                return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
+            },
+            repair: () => checkAndRepair(toolchainOps()),
         },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
@@ -1317,7 +1357,7 @@ async function boot(): Promise<void> {
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);
-        if (action.kind === 'toolchain.check' || action.kind === 'toolchain.update') featureState = { ...featureState, toolStatuses: data.toolchain?.tools ?? null, toolchainCheckedAt: data.toolchain?.checkedAt ?? null };
+        if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
         if (action.kind === 'browser.navigate' && browserPane && data.browser.url) {

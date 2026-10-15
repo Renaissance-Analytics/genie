@@ -454,28 +454,82 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
 
 export function ToolchainSurface({ data, onAction }: SurfaceProps) {
     const tc = data.toolchain;
+    const busy = tc?.busy ?? null;
+    // First run: the surface has never been scanned — scan once on open instead of drawing skeletons until a click.
+    const asked = useRef(false);
+    useEffect(() => {
+        if (tc === null && !asked.current) {
+            asked.current = true;
+            onAction({ kind: 'toolchain.check' });
+        }
+    }, [tc, onAction]);
+    const missing = tc ? tc.tools.filter((t) => t.tone === 'not-installed') : [];
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
-                <button type="button" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
+                <button type="button" disabled={busy !== null} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                    Check and repair
+                </button>
+                <button type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
                     Check again
                 </button>
             </Header>
-            {tc === null ? (
-                <Skeletons rows={6} />
-            ) : (
-                <ul className="divide-y divide-[var(--border-1)]">
-                    {tc.tools.map((t) => (
-                        <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex items-center gap-3 px-5 py-2">
-                            <span className="font-medium">{t.tool}</span>
-                            {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
-                            <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{t.tone}</Badge>
-                            {t.tone === 'update-available' && t.latest ? (
-                                <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
+            {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
+            {tc?.result ? <p data-toolchain-result="" className="px-5 py-2 text-sm">{tc.result}</p> : null}
+            {tc?.warning ? (
+                <div data-toolchain-warning={tc.warning.tool} className="flex items-center gap-3 px-5 py-2 text-sm text-[var(--warning)]">
+                    <span>{tc.warning.reason}</span>
+                    <button type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: tc.warning!.tool, confirmed: true })}>Update anyway</button>
+                </div>
+            ) : null}
+            {tc?.findings && tc.findings.length > 0 ? (
+                <ul data-toolchain-findings={tc.findings.length} className="divide-y divide-[var(--border-1)] border-b border-[var(--border-1)]">
+                    {tc.findings.map((f, i) => (
+                        <li key={`${f.kind}-${i}`} data-finding={f.kind} data-result={f.result.kind} className="flex items-center gap-3 px-5 py-2 text-sm">
+                            <span>
+                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
+                                {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
+                            </span>
+                            {f.result.kind === 'needs-install' ? (
+                                <button type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: (f.result as { tool: string }).tool, consent: true })}>Install</button>
                             ) : null}
                         </li>
                     ))}
                 </ul>
+            ) : null}
+            {tc === null ? (
+                <Skeletons rows={6} />
+            ) : (
+                <>
+                    {missing.length > 0 ? (
+                        <p data-toolchain-missing={missing.length} className="px-5 py-2 text-sm text-[var(--fg-2)]">
+                            Not on this machine yet: {missing.map((t) => t.tool).join(', ')}. Each row shows the command Genie would run; nothing runs until you click Install.
+                        </p>
+                    ) : null}
+                    <ul className="divide-y divide-[var(--border-1)]">
+                        {tc.tools.map((t) => {
+                            const plan = t.tone === 'not-installed' ? tc.installs?.[t.tool] : undefined;
+                            return (
+                                <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex items-center gap-3 px-5 py-2">
+                                    <span className="font-medium">{t.tool}</span>
+                                    {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
+                                    <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{t.tone}</Badge>
+                                    {t.tone === 'update-available' && t.latest ? (
+                                        <button type="button" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
+                                    ) : null}
+                                    {plan && 'label' in plan ? (
+                                        <>
+                                            <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
+                                            <button type="button" disabled={busy !== null} className="shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</button>
+                                        </>
+                                    ) : plan ? (
+                                        <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
+                                    ) : null}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </>
             )}
         </div>
     );

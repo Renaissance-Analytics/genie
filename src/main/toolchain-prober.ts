@@ -1,4 +1,4 @@
-import { HOST_TOOLS, parseVersionOutput, planUpdate, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
+import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED.
@@ -16,22 +16,24 @@ import { HOST_TOOLS, parseVersionOutput, planUpdate, repairOutcome, toolStatus, 
 export type CommandRunner = (binary: string, args: readonly string[]) => Promise<{ stdout: string; exitCode: number }>;
 export type LatestIndex = (tool: string) => Promise<{ version: string; source: string } | null>;
 
-async function probeInstalled(tool: (typeof HOST_TOOLS)[number], run: CommandRunner): Promise<string | null> {
+/** The version one tool reports here, or `null` (absent, broken, or silent). Windows `.cmd` shims go through `cmd.exe`. */
+export async function probeInstalled(tool: (typeof HOST_TOOLS)[number], run: CommandRunner, platform: Platform = process.platform as Platform): Promise<string | null> {
     try {
         // `go version` is the one banner not behind `--version`; its probe lists both so the registry
         // test can see the flag, and the real call drops it.
         const args = tool.probe.args.length > 1 ? tool.probe.args.filter((a) => a !== '--version') : tool.probe.args;
-        const r = await run(tool.probe.binary, args);
+        const [binary, argv] = platformArgv(tool.probe.binary, args, platform);
+        const r = await run(binary, argv);
         return parseVersionOutput(tool.name, r.stdout);
     } catch {
         return null;
     }
 }
 
-export async function probeTools(run: CommandRunner, latest: LatestIndex): Promise<ToolStatus[]> {
+export async function probeTools(run: CommandRunner, latest: LatestIndex, platform: Platform = process.platform as Platform): Promise<ToolStatus[]> {
     return Promise.all(
         HOST_TOOLS.map(async (tool) => {
-            const installed = await probeInstalled(tool, run);
+            const installed = await probeInstalled(tool, run, platform);
             let idx: { version: string; source: string } | null = null;
             try {
                 idx = await latest(tool.name);
@@ -51,10 +53,13 @@ export function shouldCheckUpdates(lastCheckedAt: number | null, now: number, fo
     return now - lastCheckedAt >= WINDOW_MS;
 }
 
-/** Split a planned command line into binary + args. The plans are Genie's own tables, so the split is plain whitespace. */
-function argv(command: string): [string, string[]] {
+/**
+ * Split a planned command line into binary + args. The plans are Genie's own tables, so the split is plain whitespace;
+ * on Windows an npm-distributed update goes through `cmd.exe` (npm is `npm.cmd`, which `execFile` cannot start).
+ */
+function argv(command: string, platform: Platform): [string, string[]] {
     const [binary, ...args] = command.split(/\s+/);
-    return [binary!, args];
+    return platformArgv(binary!, args, platform);
 }
 
 export async function runUpdate(
@@ -66,8 +71,8 @@ export async function runUpdate(
     const plan = planUpdate({ tool, ...where });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
     const def = HOST_TOOLS.find((t) => t.name === tool)!;
-    const before = await probeInstalled(def, run);
-    const [binary, args] = argv(plan.command);
+    const before = await probeInstalled(def, run, where.platform);
+    const [binary, args] = argv(plan.command, where.platform);
     let exitCode: number;
     try {
         exitCode = (await run(binary, args)).exitCode;
@@ -75,6 +80,6 @@ export async function runUpdate(
         exitCode = -1;
         void error;
     }
-    const after = await probeInstalled(def, run);
+    const after = await probeInstalled(def, run, where.platform);
     return repairOutcome({ tool, wanted, before, after, exitCode });
 }

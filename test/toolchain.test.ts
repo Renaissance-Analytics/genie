@@ -87,8 +87,9 @@ describe('planning an update for THIS platform — Genie builds the command from
     it('Windows → winget; macOS → brew; Debian → apt; Fedora → dnf; agent TUIs → npm -g everywhere', () => {
         expect(planUpdate({ tool: 'git', platform: 'win32', packageManager: 'winget' })).toEqual({ command: 'winget upgrade --id Git.Git --silent --accept-package-agreements --accept-source-agreements', manager: 'winget' });
         expect(planUpdate({ tool: 'git', platform: 'darwin', packageManager: 'brew' })).toEqual({ command: 'brew upgrade git', manager: 'brew' });
-        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'sudo apt-get install --only-upgrade -y git', manager: 'apt' });
-        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'dnf' })).toEqual({ command: 'sudo dnf upgrade -y git', manager: 'dnf' });
+        // pkexec, not sudo: Genie runs commands with no terminal, so sudo could never ask for the password.
+        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'pkexec apt-get install --only-upgrade -y git', manager: 'apt' });
+        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'dnf' })).toEqual({ command: 'pkexec dnf upgrade -y git', manager: 'dnf' });
         expect(planUpdate({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'npm install -g @anthropic-ai/claude-code@latest', manager: 'npm' });
     });
 

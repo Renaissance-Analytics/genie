@@ -32,6 +32,22 @@ describe('probing', () => {
         expect(statuses.length).toBeGreaterThanOrEqual(11);
     });
 
+    it('on Windows the .cmd/.bat tools (composer, npm, claude, codex) are probed through cmd.exe — execFile alone read every one as not-installed; .exe tools are not', async () => {
+        const run = runner({
+            'cmd.exe /d /s /c composer --version': { stdout: 'Composer version 2.8.12 2026-09-19 13:41:59', exitCode: 0 },
+            'cmd.exe /d /s /c npm --version': { stdout: '11.6.1', exitCode: 0 },
+            'node --version': { stdout: 'v22.23.2', exitCode: 0 },
+        });
+        const by = Object.fromEntries((await probeTools(run, async () => null, 'win32')).map((s) => [s.tool, s]));
+        expect(by.composer).toMatchObject({ installed: '2.8.12' });
+        expect(by.npm).toMatchObject({ installed: '11.6.1' });
+        expect(by.node).toMatchObject({ installed: '22.23.2' });
+        // Control: the same table on Linux finds no composer — the shim is Windows-only.
+        const linux = Object.fromEntries((await probeTools(run, async () => null, 'linux')).map((s) => [s.tool, s]));
+        expect(linux.composer).toMatchObject({ installed: null, tone: 'not-installed' });
+        expect(linux.node).toMatchObject({ installed: '22.23.2' });
+    });
+
     it('a probe that throws anything other than ENOENT is still not-installed — never a crash, never a guessed version', async () => {
         const run: CommandRunner = async () => { throw new Error('EACCES'); };
         const statuses = await probeTools(run, async () => null);
@@ -79,6 +95,18 @@ describe('an update, judged by the version measured after', () => {
         const r = await runUpdate('frobnicate', { platform: 'linux', packageManager: 'apt' }, counting, null);
         expect(r).toEqual({ kind: 'refused', reason: 'frobnicate is not a tool Genie manages' });
         expect(ran).toBe(0);
+    });
+
+    it('on Windows an npm-distributed update goes through cmd.exe (npm is npm.cmd, which execFile cannot start); elsewhere npm is run directly', async () => {
+        const calls: Array<[string, readonly string[]]> = [];
+        const spy: CommandRunner = async (binary, args) => { calls.push([binary, args]); return { stdout: '', exitCode: 0 }; };
+        await runUpdate('claude-code', { platform: 'win32', packageManager: 'winget' }, spy, null);
+        expect(calls.filter(([, a]) => a.includes('install'))).toEqual([['cmd.exe', ['/d', '/s', '/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code@latest']]]);
+        // Its probe too: `claude` from npm is claude.cmd.
+        expect(calls.filter(([, a]) => a.includes('--version'))).toEqual([['cmd.exe', ['/d', '/s', '/c', 'claude', '--version']], ['cmd.exe', ['/d', '/s', '/c', 'claude', '--version']]]);
+        calls.length = 0;
+        await runUpdate('claude-code', { platform: 'linux', packageManager: 'apt' }, spy, null);
+        expect(calls.filter(([, a]) => a.includes('install'))).toEqual([['npm', ['install', '-g', '@anthropic-ai/claude-code@latest']]]);
     });
 
     it('the command is run as a binary and arguments, never through a shell', async () => {
