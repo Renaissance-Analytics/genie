@@ -8,6 +8,7 @@ import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { AgentView } from './components/AgentView.js';
 import { ChatFlyout } from './components/ChatFlyout.js';
+import { GenieLogo } from './components/GenieLogo.js';
 
 /**
  * THE DOCTOR WINDOW (`genie --doctor`, the owner 2026-10-12): Genie with only the Genie OSA. The facts of the install,
@@ -60,7 +61,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
     return (
         <div data-doctor="" className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex h-9 shrink-0 items-center gap-2.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
-                <span className="size-[18px] rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
+                <GenieLogo />
                 <span className="text-[13px] font-semibold">Genie</span>
                 <span className="rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] text-[var(--warning)]">doctor mode</span>
                 <span className="text-[12px] text-[var(--fg-3)]">Genie’s configuration and database are not open. Only genie is running.</span>

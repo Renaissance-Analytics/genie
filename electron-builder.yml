@@ -59,6 +59,12 @@ extraResources:
   # Genie's own tray mark, read at runtime from resources/ (an asar-packed PNG cannot be handed to the tray).
   - from: build/tray-icon.png
     to: tray-icon.png
+  # Genie's own window icon, read at runtime from resources/ by every Genie window (src/main/app-identity.ts). The
+  # installed app packs only dist/** — nothing from build/ — so without these the installed window had no icon of its own.
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.png
+    to: icon.png
 
 asarUnpack:
   - "**/node_modules/node-pty/**"

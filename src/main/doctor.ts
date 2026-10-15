@@ -11,6 +11,7 @@ import { genieRunningNow } from './genie-running-file.js';
 import { askAndWait, doctorTools, type DoctorOsa } from './doctor-mcp.js';
 import { genieMcpServer } from './mcp-server.js';
 import { genieHome, installDir } from './paths.js';
+import { genieWindowIcon } from './app-identity.js';
 import { SessionHost } from './session-host.js';
 
 /**
@@ -116,6 +117,8 @@ export async function runDoctor(): Promise<void> {
         width: 1280,
         height: 840,
         title: 'Genie — doctor mode',
+        // Genie's own icon (main/app-identity.ts): the doctor is Genie too, on the same taskbar button.
+        ...genieWindowIcon(here),
         backgroundColor: '#09090b',
         show: false,
         webPreferences: { preload: join(here, 'doctor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },

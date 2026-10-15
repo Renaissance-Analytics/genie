@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { SignalAction } from '../../core/deck.js';
 import type { UpdateChip } from '../../core/update-chip.js';
+import { GenieLogo } from './GenieLogo.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -111,11 +112,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 onClick={() => onNavigate('genie://dashboard')}
                 className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-2"
             >
-                <span
-                    data-brand-mark
-                    aria-hidden="true"
-                    className="size-[18px] rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]"
-                />
+                <GenieLogo />
                 <span className="text-[13px] font-semibold">Genie</span>
             </button>
 

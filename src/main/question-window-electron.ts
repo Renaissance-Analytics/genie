@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, screen, shell } from 'electron';
 import { join } from 'node:path';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
+import { genieWindowIcon } from './app-identity.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW — the Electron half of `question-window.ts`. Genie 1's window, carried over (genie
@@ -65,6 +66,8 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
             center: true,
             skipTaskbar: false,
             title: 'Genie — a question for you',
+            // On the taskbar (skipTaskbar false), so it carries Genie's icon like every Genie window (main/app-identity.ts).
+            ...genieWindowIcon(input.here),
             backgroundColor: '#09090b',
             webPreferences: { preload: input.preload, contextIsolation: true, nodeIntegration: false, sandbox: true },
         });
