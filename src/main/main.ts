@@ -44,11 +44,10 @@ import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-resid
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
-import { runUpdate, type CommandRunner } from './toolchain-prober.js';
-import { HOST_TOOLS, planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
+import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
+import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
-import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { osPidAlive } from './process-supervisor.js';
@@ -420,29 +419,11 @@ function sessionCaller(key: string): Caller | null {
 const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 
-/** Where "latest" comes from, per tool. An unreachable or unreadable source yields null — the honest `unknown`. */
-async function latestFor(tool: string): Promise<{ version: string; source: string } | null> {
-    try {
-        if (tool === 'node') return latestFromNodeIndex(await (await fetch('https://nodejs.org/dist/index.json')).json());
-        if (tool === 'php') return phpLatestFromReleases(await (await fetch('https://www.php.net/releases/index.php?json')).json());
-        if (tool === 'claude-code') return latestFromNpmOutdated((await execFileRunner('npm', ['outdated', '-g', '--json'])).stdout, '@anthropic-ai/claude-code');
-        if (tool === 'codex') return latestFromNpmOutdated((await execFileRunner('npm', ['outdated', '-g', '--json'])).stdout, '@openai/codex');
-        const def = HOST_TOOLS.find((t) => t.name === tool);
-        const pm = packageManagerHere();
-        if (!def || !pm) return null;
-        if (pm === 'winget' && def.packages.winget) return latestFromWingetUpgrade((await execFileRunner('winget', ['upgrade', '--id', def.packages.winget])).stdout, def.packages.winget);
-        if (pm === 'brew' && def.packages.brew) return latestFromBrewOutdated((await execFileRunner('brew', ['outdated', '--json'])).stdout, def.packages.brew);
-        return null;
-    } catch {
-        return null;
-    }
-}
-
-function packageManagerHere(): 'winget' | 'brew' | 'apt' | 'dnf' | null {
-    if (process.platform === 'win32') return 'winget';
-    if (process.platform === 'darwin') return 'brew';
-    return null;
-}
+/**
+ * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
+ * platform routing as the probe and the update, so on Windows `npm outdated -g` reaches npm.cmd through cmd.exe.
+ */
+const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (await fetch(url)).json(), platform: process.platform as Platform });
 
 /** The package manager that actually ANSWERS on this machine (apt or dnf on Linux), asked once per run. */
 let detectedPackageManager: Promise<PackageManager | null> | null = null;

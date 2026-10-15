@@ -69,9 +69,13 @@ describe('T4 — PHP versions from the Toolchain surface', () => {
     });
 
     it('Install WITHOUT consent is refused and the installer is never called; with consent it installs once and the list shows it', async () => {
-        await expect(handleFeatureAction(services, { kind: 'toolchain.installPhp', version: '8.5.11', consent: false }, scanned(), ports())).rejects.toThrow(/without your go-ahead/);
+        const refused = await handleFeatureAction(services, { kind: 'toolchain.installPhp', version: '8.5.11', consent: false }, scanned(), ports());
         expect(installs).toEqual([]);
-        const snap = await handleFeatureAction(services, { kind: 'toolchain.installPhp', version: '8.5.11', consent: true }, scanned(), ports());
+        // Said where it was caused: PHP 8.5.11, in the action's result — not only thrown to the renderer's console.
+        expect(refused.toolchain!.refusals).toEqual([{ tool: 'php', version: '8.5.11', reason: expect.stringMatching(/without your go-ahead/) }]);
+        // The next action for that version clears it.
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.installPhp', version: '8.5.11', consent: true }, { ...scanned(), toolchainRefusals: refused.toolchain!.refusals! }, ports());
+        expect(snap.toolchain!.refusals).toBeUndefined();
         expect(installs).toEqual([['8.5.11', true]]);
         expect(snap.toolchain!.php!.managed.map((m) => m.version)).toEqual(['8.5.11', '8.4.26']);
         expect(snap.toolchain!.result).toMatch(/PHP 8\.5\.11 is installed/);
@@ -80,7 +84,8 @@ describe('T4 — PHP versions from the Toolchain surface', () => {
     it('Remove is checked against the pins of the sites Genie knows: refused while one is pinned, named', async () => {
         services.sites.declare({ name: 'shop', workspaceId: 'acme', repoPath: dir, serve: { mode: 'php', root: 'public', version: '8.4' } });
         services.sites.declare({ name: 'blog', workspaceId: 'acme', repoPath: dir, serve: { mode: 'php', root: 'public' } });
-        await expect(handleFeatureAction(services, { kind: 'toolchain.removePhp', version: '8.4.26' }, scanned(), ports())).rejects.toThrow(/pinned by shop\.gen/);
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.removePhp', version: '8.4.26' }, scanned(), ports());
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'php', version: '8.4.26', reason: expect.stringMatching(/pinned by shop\.gen/) }]);
         expect(removals).toEqual([['8.4.26', [{ host: 'shop.gen', pin: '8.4' }]]]);
         expect(managed).toEqual(['8.4.26']);
     });
