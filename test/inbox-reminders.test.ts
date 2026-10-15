@@ -4,33 +4,68 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
-import { REMINDER_GAP_MS, ReminderBook } from '../src/core/inbox-reminders.js';
+import { ReminderBook } from '../src/core/inbox-reminders.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
- * UNREAD REMINDERS THAT NEVER FIRE MID-TURN (§6.4). An agent with uncollected mail is reminded through
- * its own session — but only while it is IDLE (a reminder landing mid-turn derails the turn), only once
- * per gap, and the text says how many and how to collect (agentinbox receive). Collecting clears it.
- * The book is pure; the composed service pairs it with the inbox and reports what to send, never sends.
+ * THE INBOX PUSH'S BOOK (§6.4, B26). An agent with mail is told through its own session — only while that session can
+ * take a turn (`run` is not `null`: not mid-turn, not starting, running), and EXACTLY ONCE PER ARRIVAL BATCH: told once,
+ * not repeated; a newer message is a new batch, told at once; a new run has been told nothing. TOLD MEANS DELIVERED: a
+ * notice handed out is sending until it settles — delivered, it is told; not (refused, crashed, stopped), it is untold
+ * and told again. The text says how many and how to collect (agentinbox receive). The book is pure; the composed service pairs it with the inbox and reports
+ * what to send, never sends.
  */
 
 describe('ReminderBook', () => {
-    it('reminds an idle agent with unread mail once per gap; never a working agent; never with nothing unread', () => {
+    it('tells an agent that can take a turn about its unread mail once per batch; never one that cannot; never with nothing unread', () => {
         const book = new ReminderBook();
-        expect(book.due({ agentId: 'a', unread: 2, idle: true, now: 1_000 })).toBe('You have 2 unread AgentInbox messages; collect them with agentinbox receive.');
-        expect(book.due({ agentId: 'a', unread: 2, idle: true, now: 1_000 + REMINDER_GAP_MS - 1 })).toBeNull();
-        expect(book.due({ agentId: 'a', unread: 3, idle: true, now: 1_000 + REMINDER_GAP_MS })).toBe('You have 3 unread AgentInbox messages; collect them with agentinbox receive.');
-        expect(book.due({ agentId: 'b', unread: 1, idle: false, now: 5_000 })).toBeNull();
-        expect(book.due({ agentId: 'b', unread: 1, idle: true, now: 5_000 })).toBe('You have 1 unread AgentInbox message; collect it with agentinbox receive.');
-        expect(book.due({ agentId: 'c', unread: 0, idle: true, now: 5_000 })).toBeNull();
-        expect(REMINDER_GAP_MS).toBe(5 * 60_000);
+        expect(book.due({ agentId: 'a', unread: 2, newestSeq: 2, run: 1 })).toBe('You have 2 unread AgentInbox messages; collect them with agentinbox receive.');
+        book.settled('a', true);
+        // The same batch, however long it waits: not told again.
+        expect(book.due({ agentId: 'a', unread: 2, newestSeq: 2, run: 1 })).toBeNull();
+        // A message on top of it: a new batch, told at once — no gap.
+        expect(book.due({ agentId: 'a', unread: 3, newestSeq: 3, run: 1 })).toBe('You have 3 unread AgentInbox messages; collect them with agentinbox receive.');
+        expect(book.due({ agentId: 'b', unread: 1, newestSeq: 4, run: null })).toBeNull();
+        expect(book.due({ agentId: 'b', unread: 1, newestSeq: 4, run: 2 })).toBe('You have 1 unread AgentInbox message; collect it with agentinbox receive.');
+        expect(book.due({ agentId: 'c', unread: 0, newestSeq: 0, run: 3 })).toBeNull();
     });
 
-    it('a mid-turn moment does not consume the gap: the reminder fires as soon as the agent is idle again', () => {
+    it('a moment it cannot take a turn does not consume the batch: told the first time it can', () => {
         const book = new ReminderBook();
-        expect(book.due({ agentId: 'a', unread: 1, idle: false, now: 1_000 })).toBeNull();
-        expect(book.due({ agentId: 'a', unread: 1, idle: true, now: 1_001 })).not.toBeNull();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: null })).toBeNull();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 1 })).not.toBeNull();
+    });
+
+    it('collected and then mailed again: the next message is told at once', () => {
+        const book = new ReminderBook();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 1 })).not.toBeNull();
+        book.settled('a', true);
+        // Collected (nothing unread), then message 2 lands a moment later.
+        expect(book.due({ agentId: 'a', unread: 0, newestSeq: 0, run: 1 })).toBeNull();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 2, run: 1 })).toBe('You have 1 unread AgentInbox message; collect it with agentinbox receive.');
+    });
+
+    it('a NEW RUN has been told nothing: a batch told to the run before it is told again', () => {
+        const book = new ReminderBook();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 1 })).not.toBeNull();
+        book.settled('a', true);
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 1 })).toBeNull();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 2 })).toBe('You have 1 unread AgentInbox message; collect it with agentinbox receive.');
+    });
+
+    it('SENDING: handed out once, never twice before it settles; NOT delivered, the same batch is told again', () => {
+        const book = new ReminderBook();
+        expect(book.due({ agentId: 'a', unread: 1, newestSeq: 1, run: 1 })).not.toBeNull();
+        // A second event in the same tick, even with more mail: nothing while one is out.
+        expect(book.due({ agentId: 'a', unread: 2, newestSeq: 2, run: 1 })).toBeNull();
+        book.settled('a', false);
+        expect(book.due({ agentId: 'a', unread: 2, newestSeq: 2, run: 1 })).toBe('You have 2 unread AgentInbox messages; collect them with agentinbox receive.');
+        book.settled('a', true);
+        expect(book.due({ agentId: 'a', unread: 2, newestSeq: 2, run: 1 })).toBeNull();
+        // One handed to a run that is gone and never settled was not delivered: the next run is told.
+        expect(book.due({ agentId: 'a', unread: 3, newestSeq: 3, run: 1 })).not.toBeNull();
+        expect(book.due({ agentId: 'a', unread: 3, newestSeq: 3, run: 2 })).not.toBeNull();
     });
 });
 
@@ -57,20 +92,24 @@ afterEach(async () => {
 });
 
 describe('services.inboxReminders', () => {
-    it('reports what to send for every registered agent with unread mail that is idle; collecting clears it', async () => {
+    it('reports what to send for every registered agent with mail it has not been told about whose session can take a turn', async () => {
         onRoster('agent_a', 'atlas', 'tynn');
         onRoster('agent_b', 'bolt', 'tynn');
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'ping' });
         await services.inbox.send({ from: HUMAN, to: 'agent_b' as never, text: 'pong' });
-        const idle = new Set(['agent_a']);
-        expect(services.inboxReminders({ now: 1_000, idle: (id) => idle.has(id) })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
-        // Within the gap: nothing again for atlas; bolt becomes idle and gets its own.
-        idle.add('agent_b');
-        expect(services.inboxReminders({ now: 2_000, idle: (id) => idle.has(id) })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        const runs = new Map<string, number>([['agent_a', 1]]);
+        const run = (id: string): number | null => runs.get(id) ?? null;
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        services.inboxNoticeSettled('agent_a', true);
+        // Atlas's batch was told; bolt can now take a turn and gets its own.
+        runs.set('agent_b', 2);
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        services.inboxNoticeSettled('agent_b', true);
+        expect(services.inboxReminders({ run })).toEqual([]);
+        // Atlas collects; a new message for it is a new batch, told at once.
         await services.inbox.receive({ participant: 'agent_a' as never });
-        // Still inside bolt's gap (reminded at 2_000): nobody is told, atlas has collected.
-        expect(services.inboxReminders({ now: 1_000 + REMINDER_GAP_MS, idle: () => true })).toEqual([]);
-        // Bolt's gap has passed and the mail is still unread: reminded again; atlas, collected, stays quiet.
-        expect(services.inboxReminders({ now: 2_000 + REMINDER_GAP_MS, idle: () => true })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        expect(services.inboxReminders({ run })).toEqual([]);
+        await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'again' });
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
     });
 });

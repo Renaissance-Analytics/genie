@@ -40,6 +40,14 @@ export interface SessionDriver {
      */
     readonly running?: boolean;
     readonly cliSessionId: string | null;
+    /**
+     * OPTIONAL: resolves once the provider can take a turn — a driver that has a start-up handshake DECLARES it
+     * (prism-acp's `CodexDriver.ready`: "Resolves once initialize and thread start/resume have completed"); one that
+     * declares nothing is ready when started (`ClaudeDriver`). Read after `start()`, never before: the promise is the
+     * one that start began. Genie holds its own turns (the inbox push) until then rather than lean on what a driver
+     * does with a prompt sent before it is ready.
+     */
+    readonly ready?: Promise<void>;
 }
 
 /** A turn's outcome, as `prism-acp` reports it. */
@@ -249,6 +257,8 @@ export class AgentSession {
      * An exit is a fact; a `running` property is an opinion. The fact wins.
      */
     #exited = false;
+    /** Still starting: the driver declared a `ready` that has not resolved. No turn of Genie's own is sent until it has. */
+    #starting = false;
     /** The session id already reported to the listener, so it is reported exactly once. */
     #reportedSessionId: string | null = null;
     /**
@@ -293,6 +303,18 @@ export class AgentSession {
 
     get turnState(): TurnState {
         return this.#turnState;
+    }
+
+    /**
+     * Whether the session can take a turn NOW — Genie's own reading, the same for every provider: alive, started (the
+     * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
+     * from output), nothing parked on a person, and not broken or stopped. What the inbox push waits for.
+     *
+     * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
+     * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
+     */
+    get promptable(): boolean {
+        return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }
 
     /** `null` until the provider reports one. It is what a later resume is keyed on. */
@@ -569,6 +591,15 @@ export class AgentSession {
         this.#driver.start();
         this.#ownedPids = tree.descendantsOf(process.pid).filter((pid) => !before.has(pid));
         this.#alive = true;
+        // READY, when the driver declares when (see `SessionDriver.ready`): announced, so whatever waits for it (the inbox
+        // push) is told without polling. A rejection is still the end of starting — the failure itself arrives through
+        // the driver's own events (`onProtocolError`, `onExit`), which is where it is reported.
+        const ready = this.#driver.ready;
+        if (ready !== undefined) {
+            this.#starting = true;
+            const done = (): void => { this.#starting = false; this.#changed(); };
+            ready.then(done, done);
+        }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.
         const startedAt = Date.now();

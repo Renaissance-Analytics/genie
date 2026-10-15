@@ -198,6 +198,8 @@ interface Running {
     accepts: PromptAccepts;
     /** Whether this run resumed a conversation (the record's thread id) — what its run marker says. */
     resumed: boolean;
+    /** Which run this is, unique in this host — what tells a restarted agent's session from the one before it. */
+    run: number;
 }
 
 export class SessionHost {
@@ -211,6 +213,7 @@ export class SessionHost {
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
     readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] } | 'loading'>();
     #listeners = new Set<(agentId: AgentId) => void>();
+    #runs = 0;
 
     /** Why a start was refused, by agent. Reported, never swallowed. */
     readonly refusals = new Map<AgentId, string>();
@@ -379,7 +382,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId) };
+        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), run: ++this.#runs };
 
         const session = new AgentSession({
             agentId: record.id,
@@ -534,6 +537,20 @@ export class SessionHost {
         entry.session.prompt(text, by, { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /**
+     * The agent's RUN when its session can take a turn now (`AgentSession.promptable`), else `null` — not running,
+     * still starting, mid-turn, waiting on a person, broken. What the inbox push asks before it sends a notice.
+     */
+    promptable(agentId: AgentId): number | null {
+        const entry = this.#running.get(agentId);
+        return entry && entry.session.promptable ? entry.run : null;
+    }
+
+    /** The agent's current RUN while it has a session, promptable or not; `null` when it has none. */
+    runOf(agentId: AgentId): number | null {
+        return this.#running.get(agentId)?.run ?? null;
     }
 
     prompt(agentId: AgentId, text: string, by: string | null = null): boolean {
