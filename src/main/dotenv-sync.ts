@@ -64,6 +64,7 @@ export class DotEnvSync {
     readonly #ports: DotEnvSyncPorts;
     #queue: Promise<unknown> = Promise.resolve();
     #queued: Promise<DotEnvOutcome[]> | null = null;
+    #closed = false;
     /** The last outcome per file — what the Services tab or an agent can be told. */
     readonly #last = new Map<string, DotEnvOutcome>();
 
@@ -76,14 +77,25 @@ export class DotEnvSync {
      * to run share it — a burst of changes is one pass, run after the last of them.
      */
     syncAll(): Promise<DotEnvOutcome[]> {
+        if (this.#closed) return Promise.resolve([]);
         if (this.#queued) return this.#queued;
         const run = this.#queue.then(() => {
             this.#queued = null;
-            return this.#pass();
+            return this.#closed ? [] : this.#pass();
         });
         this.#queued = run;
         this.#queue = run.catch(() => undefined);
         return run;
+    }
+
+    /**
+     * No pass starts after this, not even one already queued; resolves once the pass in flight has ended. Genie's
+     * shutdown awaits it, so quitting never leaves a `.env` half written or a `git check-ignore` running in a site
+     * repo (on Windows, a process whose working directory is the folder keeps it from being moved or removed).
+     */
+    close(): Promise<void> {
+        this.#closed = true;
+        return this.#queue.then(() => undefined);
     }
 
     /** The last outcome for each `.env` Genie has looked at. */

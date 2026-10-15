@@ -157,6 +157,38 @@ describe('the sync — real files in a temp folder, git’s answer faked', () =>
         await Promise.all([a, b, c]);
         expect(asked).toBe(1);
     });
+
+    it('close(): waits for the pass in flight — its git call included — and runs none after, not even one already queued (counted)', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        let calls = 0;
+        const gated = new DotEnvSync({
+            envFor: () => env,
+            sites: () => [{ workspaceId: 'example-a', repoPath: repo }],
+            fs: nodeEnvelopeFs(),
+            gitIgnored: async () => { calls++; await gate; return 'ignored'; },
+        });
+        const first = gated.syncAll();
+        for (let i = 0; i < 200 && calls === 0; i++) await new Promise((r) => setTimeout(r, 0));
+        expect(calls).toBe(1);
+        // A change while the first pass waits on git: a second pass is queued behind it.
+        env = { ...ENV, DB_PORT: '4207' };
+        const queued = gated.syncAll();
+        expect(queued).not.toBe(first);
+
+        let closed = false;
+        const closing = gated.close().then(() => { closed = true; });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(closed).toBe(false);
+        release();
+        await closing;
+        expect((await first)[0]).toMatchObject({ outcome: 'written' });
+        expect(await queued).toEqual([]);
+        expect(await gated.syncAll()).toEqual([]);
+        expect(calls).toBe(1);
+        // The first pass's write landed whole; the queued port change was never written.
+        expect(parseDotEnv(await readFile(join(repo, '.env'), 'utf8')).get('DB_PORT')).toBe('4101');
+    });
 });
 
 describe('git’s answer', () => {

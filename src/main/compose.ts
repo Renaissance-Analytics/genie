@@ -745,6 +745,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
+                await envFiles.close();
                 stopLiveness();
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
