@@ -426,20 +426,27 @@ export function ChatFlyout({
                         <span>{blocked}</span>
                     </div>
                 ) : (
-                <PromptInput
-                    {...(contextUsage
-                        ? { budgetTokens: contextUsage.size, usedTokens: contextUsage.used, meter: 'near-limit' as const }
-                        // The type requires a budget; with the meter hidden it is never drawn, and nothing is made up.
-                        : { budgetTokens: 0, meter: 'hidden' as const })}
-                    attachButton="icon"
-                    sendButton="icon"
-                    pasteThreshold={500}
-                    pasteImages
-                    previewChars={30}
-                    commands={toPromptCmds(commands)}
-                    placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
-                    onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files)); }}
-                />
+                /*
+                 * `data-chat-composer`: Genie's own handle on the composer, and only on it (never on the notice above). The
+                 * smoke finds the composer by it — with paste pills on, react-fancy 5.39.0's input is a `contenteditable`
+                 * `role="textbox"`, not a `<textarea>`, so a selector for the library's element broke the day it changed.
+                 */
+                <div data-chat-composer="">
+                    <PromptInput
+                        {...(contextUsage
+                            ? { budgetTokens: contextUsage.size, usedTokens: contextUsage.used, meter: 'near-limit' as const }
+                            // The type requires a budget; with the meter hidden it is never drawn, and nothing is made up.
+                            : { budgetTokens: 0, meter: 'hidden' as const })}
+                        attachButton="icon"
+                        sendButton="icon"
+                        pasteThreshold={500}
+                        pasteImages
+                        previewChars={30}
+                        commands={toPromptCmds(commands)}
+                        placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
+                        onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files)); }}
+                    />
+                </div>
                 )}
                 {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
                 {running ? (

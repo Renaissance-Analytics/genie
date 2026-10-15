@@ -134,6 +134,32 @@ describe('every composer has the quiet footer and holds pastes as pills', () => 
         expectQuietFooter(renderDoctor(session(10_000, 1_000_000)).html);
     });
 
+    /*
+     * THE SMOKE FINDS THE COMPOSER BY GENIE'S OWN HANDLE (PR #313, CI run 38801183441). With `pasteThreshold` /
+     * `pasteImages`, 5.39.0's `PromptInput` renders its inline editor — a `contenteditable` `role="textbox"` — and no
+     * `<textarea>` at all, so `scripts/smoke-cdp.mjs` waiting for `textarea` timed out on a composer that was there.
+     * The smoke now waits for an editable input inside `[data-chat-composer]`: one handle, on the composer only, never
+     * on the "no agent to message" notice that stands in its place.
+     */
+    it('Genie’s [data-chat-composer] wraps exactly one editable input, and there is no textarea (counted)', () => {
+        const { html } = renderFlyout();
+        expect(count(html, 'data-chat-composer=""')).toBe(1);
+        // React's static markup keeps the prop's casing (`contentEditable`); the live DOM's attribute names are
+        // case-insensitive, which is why the smoke's `[contenteditable="true"]` matches the same element.
+        const inside = html.slice(html.indexOf('data-chat-composer=""'));
+        expect(count(inside, 'contentEditable="true"')).toBe(1);
+        expect(count(inside, 'role="textbox"')).toBe(1);
+        expect(count(html, '<textarea')).toBe(0);
+    });
+
+    it('CONTROL: a blocked flyout has no composer, so the handle is absent with it', () => {
+        seen.length = 0;
+        const html = renderToStaticMarkup(<ChatFlyout thread={THREAD} scope={{ kind: 'blocked', reason: 'No agent here to message.' }} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
+        expect(count(html, 'data-chat-blocked=""')).toBe(1);
+        expect(count(html, 'data-chat-composer=""')).toBe(0);
+        expect(count(html, 'contentEditable="true"')).toBe(0);
+    });
+
     it('the props are the ones the API names', () => {
         const { props } = renderFlyout();
         expect(props).toMatchObject({ attachButton: 'icon', sendButton: 'icon', pasteThreshold: 500, pasteImages: true, previewChars: 30 });
