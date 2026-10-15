@@ -13,7 +13,6 @@ import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
 import { trustDeckItem, trustInstallStep } from '../core/gen-ca.js';
 import { GenCa, osTrustStore, type CaSource, type CertIssuer, type TrustStorePort } from './gen-ca.js';
-import { hostsFileBlock } from '../core/gen-router.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
@@ -34,12 +33,13 @@ import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
-import { realHostsIo, runElevated as runElevatedViaOs, type Step } from './elevate.js';
+import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
 import { FeedbackStore } from './feedback-store.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
-import { syncHostsFile, type HostsIo, type HostsSyncResult } from './hosts-file.js';
+import { FRONT_DOOR_PORTS, bindFailure, heldReason, realFrontDoorPorts, type FrontDoorBlocked, type FrontDoorPort, type FrontDoorPorts } from './front-door-port.js';
+import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
 import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runtimeDir } from './paths.js';
@@ -111,8 +111,15 @@ export interface ComposeInput {
     readonly gitIgnored?: DotEnvSyncPorts['gitIgnored'];
     /** The OS hosts file; the real one by default. */
     readonly hostsIo?: HostsIo;
-    /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
-    readonly runElevated?: (step: Step) => Promise<void>;
+    /**
+     * Runs a BATCH of steps through ONE OS elevation prompt and says which step, if any, stopped it (elevate.ts). The real
+     * prompt by default. Genie calls it one batch at a time, and a hosts write due when the person trusts rides along.
+     */
+    readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
+    /** How long a burst of site changes is waited out before the one hosts write; 250 ms by default. */
+    readonly hostsDebounceMs?: number;
+    /** The front door's :443/:80 — free, or held and by whom; real bind probes and the OS's listener table by default. */
+    readonly frontDoorPorts?: FrontDoorPorts;
     /**
      * Genie 1's `host-gen` folders (`<Genie 1 userData>/host-gen`), where its `.gen` CA may be — ADOPTED by copying when
      * Genie 2 has no CA of its own. None by default: only main.ts names Genie 1's real folders.
@@ -169,7 +176,11 @@ export type FrontDoorStatus =
           trustError: string | null;
           certificateError: string | null;
       }
-    | { running: false; reason: string };
+    /**
+     * Off: no bundled Caddy or no CA (`reason` alone), or — `blocked` — a port the front door needs is held by another
+     * process (or refused by the OS): Caddy is not started and not restarted until the person tries again.
+     */
+    | { running: false; reason: string; blocked?: { port: FrontDoorPort; holder: string | null } };
 
 export interface ComposedServices {
     readonly inbox: InboxStore;
@@ -227,6 +238,8 @@ export interface ComposedServices {
     onFrontDoorChange(listener: () => void): () => void;
     /** Sync the hosts block now — the person's "try again" after a declined prompt. */
     syncHosts(): Promise<HostsSyncResult>;
+    /** The person's Try again on a front door whose port was held: asked again, and Caddy started when it is free. */
+    retryFrontDoor(): Promise<FrontDoorStatus>;
     /**
      * Install Genie's CA into the OS trust store through ONE elevation. Trusted only when the store, read again
      * afterwards, holds the CA's thumbprint; a declined prompt or a failed install answers its reason and marks nothing.
@@ -236,6 +249,11 @@ export interface ComposedServices {
     deferTrustCertificate(): void;
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
+    /**
+     * The `.gen` names the hosts file carries: every site that is CONFIGURED (servable, not declared `enabled: false`),
+     * running or not — plus any site up right now, so a name Caddy serves always resolves (genie#624's union).
+     */
+    configuredHosts(): string[];
     /** The Deck's items from the stores, now. */
     deckItems(): DeckItem[];
     /** Every roster agent's full address with its name — the human's peer list. */
@@ -256,11 +274,19 @@ interface FrontDoorController {
     status(): FrontDoorStatus;
     onChange(listener: () => void): () => void;
     syncHosts(): Promise<HostsSyncResult>;
+    /** Boot has loaded the workspaces' sites: the hosts file follows them from here, starting with one sync. */
+    beginHosts(): void;
+    retry(): Promise<FrontDoorStatus>;
     trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
     deferTrust(): void;
     /** Genie's own Deck items about the front door: the one Trust ask. */
     deckItems(): DeckItem[];
+    /** Shutdown: nothing more is started or synced. */
+    close(): void;
 }
+
+const FRONT_DOOR_ID = 'genie-front-door';
+const TRUST_STEP_ID = 'trust';
 
 const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
 
@@ -276,10 +302,14 @@ function startExternalFrontDoor(input: {
     platform: NodeJS.Platform;
     now: () => number;
     sites: SiteManager;
+    /** The names the hosts file carries — configured, not running (ComposedServices.configuredHosts). */
+    configuredHosts: () => readonly string[];
     supervisor: ProcessSupervisor;
     hostsIo: HostsIo;
     hostsPath: string;
-    runElevated: (step: Step) => Promise<void>;
+    hostsDebounceMs: number;
+    elevator: Elevator;
+    ports: FrontDoorPorts;
 }): FrontDoorController {
     const listeners = new Set<() => void>();
     const onChange = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
@@ -289,9 +319,12 @@ function startExternalFrontDoor(input: {
         status: () => ({ running: false, reason }),
         onChange,
         syncHosts: async () => { throw new Error(reason); },
+        beginHosts: () => {},
+        retry: async () => ({ running: false, reason }),
         trust: async () => ({ ok: false, reason }),
         deferTrust: () => {},
         deckItems: () => [],
+        close: () => {},
     });
     if (caddyBin === null) return off(NO_CADDY);
     let ca: GenCa;
@@ -306,13 +339,15 @@ function startExternalFrontDoor(input: {
     // Earlier betas remembered `caddy trust` (Caddy's own root) with this marker. Trust is read from the OS store now,
     // and that root is no longer served; the marker would only mislead whoever reads the folder.
     rmSync(join(caddyDir, 'trusted'), { force: true });
-    let hosts: HostsSyncResult | null = null;
     let trusted: boolean | null = null;
     let trustError: string | null = null;
     let certificateError: string | null = null;
     let askedAt: number | null = null;
     let deferredFor = ca.trustDeferred();
     let trusting: Promise<{ ok: true } | { ok: false; reason: string }> | null = null;
+    /** A front-door port another process holds (or the OS refused): Caddy is down on purpose, with the reason. */
+    let blocked: FrontDoorBlocked | null = null;
+    let closed = false;
     const render = () => {
         const routes = sites.routes();
         let tls: FrontDoorTls | null = null;
@@ -344,44 +379,99 @@ function startExternalFrontDoor(input: {
         trusted = holds;
         return holds;
     };
-    // The hosts block follows the routes; the OS prompt appears only when a plain write is refused
-    // AND the block actually changed. A declined prompt is a recorded fact with the block to paste.
-    const syncHosts = async (): Promise<HostsSyncResult> => {
-        const routes = sites.routes();
-        try {
-            hosts = await syncHostsFile(routes, input.hostsIo);
-        } catch (error) {
-            hosts = { changed: false, elevated: false, error: message(error), manualBlock: hostsFileBlock(routes) };
-        }
-        notify();
-        return hosts;
-    };
+    // The hosts block follows the CONFIGURED names, so a start or a stop never writes it (and never prompts); a burst of
+    // changes is one write, one sync at a time, and a declined prompt is a recorded fact with the block to paste.
+    const hosts = new HostsSync({
+        names: input.configuredHosts,
+        io: input.hostsIo,
+        elevator: input.elevator,
+        debounceMs: input.hostsDebounceMs,
+        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        onResult: notify,
+    });
     render();
-    sites.onChange(() => { render(); void syncHosts(); });
-    supervisor.onChange(render);
-    supervisor.start({
-        id: 'genie-front-door',
+    sites.onChange(() => { render(); hosts.changed(); });
+    supervisor.onChange((status) => {
+        render();
+        // Started again (by the person's Restart in Processes, or by Try again): whatever held the port is asked anew —
+        // Caddy's own words below set it again if it still cannot bind.
+        if (status.id === FRONT_DOOR_ID && status.state === 'running' && blocked !== null) { blocked = null; notify(); }
+    });
+    const spec = {
+        id: FRONT_DOOR_ID,
         workspaceId: '_genie',
         name: 'Genie front door (Caddy)',
         command: `${caddyBin} run --config ${caddyfile} --adapter caddyfile --watch`,
         cwd: caddyDir,
         env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
-        restart: 'always',
+        restart: 'always' as const,
+    };
+    const block = (port: FrontDoorPort, holder: string | null, reason: string) => {
+        blocked = { port, holder, reason };
+        notify();
+    };
+    /** Caddy's recent output, across chunks (a line can arrive in two). */
+    let output = '';
+    // ASKED before Caddy starts: a port another process holds is reported, and Caddy is not started into a restart loop.
+    const startCaddy = async (): Promise<void> => {
+        for (const port of FRONT_DOOR_PORTS) {
+            if ((await input.ports.probe(port)) !== 'held') continue;
+            const holder = await input.ports.holder(port);
+            if (closed) return;
+            block(port, holder, heldReason(port, holder));
+            return;
+        }
+        if (closed) return;
+        blocked = null;
+        output = '';
+        supervisor.start(spec);
+        notify();
+    };
+    // And READ from Caddy's own words while it runs: a bind that fails at start, or on a --watch reload that brings the
+    // first route (with no routes Caddy binds nothing), stops the front door instead of letting `always` restart it.
+    supervisor.onOutput((id, data) => {
+        if (id !== FRONT_DOOR_ID || closed) return;
+        output = (output + data).slice(-4_000);
+        const failed = bindFailure(output);
+        if (!failed) return;
+        output = '';
+        supervisor.stop(FRONT_DOOR_ID);
+        block(failed.port, null, failed.kind === 'held' ? heldReason(failed.port, null) : `the front door could not listen on :${failed.port} (${failed.words}); https://<name>.gen in external browsers is off — the in-app browser still works`);
+        // Who: when the OS lists a listener on the port, that process holds it — whatever words the bind failed with
+        // (Windows answers "forbidden", not "in use", for a port http.sys holds).
+        void input.ports.holder(failed.port).then((holder) => {
+            if (holder !== null && blocked?.port === failed.port && blocked.holder === null) block(failed.port, holder, heldReason(failed.port, holder));
+        });
     });
-    void syncHosts();
+    const status = (): FrontDoorStatus =>
+        blocked !== null
+            ? { running: false, reason: blocked.reason, blocked: { port: blocked.port, holder: blocked.holder } }
+            : { running: true, caddyfile, hostsPath: input.hostsPath, hosts: hosts.result, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError };
+    void startCaddy();
     void readTrust().then(notify);
     return {
-        status: () => ({ running: true, caddyfile, hostsPath: input.hostsPath, hosts, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError }),
+        status,
         onChange,
-        syncHosts,
+        syncHosts: () => hosts.flush(),
+        beginHosts: () => hosts.begin(),
+        retry: async () => {
+            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') await startCaddy();
+            return status();
+        },
         trust: () => {
-            // One Trust at a time: the Deck's and Hosting's buttons pressed together raise ONE prompt.
+            // One Trust at a time: the Deck's and Hosting's buttons pressed together raise ONE prompt. A hosts write that
+            // is due rides in that same prompt (genie#604): trusting never costs two approvals.
             trusting ??= (async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
                 if (await readTrust()) { notify(); return { ok: true }; }
-                try {
-                    await input.runElevated(trustInstallStep(input.platform, ca.certPath));
-                } catch (error) {
-                    trustError = `Genie could not install its certificate into the trust store: ${message(error)}`;
+                const trustStep: PrivilegedStep = { id: TRUST_STEP_ID, label: 'install Genie’s certificate into the trust store', step: trustInstallStep(input.platform, ca.certPath) };
+                let ran: readonly PrivilegedStep[] = [trustStep];
+                const outcome = await hosts.joinElevation(async (hostsSteps) => {
+                    ran = [trustStep, ...hostsSteps];
+                    return { outcome: await input.elevator.run(ran), steps: ran };
+                });
+                const mine = stepOutcome(outcome, ran, TRUST_STEP_ID);
+                if (!mine.ok) {
+                    trustError = `Genie could not install its certificate into the trust store: ${mine.error}`;
                     notify();
                     return { ok: false, reason: trustError };
                 }
@@ -408,6 +498,10 @@ function startExternalFrontDoor(input: {
             askedAt ??= input.now();
             const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
             return item ? [item] : [];
+        },
+        close: () => {
+            closed = true;
+            hosts.close();
         },
     };
 }
@@ -542,6 +636,15 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         envFor: (workspaceId) => engines.envFor(workspaceId),
         log: (line) => console.error(line),
     });
+    // CONFIGURED, not running (genie#624): a site that exists resolves whether or not it is up, so a start or a stop never
+    // moves the hosts file. Unioned with what is up only so a name Caddy serves always resolves (a site started by
+    // hand that its envelope declares disabled).
+    const configuredHosts = (): string[] => [
+        ...new Set([
+            ...sites.list().filter((s) => s.state !== 'unservable' && !envelopeSites.disabled(s.id)).map((s) => s.host),
+            ...sites.routes().map((r) => r.host),
+        ]),
+    ];
     const frontDoor = new GenRouterServer(routes);
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
@@ -577,14 +680,21 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         now,
         sites,
         supervisor,
-        hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData), run: elevationRun }),
+        configuredHosts,
+        hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData) }),
         hostsPath: hostsFilePath(process.platform),
-        runElevated: input.runElevated ?? ((step) => runElevatedViaOs(process.platform, step, elevationRun)),
+        hostsDebounceMs: input.hostsDebounceMs ?? 250,
+        // Every elevation Genie raises goes through this one Elevator: one prompt at a time, batches carried whole.
+        elevator: new Elevator(input.elevate ?? ((steps) => runElevatedBatch(process.platform, steps, elevationRun))),
+        ports: input.frontDoorPorts ?? realFrontDoorPorts(process.platform, (command, args) => execFileRunner(command, args, { timeoutMs: 10_000 })),
     });
     // The workspaces' declared sites, after the front door so it re-renders as they start. Awaited: Hosting's
     // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
+    // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
+    // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
+    frontDoorCtl.beginHosts();
     // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
     const envFiles = new DotEnvSync({
         envFor: (workspaceId) => engines.envFor(workspaceId),
@@ -647,9 +757,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,
         syncHosts: frontDoorCtl.syncHosts,
+        retryFrontDoor: frontDoorCtl.retry,
         trustCertificate: frontDoorCtl.trust,
         deferTrustCertificate: frontDoorCtl.deferTrust,
         routes,
+        configuredHosts,
         deckItems: () => [
             ...approvals.deckItems(),
             ...frontDoorCtl.deckItems(),
@@ -748,6 +860,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 stopWatchingWorkspaces();
                 await envFiles.close();
                 stopLiveness();
+                // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
+                frontDoorCtl.close();
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();

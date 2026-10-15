@@ -226,6 +226,15 @@ export class EnvelopeSites {
         await this.#ports.runState.save([...set].sort());
     }
 
+    /**
+     * A site its workspace declares `enabled: false`: listed, never started at boot, and not CONFIGURED for the hosts
+     * file. A site Hosting created, or one Genie does not track, is not disabled.
+     */
+    disabled(siteId: string): boolean {
+        const t = this.#tracked.get(siteId);
+        return t !== undefined && !t.enabled;
+    }
+
     /** The person's Stop: the processes end and the stop is remembered on this machine through the next launch. */
     async stop(siteId: string): Promise<boolean> {
         if (!this.#sites.stop(siteId)) return false;

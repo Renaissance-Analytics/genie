@@ -59,6 +59,14 @@ describe('the front door lines', () => {
         expect(html).toMatch(/Try again/);
     });
 
+    it(':443 held by another process: the reason naming the holder, and Try again — not the "off" line with nothing to click', () => {
+        const html = render({ running: false, reason: 'another process holds :443 (nginx); https://<name>.gen in external browsers is off until it lets go — the in-app browser still works', blocked: { port: 443, holder: 'nginx' } });
+        expect(lines(html)).toEqual(['data-frontdoor-line="blocked"']);
+        expect(html).toMatch(/another process holds :443 \(nginx\)/);
+        expect(html.match(/Try again/g) ?? []).toHaveLength(1);
+        expect(html).not.toMatch(/Trust certificate/);
+    });
+
     it('no bundled Caddy: the reason, and nothing to click', () => {
         const html = render({ running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' });
         expect(lines(html)).toEqual(['data-frontdoor-line="off"']);
