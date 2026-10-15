@@ -177,8 +177,8 @@ describe('an adopted engine is never created or re-keyed', () => {
         expect(docker.calls.some((c) => c[0] === 'create')).toBe(false);
     });
 
-    it('Mailpit can be added new, from its real tag (`v1.30` — there is no bare `1.30`)', () => {
-        expect(containerPlan({ engine: 'mailpit', major: '1.30', scope: { kind: 'shared' }, publishedPort: 31025 }).image).toBe('axllent/mailpit:v1.30');
+    it('Mailpit can be added new, from its real tag (`v1.30` — there is no bare `1.30`) — with its web inbox published too (H6)', () => {
+        expect(containerPlan({ engine: 'mailpit', major: '1.30', scope: { kind: 'shared' }, publishedPort: 31025, surfacePorts: { ui: 38025 } }).image).toBe('axllent/mailpit:v1.30');
     });
 });
 
@@ -196,9 +196,20 @@ describe('an adopted engine is addressed by ITS container and ITS volume', () =>
         expect(docker.calls.flat()).not.toContain('genie-shared-postgres-17');
     });
 
-    it('delete-data removes the volume the container actually mounts', async () => {
-        await registry.remove(pg17.id, { deleteData: true });
-        expect(docker.calls.filter((c) => c[0] === 'volume')).toEqual([['volume', 'rm', 'example-pgdata']]);
+    it('delete-data on Genie 1’s shared engine is REFUSED while another workspace keeps its database there — BETA named, nothing removed (H6)', async () => {
+        await expect(registry.remove(pg17.id, { deleteData: true, workspaceId: ALPHA })).rejects.toThrow('ws_ws_beta (workspace ws-beta)');
+        expect(docker.calls.filter((c) => c[0] === 'rm' || c[0] === 'volume')).toEqual([]);
+        expect(registry.list().map((i) => i.id)).toContain(pg17.id);
+    });
+
+    it('delete-data by its sole holder removes the volume the container actually mounts', async () => {
+        const alphaOnly = adopted({
+            id: 'svc_v1_postgres-16', engine: 'postgres', version: '16', publishedPort: 35416, containerName: 'genie-svc-postgres-16', volume: 'example-pg16data',
+            slices: { [ALPHA]: slice('ws_ws_alpha', 'alpha-pg16-pw', { active: true }) },
+        });
+        await registry.adoptFromV1({ instances: [alphaOnly], record: RECORD });
+        await registry.remove(alphaOnly.id, { deleteData: true, workspaceId: ALPHA });
+        expect(docker.calls.filter((c) => c[0] === 'volume')).toEqual([['volume', 'rm', 'example-pg16data']]);
     });
 
     it("switching the active version is the WORKSPACE's slice: ALPHA moves to 16, BETA stays where it was", async () => {

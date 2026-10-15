@@ -5,7 +5,7 @@ import { isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm } from '../core/forms.js';
-import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding, SiteEditing } from '../renderer/features.js';
+import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
@@ -13,7 +13,7 @@ import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { ComposedServices } from './compose.js';
 import {
-    createService, createSite, openSite, removeService, removeSite, restartSite, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite,
+    createService, createSite, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite,
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
@@ -69,6 +69,8 @@ export interface FeatureState {
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
     serviceAdding?: ServiceAdding | null;
+    /** The engine log the person opened in the Services tab (H6), until they hide it. */
+    serviceLogs?: ServiceLogs | null;
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
@@ -170,7 +172,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : services.supervisor.list()), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null },
+        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
@@ -356,7 +358,17 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await stopService(services, action.serviceId);
             break;
         case 'services.remove':
-            await removeService(services, action.serviceId, { deleteData: action.deleteData });
+            // A delete-data acts for `workspaceId` (the Services tab sends the engine's sole data holder, core/service-tenancy.ts);
+            // refused, with the other holders named, while anyone else keeps data in it.
+            await removeService(services, action.serviceId, { deleteData: action.deleteData, ...(action.workspaceId ? { workspaceId: action.workspaceId } : {}) });
+            if (state.serviceLogs?.serviceId === action.serviceId) next.serviceLogs = null;
+            break;
+        case 'services.logs':
+            // Read when asked — never on every snapshot: `docker logs` is a call per engine, and a log is looked at, not watched.
+            next.serviceLogs = { serviceId: action.serviceId, ...(await serviceLogs(services, action.serviceId, action.tail)) };
+            break;
+        case 'services.hideLogs':
+            next.serviceLogs = null;
             break;
         case 'toolchain.check': {
             const tc = ports.toolchain;

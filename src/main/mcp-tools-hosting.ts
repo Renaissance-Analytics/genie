@@ -4,9 +4,9 @@ import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
-import { imageFor, SERVICE_CATALOG, type ServiceInstance } from '../core/services.js';
+import { DEFAULT_CUSTOM_NAME, imageFor, SERVICE_CATALOG, type ServiceInstance } from '../core/services.js';
 import {
-    createService, createSite, detectSite, openSite, removeService, removeSite, restartSite, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite,
+    createService, createSite, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite,
     type HostingServices, type OpenInBrowser,
 } from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
@@ -28,7 +28,11 @@ import type { SiteInfo } from './site-manager.js';
  *   `logs`, `restart` and `open` act at once, on the workspace's own sites only; `open` puts the site in front of the
  *   person in Genie's browser.
  * - Never deleting data: `remove` keeps the engine's data volume, and asking for anything else is refused outright.
+ * - A custom image is added only through the same approval, with the IMAGE named to the person (and the env names, never
+ *   their values) — an agent never runs an image the person did not see.
  * - `env` names every variable with its value, secrets masked — the processes get the real ones, the transcript does not.
+ * - `logs` is the end of an engine's output with every credential Genie holds for that engine masked in it: a shared
+ *   engine's log can carry another workspace's statements (a failed `ALTER ROLE … PASSWORD` is logged whole).
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
@@ -51,7 +55,21 @@ const err = (message: string, extra: Record<string, unknown> = {}): McpToolResul
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
 
 const MASK = '********';
-const SECRET_NAME = /PASSWORD|SECRET|TOKEN/i;
+// `…_KEY` too: Meilisearch's MEILISEARCH_KEY is its master key (an `AWS_ACCESS_KEY_ID` ends `_ID`: the bucket name, not a secret).
+const SECRET_NAME = /PASSWORD|SECRET|TOKEN|(^|_)KEY$/i;
+
+/** Every credential Genie holds for an engine — its admin's, its own, each workspace slice's: what a log answer masks. */
+function secretsOf(i: ServiceInstance): string[] {
+    return [i.admin?.password, i.credentials.password, ...Object.values(i.slices ?? {}).map((x) => x.password)]
+        .filter((p): p is string => typeof p === 'string' && p.length >= 4);
+}
+
+/** Text with each of `secrets` replaced by the mask, longest first (one secret may contain another). */
+export function maskSecrets(text: string, secrets: readonly string[]): string {
+    let out = text;
+    for (const s of [...secrets].sort((a, b) => b.length - a.length)) out = out.split(s).join(MASK);
+    return out;
+}
 
 /**
  * A workspace's service env for an agent to READ: every name, every value — except secrets. A variable whose name says
@@ -92,9 +110,25 @@ function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<Engi
         host: '127.0.0.1',
         port: i.publishedPort,
         active,
+        // The surfaces beside the primary port, by name — and Mailpit's web inbox as the address to open.
+        ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}),
+        ...(i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? { inbox: `http://127.0.0.1:${i.publishedPorts.ui}/` } : {}),
+        ...(i.engine === 'custom' && i.image ? { image: i.image } : {}),
         ...(i.adopted ? { takenOverFromGenie1: true } : {}),
         ...(status ? { status: status.status, ...(status.note ? { note: status.note } : {}) } : {}),
     };
+}
+
+/** An agent's `env` argument for a custom image: an object of string values, or why not. */
+function customEnvArg(v: unknown): Record<string, string> | string {
+    if (v === undefined) return {};
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) return '`env` is an object of NAME: value strings';
+    const out: Record<string, string> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (typeof x !== 'string') return `\`env\`: ${JSON.stringify(k)} must be a string`;
+        out[k] = x;
+    }
+    return out;
 }
 
 function siteView(s: SiteInfo): Record<string, unknown> {
@@ -119,23 +153,30 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
     const services: Registration = {
         definition: new ToolDefinition(
             'services',
-            'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit, Reverb. GENIE runs them: never run `docker` (or docker compose) yourself. '
-                + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL…). '
+            'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), Reverb, Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
+                + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, MEILISEARCH_*, AWS_*…). '
                 + 'Actions: `catalog` — the engines and versions Genie offers, with each image. '
-                + '`list` — this workspace’s engines and the shared ones, with live status. '
+                + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox). '
                 + '`env` — the variables a process here gets: names and values, secrets masked. '
+                + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
                 + '`add` {engine, version, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. '
+                + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?} — always dedicated; the person sees the image before anything is pulled. '
                 + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
                 + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab).',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'add', 'start', 'stop', 'remove'] },
-                    engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, reverb).' },
-                    version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17).' },
+                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'add', 'start', 'stop', 'remove'] },
+                    engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, reverb, meilisearch, seaweedfs, custom).' },
+                    version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
                     scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine).' },
-                    id: { type: 'string', description: 'start / stop / remove: the engine’s id, from `list`.' },
+                    image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
+                    port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
+                    env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
+                    name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}".` },
+                    id: { type: 'string', description: 'logs / start / stop / remove: the engine’s id, from `list`.' },
+                    tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
                     deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
                 },
                 required: ['action'],
@@ -159,8 +200,9 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                         engines: SERVICE_CATALOG.filter((d) => !d.adoptOnly).map((d) => ({
                             engine: d.engine,
                             versions: d.majors,
-                            scopes: d.sharing === 'shared-only' ? ['shared'] : ['dedicated', 'shared'],
+                            scopes: d.sharing === 'shared-only' ? ['shared'] : d.sharing === 'dedicated-only' ? ['dedicated'] : ['dedicated', 'shared'],
                             images: d.majors.map((m) => imageFor(d, m)),
+                            ...(d.custom ? { note: 'any image you name, with its port and env — the person sees the image and approves it before anything is pulled' } : {}),
                         })),
                     });
                 case 'list': {
@@ -171,20 +213,39 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const { variables, masked } = maskEnv(s.engines.envFor(caller.workspaceId));
                     return ok({ ok: true, variables, masked, note: ENV_NOTE });
                 }
+                case 'logs': {
+                    const i = own(str(args.id));
+                    if (typeof i === 'string') return err(i);
+                    if (args.tail !== undefined && typeof args.tail !== 'number') return err('`tail` is a number of lines');
+                    const r = await serviceLogs(s, i.id, typeof args.tail === 'number' ? args.tail : undefined);
+                    return ok({ ok: true, id: i.id, engine: i.engine, version: i.version, tail: r.tail, logs: maskSecrets(r.text, secretsOf(i)) });
+                }
                 case 'add': {
                     const engine = str(args.engine);
-                    const version = str(args.version);
+                    const custom = engine === 'custom';
+                    // A custom image has no version: its name stands in (one per name per workspace).
+                    const version = custom ? (str(args.name) ?? DEFAULT_CUSTOM_NAME) : str(args.version);
                     if (!engine || !version) return err('add needs `engine` and `version`; `services catalog` lists them');
                     if (args.scope !== undefined && args.scope !== 'dedicated' && args.scope !== 'shared') return err('`scope` is dedicated or shared');
-                    const form: ServiceForm = { workspaceId: caller.workspaceId, engine, major: version, scope: args.scope === 'shared' ? 'shared' : 'dedicated' };
+                    const env = custom ? customEnvArg(args.env) : {};
+                    if (typeof env === 'string') return err(env);
+                    if (custom && args.port !== undefined && typeof args.port !== 'number') return err('`port` is a number');
+                    const form: ServiceForm = {
+                        workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' ? 'shared' : 'dedicated',
+                        ...(custom ? { custom: { name: version, image: str(args.image) ?? '', port: typeof args.port === 'number' ? args.port : null, env } } : {}),
+                    };
                     // The form's own validation, BEFORE anyone is asked: a request Genie would refuse is never put to the person.
                     const problems = validateServiceForm(form);
                     if (problems.length > 0) return err(problems.map((p) => p.message).join(' '), { problems });
                     const def = SERVICE_CATALOG.find((d) => d.engine === engine)!;
-                    const image = imageFor(def, version);
+                    const image = form.custom ? form.custom.image : imageFor(def, version);
                     const where = form.scope === 'shared' ? 'shared by every workspace on this machine' : 'for this workspace only';
-                    const verdict = await deps.approve(caller, 'services.add', `${engine} ${version}, ${where} — Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`);
-                    if (verdict !== 'allowed') return err(`adding ${engine} ${version} was denied by the person; nothing was pulled or created`);
+                    // A custom image is named to the person BEFORE anything runs — the image, its port, and its env NAMES (never values).
+                    const what = form.custom
+                        ? `a custom image ${image} named "${version}" (listening on ${form.custom.port} inside)${Object.keys(env).length > 0 ? `, env ${Object.keys(env).join(', ')}` : ''}`
+                        : `${engine} ${version}`;
+                    const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`);
+                    if (verdict !== 'allowed') return err(`adding ${form.custom ? `the custom image ${image}` : `${engine} ${version}`} was denied by the person; nothing was pulled or created`);
                     // The person's approval, which named the image, IS the pull's consent.
                     const r = await createService(s, form, true);
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems });
@@ -218,7 +279,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     return ok({ ok: true, removed: i.id, dataKept: true });
                 }
                 default:
-                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, add, start, stop, remove`);
+                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, start, stop, remove`);
             }
         }),
     };

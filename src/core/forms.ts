@@ -144,17 +144,51 @@ export function validateFlowForm(form: FlowForm): Problem[] {
 
 export type ServiceScopeKind = 'dedicated' | 'shared';
 
+/** A custom image, as the person (or an agent, through the person's approval) names it — Genie 1's custom escape hatch. */
+export interface CustomServiceForm {
+    /** One per name per workspace; the container is `genie-<workspace>-custom-<name>` and the env `GENIE_SERVICE_CUSTOM_<NAME>_*`. */
+    readonly name: string;
+    readonly image: string;
+    /** The port the image listens on inside its container; `null` = not given yet. */
+    readonly port: number | null;
+    /** The container's env, and the workspace's (Genie 1 gave both). */
+    readonly env: Readonly<Record<string, string>>;
+}
+
 /** "Add an engine": which engine, which major, dedicated to the workspace or shared by the workstation. */
 export interface ServiceForm {
     readonly workspaceId: string;
     readonly engine: string;
+    /** The major; ignored for `custom`, which has none. */
     readonly major: string;
     readonly scope: ServiceScopeKind;
+    /** `custom` only. */
+    readonly custom?: CustomServiceForm;
 }
 
 export function serviceFormDefaults(input: { workspaceId: string }): ServiceForm {
     const def = SERVICE_CATALOG[0]!;
     return { workspaceId: input.workspaceId, engine: def.engine, major: def.majors[def.majors.length - 1]!, scope: 'dedicated' };
+}
+
+/** Genie 1's validation of a custom image (services-config.ts IMAGE_REF / ENV_NAME): what goes onto `docker create`'s argv. */
+const IMAGE_REF = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]{0,254}$/;
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const CUSTOM_NAME = /^[a-z][a-z0-9-]{0,30}$/;
+
+function validateCustom(form: ServiceForm, problems: Problem[]): void {
+    const c = form.custom;
+    if (form.scope !== 'dedicated') problems.push({ field: 'scope', message: 'A custom image is always dedicated to its workspace — an arbitrary image has no multi-tenant story to share.' });
+    if (!c) {
+        problems.push({ field: 'image', message: 'A custom engine needs its image and the port it listens on.' });
+        return;
+    }
+    if (!CUSTOM_NAME.test(c.name)) problems.push({ field: 'name', message: `"${c.name}" is not a name Genie can give a container: lowercase letters, digits and hyphens, starting with a letter, at most 31.` });
+    if (!IMAGE_REF.test(c.image)) problems.push({ field: 'image', message: c.image.trim() === '' ? 'Name the image to run (for example registry.example/team/app:1).' : `"${c.image}" is not an image reference Genie will run.` });
+    if (c.port === null || !Number.isInteger(c.port) || c.port < 1 || c.port > 65535) problems.push({ field: 'port', message: 'The port the image listens on inside its container: a whole number from 1 to 65535.' });
+    const badNames = Object.keys(c.env).filter((k) => !ENV_NAME.test(k));
+    if (badNames.length > 0) problems.push({ field: 'env', message: `Not environment variable names: ${badNames.map((k) => JSON.stringify(k)).join(', ')} (one NAME=value per line).` });
+    if (Object.values(c.env).some((v) => typeof v !== 'string' || v.includes('\0'))) problems.push({ field: 'env', message: 'An environment value cannot hold a NUL byte.' });
 }
 
 export function validateServiceForm(form: ServiceForm): Problem[] {
@@ -167,6 +201,10 @@ export function validateServiceForm(form: ServiceForm): Problem[] {
     }
     if (!def) {
         problems.push({ field: 'engine', message: `${form.engine} is not an engine Genie manages.` });
+        return problems;
+    }
+    if (def.custom) {
+        validateCustom(form, problems);
         return problems;
     }
     if (!def.majors.includes(form.major)) problems.push({ field: 'major', message: `${form.engine} ${form.major} is not a version Genie knows (${def.majors.join(', ')}).` });

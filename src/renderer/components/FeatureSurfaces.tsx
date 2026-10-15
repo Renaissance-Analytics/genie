@@ -8,6 +8,7 @@ import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditi
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
+import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
@@ -268,7 +269,7 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
     );
 }
 
-export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
+export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
     const hosting = data.hosting;
     return (
         <div data-surface="hosting" className="flex h-full min-h-0 flex-col">
@@ -336,7 +337,7 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                             <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
-                            <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} />
+                            <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} onNavigate={onNavigate} />
                         </Tabs.Panel>
                     </Tabs.Panels>
                 </Tabs>
@@ -473,13 +474,51 @@ function sameScope(a: ServiceInstance, b: ServiceInstance): boolean {
     return a.scope.kind === b.scope.kind && (a.scope.kind === 'shared' || (b.scope.kind === 'dedicated' && a.scope.workspaceId === b.scope.workspaceId));
 }
 
+/** Mailpit's web inbox on its own loopback port, when the engine publishes it (Genie 1's `ui` surface). */
+export function inboxUrlOf(i: ServiceInstance): string | null {
+    return i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? `http://127.0.0.1:${i.publishedPorts.ui}/` : null;
+}
+
+/**
+ * "Remove and delete data", confirmed ON THE ROW (H6): it says exactly what is deleted — the volume and whose data is
+ * in it — before the button that does it. When another workspace keeps data in the engine there is NO delete button,
+ * only why (core/service-tenancy.ts, the same verdict main enforces). It acts for the engine's sole holder.
+ */
+export function DeleteDataConfirm({ instance, workspaces, onAction, onCancel }: { instance: ServiceInstance; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; onCancel: () => void }) {
+    const holder = soleHolderOf(instance);
+    const verdict = deleteDataVerdict(instance, holder, (id) => workspaceLabel(workspaces, id));
+    return (
+        <div data-delete-confirm={instance.id} data-delete-allowed={verdict.allowed ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--danger)] px-3 py-2 text-sm">
+            {verdict.allowed ? (
+                <>
+                    <span>Removes {instance.engine} {instance.version} and deletes {verdict.deletes}. This cannot be undone.</span>
+                    <button
+                        type="button"
+                        className="ml-auto rounded-lg bg-[var(--danger)] px-2.5 py-1 text-[13px] text-white"
+                        onClick={() => onAction({ kind: 'services.remove', serviceId: instance.id, deleteData: true, ...(holder ? { workspaceId: holder } : {}) })}
+                    >
+                        Delete the data
+                    </button>
+                </>
+            ) : (
+                <span data-delete-refused>{verdict.reason}</span>
+            )}
+            <button type="button" className={verdict.allowed ? 'text-[13px]' : 'ml-auto text-[13px]'} onClick={onCancel}>Keep it</button>
+        </div>
+    );
+}
+
 /**
  * SERVICE ENGINES (§6.6). Each row: engine and version, scope, status as Docker reported it, the
  * loopback port. The active version is marked; another version offers "Make active" with the data
- * warning ON THE ROW, before the click — a switch is never a surprise. Remove keeps the data volume.
+ * warning ON THE ROW, before the click — a switch is never a surprise. Remove keeps the data volume;
+ * "Remove and delete data…" opens a confirmation that names what is deleted, or why it may not be.
+ * "Logs" reads the end of the engine's own output; a Mailpit row opens its web inbox in Genie's browser.
  */
-function ServicesPanel({ services, workspaces, onAction }: { services: FeatureData['services']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+function ServicesPanel({ services, workspaces, onAction, onNavigate }: { services: FeatureData['services']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; onNavigate: SurfaceProps['onNavigate'] }) {
+    const [confirming, setConfirming] = useState<string | null>(null);
     if (services === null) return <Skeletons />;
+    const logs = services.logs ?? null;
     return (
         <div className="flex flex-col">
             <form
@@ -492,13 +531,15 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
                 </button>
             </form>
             {services.instances.length === 0 ? (
-                <Empty>No service engines yet. Add an engine — Postgres, MySQL, MariaDB, Redis, Mongo — dedicated to a workspace or shared by the workstation.</Empty>
+                <Empty>No service engines yet. Add an engine — Postgres, MySQL, MariaDB, Redis, Mongo, Mailpit, Meilisearch, S3, or an image of your own — dedicated to a workspace or shared by the workstation.</Empty>
             ) : (
                 <ul className="divide-y divide-[var(--border-1)]">
                     {services.instances.map(({ instance: i, status, note }) => {
                         const activeSibling = services.instances.find((o) => o.instance.engine === i.engine && o.instance.active && sameScope(o.instance, i))?.instance;
                         const warning = !i.active && activeSibling ? switchActiveWarning({ engine: i.engine, from: activeSibling.version, to: i.version }) : null;
                         const scope = i.scope;
+                        const inbox = inboxUrlOf(i);
+                        const myLog = logs?.serviceId === i.id ? logs : null;
                         return (
                             <li key={i.id} data-service={i.id} data-service-status={status} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
@@ -507,20 +548,37 @@ function ServicesPanel({ services, workspaces, onAction }: { services: FeatureDa
                                     <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
                                     <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{i.publishedPort}</span>
+                                    {i.engine === 'custom' && i.image ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
                                     <span className="ml-auto flex gap-3 text-[13px]">
                                         {warning !== null && scope.kind === 'dedicated' ? (
                                             <button type="button" onClick={() => onAction({ kind: 'services.setActive', workspaceId: scope.workspaceId, engine: i.engine, version: i.version })}>Make active</button>
+                                        ) : null}
+                                        {inbox ? (
+                                            // In Genie's own browser: the surface first (it reports the box the page is placed in), then the page.
+                                            <button type="button" data-open-inbox={inbox} onClick={() => { onNavigate('genie://browser'); onAction({ kind: 'browser.navigate', url: inbox }); }}>Open inbox</button>
                                         ) : null}
                                         {status === 'running' ? (
                                             <button type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</button>
                                         ) : (
                                             <button type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</button>
                                         )}
+                                        <button type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</button>
                                         <button type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</button>
+                                        <button type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</button>
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
                                 {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
+                                {confirming === i.id ? <DeleteDataConfirm instance={i} workspaces={workspaces} onAction={onAction} onCancel={() => setConfirming(null)} /> : null}
+                                {myLog ? (
+                                    <div data-service-log={i.id} className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-3 text-xs text-[var(--fg-3)]">
+                                            <span>Logs · the last {myLog.tail} lines Docker kept for this engine</span>
+                                            <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'services.hideLogs' })}>Hide logs</button>
+                                        </div>
+                                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{myLog.text === '' ? 'The engine has written nothing yet.' : myLog.text}</pre>
+                                    </div>
+                                ) : null}
                             </li>
                         );
                     })}

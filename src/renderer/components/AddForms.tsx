@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { Input } from '@particle-academy/react-fancy';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
-import { SERVICE_CATALOG } from '../../core/services.js';
+import { DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
 
 /**
  * THE FORMS — "Add a site" and "Add a flow".
@@ -165,6 +166,9 @@ export interface AddServiceFormProps {
  * plain "Add engine" never pulls.
  */
 export function AddServiceForm({ defaults, problems, consent, workspaceName, onSubmit, onCancel }: AddServiceFormProps) {
+    // Which engine is picked decides which fields there are: a custom image has no version, and needs its image and port.
+    const [engine, setEngine] = useState(defaults.engine);
+    const custom = engine === 'custom';
     return (
         <form
             data-form="add-service"
@@ -173,12 +177,24 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
                 e.preventDefault();
                 const data = new FormData(e.currentTarget);
                 const pull = (e.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'pull';
+                const picked = String(data.get('engine') ?? '');
+                const port = String(data.get('port') ?? '').trim();
                 onSubmit(
                     {
                         workspaceId: defaults.workspaceId,
-                        engine: String(data.get('engine') ?? ''),
+                        engine: picked,
                         major: String(data.get('major') ?? '').trim(),
                         scope: data.get('scope') === 'shared' ? 'shared' : 'dedicated',
+                        ...(picked === 'custom'
+                            ? {
+                                custom: {
+                                    name: String(data.get('name') ?? '').trim() || DEFAULT_CUSTOM_NAME,
+                                    image: String(data.get('image') ?? '').trim(),
+                                    port: port === '' ? null : Number(port),
+                                    env: parseEnvLines(String(data.get('env') ?? '')),
+                                },
+                            }
+                            : {}),
                     },
                     pull,
                 );
@@ -186,19 +202,40 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
         >
             <p className="text-sm text-[var(--fg-3)]">An engine in a container on this machine, reached over 127.0.0.1 on a port Genie picks. Its credentials go into the workspace’s environment.</p>
             <Row label="Engine">
-                <select name="engine" defaultValue={defaults.engine} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                <select name="engine" defaultValue={defaults.engine} onChange={(e) => setEngine(e.currentTarget.value)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
                     {SERVICE_CATALOG.filter((d) => !d.adoptOnly).map((d) => (
                         <option key={d.engine} value={d.engine}>
-                            {d.engine} — {d.sharing === 'shared-only' ? 'shared, one per workstation' : `versions ${d.majors.join(', ')}`}
+                            {d.engine} — {d.custom ? 'an image you name, dedicated to this workspace' : d.sharing === 'shared-only' ? 'shared, one per workstation' : `versions ${d.majors.join(', ')}`}
                         </option>
                     ))}
                 </select>
                 <ProblemLine field="engine" problems={problems} />
             </Row>
-            <Row label="Version (major)">
-                <Input name="major" defaultValue={defaults.major} placeholder="17" />
-                <ProblemLine field="major" problems={problems} />
-            </Row>
+            {custom ? (
+                <div data-custom-fields className="flex flex-col gap-4">
+                    <Row label="Image">
+                        <Input name="image" defaultValue={defaults.custom?.image ?? ''} placeholder="registry.example/team/app:1" />
+                        <ProblemLine field="image" problems={problems} />
+                    </Row>
+                    <Row label="Port it listens on (inside its container)">
+                        <Input name="port" type="number" defaultValue={defaults.custom?.port != null ? String(defaults.custom.port) : ''} placeholder="8080" />
+                        <ProblemLine field="port" problems={problems} />
+                    </Row>
+                    <Row label="Name">
+                        <Input name="name" defaultValue={defaults.custom?.name ?? DEFAULT_CUSTOM_NAME} />
+                        <ProblemLine field="name" problems={problems} />
+                    </Row>
+                    <Row label="Environment (NAME=value, one per line) — the container gets it, and so does the workspace">
+                        <textarea name="env" rows={3} defaultValue={Object.entries(defaults.custom?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n')} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 font-mono text-sm" />
+                        <ProblemLine field="env" problems={problems} />
+                    </Row>
+                </div>
+            ) : (
+                <Row label="Version (major)">
+                    <Input name="major" defaultValue={defaults.major} placeholder="17" />
+                    <ProblemLine field="major" problems={problems} />
+                </Row>
+            )}
             <fieldset className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Scope</span>
                 <label className="flex items-center gap-2">

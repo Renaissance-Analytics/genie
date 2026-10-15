@@ -42,6 +42,7 @@ function fakeDocker() {
         if (cmd === 'start') { containers.set(args[1]!, 'running'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'stop') { containers.set(args[1]!, 'exited'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'rm') { containers.delete(args[2]!); return { stdout: '', exitCode: 0 }; }
+        if (cmd === 'logs') return { stdout: `${args.at(-1)} is ready\n`, exitCode: 0 };
         return { stdout: '', exitCode: 0 };
     };
     return { run, calls, images, containers, daemon };
@@ -90,7 +91,8 @@ afterEach(async () => {
 describe('the snapshot', () => {
     it('has a services section, MEASURED empty before anything is added (not null), with no form open', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.services).toEqual({ instances: [], adding: null });
+        // `logs: null`: no engine log is open (one is read only when the person asks — H6).
+        expect(snap.services).toEqual({ instances: [], adding: null, logs: null });
     });
 });
 
@@ -169,6 +171,35 @@ describe('an engine that exists', () => {
         expect(removed.services!.instances.map((v) => v.instance.version)).toEqual(['16']);
         expect(docker.calls.some((c) => c[0] === 'volume')).toBe(false);
         await expect(handleFeatureAction(services, { kind: 'services.stop', serviceId: id }, state())).rejects.toThrow(/no service/);
+    });
+});
+
+describe('an engine’s log and its data (H6)', () => {
+    it('Logs reads the engine’s output once, when asked — it rides the next snapshots until hidden; no snapshot calls `docker logs` by itself (counted)', async () => {
+        const added = await handleFeatureAction(services, { kind: 'services.create', form, consent: true }, state());
+        const id = added.services!.instances[0]!.instance.id;
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toHaveLength(0);
+        const shown = await handleFeatureAction(services, { kind: 'services.logs', serviceId: id }, state());
+        expect(shown.services!.logs).toEqual({ serviceId: id, text: 'genie-tynn-postgres-17 is ready\n', tail: 500 });
+        // The state main keeps carries it; a snapshot from it shows the same log WITHOUT asking Docker again.
+        const kept = state({ serviceLogs: shown.services!.logs! });
+        expect((await featureSnapshot(services, kept)).services!.logs).toEqual(shown.services!.logs);
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toHaveLength(1);
+        expect((await handleFeatureAction(services, { kind: 'services.hideLogs' }, kept)).services!.logs).toBeNull();
+    });
+
+    it('delete data of a shared engine two workspaces use is REFUSED through the tab, naming the other; the sole holder deletes (control)', async () => {
+        const shared = { workspaceId: 'tynn', engine: 'postgres', major: '17', scope: 'shared' as const };
+        await handleFeatureAction(services, { kind: 'services.create', form: shared, consent: true }, state());
+        await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, workspaceId: 'fancy' }, consent: true }, state());
+        const id = services.engines.list()[0]!.id;
+        await expect(handleFeatureAction(services, { kind: 'services.remove', serviceId: id, deleteData: true, workspaceId: 'tynn' }, state())).rejects.toThrow('ws_fancy (workspace fancy)');
+        expect(docker.calls.filter((c) => c[0] === 'rm' || c[0] === 'volume')).toEqual([]);
+
+        const solo = await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, major: '16' }, consent: true }, state());
+        const soloId = solo.services!.instances.find((v) => v.instance.version === '16')!.instance.id;
+        await handleFeatureAction(services, { kind: 'services.remove', serviceId: soloId, deleteData: true, workspaceId: 'tynn' }, state());
+        expect(docker.calls.filter((c) => c[0] === 'volume')).toEqual([['volume', 'rm', 'genie-shared-postgres-16-data']]);
     });
 });
 

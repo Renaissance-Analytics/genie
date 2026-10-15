@@ -20,7 +20,7 @@ import type { PtyPort } from '../src/main/terminal-host.js';
 const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
 /** The calls that must live in hosting-actions.ts only. */
-const DIRECT = [/\.engines\.add\(/, /\.engines\.setActive\(/, /\.envelopeSites\.(create|start|stop|remove)\(/, /\.(startEngine|stopEngine|removeEngine)\(/, /validateSiteForm\(/, /validateServiceForm\(/];
+const DIRECT = [/\.engines\.add\(/, /\.engines\.setActive\(/, /\.engines\.logs\(/, /\.envelopeSites\.(create|start|stop|remove)\(/, /\.(startEngine|stopEngine|removeEngine)\(/, /validateSiteForm\(/, /validateServiceForm\(/];
 /**
  * The one exception, by design: the agent tool runs the SAME `validateServiceForm` once more BEFORE it asks the person,
  * so a request Genie would refuse is never put to them. The add itself still goes through `createService`.

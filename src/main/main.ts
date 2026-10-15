@@ -1398,7 +1398,8 @@ async function boot(): Promise<void> {
             const shown = await browserPane.show(data.browser.url);
             if (!shown.ok) console.error('[genie] browser:', shown.reason);
         }
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null };
+        // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null };
         return data;
     });
 
