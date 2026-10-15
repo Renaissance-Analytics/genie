@@ -23,6 +23,7 @@ function deps(asked: string[]): AllToolsDeps {
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller },
         attention: { resolveCaller, openFile: async () => ({ ok: false, reason: 'x' }), feedback: never as never },
         sidecar: { resolveCaller, roster: () => [], register: never as never, start: never as never, running: () => false, addressOf: () => '' },
+        hosting: { resolveCaller, approve: async () => 'denied', services: null },
         plugins: { plugins: { tools: () => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }], guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller },
     };
 }
@@ -48,7 +49,7 @@ describe('the session key', () => {
 
     it('is the caller for EVERY tool, whatever terminalId the model invents — counted, the offenders named', async () => {
         const calls = await callAll({ terminalId: 'genie' }, { 'genie-session': 'session-k' });
-        expect(calls.length).toBe(11);
+        expect(calls.length).toBe(13);
         expect(calls.filter((c) => c.asked.join() !== 'session-k').map((c) => `${c.name}: ${c.asked.join()}`)).toEqual([]);
     });
 
@@ -63,7 +64,7 @@ describe('the session key', () => {
     it('the control: with no session key, a plain terminal is still known by its terminalId — every tool', async () => {
         const calls = await callAll({ terminalId: 'term_7' }, {});
         expect(calls.filter((c) => c.asked.join() !== 'term_7').map((c) => c.name)).toEqual([]);
-        expect(calls.length).toBe(11);
+        expect(calls.length).toBe(13);
     });
 
     it('with neither, one message everywhere: a session leaves it out, a terminal passes GENIE_TERMINAL_ID', async () => {

@@ -37,7 +37,8 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`agentinbox\` to reach another agent. Never edit another agent's files to talk to it.
 - \`lists\` for your own checklist and for things only a person can do.
 - \`openFileForUser\` to put a file in front of the person.
-- \`manageTerminals\` for shells, builds and services. You are never run in one yourself.
+- \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
+- \`manageTerminals\` for shells and builds. You are never run in one yourself.
 - \`runAgent\` to start your sidecar, a review partner with its own context.
 - \`knowledge\` for the workstation's knowledge graph.
 - \`thumbsUp\` to say you are ready; \`submitFeedback\` to tell Genie's makers about Genie itself.
@@ -70,9 +71,24 @@ Use \`agentinbox\` to list peers, send a message, receive your mail and check re
         description: 'Use when you need a shell, a build, a long-running service, or your sidecar in Genie.',
         body: `# Terminals and your sidecar
 
-Use \`manageTerminals\` to list, create, write to and read the workspace's terminals. Creating one and writing to one may need the person's approval. Multi-line text is pasted as one block and Enter is sent separately. A read that says \`dropped: true\` was cut at the scrollback cap. Terminals are for shells, builds and services; no agent runs in one.
+Use \`manageTerminals\` to list, create, write to and read the workspace's terminals. Creating one and writing to one may need the person's approval. Multi-line text is pasted as one block and Enter is sent separately. A read that says \`dropped: true\` was cut at the scrollback cap. Terminals are for shells and builds; no agent runs in one. A terminal already has the workspace's service variables.
+
+Services and sites are not terminal work: use \`services\` and \`sites\`, and Genie sets them up, starts and stops them. Never run docker yourself.
 
 Use \`runAgent\` with action \`sidecar\` to start \`<agent>-slave\`, your review partner. Calling it again rejoins the same one. Genie never stops it for you.
+`,
+    },
+    {
+        name: 'genie-services',
+        description: 'Use when the workspace needs a database, Redis, mail, Reverb or a site served in Genie: Genie runs them, never docker.',
+        body: `# Services and sites
+
+Genie sets up, starts and stops the workspace's service engines and sites. Never run docker, docker compose, or a database or web server of your own for them.
+
+- \`services\` with action \`catalog\` lists the engines and versions; \`list\` shows this workspace's engines and the shared ones with their live status; \`env\` shows the variables every process here gets, secrets masked.
+- \`services\` with action \`add\` (engine, version, scope) asks the person first, and they see the image Genie will pull. \`start\` and \`stop\` act at once. \`remove\` asks the person and always keeps the data.
+- \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use; \`list\`, \`start\` and \`stop\` act at once; \`remove\` asks the person.
+- Terminals and site processes already have the service variables.
 `,
     },
     {
