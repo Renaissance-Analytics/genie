@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize, relative, sep } from 'node:path';
+import type { ProcessLog } from '../core/output-tail.js';
 import { runtimeDir } from './paths.js';
 import type { ProcessStatus, ProcessSupervisor, RestartPolicy } from './process-supervisor.js';
 import { readJson, writeJsonAtomic } from './store.js';
@@ -44,8 +45,11 @@ export interface KeptProcess {
     readonly changedAt: number;
 }
 
-/** A row of Hosting → Processes: the supervisor's status, plus what the book knows when it is one the person keeps. */
-export type HostedProcess = ProcessStatus & { readonly durable?: true; readonly command?: string };
+/**
+ * A row of Hosting → Processes: the supervisor's status, plus what the book knows when it is one the person keeps, plus
+ * the last lines of its output when the supervisor has any (feature-ipc.ts adds them; kept after an exit or a crash).
+ */
+export type HostedProcess = ProcessStatus & { readonly durable?: true; readonly command?: string; readonly log?: ProcessLog };
 
 export interface CreateProcessInput {
     readonly workspaceId: string;
@@ -207,8 +211,11 @@ export class ProcessBook {
         return { started, heldBack };
     }
 
-    /** Validate, write it down as wanted, then start it. A refusal throws with the reason and keeps nothing. */
-    async create(input: CreateProcessInput): Promise<ProcessStatus> {
+    /**
+     * What `create` would keep, or the refusal it would throw — checked WITHOUT keeping or starting anything, so an agent's
+     * `processes add` that Genie would refuse is never put to the person for approval (mcp-tools-processes.ts).
+     */
+    prepare(input: CreateProcessInput): { readonly name: string; readonly command: string; readonly cwd: string; readonly restart: RestartPolicy } {
         const name = input.name.trim();
         const command = input.command.trim();
         if (!name) throw new Error('a background process needs a name');
@@ -216,6 +223,12 @@ export class ProcessBook {
         if (!RESTART_POLICIES.includes(input.restart)) throw new Error(`restart must be one of ${RESTART_POLICIES.join(', ')}`);
         const cwd = folderInside(input.workspacePath, input.folder);
         if (this.#deps.asleep(input.workspaceId)) throw new Error(`cannot start ${name}: ${ASLEEP_REASON}`);
+        return { name, command, cwd, restart: input.restart };
+    }
+
+    /** Validate, write it down as wanted, then start it. A refusal throws with the reason and keeps nothing. */
+    async create(input: CreateProcessInput): Promise<ProcessStatus> {
+        const { name, command, cwd } = this.prepare(input);
         const kept: KeptProcess = { id: `proc_${randomUUID()}`, workspaceId: input.workspaceId, name, command, cwd, restart: input.restart, wanted: true, changedAt: this.#now() };
         this.#data = { ...this.#data, processes: [...this.#data.processes, kept] };
         await this.#flush();

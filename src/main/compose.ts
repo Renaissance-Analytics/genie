@@ -93,6 +93,12 @@ export interface ComposeInput {
     /** Whether 127.0.0.1:<port> is free to bind (the shared allocator's probe); a real bind probe by default. */
     readonly portFree?: (port: number) => Promise<boolean>;
     readonly now?: () => number;
+    /**
+     * Whether a supervised process's pid is still a live OS process (`osPidAlive` in production, main.ts) — one of the two
+     * questions the supervisor's liveness check asks (P2). Absent = only the pty engine is asked, so a test's fake pids
+     * are never put to the real OS.
+     */
+    readonly pidAlive?: (pid: number) => boolean;
     /** Runs `docker <args>`; execFile in production. A missing Docker answers a non-zero exit, never a throw. */
     readonly docker?: DockerRunner;
     /** ONE readiness probe of an engine on its loopback port; the engine's own handshake over a real socket by default. */
@@ -439,7 +445,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     });
     flowScheduler.plan();
 
-    const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
+    const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
     // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
     // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).
@@ -596,6 +602,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
+    // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
+    // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
+    const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
     return {
@@ -733,6 +742,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
+                stopLiveness();
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 await new Promise<void>((r) => frontDoor.close(r));
                 await flowScheduler.settled();

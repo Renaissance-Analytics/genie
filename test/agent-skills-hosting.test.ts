@@ -28,6 +28,26 @@ describe('the skills Genie writes', () => {
         expect(own?.body).toMatch(/`sites` with action `add`/);
     });
 
+    it('name the processes tool (P3) — in the general skill, in one of its own, and the terminals skill sends work that must keep running to it', () => {
+        const genie = GENIE_SKILLS.find((s) => s.name === 'genie')!;
+        expect(genie.body).toMatch(/^- `processes` for anything that must keep running/m);
+        const own = GENIE_SKILLS.find((s) => s.name === 'genie-processes');
+        expect(own?.description).toMatch(/never nohup/i);
+        for (const action of ['list', 'logs', 'add']) expect(own?.body).toContain(`\`processes\` with action \`${action}\``);
+        expect(own?.body).toMatch(/`add`[^\n]*asks the person first/);
+        expect(own?.body).toMatch(/`remove` asks the person/);
+        const terminals = GENIE_SKILLS.find((s) => s.name === 'genie-terminals')!;
+        expect(terminals.body).toMatch(/must keep running[^\n]*`processes`/);
+        // The terminals skill no longer offers itself for "a long-running service".
+        expect(terminals.description).not.toMatch(/long-running/);
+    });
+
+    it('every line that names nohup says never — counted (control: the skills DO name it)', () => {
+        const nohup = lines.filter((l) => /nohup/i.test(l.line));
+        expect(nohup.length).toBeGreaterThanOrEqual(2);
+        expect(nohup.filter((l) => !/never/i.test(l.line)).map((l) => `${l.skill}: ${l.line}`)).toEqual([]);
+    });
+
     it('every line that mentions docker says never — counted (control: the skills DO mention it)', () => {
         const docker = lines.filter((l) => /docker/i.test(l.line));
         expect(docker.length).toBeGreaterThanOrEqual(2);

@@ -50,6 +50,8 @@ export interface HostBackend {
     resize(id: string, cols: number, rows: number): boolean;
     kill(id: string): boolean;
     getScrollback(id: string): string | undefined;
+    /** Whether the engine holds a live pty under this id (`PtyBackend.isLive`). Optional so a test double may leave it out. */
+    isLive?(id: string): boolean;
     on(event: 'data', listener: (id: string, data: string) => void): unknown;
     on(event: 'exit', listener: (id: string, payload: { exitCode: number; signal?: number }) => void): unknown;
 }
@@ -112,6 +114,8 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
         resize: (id, cols, rows) => backend.resize(id, cols, rows),
         kill: (id) => backend.kill(id),
         scrollback: (id) => backend.getScrollback(id),
+        // Asked of the engine every time (the supervisor's liveness check): never a set this adapter remembers.
+        ...(backend.isLive ? { isLive: (id: string) => backend.isLive!(id) } : {}),
         onData(listener) {
             dataListeners.add(listener);
             return () => dataListeners.delete(listener);

@@ -38,6 +38,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`lists\` for your own checklist and for things only a person can do.
 - \`openFileForUser\` to put a file in front of the person.
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
+- \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
 - \`runAgent\` to start your sidecar, a review partner with its own context.
 - \`knowledge\` for the workstation's knowledge graph.
@@ -70,12 +71,14 @@ Use \`agentinbox\` to list peers, send a message, receive your mail and check re
     },
     {
         name: 'genie-terminals',
-        description: 'Use when you need a shell, a build, a long-running service, or your sidecar in Genie.',
+        description: 'Use when you need a shell, a build, or your sidecar in Genie; something that must keep running goes to `processes`.',
         body: `# Terminals and your sidecar
 
 Use \`manageTerminals\` to list, create, write to and read the workspace's terminals. Creating one and writing to one may need the person's approval. Multi-line text is pasted as one block and Enter is sent separately. A read that says \`dropped: true\` was cut at the scrollback cap. Terminals are for shells and builds; no agent runs in one. A terminal already has the workspace's service variables.
 
 Services and sites are not terminal work: use \`services\` and \`sites\`, and Genie sets them up, starts and stops them. Never run docker yourself.
+
+Neither is a process that must keep running (a queue worker, a watcher): add it with \`processes\`, and Genie keeps it running and keeps its log.
 
 Use \`runAgent\` with action \`sidecar\` to start \`<agent>-slave\`, your review partner. Calling it again rejoins the same one. Genie never stops it for you.
 `,
@@ -91,6 +94,20 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
 - \`services\` with action \`add\` (engine, version, scope) asks the person first, and they see the image Genie will pull. \`start\` and \`stop\` act at once. \`remove\` asks the person and always keeps the data.
 - \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use; \`list\`, \`start\` and \`stop\` act at once; \`remove\` asks the person.
 - Terminals and site processes already have the service variables.
+`,
+    },
+    {
+        name: 'genie-processes',
+        description: 'Use when something must keep running in the background in Genie (a queue worker, a watcher, a dev server) or you need its log; Genie keeps it, never nohup or a terminal.',
+        body: `# Background processes
+
+Genie keeps the workspace's background processes running: it starts each in the workspace with the service variables, restarts it by its policy, brings it back after Genie restarts until it is stopped, and keeps its log after it exits or crashes. Never leave one running in a terminal, with nohup, or with a trailing &.
+
+- \`processes\` with action \`list\` shows this workspace's processes, its sites' servers included.
+- \`processes\` with action \`logs\` (process, lines) reads the end of a process's output, still there after a crash. Read it before you restart something that keeps failing.
+- \`processes\` with action \`add\` (name, command, folder, restart: on-failure, always or never) asks the person first, and they see the command.
+- \`start\`, \`stop\` and \`restart\` act at once on a process this workspace keeps. A site's server belongs to its site: use \`sites\`.
+- \`remove\` asks the person, and the process is no longer brought back.
 `,
     },
     {

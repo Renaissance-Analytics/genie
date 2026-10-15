@@ -5,6 +5,7 @@ import type { AttentionStore } from './attention-store.js';
 import type { FeedbackStore } from './feedback-store.js';
 import type { HostingServices } from './hosting-actions.js';
 import type { HostingApproval } from './mcp-tools-hosting.js';
+import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
 import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
@@ -27,8 +28,8 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly feedback: FeedbackStore;
-    /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval, detail: string) => Promise<'allowed' | 'denied'>;
+    /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
@@ -45,6 +46,8 @@ export interface GenieToolParts {
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** The services and sites the agents' `services` / `sites` tools act on. Absent = this Genie has none (doctor mode), and the tools say so. */
     readonly hosting?: HostingServices;
+    /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
+    readonly processes?: ProcessesPort;
     readonly sidecar: Pick<SidecarToolsDeps, 'register' | 'start' | 'running'>;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
 }
@@ -75,6 +78,11 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             resolveCaller: p.resolveCaller,
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             services: p.hosting ?? null,
+        },
+        processes: {
+            resolveCaller: p.resolveCaller,
+            approve: (caller, action, detail) => p.approve(caller, action, detail),
+            processes: p.processes ?? null,
         },
         attention: { resolveCaller: p.resolveCaller, openFile: p.openFile, feedback: p.feedback },
         sidecar: {

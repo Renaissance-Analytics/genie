@@ -48,6 +48,26 @@ describe('the Processes tab', () => {
         expect(html).toMatch(/hibernated/);
     });
 
+    it('a crashed process shows its log under the row — the output, Genie’s line about the crash, the line count — and the row’s actions are unchanged', () => {
+        const text = ['[genie] started (pid 4001): php artisan queue:work', 'PDOException: could not connect', '[genie] exited with code 1; gave up after 5 consecutive failures'].join('\n');
+        const html = render(data([row({ state: 'failed', pid: null, exitCode: 1, durable: true, command: 'php artisan queue:work', log: { text, lines: 3, dropped: 0 } })]));
+        const start = html.indexOf('data-process-log="p1"');
+        expect(start).toBeGreaterThan(html.indexOf('data-process="p1"'));
+        expect(start).toBeLessThan(html.indexOf('</li>', html.indexOf('data-process="p1"')));
+        expect(html).toMatch(/Log · last 3 lines/);
+        expect(html).toContain('PDOException: could not connect');
+        expect(html).toContain('[genie] exited with code 1; gave up after 5 consecutive failures');
+        expect(buttonsOf(html, 'p1')).toEqual(['Start', 'Remove']);
+    });
+
+    it('a log the bound has cut says so; a row with no output draws no log (control)', () => {
+        const cut = render(data([row({ log: { text: 'line 2001', lines: 1, dropped: 2000 } })]));
+        expect(cut).toMatch(/Log · last 1 line \(earlier output was cut\)/);
+        const none = render(data([row({ durable: true, command: 'npm run watch' })]));
+        expect(none).not.toContain('data-process-log');
+        expect(buttonsOf(none, 'p1')).toEqual(['Stop', 'Restart']);
+    });
+
     it('a site’s process is never offered Remove — it goes with its site', () => {
         const html = render(data([row({ id: 'site:docs', name: 'docs dev server' }), row({ id: 'site:api', name: 'api dev server', state: 'exited', pid: null, exitCode: 1 })]));
         expect(buttonsOf(html, 'site:docs')).toEqual(['Stop', 'Restart']);

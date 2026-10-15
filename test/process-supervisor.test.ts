@@ -15,7 +15,7 @@ import { ProcessSupervisor, type ProcessSpec } from '../src/main/process-supervi
  * a process that is restarted forever looks running from across the room and is not.
  */
 
-function fakePty() {
+function fakePty(options: { isLive?: boolean } = {}) {
     const opened: Array<PtySpawnOptions & { id: string }> = [];
     const killed: string[] = [];
     const data = new Set<(id: string, d: string) => void>();
@@ -40,6 +40,8 @@ function fakePty() {
         scrollback: (id) => (live.has(id) ? `log of ${id}` : undefined),
         onData: (l) => { data.add(l); return () => data.delete(l); },
         onExit: (l) => { exit.add(l); return () => exit.delete(l); },
+        // The engine's own answer, asked every time (fancy-term-host `isLive`); left out to model an engine without it.
+        ...(options.isLive === false ? {} : { isLive: (id: string) => live.has(id) }),
     };
     return {
         port,
@@ -49,6 +51,10 @@ function fakePty() {
         exits(id: string, code: number) {
             live.delete(id);
             for (const l of exit) l(id, code);
+        },
+        /** The pty is gone and NO exit event comes — what a lost pty host does to every pty it held. */
+        vanish(id: string) {
+            live.delete(id);
         },
         output(id: string, d: string) {
             for (const l of data) l(id, d);
@@ -89,12 +95,15 @@ const spec = (over: Partial<ProcessSpec> = {}): ProcessSpec => ({
     ...over,
 });
 
-function make() {
-    const pty = fakePty();
+function make(options: { isLive?: boolean; pidAlive?: (pid: number) => boolean } = {}) {
+    const pty = fakePty({ ...(options.isLive === undefined ? {} : { isLive: options.isLive }) });
     const clock = fakeClock();
-    const sup = new ProcessSupervisor(pty.port, { now: clock.now, schedule: clock.schedule });
+    const sup = new ProcessSupervisor(pty.port, { now: clock.now, schedule: clock.schedule }, options.pidAlive ? { pidAlive: options.pidAlive } : {});
     return { pty, clock, sup };
 }
+
+/** The log as lines — what a person reads under the row and an agent gets from `processes logs`. */
+const logLines = (sup: ProcessSupervisor, id = 'proc_queue') => sup.log(id)?.split('\n') ?? [];
 
 describe('start / stop', () => {
     it('starts the command in its cwd with its env on a pty and reports running with the pid', () => {
@@ -131,14 +140,203 @@ describe('start / stop', () => {
         expect(sup.stop('proc_nope')).toBe(false);
     });
 
-    it('the log is the pty scrollback, and output is streamed to listeners with the process id', () => {
+    it('the log is what the process printed — kept by the supervisor, not the pty’s scrollback — and output is streamed to listeners with the process id', () => {
         const { pty, sup } = make();
         const seen: Array<[string, string]> = [];
         sup.onOutput((id, d) => seen.push([id, d]));
         sup.start(spec());
-        pty.output('term_1', 'Processing job 1');
-        expect(sup.log('proc_queue')).toBe('log of term_1');
-        expect(seen).toEqual([['proc_queue', 'Processing job 1']]);
+        pty.output('term_1', 'Processing job 1\r\n');
+        expect(logLines(sup)).toEqual(['[genie] started (pid 1001): php artisan queue:work', 'Processing job 1']);
+        expect(sup.log('proc_queue')).not.toContain('log of term_1');
+        expect(seen).toEqual([['proc_queue', 'Processing job 1\r\n']]);
+    });
+});
+
+describe('the log outlives the run (P1)', () => {
+    it('survives a clean exit — counted: the start, two lines of output, the exit', () => {
+        const { pty, sup } = make();
+        sup.start(spec({ restart: 'never' }));
+        pty.output('term_1', 'migrated 3 tables\nready\n');
+        pty.exits('term_1', 0);
+        expect(sup.status('proc_queue')!.state).toBe('exited');
+        // The pty is gone (its scrollback with it); the log is not.
+        expect(pty.port.scrollback('term_1')).toBeUndefined();
+        expect(logLines(sup)).toEqual(['[genie] started (pid 1001): php artisan queue:work', 'migrated 3 tables', 'ready', '[genie] exited with code 0']);
+    });
+
+    it('survives a CRASH and the policy’s restart: both runs’ output, and why it restarted, in one log — counted', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ restart: 'on-failure' }));
+        pty.output('term_1', 'PDOException: could not connect\n');
+        pty.exits('term_1', 1);
+        // Mid-backoff, nothing running: the crash is readable now, which is when it is needed.
+        expect(sup.status('proc_queue')!.state).toBe('restarting');
+        expect(logLines(sup)).toContain('PDOException: could not connect');
+        clock.advance(1_000);
+        pty.output('term_2', 'Processing job 2\n');
+        expect(logLines(sup)).toEqual([
+            '[genie] started (pid 1001): php artisan queue:work',
+            'PDOException: could not connect',
+            '[genie] exited with code 1; restarting in 1s',
+            '[genie] started (pid 1002): php artisan queue:work',
+            'Processing job 2',
+        ]);
+    });
+
+    it('a process that gave up says so in its log, and a manual restart keeps what came before', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ restart: 'always' }));
+        for (let i = 1; i <= 6; i++) {
+            pty.output(`term_${i}`, `attempt ${i}\n`);
+            pty.exits(`term_${i}`, 1);
+            clock.advance(60_000 - 1); // never healthy: each run dies inside the minute
+        }
+        expect(sup.status('proc_queue')!.state).toBe('failed');
+        expect(logLines(sup).filter((l) => /^attempt \d$/.test(l))).toHaveLength(6);
+        expect(logLines(sup).at(-1)).toMatch(/^\[genie\] exited with code 1; gave up after 5 consecutive failures/);
+        sup.restart('proc_queue');
+        expect(logLines(sup).filter((l) => /^attempt \d$/.test(l))).toHaveLength(6);
+        expect(logLines(sup).at(-1)).toBe('[genie] started (pid 1007): php artisan queue:work');
+    });
+
+    it('is bounded — counted: 3 000 lines printed, 2 000 kept, the cut reported (control: a short log is whole)', () => {
+        const { pty, sup } = make();
+        sup.start(spec());
+        pty.output('term_1', `${Array.from({ length: 3_000 }, (_, i) => `line ${i + 1}`).join('\n')}\n`);
+        const log = sup.readLog('proc_queue')!;
+        expect(log.lines).toBe(2_000);
+        expect(logLines(sup)).toHaveLength(2_000);
+        expect(logLines(sup)[0]).toBe('line 1001');
+        expect(log.dropped).toBe(1_001); // the start line and the first 1 000 printed
+        expect(sup.readLog('proc_queue', 5)!.text.split('\n')).toEqual(['line 2996', 'line 2997', 'line 2998', 'line 2999', 'line 3000']);
+
+        const short = make();
+        short.sup.start(spec());
+        short.pty.output('term_1', 'one\ntwo\n');
+        expect(short.sup.readLog('proc_queue')).toMatchObject({ lines: 3, dropped: 0 });
+    });
+
+    it('a stop keeps the log (the row is still listed); forget drops it with the process', () => {
+        const { pty, sup } = make();
+        sup.start(spec());
+        pty.output('term_1', 'hello\n');
+        sup.stop('proc_queue');
+        expect(logLines(sup)).toContain('hello');
+        sup.forget('proc_queue');
+        expect(sup.log('proc_queue')).toBeUndefined();
+        expect(sup.readLog('proc_queue')).toBeNull();
+    });
+});
+
+describe('running means running: the liveness check (P2)', () => {
+    it('a running process whose pty vanished with NO exit event is a crash: suspect first, then restarted by its policy', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ restart: 'on-failure' }));
+        pty.vanish('term_1');
+        expect(sup.recheck()).toEqual([]);
+        // Suspect, not yet declared: its own exit may still be on its way.
+        expect(sup.status('proc_queue')!.state).toBe('running');
+        clock.advance(5_000);
+        // The second look was scheduled by the first, not left to the next heartbeat.
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'restarting', exitCode: -1 });
+        expect(logLines(sup)).toContain('[genie] this process is no longer running, and Genie never saw it exit (the pty engine or the OS has no process for it); treating it as a crash');
+        clock.advance(1_000);
+        expect(pty.opened).toHaveLength(2);
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'running', pid: 1002, restarts: 1 });
+    });
+
+    it('a LIVE process is untouched — counted, beside a lost one (the control)', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ id: 'lost', restart: 'always' }));
+        sup.start(spec({ id: 'alive', restart: 'always' }));
+        pty.vanish('term_1');
+        sup.recheck();
+        clock.advance(5_000);
+        expect(sup.status('lost')!.state).toBe('restarting');
+        expect(sup.status('alive')).toMatchObject({ state: 'running', pid: 1002, restarts: 0 });
+        expect(pty.killed).not.toContain('term_2');
+        clock.advance(60_000);
+        expect(pty.opened.map((o) => o.id)).toEqual(['term_1', 'term_2', 'term_3']);
+        expect(sup.status('alive')).toMatchObject({ state: 'running', pid: 1002 });
+    });
+
+    it('an exit that arrives inside the grace is routed with ITS code: a clean exit is never read as a crash', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ restart: 'on-failure' }));
+        pty.vanish('term_1');
+        sup.recheck();
+        pty.exits('term_1', 0);
+        clock.advance(60_000);
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'exited', exitCode: 0 });
+        expect(pty.opened).toHaveLength(1);
+    });
+
+    it('a pty the engine still holds for a DEAD pid is lost too, and the engine is told to let it go', () => {
+        const dead = new Set<number>();
+        const { pty, clock, sup } = make({ pidAlive: (pid) => !dead.has(pid) });
+        sup.start(spec({ restart: 'on-failure' }));
+        dead.add(1001);
+        sup.recheck();
+        clock.advance(5_000);
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'restarting', exitCode: -1 });
+        expect(pty.killed).toEqual(['term_1']);
+    });
+
+    it('the policy still decides: `never` ends exited with -1; a process the person stopped is never revived', () => {
+        const n = make();
+        n.sup.start(spec({ restart: 'never' }));
+        n.pty.vanish('term_1');
+        n.sup.recheck();
+        n.clock.advance(60_000);
+        expect(n.sup.status('proc_queue')).toMatchObject({ state: 'exited', exitCode: -1 });
+        expect(n.pty.opened).toHaveLength(1);
+
+        const s = make();
+        s.sup.start(spec({ restart: 'always' }));
+        s.sup.stop('proc_queue');
+        s.sup.recheck();
+        s.clock.advance(60_000);
+        expect(s.sup.status('proc_queue')!.state).toBe('stopped');
+        expect(s.pty.opened).toHaveLength(1);
+    });
+
+    it('runs on a 30 s heartbeat until stopped — no one has to ask', () => {
+        const { pty, clock, sup } = make();
+        const stop = sup.watchLiveness();
+        sup.start(spec({ restart: 'always' }));
+        pty.vanish('term_1');
+        clock.advance(29_999);
+        expect(sup.status('proc_queue')!.state).toBe('running');
+        clock.advance(1); // the heartbeat: suspect
+        clock.advance(5_000); // the scheduled second look: lost
+        expect(sup.status('proc_queue')!.state).toBe('restarting');
+        clock.advance(1_000);
+        expect(pty.opened).toHaveLength(2);
+
+        stop();
+        pty.vanish('term_2');
+        clock.advance(120_000);
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'running', pid: 1002 });
+    });
+
+    it('any pty exit is the cue to look at the rest: a lost process is found without waiting for the heartbeat', () => {
+        const { pty, clock, sup } = make();
+        sup.start(spec({ id: 'worker', restart: 'on-failure' }));
+        sup.start(spec({ id: 'watcher', restart: 'never' }));
+        pty.vanish('term_1'); // the worker's pty went with the host…
+        pty.exits('term_2', 0); // …and the one exit Genie DID see makes it look
+        clock.advance(5_000);
+        expect(sup.status('worker')).toMatchObject({ state: 'restarting', exitCode: -1 });
+        expect(sup.status('watcher')).toMatchObject({ state: 'exited', exitCode: 0 });
+    });
+
+    it('an engine with no `isLive` and no pid probe cannot tell — and nothing is guessed (control for the claims above)', () => {
+        const { pty, clock, sup } = make({ isLive: false });
+        sup.start(spec({ restart: 'always' }));
+        pty.vanish('term_1');
+        sup.recheck();
+        clock.advance(60_000);
+        expect(sup.status('proc_queue')).toMatchObject({ state: 'running', pid: 1001 });
     });
 });
 
