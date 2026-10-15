@@ -2,6 +2,7 @@ import { ContentRenderer } from '@particle-academy/react-fancy';
 import { useState, type FormEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
 import { unansweredCount } from '../../core/deck-resolve.js';
+import type { QuestionDraft } from '../../core/question-drafts.js';
 
 /**
  * ONE AGENT'S QUESTIONS, AS A FORM (§6.3): each question with its options (radio, or checkboxes for multi-select) and ITS
@@ -24,13 +25,15 @@ import { unansweredCount } from '../../core/deck-resolve.js';
  * Beside Answer: the question is put aside WITHOUT an answer and its agent is told so (attention-store.ts) — with the
  * notes written in the form, so a person can say why, or what to do instead (the owner, 2026-10-15: "I NEED THE ABILITY TO
  * ADD NOTES TO ANY AND ALL QUESTIONS"). A note is never required to dismiss. Offered only where the surface wires it.
+ *
+ * ## The draft outlives the form
+ *
+ * `initial` starts it and `onDraft` hears every change, so a surface that shows several questions (the question window's
+ * queue) keeps each one's draft by question id and hands it back when the person returns to it — nothing typed is lost
+ * to another agent's question arriving, or to looking at another question (the owner, 2026-10-15).
  */
-export interface QuestionDraft {
-    /** Chosen labels, one array per question. */
-    readonly selections: readonly (readonly string[])[];
-    /** One note per question ('' where none). */
-    readonly notes: readonly string[];
-}
+// The draft is the question's, not the form's (core/question-drafts.ts): the question window keeps one per question id.
+export type { QuestionDraft };
 
 export interface QuestionFormProps {
     readonly item: DeckItem;
@@ -48,9 +51,11 @@ export interface QuestionFormProps {
     readonly initial?: QuestionDraft;
     /** Show each question's header chip. The Deck hides it for a single question: the row's title is that header. */
     readonly showHeaders?: boolean;
+    /** Every change to the draft (an option picked or cleared, a note written), as the whole draft. */
+    readonly onDraft?: ((draft: QuestionDraft) => void) | undefined;
 }
 
-export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', onDismiss, refusal = null, initial, showHeaders = true }: QuestionFormProps) {
+export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', onDismiss, refusal = null, initial, showHeaders = true, onDraft }: QuestionFormProps) {
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const count = questions?.length ?? 0;
     const [selections, setSelections] = useState<string[][]>(() => Array.from({ length: count }, (_, i) => [...(initial?.selections[i] ?? [])]));
@@ -59,9 +64,17 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
 
     const remaining = unansweredCount(count, selections, notes);
     const sending = answering === item.id;
-    const pick = (i: number, label: string, multi: boolean, on: boolean) =>
-        setSelections((prev) => prev.map((s, j) => (j !== i ? s : multi ? (on ? [...s.filter((l) => l !== label), label] : s.filter((l) => l !== label)) : on ? [label] : [])));
-    const write = (i: number, text: string) => setNotes((prev) => prev.map((n, j) => (j === i ? text : n)));
+    // Computed from this render's values (one change per event), so the draft handed to `onDraft` is exactly what is shown.
+    const pick = (i: number, label: string, multi: boolean, on: boolean) => {
+        const next = selections.map((s, j) => (j !== i ? s : multi ? (on ? [...s.filter((l) => l !== label), label] : s.filter((l) => l !== label)) : on ? [label] : []));
+        setSelections(next);
+        onDraft?.({ selections: next, notes });
+    };
+    const write = (i: number, text: string) => {
+        const next = notes.map((n, j) => (j === i ? text : n));
+        setNotes(next);
+        onDraft?.({ selections, notes: next });
+    };
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (remaining > 0 || sending) return;

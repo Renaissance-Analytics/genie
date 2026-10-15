@@ -91,7 +91,10 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
     for (const q of input.questions) {
         const at = Date.parse(q.askedAt);
         const live = input.asker?.(q.agentId);
-        const stale = live === undefined ? null : questionStale(at, input.agents[q.agentId] !== undefined, live);
+        // Judged from the LATEST ask: an agent that asked again (a rejoin) is waiting now, even if its first ask came
+        // from an earlier run. Its age on the Deck stays the first ask's — it has been waiting that long.
+        const lastAsked = q.reaskedAt === undefined ? at : Date.parse(q.reaskedAt);
+        const stale = live === undefined ? null : questionStale(lastAsked, input.agents[q.agentId] !== undefined, live);
         items.push({
             id: q.id,
             source: 'agent-question',
@@ -109,6 +112,8 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             forwardedFrom: null,
             // Updated by its agent: a form keyed by this starts a clean draft (a draft for the old content is dropped).
             ...(q.revision ? { revision: q.revision } : {}),
+            // Asked again: the window takes it as a new ask (a question put off comes back).
+            ...(q.asks ? { asks: q.asks } : {}),
             // Its agent no longer waits: kept, and marked (the Deck greys it and offers Dismiss / Dismiss all stale).
             ...(stale ? { stale } : {}),
         });

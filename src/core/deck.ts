@@ -79,6 +79,11 @@ export interface DeckItem {
      */
     revision?: number | undefined;
     /**
+     * How many times its agent asked it AGAIN (a rejoined repeat — attention-store.ts). The question window reads a new
+     * count as a new ask: a question put off with Later comes back. Absent = never asked again.
+     */
+    asks?: number | undefined;
+    /**
      * Its agent NO LONGER WAITS for it (deck-sources.ts `questionStale`): the agent is gone from the roster, its session
      * ended, or the session running now started after it was asked (an earlier run asked it). Absent = live, or not
      * judged (no liveness was given). The owner, 2026-10-15, on old items: "Keep, but mark stale" — it stays on the

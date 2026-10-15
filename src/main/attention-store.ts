@@ -35,7 +35,10 @@ import { readJson, reportFlush, writeJsonAtomic } from './store.js';
  * ## A question survives a restart and is never duplicated
  *
  * `ask` keys the decision (`questionKey`) and rejoins a repeat to the pending question instead
- * of filing a second one. The answer is not returned by the tool — it is mailed to the asker
+ * of filing a second one. A rejoin is still an ASK: the agent is waiting on it now. It is written down (`reaskedAt`, and
+ * `asks` counted up) and announced like any change, so a question the person had put off comes back to the question
+ * window (main/question-window.ts) — unless Do Not Disturb is on — and its liveness is judged from this ask, not the
+ * first one. Same id, same content, same revision: the person's half-written answer to it is kept. The answer is not returned by the tool — it is mailed to the asker
  * through the inbox FROM the human, so the agent's ordinary `receive` picks it up and the human
  * is on record as having decided.
  *
@@ -118,6 +121,10 @@ export interface PendingQuestion {
     readonly askedAt: string;
     /** How many times its agent updated it; absent (a question never updated, or filed before updates existed) = 0. */
     readonly revision?: number;
+    /** How many times its agent asked it AGAIN (a rejoined repeat); absent = never. */
+    readonly asks?: number;
+    /** When it was last asked again (ISO); absent = never. Its agent's liveness is judged from this ask. */
+    readonly reaskedAt?: string;
 }
 
 /** The asking agent, as the MCP caller resolves it: a question is withdrawn or updated only by the agent that asked it. */
@@ -249,7 +256,15 @@ export class AttentionStore {
 
         const key = questionKey(input.agentId, input.questions);
         const existing = this.#data.questions.find((q) => q.key === key);
-        if (existing) return { ok: true, questionId: existing.id, userActive: context.userActive, rejoined: true, dndReply };
+        if (existing) {
+            // Asked again: the same question, and the agent waiting on it NOW. Recorded and announced (the flush fires the
+            // change), so a question the person put off comes back to the window; content and revision untouched, so the
+            // draft for it stays good. Before, a rejoin wrote nothing and fired nothing: put off once, never seen again.
+            const again: PendingQuestion = { ...existing, asks: (existing.asks ?? 0) + 1, reaskedAt: this.#now() };
+            this.#data.questions = this.#data.questions.map((q) => (q.id === existing.id ? again : q));
+            await this.#flush();
+            return { ok: true, questionId: existing.id, userActive: context.userActive, rejoined: true, dndReply };
+        }
 
         const pending: PendingQuestion = {
             id: `q_${randomUUID()}`,

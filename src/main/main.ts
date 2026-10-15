@@ -1430,6 +1430,10 @@ async function boot(): Promise<void> {
         // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
         // notes the person wrote in the form.
         dismiss: async (item, notes) => { await handleFeatureAction(composed, { kind: 'deck.dismiss', item, notes }, featureState, featurePorts); },
+        // Do Not Disturb (Settings → General) is the ONE thing that keeps the window shut (the owner, 2026-10-15: "If DnD
+        // is not turned on then FTQ always opens for every agent"). Read at every change; the agent is still told the DND
+        // reply at once (attention-store.ts), and the question waits in Pending Questions.
+        dnd: () => composed.settings.snapshot().do_not_disturb === true,
     });
     composed.attention.onChange(() => questionWindow?.changed());
     // Questions already waiting when Genie starts come up too.
