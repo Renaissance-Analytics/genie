@@ -147,8 +147,31 @@ if (-not $SkipSource) {
 }
 
 if (-not $SkipInstaller) {
+    # The SAME installer a release builds: release.yml fetches Genie's pinned Caddy before packaging, and this script did
+    # not — so every VM-installed app had no Caddy and could serve no site (found 2026-10-14, when the sites acceptance
+    # scenario failed on a build that had the fix). A verify that packages something other than the release proves
+    # nothing about the release.
+    Step 'fetch the pinned Caddy (as release.yml does)'
+    Run 'npx tsx scripts\fetch-caddy.ts' 'fetch-caddy.log'
+    Get-Content fetch-caddy.log -Tail 2
+
     Step 'electron-builder --publish never'
-    Run 'npx electron-builder --publish never' 'package.log'
+    # A HEARTBEAT, not silence (2026-10-14): packaging wrote only to package.log, so the host's watchdog (no output for
+    # 25 min = a frozen guest) powered off a VM that was busy packaging on three cores. A frozen guest stops this clock
+    # too, so a real freeze is still caught; a long package now says so every minute, with the log's newest line.
+    $pkg = Start-Job -ArgumentList (Get-Location).Path -ScriptBlock {
+        param($dir)
+        Set-Location $dir
+        & cmd /c "npx electron-builder --publish never > package.log 2>&1"
+        $LASTEXITCODE
+    }
+    while ($pkg.State -eq 'Running') {
+        Start-Sleep 60
+        $last = Get-Content package.log -Tail 1 -ErrorAction SilentlyContinue
+        Write-Output ("  packaging {0}: {1}" -f (Get-Date -Format HH:mm:ss), $last)
+    }
+    $pkgExit = Receive-Job $pkg | Select-Object -Last 1
+    if ($pkgExit -ne 0) { Get-Content package.log -Tail 40; throw "FAILED ($pkgExit): npx electron-builder --publish never" }
     Get-Content package.log -Tail 8
     $setup = @(Get-ChildItem release\Genie-*-setup.exe)[0]
     if (-not $setup) { throw 'no release\Genie-*-setup.exe' }
@@ -182,6 +205,12 @@ if (-not $SkipInstaller) {
     Step 'a real window, from the INSTALLED app'
     Run 'node scripts\smoke-seed.mjs'
     Drive $exe @('--remote-debugging-port=9222') 'installed'
+
+    # ACCEPTANCE: outcomes a person sees, not return codes (the owner, 2026-10-14). Sites declared in a workspace's
+    # project.json answer over https://<name>.gen through the front door; no site's Caddy holds :80 or :2019; launching
+    # adds no trusted root; a normal quit leaves no Caddy and the sites come back after a relaunch.
+    Step 'acceptance: sites through the front door (installed app)'
+    Run "node scripts\acceptance-sites.mjs `"$exe`""
 
     Step '§7.1 runtime dir is under ~/.genie, never under the install dir'
     $runtime = "$env:USERPROFILE\.genie\runtime"
