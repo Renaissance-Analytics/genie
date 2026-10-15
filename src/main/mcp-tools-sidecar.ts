@@ -7,10 +7,12 @@ import { sidecarPlan } from '../core/sidecar.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext } from './mcp-tools.js';
 
 /**
- * `runAgent {action:"sidecar", agent}` (§6.2): the caller's review partner. Registers `<driver>-slave` in
- * the caller's workspace with `sidecarOf` the caller, starts it at the caller's cwd, and answers with its
- * id and AgentInbox address. A second call rejoins the existing one (no second start). A sidecar asking
- * for a sidecar is refused. Nothing here stops anything: Genie never stops a sidecar for you.
+ * `runAgent {action:"sidecar", agent}` (§6.2): the caller's review partner. Registers `<caller's name>-slave`
+ * (named after the AGENT, never the provider — B27, see `core/sidecar.ts`) in the caller's workspace with
+ * `sidecarOf` the caller, starts it at the caller's cwd, and answers with its id and AgentInbox address. A
+ * second call rejoins the existing one (no second start) — including a Genie 1 sidecar that carries only the
+ * name. An agent has ONE sidecar: asking for another provider than its own runs on is refused, in words. A
+ * sidecar asking for a sidecar is refused. Nothing here stops anything: Genie never stops a sidecar for you.
  */
 
 export interface SidecarToolsDeps {
@@ -33,7 +35,7 @@ export function sidecarTools(deps: SidecarToolsDeps): Registration[] {
     const runAgent: Registration = {
         definition: new ToolDefinition(
             'runAgent',
-            'Run your sidecar: action "sidecar" with agent "claude" or "codex" registers <agent>-slave in your workspace (your own review partner, its own identity and context), starts it beside you and answers with its AgentInbox address. Calling again rejoins the same one. Genie never stops a sidecar for you.',
+            'Run your sidecar: action "sidecar" with agent "claude" or "codex" (the provider it runs on) starts <your name>-slave in your workspace — your own review partner, its own identity and context — and answers with its AgentInbox address. If you already have a sidecar it is rejoined, never a second one: ask for the provider it runs on (a different one is refused and says which). Genie never stops a sidecar for you.',
             {
                 type: 'object',
                 properties: {

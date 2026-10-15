@@ -125,7 +125,7 @@ export interface AgentRecord {
      */
     readonly dailyBudgetUsd?: number | null;
     /**
-     * The agent this one is the SIDECAR of (§6.2): `<driver>-slave`, registered by that agent as its own
+     * The agent this one is the SIDECAR of (§6.2): `<agent>-slave`, registered by that agent as its own
      * review partner. OPTIONAL and not in AGENT_RECORD_FIELDS for the same reason as the budget. Genie
      * never stops a sidecar for you: nothing links the parent's stop to this record.
      */
