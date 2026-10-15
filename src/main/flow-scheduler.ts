@@ -3,9 +3,17 @@ import type { FlowRecord, FlowRun, FlowStore, RunOutcome, Schedule } from './flo
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
- * schedule triggers; when it fires, the flow runs and the timer is set again. Never a poll:
- * nothing ticks, nothing scans on an interval. The store's `onChange` is what re-plans — an arm,
- * a disarm, a document edit, a removal.
+ * schedule triggers; when it fires, EVERY armed flow due at that instant runs and the timer is set
+ * again. Never a poll: nothing ticks, nothing scans on an interval. The store's `onChange` is what
+ * re-plans — an arm, a disarm, a document edit, a removal.
+ *
+ * ## One timer, every flow due at it
+ *
+ * The timer is one; the flows it fires are all of those due at its instant. Two flows on `* * * * *`
+ * are due at the same minute, and both run — the timer is a wake-up, not a choice of which flow wins.
+ * (Before this, the timer held ONE flow: the first armed flow in the store's order took every tie, so
+ * a second flow on the same schedule was armed and never ran — the Windows acceptance's 2b, 2026-10-15.)
+ * A flow with several triggers due at the same instant runs once, from the first of them.
  *
  * ## Every run has an outcome (hosting ship line P4)
  *
@@ -46,10 +54,22 @@ export interface Due {
     readonly at: number;
 }
 
+/** One flow due at the planned instant, with the trigger that makes it due. */
+interface DueFlow {
+    readonly flowId: string;
+    readonly trigger: Schedule;
+}
+
+/** The planned instant and every armed flow due at it, in the store's order. */
+interface Planned {
+    readonly at: number;
+    readonly flows: readonly DueFlow[];
+}
+
 export class FlowScheduler {
     readonly #deps: FlowSchedulerDeps;
     #cancel: (() => void) | null = null;
-    #next: (Due & { trigger: Schedule }) | null = null;
+    #next: Planned | null = null;
     /** The flows with a run in flight, each with that run. */
     readonly #running = new Map<string, Promise<FlowRun | null>>();
 
@@ -59,28 +79,40 @@ export class FlowScheduler {
         deps.store.onChange(() => this.plan());
     }
 
-    /** Compute the nearest due across armed flows and hold exactly one timer for it. */
+    /** Compute the nearest due across armed flows — and every flow due at it — and hold exactly one timer for it. */
     plan(): void {
         this.#cancel?.();
         this.#cancel = null;
         this.#next = null;
         const now = this.#deps.now();
+        let at: number | null = null;
+        let flows: DueFlow[] = [];
         for (const flow of this.#deps.store.list()) {
             if (!flow.armed) continue;
+            // This flow's own nearest due: its first trigger at its earliest instant (one run per flow per instant).
+            let mine: { at: number; trigger: Schedule } | null = null;
             for (const trigger of this.#deps.store.schedules(flow.id)) {
-                const at = nextCronAfter(trigger.cron, now, trigger.timezone);
-                if (at === null) continue;
-                if (this.#next === null || at < this.#next.at) this.#next = { flowId: flow.id, at, trigger };
+                const t = nextCronAfter(trigger.cron, now, trigger.timezone);
+                if (t !== null && (mine === null || t < mine.at)) mine = { at: t, trigger };
+            }
+            if (mine === null) continue;
+            if (at === null || mine.at < at) {
+                at = mine.at;
+                flows = [{ flowId: flow.id, trigger: mine.trigger }];
+            } else if (mine.at === at) {
+                flows.push({ flowId: flow.id, trigger: mine.trigger });
             }
         }
-        if (this.#next) {
-            const due = this.#next;
-            this.#cancel = this.#deps.schedule(() => this.#fire(due), Math.max(0, due.at - now));
+        if (at !== null) {
+            const due: Planned = { at, flows };
+            this.#next = due;
+            this.#cancel = this.#deps.schedule(() => this.#fire(due), Math.max(0, at - now));
         }
     }
 
+    /** The nearest due: its instant and the first flow (in the store's order) due at it — every flow due then runs. */
     nextDue(): Due | null {
-        return this.#next ? { flowId: this.#next.flowId, at: this.#next.at } : null;
+        return this.#next ? { flowId: this.#next.flows[0]!.flowId, at: this.#next.at } : null;
     }
 
     /** How many flows are executing right now — the Deck's "N flows running" signal. */
@@ -105,14 +137,17 @@ export class FlowScheduler {
         return run;
     }
 
-    #fire(due: Due & { trigger: Schedule }): void {
+    #fire(due: Planned): void {
         this.#cancel = null;
-        const flow = this.#deps.store.get(due.flowId);
-        // Replan FIRST, so the next due is held whatever the run does — and so a slow run cannot
+        const flows = due.flows.map((d) => ({ flow: this.#deps.store.get(d.flowId), trigger: d.trigger }));
+        // Replan FIRST, so the next due is held whatever the runs do — and so a slow run cannot
         // delay the schedule behind it.
         this.plan();
-        if (!flow || !flow.armed) return;
-        void this.#start(flow, due.trigger, 'schedule');
+        // Every flow due at this instant, side by side: one's run never waits on, or replaces, another's.
+        for (const { flow, trigger } of flows) {
+            if (!flow || !flow.armed) continue;
+            void this.#start(flow, trigger, 'schedule');
+        }
     }
 
     #start(flow: FlowRecord, trigger: Schedule | null, kind: FlowRun['trigger']): Promise<FlowRun | null> {
