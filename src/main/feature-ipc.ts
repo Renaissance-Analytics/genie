@@ -289,6 +289,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.syncHosts':
             await services.syncHosts();
             break;
+        case 'hosting.retryFrontDoor':
+            // The person's Try again on a front door whose port another process held: asked again; started when free.
+            await services.retryFrontDoor();
+            break;
         case 'hosting.startSite':
             // The person's Start: serves a listed site that is not running, and lifts a remembered Stop.
             await startSite(services, action.siteId);

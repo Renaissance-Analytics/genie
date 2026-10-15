@@ -32,14 +32,18 @@ let dir: string;
 let ws: string;
 let services: ComposedServices;
 let hosts = '';
+let staged = '';
+// The plain write is refused, as for a person who is not an administrator: the hosts file changes only through the ONE
+// elevation (S4), which copies what was staged.
 const hostsIo: HostsIo = {
     read: async () => hosts,
     write: async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
-    writeElevated: async (next) => { hosts = next; },
+    stage: async (next) => { staged = next; return { command: 'cp', args: [] }; },
 };
 const trustStore: TrustStorePort = { has: async () => true };
 const compose = () => composeServices({
-    userData: dir, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, trustStore, runElevated: async () => {},
+    userData: dir, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, trustStore,
+    elevate: async () => { hosts = staged; return { ok: true }; }, hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
     workspaces: () => [{ id: 'example', path: ws }],
 });
 
@@ -95,7 +99,7 @@ describe('S5: a multi-label site reaches every place a name goes', () => {
         const caddyfile = await readFile(fd.caddyfile, 'utf8');
         expect(caddyfile.match(/^https:\/\/\S+ \{$/gm)).toEqual(['https://web.example.gen {', 'https://docs.gen {']);
         expect(caddyfile).toContain('reverse_proxy 127.0.0.1:5173');
-        expect(hosts.split('\n').filter((l) => l.startsWith('127.0.0.1 ') && l.endsWith('.gen'))).toEqual(['127.0.0.1 web.example.gen', '127.0.0.1 docs.gen']);
+        expect(hosts.split('\n').filter((l) => l.startsWith('127.0.0.1 ') && l.endsWith('.gen'))).toEqual(['127.0.0.1 docs.gen', '127.0.0.1 web.example.gen']);
         const sans = await leafSans(caddyfile);
         expect(sans).toEqual(['docs.gen', 'web.example.gen']);
         expect(sans.filter((s) => s.includes('*'))).toEqual([]);

@@ -42,7 +42,7 @@ import { createTray } from './tray.js';
 import { showOnBoot } from '../core/tray-resident.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { caddyBinPath } from './caddy-runtime.js';
+import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { HOST_TOOLS, planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
@@ -58,7 +58,7 @@ import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
-import { genieHome, installDir, osaHomeDir } from './paths.js';
+import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
@@ -1017,6 +1017,11 @@ async function boot(): Promise<void> {
         serve: staticServer(join(here, '../renderer')),
     });
     remoteSocketNow = remoteSocket;
+    // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
+    // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
+    const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
+    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieHome()), 'caddy-bin'));
+    if (caddyCopy?.error) console.error(`[caddy] ${caddyCopy.error}`);
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
@@ -1031,8 +1036,8 @@ async function boot(): Promise<void> {
         // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
         // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
         v1Services: { database: v1DatabaseFile() },
-        // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
-        caddyBin: caddyBinPath(process.resourcesPath, process.platform),
+        // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
+        caddyBin: caddyCopy?.path ?? null,
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so

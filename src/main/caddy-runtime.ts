@@ -1,5 +1,7 @@
-import { existsSync } from 'node:fs';
-import { posix, win32 } from 'node:path';
+import { createHash } from 'node:crypto';
+import { createReadStream, existsSync } from 'node:fs';
+import { chmod, copyFile as nodeCopyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, join, posix, win32 } from 'node:path';
 
 /**
  * THE BUNDLED CADDY RUNTIME (§6.6).
@@ -51,4 +53,79 @@ export function caddyBinPath(resourcesPath: string, platform: NodeJS.Platform, e
     // A packaged Windows path is a Windows path wherever this runs (the test machine is Linux).
     const file = (platform === 'win32' ? win32 : posix).join(resourcesPath, 'runtime', platform === 'win32' ? 'caddy.exe' : 'caddy');
     return exists(file) ? file : null;
+}
+
+/** sha256 of a file, streamed (the binary is tens of megabytes). */
+export function sha256OfFile(path: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const hash = createHash('sha256');
+        createReadStream(path)
+            .on('data', (chunk) => hash.update(chunk))
+            .on('error', reject)
+            .on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+export interface CaddyCopy {
+    /** The binary to RUN: the per-user copy, or — when the copy could not be made — the bundled one. */
+    readonly path: string;
+    /** Whether this call copied (the bundled binary is new to this machine, or its copy was incomplete). */
+    readonly copied: boolean;
+    /** Why the copy could not be made; the bundled binary is then what runs. */
+    readonly error: string | null;
+}
+
+const COPY_DIR = /^[0-9a-f]{16}$/;
+
+/**
+ * THE CADDY THAT SURVIVES AN UPDATE (Genie 1's genie#265). Run from `resources/runtime/` inside the install, Caddy sits
+ * in the NSIS installer's path sweep: every update kills the front door — and every static/php site's server — mid
+ * session. So Genie runs it from a per-user copy under its data dir, in a folder named by the bundled binary's sha256:
+ *
+ * - the same bundled binary → the copy already there (its `.complete` names the hash), copied NOTHING;
+ * - a new bundled binary (an update that bumped Caddy) → a new folder beside the old; a running old copy is never
+ *   overwritten, and the folders of other hashes are removed when they can be (a locked one is left for next time);
+ * - a copy is committed by its `.complete` marker, written last, after the copied bytes hash to the bundled ones — an
+ *   interrupted copy is never run.
+ *
+ * Never throws: a copy that cannot be made answers the bundled path with the reason (sites still serve; they go down on
+ * the next update, as before).
+ */
+export async function userCaddyCopy(bundled: string, baseDir: string, deps: { copyFile?: (from: string, to: string) => Promise<void>; platform?: NodeJS.Platform } = {}): Promise<CaddyCopy> {
+    const copyFile = deps.copyFile ?? nodeCopyFile;
+    const platform = deps.platform ?? process.platform;
+    try {
+        const sha = await sha256OfFile(bundled);
+        const dir = join(baseDir, sha.slice(0, 16));
+        const name = basename(bundled);
+        const dest = join(dir, name);
+        const marker = join(dir, '.complete');
+        const committed = await readFile(marker, 'utf8').then((t) => t.trim() === sha, () => false);
+        const present = await stat(dest).then((s) => s.isFile(), () => false);
+        let copied = false;
+        if (!committed || !present) {
+            await mkdir(dir, { recursive: true });
+            await rm(marker, { force: true });
+            const tmp = join(dir, `${name}.partial-${process.pid}`);
+            await copyFile(bundled, tmp);
+            const got = await sha256OfFile(tmp);
+            if (got !== sha) {
+                await rm(tmp, { force: true });
+                throw new Error(`the copy of ${bundled} does not match it (sha256 ${got.slice(0, 16)}…, expected ${sha.slice(0, 16)}…)`);
+            }
+            if (platform !== 'win32') await chmod(tmp, 0o755);
+            await rm(dest, { force: true });
+            await rename(tmp, dest);
+            await writeFile(marker, sha, 'utf8');
+            copied = true;
+        }
+        // Other hashes' folders: an earlier Caddy. Removed when nothing holds them; a locked one waits for a later boot.
+        for (const entry of await readdir(baseDir).catch(() => [] as string[])) {
+            if (entry === sha.slice(0, 16) || !COPY_DIR.test(entry)) continue;
+            await rm(join(baseDir, entry), { recursive: true, force: true }).catch(() => undefined);
+        }
+        return { path: dest, copied, error: null };
+    } catch (error) {
+        return { path: bundled, copied: false, error: `Genie runs its Caddy from the install folder this session — the per-user copy could not be made: ${error instanceof Error ? error.message : String(error)}` };
+    }
 }

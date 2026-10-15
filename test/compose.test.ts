@@ -128,8 +128,11 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
         dir = await mkdtemp(join(tmpdir(), 'genie2-compose-caddy-'));
         pty = fakePty();
         let hostsContent = '127.0.0.1 localhost\n';
-        const hostsIo: HostsIo = { read: async () => hostsContent, write: async (n) => { hostsContent = n; }, writeElevated: async (n) => { hostsContent = n; } };
-        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, runElevated: async () => {}, trustStore: { has: async () => false } });
+        const hostsIo: HostsIo = { read: async () => hostsContent, write: async (n) => { hostsContent = n; }, stage: async () => ({ command: 'cp', args: [] }) };
+        services = await composeServices({
+            userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo,
+            elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null }, trustStore: { has: async () => false },
+        });
         await new Promise((r) => setTimeout(r, 15));
         const caddyProcs = () => pty.opened.filter((o) => o.command?.includes('/opt/genie/runtime/caddy run') && o.command.includes('--watch'));
         expect(caddyProcs()).toHaveLength(1);
@@ -151,6 +154,8 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
             authority: { source: 'created', thumbprint: expect.stringMatching(/^[0-9A-F]{40}$/) }, trusted: false, trustError: null, certificateError: null,
         });
         expect(hostsContent).toContain('# >>> genie .gen sites');
+        // The hosts file carries the CONFIGURED site — still there after its stop (genie#624), with both loopbacks.
+        expect(hostsContent).toContain('127.0.0.1 docs.gen\n::1 docs.gen\n');
 
         await services.shutdown();
         services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });

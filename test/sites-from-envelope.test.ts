@@ -29,7 +29,10 @@ const pty: PtyPort = {
     open: (o) => { opened.push({ command: o.command ?? '', cwd: o.cwd ?? '', env: o.env ?? {} }); return { id: `term_${opened.length}`, pid: 1, shell: o.command ?? 'sh', scrollback: '' }; },
     write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
 };
-const hostsIo: HostsIo = { read: async () => '127.0.0.1 localhost\n', write: async () => {}, writeElevated: async () => {} };
+/** The hosts file: what it says now, and every write it took (a write on a real machine may be an admin prompt). */
+let hostsContent = '127.0.0.1 localhost\n';
+let hostsWrites = 0;
+const hostsIo: HostsIo = { read: async () => hostsContent, write: async (n) => { hostsWrites += 1; hostsContent = n; }, stage: async () => ({ command: 'cp', args: [] }) };
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 const settle = () => new Promise<void>((r) => setTimeout(r, 25));
 
@@ -76,7 +79,7 @@ async function envelope(path: string, manifest: unknown, repos: string[]): Promi
 async function launch(): Promise<ComposedServices> {
     services = await composeServices({
         userData: join(dir, 'genie-home'), pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0,
-        hostsIo, runElevated: async () => {},
+        hostsIo, elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         workspaces: () => workspaces,
         onWorkspacesChange: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; },
     } as Parameters<typeof composeServices>[0]);
@@ -103,6 +106,8 @@ beforeEach(async () => {
     workspaces = [{ id: 'acme', path: acme }, { id: 'sleepy', path: sleepy, asleep: true }];
     opened.length = 0;
     listeners.clear();
+    hostsContent = '127.0.0.1 localhost\n';
+    hostsWrites = 0;
 });
 
 afterEach(async () => {
@@ -228,5 +233,37 @@ describe('a site created or removed in Hosting is kept in the envelope', () => {
         }, state())).rejects.toThrow(/project\.json/);
         expect(existsSync(join(bare, 'project.json'))).toBe(false);
         expect((await sitesOf(s)).map((x) => x.host)).not.toContain('loose.gen');
+    });
+});
+
+describe('the hosts file follows the CONFIGURED sites (S4)', () => {
+    it('carries every servable site not declared disabled — running or not, asleep or awake — written ONCE for the whole boot', async () => {
+        const s = await launch();
+        // docs is `enabled: false`; wallet cannot be served; web.acme can since S5; blog's workspace is asleep, but blog is configured.
+        expect(s.configuredHosts().sort()).toEqual(['api.gen', 'blog.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']);
+        expect(hostsWrites).toBe(1);
+        for (const h of ['api.gen', 'blog.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']) expect(hostsContent).toContain(`127.0.0.1 ${h}\n::1 ${h}\n`);
+        expect(hostsContent).not.toContain('docs.gen');
+        expect(hostsContent).not.toContain('wallet.gen');
+    });
+
+    it('the person’s Stop and Start, and a workspace waking, write nothing; a site created in Hosting is one write', async () => {
+        const s = await launch();
+        expect(hostsWrites).toBe(1);
+        await handleFeatureAction(s, { kind: 'hosting.stopSite', siteId: 'site_shop' }, state());
+        await handleFeatureAction(s, { kind: 'hosting.startSite', siteId: 'site_shop' } as never, state());
+        workspaces = [{ id: 'acme', path: acme }, { id: 'sleepy', path: sleepy, asleep: false }];
+        for (const l of listeners) l();
+        await settle();
+        expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
+        expect(hostsWrites).toBe(1);
+        // Positive control in the same run: a new site is exactly one write.
+        await handleFeatureAction(s, {
+            kind: 'hosting.createSite', workspaceId: 'acme', repoPath: join(acme, 'repos', 'new'),
+            form: { name: 'fresh', mode: 'static', devServer: null, hostPort: null, root: 'build', spa: true },
+        }, state());
+        await settle();
+        expect(hostsWrites).toBe(2);
+        expect(hostsContent).toContain('127.0.0.1 fresh.gen');
     });
 });

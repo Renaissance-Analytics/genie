@@ -351,12 +351,24 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
  * THE FRONT DOOR'S LINES — each a fact with its fix beside it, shown ONLY when true (§4.5's signal
  * rule): Genie's CA read as untrusted offers the one-click trust (with the last failure's reason; nothing while the
  * store is still being read); a leaf that could not be issued says so; a declined hosts-file prompt shows the
- * error, the block to paste and where, and a retry; no bundled Caddy says so. All quiet → nothing.
+ * error, the block to paste and where, and a retry; a port another process holds says which and offers Try again; no
+ * bundled Caddy says so. All quiet → nothing.
  */
 function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; onAction: SurfaceProps['onAction'] }) {
-    if (!frontDoor.running) return <p data-frontdoor-line="off" className="px-5 py-2 text-sm text-[var(--fg-3)]">{frontDoor.reason}</p>;
-    const hosts = frontDoor.hosts;
     const button = 'ml-auto shrink-0 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    if (!frontDoor.running) {
+        // A port another process holds is the person's to free; Try again asks again and starts the front door when it is.
+        if (frontDoor.blocked) {
+            return (
+                <div data-frontdoor-line="blocked" className="flex items-center gap-3 px-5 py-2 text-sm">
+                    <span className="flex-1">{frontDoor.reason}</span>
+                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.retryFrontDoor' })}>Try again</button>
+                </div>
+            );
+        }
+        return <p data-frontdoor-line="off" className="px-5 py-2 text-sm text-[var(--fg-3)]">{frontDoor.reason}</p>;
+    }
+    const hosts = frontDoor.hosts;
     return (
         <>
             {frontDoor.trusted === false ? (

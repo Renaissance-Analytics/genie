@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { frontDoorCaddyfile, hostsFilePath } from '../src/core/front-door-caddy.js';
-import { syncHostsFile, type HostsIo } from '../src/main/hosts-file.js';
 
 /**
  * THE EXTERNAL-BROWSER PATH (§6.6) — Chrome/Edge reaching `https://<name>.gen`. Two things make it
@@ -69,44 +68,5 @@ describe('the hosts file', () => {
         expect(hostsFilePath('darwin')).toBe('/etc/hosts');
         expect(hostsFilePath('linux')).toBe('/etc/hosts');
     });
-
-    function io(initial: string, opts: { denyPlain?: boolean; denyElevated?: boolean } = {}) {
-        let content = initial;
-        const calls: string[] = [];
-        const port: HostsIo = {
-            read: async () => { calls.push('read'); return content; },
-            write: async (next) => { calls.push('write'); if (opts.denyPlain) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); content = next; },
-            writeElevated: async (next) => { calls.push('elevated'); if (opts.denyElevated) throw new Error('the user declined'); content = next; },
-        };
-        return { port, calls, content: () => content };
-    }
-
-    it('writes nothing when the block already matches — no elevation prompt for no change', async () => {
-        const current = '127.0.0.1 localhost\n# >>> genie .gen sites — managed, do not edit between the markers\n127.0.0.1 tynn.gen\n# <<< genie .gen sites\n';
-        const f = io(current);
-        const r = await syncHostsFile([{ host: 'tynn.gen', target: '127.0.0.1:4101' }], f.port);
-        expect(r).toEqual({ changed: false, elevated: false });
-        expect(f.calls).toEqual(['read']);
-    });
-
-    it('writes plainly when it can; escalates only on EACCES; reports a declined elevation as an error with the block the person could paste', async () => {
-        const plain = io('127.0.0.1 localhost\n');
-        expect(await syncHostsFile([{ host: 'tynn.gen', target: '127.0.0.1:4101' }], plain.port)).toEqual({ changed: true, elevated: false });
-        expect(plain.content()).toContain('127.0.0.1 tynn.gen');
-
-        const locked = io('127.0.0.1 localhost\n', { denyPlain: true });
-        expect(await syncHostsFile([{ host: 'tynn.gen', target: '127.0.0.1:4101' }], locked.port)).toEqual({ changed: true, elevated: true });
-        expect(locked.calls).toEqual(['read', 'write', 'elevated']);
-
-        const declined = io('127.0.0.1 localhost\n', { denyPlain: true, denyElevated: true });
-        const r = await syncHostsFile([{ host: 'tynn.gen', target: '127.0.0.1:4101' }], declined.port);
-        expect(r).toMatchObject({ changed: false, elevated: false, error: 'the user declined' });
-        expect((r as { manualBlock: string }).manualBlock).toContain('127.0.0.1 tynn.gen');
-    });
-
-    it('removing the last site leaves only the markers, and a file with no block gets one appended', async () => {
-        const f = io('127.0.0.1 localhost\n# >>> genie .gen sites — managed, do not edit between the markers\n127.0.0.1 old.gen\n# <<< genie .gen sites\n');
-        await syncHostsFile([], f.port);
-        expect(f.content()).toBe('127.0.0.1 localhost\n# >>> genie .gen sites — managed, do not edit between the markers\n# <<< genie .gen sites\n');
-    });
+    // What is WRITTEN, when, and through which prompt: test/hosts-sync.test.ts (the hosts file follows the CONFIGURED names).
 });
