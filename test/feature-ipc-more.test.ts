@@ -90,7 +90,9 @@ describe('the Deck’s inline answers reach the stores', () => {
         const a = 'agent_' + 'a'.repeat(32);
         const asked = await services.attention.ask({ agentId: a as never, agentName: 'atlas', workspaceId: 'tynn', questions: [{ header: 'Engine', question: 'Which?', options: [{ label: 'x' }, { label: 'y' }] }] }, { userActive: true });
         const item = services.deckItems().find((i) => i.id === asked.questionId)!;
-        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'y' }, state());
+        // Every agent question is a form now (the owner, 2026-10-14): answered with its selection and a note per question.
+        expect(item.answer.kind).toBe('form');
+        await handleFeatureAction(services, { kind: 'deck.answerForm', item, selections: [['y']], notes: [''], note: '' }, state());
         expect(services.attention.pending()).toEqual([]);
         expect(services.inbox.unread(a as never)[0]!.text).toContain('y');
     });

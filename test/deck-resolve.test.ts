@@ -17,9 +17,9 @@ const base = (over: Partial<DeckItem>): DeckItem => ({
 });
 
 describe('agent questions', () => {
-    it('a ForceTheQuestion item (q_…) answers the question with the chosen label as the single selection and an empty note', () => {
+    it('a ForceTheQuestion item (q_…) answers the question with the chosen label as the single selection, no note for its one question, and an empty overall note', () => {
         const item = base({ id: 'q_1', answer: { kind: 'inline', options: [{ id: 'webContents', label: 'webContents', tone: 'neutral' }, { id: 'BrowserWindow', label: 'BrowserWindow', tone: 'neutral' }] } });
-        expect(resolveDeckAnswer(item, 'webContents')).toEqual({ kind: 'answer-question', questionId: 'q_1', selections: [['webContents']], note: '' });
+        expect(resolveDeckAnswer(item, 'webContents')).toEqual({ kind: 'answer-question', questionId: 'q_1', selections: [['webContents']], notes: [''], note: '' });
     });
 
     it('a form-shaped question cannot be answered by an option id — it needs the form', () => {

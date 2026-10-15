@@ -242,12 +242,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'deck.answer':
         case 'deck.answerForm': {
-            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId) : resolveDeckForm(action.item, action.selections, action.note);
+            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId) : resolveDeckForm(action.item, action.selections, Array.isArray(action.notes) ? action.notes : [], action.note);
             switch (command.kind) {
                 case 'refused':
                     throw new Error(command.reason);
                 case 'answer-question':
-                    await services.attention.answer(command.questionId, { selections: command.selections, note: command.note });
+                    await services.attention.answer(command.questionId, { selections: command.selections, notes: command.notes, note: command.note });
                     break;
                 case 'resolve-approval':
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);

@@ -37,14 +37,16 @@ export interface DeckProps {
     /** The update signal's door is an action (§7): download, then install. */
     onSignalAction?: ((action: SignalAction) => void) | undefined;
     /** A multi-part question's form, filled IN PLACE: one array of labels per question, plus the note. */
-    onAnswerForm?: ((item: DeckItem, selections: string[][], note: string) => void) | undefined;
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The last refused form answer: said beside THAT item's Answer button, where the person clicked. */
+    formRefusal?: { itemId: string; reason: string } | null | undefined;
     /** Which form item is expanded — controlled, for tests that render server-side. Otherwise the Deck keeps its own. */
     expanded?: string | null | undefined;
     /** The item the reader was SENT to (`genie://deck?item=<id>`, a waiting Dashboard row): marked, scrolled to, a form opened. */
     focusId?: string | null | undefined;
 }
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, expanded, focusId = null }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, expanded, focusId = null }: DeckProps) {
     const band = deckBand(items);
     // SINCE YOU LOOKED (§4.5): finished agents with their handoff notes — read here, newest first; never in the count.
     const looked = sinceYouLooked(items);
@@ -167,7 +169,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                         ) : null}
                         {item.answer.kind === 'form' && item.answer.questions && open === item.id ? (
                             <div className="mt-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
-                                <QuestionForm item={item} answering={answering} onSubmit={(selections, note) => onAnswerForm?.(item, selections, note)} onCancel={() => setOwnExpanded(null)} />
+                                <QuestionForm item={item} answering={answering} refusal={formRefusal?.itemId === item.id ? formRefusal.reason : null} onSubmit={(selections, notes) => onAnswerForm?.(item, selections, notes)} onCancel={() => setOwnExpanded(null)} />
                             </div>
                         ) : null}
 

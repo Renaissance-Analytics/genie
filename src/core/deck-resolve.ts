@@ -13,7 +13,7 @@ import type { DeckItem } from './deck.js';
  */
 
 export type DeckCommand =
-    | { kind: 'answer-question'; questionId: string; selections: string[][]; note: string }
+    | { kind: 'answer-question'; questionId: string; selections: string[][]; notes: string[]; note: string }
     | { kind: 'resolve-approval'; approvalId: string; choice: 'allow' | 'deny' }
     | { kind: 'answer-provider-approval'; agentId: string; optionId: string }
     | { kind: 'list-done'; workspaceId: string; itemId: string }
@@ -26,11 +26,29 @@ export type DeckCommand =
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
 
 /**
- * THE FORM, filled in place (§4.5): one array of chosen labels per question, in order, plus the free-text note the
- * modal always offers. Checked here, not guessed: a single-select question takes exactly one label, a multi-select at
- * least one, every label must be one of that question's options; a forwarded question is never answered here.
+ * HOW MANY QUESTIONS STILL NEED AN ANSWER — Genie 1's rule (genie renderer/lib/ask-state.ts `isDraftReady`), carried over
+ * because the owner asked for it back (2026-10-14: "I should have a note section for every question asked"): a question is
+ * answered by at least one option OR a non-blank note of its own. One rule, used by the form (its Answer button and the
+ * count beside it) and by `resolveDeckForm` (the refusal), so the two can never disagree about what "ready" means.
  */
-export function resolveDeckForm(item: DeckItem, selections: readonly (readonly string[])[], note: string): DeckCommand {
+export function unansweredCount(questionCount: number, selections: readonly (readonly string[])[], notes: readonly string[]): number {
+    let missing = 0;
+    for (let i = 0; i < questionCount; i++) {
+        const picked = (selections[i] ?? []).length > 0;
+        const noted = (notes[i] ?? '').trim() !== '';
+        if (!picked && !noted) missing++;
+    }
+    return missing;
+}
+
+/**
+ * THE FORM, filled in place (§4.5): one array of chosen labels per question, in order, and one note per question (the
+ * form offers a note under every question, as Genie 1's did). Checked here, not guessed: a question is answered by at
+ * least one of its options OR a non-blank note; a single-select takes at most one label; every label must be one of that
+ * question's options; a forwarded question is never answered here. `note` is the overall note a caller other than the
+ * form may still send (the form itself no longer shows one).
+ */
+export function resolveDeckForm(item: DeckItem, selections: readonly (readonly string[])[], notes: readonly string[], note = ''): DeckCommand {
     if (item.forwardedFrom !== null || item.answer.kind === 'elsewhere') {
         const host = item.answer.kind === 'elsewhere' ? item.answer.host : item.forwardedFrom;
         return refuse(`this question was raised on ${host} and must be answered there`);
@@ -40,16 +58,23 @@ export function resolveDeckForm(item: DeckItem, selections: readonly (readonly s
     const questions = item.answer.questions;
     if (!questions) return refuse('this item did not carry its questions; open the agent to answer it');
     if (selections.length !== questions.length) return refuse(`${questions.length} questions, ${selections.length} answers`);
+    if (notes.length > questions.length) return refuse(`${questions.length} questions, ${notes.length} notes`);
     for (let i = 0; i < questions.length; i++) {
         const q = questions[i]!;
         const picked = selections[i] ?? [];
         const labels = q.options.map((o) => o.label);
         const stray = picked.find((p) => !labels.includes(p));
         if (stray !== undefined) return refuse(`"${stray}" is not one of the options for ${q.header}`);
-        if (picked.length === 0) return refuse(`${q.header} has no answer yet`);
         if (q.multiSelect !== true && picked.length > 1) return refuse(`${q.header} takes one answer`);
+        if (unansweredCount(1, [picked], [notes[i] ?? '']) > 0) return refuse(`${q.header} needs an option or a note`);
     }
-    return { kind: 'answer-question', questionId: item.id, selections: selections.map((s) => [...s]), note };
+    return {
+        kind: 'answer-question',
+        questionId: item.id,
+        selections: selections.map((s) => [...s]),
+        notes: questions.map((_, i) => (notes[i] ?? '').trim()),
+        note,
+    };
 }
 
 /**
@@ -100,7 +125,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand
 
     switch (item.source) {
         case 'agent-question':
-            if (item.id.startsWith('q_')) return { kind: 'answer-question', questionId: item.id, selections: [[optionId]], note: '' };
+            if (item.id.startsWith('q_')) return { kind: 'answer-question', questionId: item.id, selections: [[optionId]], notes: [''], note: '' };
             if (item.id.startsWith('appr_')) return { kind: 'resolve-approval', approvalId: item.id, choice: optionId === 'allow' ? 'allow' : 'deny' };
             if (item.id.startsWith('approval:') && item.agentId) return { kind: 'answer-provider-approval', agentId: item.agentId, optionId };
             return refuse(`${item.id} is not an item Genie knows how to answer`);

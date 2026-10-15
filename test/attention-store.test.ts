@@ -124,6 +124,37 @@ describe('ForceTheQuestion', () => {
         expect(mail.messages[0]!.text).toContain(r.questionId);
     });
 
+    it('each question’s OWN note reaches the asker right under that question; a note alone answered it; no overall Note line without one', async () => {
+        // The owner, 2026-10-14: "I should have a note section for every question asked" — Genie 1's FTQ had one each.
+        const three = [
+            { header: 'Engine', question: 'Which browser engine?', options: [{ label: 'webContents' }, { label: 'BrowserWindow' }] },
+            { header: 'Scope', question: 'Which suites?', options: [{ label: 'unit' }, { label: 'e2e' }], multiSelect: true },
+            { header: 'When', question: 'Ship when?', options: [{ label: 'today' }, { label: 'tomorrow' }] },
+        ];
+        const r = await store.ask({ agentId: agent, agentName: 'atlas', workspaceId: 'tynn', questions: three }, { userActive: true });
+        await store.answer(r.questionId, { selections: [['webContents'], [], ['today']], notes: ['start there', 'neither — run perf', ''], note: '' });
+
+        const [mail] = (await inbox.receive({ participant: agent })).messages;
+        const text = mail!.text;
+        // Under its own question, in order.
+        expect(text).toContain('- **Engine** — Which browser engine?\n  → webContents\n  Note: start there\n- **Scope**');
+        expect(text).toContain('- **Scope** — Which suites?\n  → (no option chosen)\n  Note: neither — run perf\n- **When**');
+        // COUNTED: exactly the two notes that were given — the third question had none.
+        expect(text.match(/^ {2}Note: /gm) ?? []).toHaveLength(2);
+        expect(text).toMatch(/- \*\*When\*\* — Ship when\?\n {2}→ today$/);
+        // No overall note was given, so there is no overall Note line (and no "(none)").
+        expect(text).not.toMatch(/^Note: /m);
+        expect(text).not.toContain('(none)');
+    });
+
+    it('an overall note from a caller other than the form still reaches the asker on its own line', async () => {
+        const r = await store.ask({ agentId: agent, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
+        await store.answer(r.questionId, { selections: [['webContents']], note: 'overall word' });
+        const [mail] = (await inbox.receive({ participant: agent })).messages;
+        expect(mail!.text).toMatch(/^Note: overall word$/m);
+        expect(mail!.text.match(/^ {2}Note: /gm) ?? []).toHaveLength(0);
+    });
+
     it('answering an unknown or already-answered question throws rather than mailing anyone', async () => {
         await expect(store.answer('q_nope', { selections: [[]], note: '' })).rejects.toThrow(/q_nope/);
         expect((await inbox.receive({ participant: agent })).messages).toEqual([]);
