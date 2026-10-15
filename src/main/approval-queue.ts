@@ -42,10 +42,28 @@ export class ApprovalQueue {
     readonly #pending = new Map<string, Pending>();
     #cancelled: Array<{ action: string; detail: string; reason: string }> = [];
     #n = 0;
+    readonly #listeners = new Set<() => void>();
 
     constructor(options: { now?: () => number; timeoutMs?: number } = {}) {
         this.#now = options.now ?? Date.now;
         this.#timeoutMs = options.timeoutMs ?? 30 * 60_000;
+    }
+
+    /**
+     * Called whenever the Deck items this queue feeds change: a request parks, or one is answered, cancelled or swept.
+     * The Deck is push-only (App.tsx `useSnapshot`), so without this a parked request never reached it — main.ts
+     * rebuilds the snapshot on it. A request that joins an item already pending changes nothing and is not announced.
+     */
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+
+    #changed(): void {
+        for (const listener of [...this.#listeners]) {
+            // A listener that throws must not lose the verdict for the caller waiting on the gate.
+            try { listener(); } catch { /* the next change announces again */ }
+        }
     }
 
     gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
@@ -57,6 +75,7 @@ export class ApprovalQueue {
             }
             const id = `appr_${++this.#n}_${this.#now()}`;
             this.#pending.set(id, { id, caller, action, detail, at: this.#now(), resolvers: [resolve] });
+            this.#changed();
         });
     }
 
@@ -65,6 +84,7 @@ export class ApprovalQueue {
         if (!p) return false;
         this.#pending.delete(id);
         for (const r of p.resolvers) r(choice === 'allow' ? 'allowed' : 'denied');
+        this.#changed();
         return true;
     }
 
