@@ -48,6 +48,7 @@ import { HOST_TOOLS } from '../core/toolchain.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
+import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
@@ -987,6 +988,8 @@ async function boot(): Promise<void> {
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
+        // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
+        pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
         // Genie 1's knowledge graph, from the same database, read-only; the store decides whether it still needs it.
         v1Knowledge: () => readV1Knowledge(v1DatabaseFile()),
@@ -1163,6 +1166,8 @@ async function boot(): Promise<void> {
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
+            // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
+            ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
             sidecar: {
                 register: (input) => registry!.register(input),
                 start: (record, cwd) => host!.start(record, cwd),

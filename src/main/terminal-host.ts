@@ -75,6 +75,12 @@ export interface PtyPort {
     onExit(listener: (id: string, exitCode: number) => void): () => void;
     /** Subscribe to the shell's working directory, as the engine learns it (OSC-7). Optional: an engine without it tracks nothing. */
     onCwd?(listener: (id: string, cwd: string) => void): () => void;
+    /**
+     * Whether the engine still holds a live pty under this id — ASKED, not remembered, so a pty that vanished without an
+     * exit event reads as gone (the supervisor's liveness check, process-supervisor.ts). Optional: an engine without it
+     * leaves liveness to the exit event and the pid.
+     */
+    isLive?(id: string): boolean;
 }
 
 export interface TerminalOptions {

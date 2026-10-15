@@ -29,15 +29,20 @@ import type { PtyPort } from '../src/main/terminal-host.js';
 const opened: Array<{ command?: string | undefined; cwd: string; env?: Readonly<Record<string, string>> | undefined }> = [];
 let n = 0;
 const live = new Set<string>();
+// The pty can print and exit (P1: the log a crashed process leaves behind); nothing above the log tests makes it do either.
+const dataListeners = new Set<(id: string, d: string) => void>();
+const exitListeners = new Set<(id: string, code: number) => void>();
 const pty: PtyPort = {
     open: (o) => { const id = `term_${++n}`; live.add(id); opened.push({ command: o.command, cwd: o.cwd, env: o.env }); return { id, pid: 4000 + n, shell: o.command ?? 'sh', scrollback: '' }; },
     write: () => true,
     resize: () => true,
     kill: (id) => live.delete(id),
     scrollback: () => '',
-    onData: () => () => {},
-    onExit: () => () => {},
+    onData: (l) => { dataListeners.add(l); return () => dataListeners.delete(l); },
+    onExit: (l) => { exitListeners.add(l); return () => exitListeners.delete(l); },
 };
+const print = (d: string) => { for (const l of dataListeners) l(`term_${n}`, d); };
+const crash = (code: number) => { const id = `term_${n}`; live.delete(id); for (const l of exitListeners) l(id, code); };
 const docker: DockerRunner = async () => ({ stdout: '', exitCode: 1 });
 
 let dir: string;
@@ -68,6 +73,8 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-processes-'));
     opened.length = 0;
     live.clear();
+    dataListeners.clear();
+    exitListeners.clear();
     serviceEnv = { DB_HOST: '127.0.0.1' };
     asleep = new Set();
     await boot();
@@ -165,5 +172,33 @@ describe('across a restart', () => {
         expect(rows).toHaveLength(1);
         expect(rows[0]!.state).toBe('stopped');
         expect(rows[0]!.reason).toMatch(/hibernat/);
+    });
+});
+
+describe('the log under the row (P1)', () => {
+    it('a crashed process’s row still carries what it printed and why it stopped — counted', async () => {
+        await handleFeatureAction(services, queue, state(), ports);
+        print('Processing job 1\nSQLSTATE[HY000] [2002] Connection refused\n');
+        crash(1);
+        const [row] = await mine();
+        expect(row).toMatchObject({ state: 'restarting', exitCode: 1 });
+        const lines = row!.log!.text.split('\n');
+        // The pty counter runs across this file's tests, so the pid is whatever this one got.
+        expect(lines[0]).toMatch(/^\[genie\] started \(pid \d+\): php artisan queue:work$/);
+        expect(lines.slice(1)).toEqual([
+            'Processing job 1',
+            'SQLSTATE[HY000] [2002] Connection refused',
+            '[genie] exited with code 1; restarting in 1s',
+        ]);
+        expect(row!.log).toMatchObject({ lines: 4, dropped: 0 });
+    });
+
+    it('rides the snapshot as the END of the log only — counted: 100 lines printed, the last 40 on the row', async () => {
+        await handleFeatureAction(services, queue, state(), ports);
+        print(`${Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join('\n')}\n`);
+        const [row] = await mine();
+        expect(row!.log!.lines).toBe(40);
+        expect(row!.log!.text.split('\n')[0]).toBe('line 61');
+        expect(row!.log!.text.split('\n').at(-1)).toBe('line 100');
     });
 });

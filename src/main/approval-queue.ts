@@ -30,6 +30,9 @@ const VERBS: Record<string, string> = {
     'services.add': 'add a service',
     'services.remove': 'remove a service',
     'sites.remove': 'remove a site',
+    // An agent's `processes` tool (mcp-tools-processes.ts): the detail names the command, the folder and the policy.
+    'processes.add': 'keep a background process running',
+    'processes.remove': 'remove a background process',
 };
 
 export class ApprovalQueue {

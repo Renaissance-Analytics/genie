@@ -10,7 +10,7 @@ import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
 import { createService, createSite, removeService, removeSite, setActiveService, siteDefaults, startService, startSite, stopService, stopSite } from './hosting-actions.js';
-import type { ProcessBook } from './process-book.js';
+import type { HostedProcess, ProcessBook } from './process-book.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 
 /**
@@ -52,6 +52,16 @@ export interface FeatureState {
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
+/** How much of a process's log rides each snapshot: the end of it. All of it is the agents' `processes logs`. */
+export const ROW_LOG_LINES = 40;
+
+function withLogTails(services: ComposedServices, rows: readonly HostedProcess[]): HostedProcess[] {
+    return rows.map((row) => {
+        const log = services.supervisor.readLog(row.id, ROW_LOG_LINES);
+        return log && log.lines > 0 ? { ...row, log } : row;
+    });
+}
+
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
@@ -62,8 +72,9 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
-        // The kept processes are listed even when not running (a stop is durable, never a disappearance).
-        hosting: { sites: services.sites.list(), processes: ports.processes ? ports.processes.list() : services.supervisor.list(), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
+        // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
+        // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
+        hosting: { sites: services.sites.list(), processes: withLogTails(services, ports.processes ? ports.processes.list() : services.supervisor.list()), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
         services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null },
         toolchain: state.toolStatuses === null ? null : { tools: state.toolStatuses, checkedAt: state.toolchainCheckedAt ?? null },

@@ -312,6 +312,11 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * down, and brings it back on every launch until they stop it. A running process offers Stop and
  * Restart; a kept one that is not running offers Start and Remove (a stop is durable, so it stays
  * listed). A site's process is the site's: Remove is never offered for it here.
+ *
+ * Under a row with output, "Log" opens the end of it — the supervisor's tail, so it is still there
+ * after the process exited or crashed, with Genie's own `[genie]` lines saying what happened. A
+ * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
+ * and its summary is not a button, so the row's actions stay exactly the row's.
  */
 function ProcessesPanel({ processes, workspaces, onAction }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
@@ -358,7 +363,7 @@ function ProcessesPanel({ processes, workspaces, onAction }: { processes: NonNul
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
                         return (
-                            <li key={p.id} data-process={p.id} className="flex items-center gap-3 px-5 py-2">
+                            <li key={p.id} data-process={p.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                 <span className="font-medium">{p.name}</span>
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
                                 {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
@@ -369,6 +374,14 @@ function ProcessesPanel({ processes, workspaces, onAction }: { processes: NonNul
                                     {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</button> : null}
                                     {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</button> : null}
                                 </span>
+                                {p.log && p.log.lines > 0 ? (
+                                    <details data-process-log={p.id} className="basis-full">
+                                        <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
+                                            Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}
+                                        </summary>
+                                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log.text}</pre>
+                                    </details>
+                                ) : null}
                             </li>
                         );
                     })}
