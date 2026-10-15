@@ -45,6 +45,8 @@ function fakeDocker() {
         if (cmd === 'start') { containers.set(args[1]!, 'running'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'stop') { containers.set(args[1]!, 'exited'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'rm') { containers.delete(args[2]!); return { stdout: '', exitCode: 0 }; }
+        // An engine's own client inside its container (a shared engine's workspace slice): redis-cli prints the answer.
+        if (cmd === 'exec') return { stdout: args.includes('PING') ? 'PONG\n' : args.includes('SETUSER') ? 'OK\n' : '', exitCode: 0 };
         return { stdout: '', exitCode: 0 };
     };
     return { run, calls, containers };
@@ -120,9 +122,12 @@ describe('services: reading', () => {
         const theirs = await call('services', 't-other', { action: 'list' });
         expect((theirs.json.services as Array<Record<string, unknown>>).map((s) => [s.engine, s.version])).toEqual([['postgres', '16'], ['redis', '7']]);
 
-        // The absence is the claim; the positive control is that each engine HAS a password to leak.
-        const passwords = services.engines.list().map((i) => i.credentials.password).filter((p): p is string => typeof p === 'string');
-        expect(passwords).toHaveLength(2);
+        // The absence is the claim; the positive control is that each engine HAS a password to leak — the two dedicated
+        // Postgres credentials, and the shared Redis's superuser and the workspace's own ACL user (H3).
+        const passwords = services.engines.list()
+            .flatMap((i) => [i.credentials.password, i.admin?.password, ...Object.values(i.slices ?? {}).map((s) => s.password)])
+            .filter((p): p is string => typeof p === 'string');
+        expect(passwords).toHaveLength(4);
         for (const p of passwords) {
             expect(p.length).toBeGreaterThan(10);
             expect(mine.text).not.toContain(p);

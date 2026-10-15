@@ -1,4 +1,4 @@
-import { containerPlan, SERVICE_CATALOG, type Credentials, type ServiceScope } from '../core/services.js';
+import { containerPlan, SERVICE_CATALOG, type Credentials, type EngineAdmin, type ServiceScope } from '../core/services.js';
 
 /**
  * SERVICE ENGINES — the Docker driver (§6.6).
@@ -7,7 +7,8 @@ import { containerPlan, SERVICE_CATALOG, type Credentials, type ServiceScope } f
  * in tests). Pulls happen only with CONSENT — an image is a download the person should know about.
  * A container is created from `containerPlan` (loopback-only publishing, engine-keyed name and
  * volume). Status is READ from `docker inspect` on every ask, never remembered. Removing a container
- * keeps its data volume unless asked: switching versions never destroys data.
+ * keeps its data volume unless asked: switching versions never destroys data. `exec` runs an engine's own
+ * client inside its container — how a workspace's slice of a shared engine is made (core/service-provision.ts).
  */
 
 export type DockerRunner = (args: readonly string[]) => Promise<{ stdout: string; exitCode: number }>;
@@ -81,7 +82,7 @@ export class ServiceDriver {
         return { kind: 'pulled', image };
     }
 
-    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
+    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
         const plan = containerPlan(input);
         const existing = await this.#run(['container', 'inspect', plan.name]);
         if (existing.exitCode === 0) return { ok: true, name: plan.name, existed: true };
@@ -89,7 +90,7 @@ export class ServiceDriver {
         const dataDir = DATA_DIRS[def.engine] ?? '/data';
         const args = ['create', '--name', plan.name, '-p', plan.publish, '-v', `${plan.volume}:${dataDir}`, '--restart', 'unless-stopped'];
         for (const [k, v] of Object.entries(plan.env)) args.push('-e', `${k}=${v}`);
-        args.push(plan.image);
+        args.push(plan.image, ...(plan.command ?? []));
         const r = await this.#run(args);
         if (r.exitCode !== 0) return { ok: false, reason: r.stdout.trim() || `docker create ${plan.name} failed (exit ${r.exitCode})` };
         return { ok: true, name: plan.name };
@@ -98,6 +99,11 @@ export class ServiceDriver {
     async start(name: string): Promise<void> {
         const r = await this.#run(['start', name]);
         if (r.exitCode !== 0) throw new Error(r.stdout.trim() || `docker start ${name} failed`);
+    }
+
+    /** `docker exec <name> …argv`: the engine's own client, inside its container. Answers what it said; never throws for a non-zero exit. */
+    exec(name: string, argv: readonly string[]): Promise<{ stdout: string; exitCode: number }> {
+        return this.#run(['exec', name, ...argv]);
     }
 
     async stop(name: string): Promise<void> {

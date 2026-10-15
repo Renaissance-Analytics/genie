@@ -1,0 +1,186 @@
+import type { AdoptedSlice, EngineAdmin } from './services.js';
+
+/**
+ * A WORKSPACE'S SLICE OF A SHARED ENGINE (§6.6, hosting ship line H3) — the pure half: the commands that carve it.
+ *
+ * Genie 1's model, kept: a SHARED Postgres / MySQL / MariaDB becomes many isolated workspaces because each one gets
+ * its own DATABASE and a ROLE that can reach nothing else, and a shared Redis gets an ACL USER pinned to its own key
+ * prefix. All are named `ws_<slug>` (core/v1-services.ts `workspaceSqlIdentifier`) — the same names Genie 1 created,
+ * so an engine taken over from Genie 1 and a new one carve their slices identically. Each runs as the engine's own
+ * client INSIDE its container (`docker exec`), as the engine's superuser, which Genie generated once and keeps.
+ *
+ * Ported from Genie 1 (repos/genie main/dev-server/services/provision.ts + redis-acl.ts); what changed is said there.
+ *
+ * ## Idempotent
+ *
+ * The role branch ALTERs when the role exists (which also repairs a drifted credential), `CREATE DATABASE` tolerates
+ * "already exists", MySQL has IF NOT EXISTS for all three, and the Redis user starts from `reset`. Running a slice's
+ * steps twice converges on the same engine state.
+ *
+ * ## Redis ACLs are memory-only
+ *
+ * `ACL SETUSER` does not survive a restart of the engine (no aclfile — see below). So a Redis slice is put back every
+ * time Genie starts the engine and every time Genie finds it already running at boot (Docker's `unless-stopped`
+ * restarts it on a reboot without asking Genie). NOT an aclfile: measured by Genie 1 against a real `redis:7-alpine`
+ * (genie#771), a missing file aborts startup and `ACL SAVE` writes back `user default on nopass` — the aclfile route
+ * silently disables `requirepass`.
+ *
+ * ## Injection
+ *
+ * Not escaping. The identifier is DERIVED (closed alphabet) and passwords are generated base64url; both are asserted
+ * here, so the day a user-supplied value is threaded through, it fails loudly instead of becoming SQL injection.
+ */
+
+export interface ProvisionStep {
+    /** Which part of provisioning this is, so a failure names it. */
+    readonly label: string;
+    /** Literal argv, run INSIDE the engine container (`docker exec <container> …argv`). */
+    readonly argv: readonly string[];
+    /** Engine output that means the postcondition already holds. */
+    readonly tolerate?: RegExp;
+    /**
+     * Output the step must print to count as done. `redis-cli` exits 0 on an error reply (Genie 1 measured 7.4.7,
+     * genie#643), so its exit code alone does not carry the server's answer.
+     */
+    readonly expect?: RegExp;
+}
+
+/** The engines a shared instance is carved into per-workspace slices on. */
+export const SLICED_ENGINES: ReadonlySet<string> = new Set(['postgres', 'mysql', 'mariadb', 'redis']);
+
+const SQL_IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
+const GENERATED_PASSWORD = /^[A-Za-z0-9_-]{8,128}$/;
+
+export function assertSliceIdentifier(value: string): string {
+    if (!SQL_IDENTIFIER.test(value)) throw new Error(`refusing to provision with the identifier ${JSON.stringify(value)}: it is not a derived workspace name`);
+    return value;
+}
+
+export function assertGeneratedPassword(value: string, whose: string): string {
+    if (!GENERATED_PASSWORD.test(value)) throw new Error(`refusing to provision with a ${whose} password that is not a generated one`);
+    return value;
+}
+
+/**
+ * Commands a workspace's Redis user must NOT have (Genie 1's REDIS_DENIED, verbatim): the key pattern scopes commands
+ * that name a KEY, and says nothing about the keyspace or the server — FLUSHALL, SWAPDB and FUNCTION reach every
+ * workspace's data without naming a key; CONFIG and ACL change the rules themselves.
+ */
+export const REDIS_DENIED: readonly string[] = ['-flushall', '-flushdb', '-swapdb', '-function', '-shutdown', '-config', '-acl', '-debug', '-replicaof', '-slaveof', '-module'];
+
+/** What a workspace's Redis user may do — on, its password, its own key and channel prefix, everything else minus the deny-list. */
+export function redisUserAclRule(identifier: string, password: string): string[] {
+    return ['on', `>${password}`, `~${identifier}:*`, `&${identifier}:*`, '+@all', ...REDIS_DENIED];
+}
+
+/**
+ * The engine's client asking whether the SERVER is up, over TCP on 127.0.0.1 inside the container. TCP on purpose:
+ * the Postgres, MySQL and MariaDB images run their first-init server with networking off (unix socket only) and then
+ * restart it, so a TCP answer means the real server — the one a slice is created in — is accepting.
+ */
+export function readinessProbe(engine: string, admin: EngineAdmin): ProvisionStep {
+    assertGeneratedPassword(admin.password, 'admin');
+    switch (engine) {
+        case 'postgres':
+            return { label: 'engine ready', argv: ['pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', admin.user] };
+        case 'mysql':
+            return { label: 'engine ready', argv: ['mysqladmin', 'ping', '-h', '127.0.0.1', '-u', admin.user, `-p${admin.password}`, '--silent'] };
+        case 'mariadb':
+            // MariaDB 11's image ships `mariadb-admin` and no `mysqladmin`; 10.x ships both.
+            return { label: 'engine ready', argv: ['mariadb-admin', 'ping', '-h', '127.0.0.1', '-u', admin.user, `-p${admin.password}`, '--silent'] };
+        case 'redis':
+            return { label: 'engine ready', argv: ['redis-cli', '-h', '127.0.0.1', '-a', admin.password, '--no-auth-warning', 'PING'], expect: /^PONG$/m };
+        default:
+            throw new Error(`${engine} is not carved into per-workspace slices`);
+    }
+}
+
+function postgresSteps(admin: EngineAdmin, name: string, password: string): ProvisionStep[] {
+    // A URI rather than the unix socket: no assumption about the image's pg_hba.conf; base64url needs no escaping.
+    const uri = `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/postgres`;
+    const psql = (sql: string): string[] => ['psql', uri, '-v', 'ON_ERROR_STOP=1', '-q', '-tAc', sql];
+    return [
+        {
+            label: 'role',
+            // Postgres has no CREATE ROLE IF NOT EXISTS; the ELSE branch repairs a drifted credential.
+            argv: psql(`DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${name}') THEN
+    CREATE ROLE "${name}" LOGIN PASSWORD '${password}';
+  ELSE
+    ALTER ROLE "${name}" WITH LOGIN PASSWORD '${password}';
+  END IF;
+END $$;`),
+        },
+        {
+            label: 'database',
+            // CREATE DATABASE cannot run in a DO block or a transaction: "already there" is a tolerated error.
+            argv: psql(`CREATE DATABASE "${name}" OWNER "${name}"`),
+            tolerate: /already exists/i,
+        },
+        {
+            label: 'grants',
+            // THE load-bearing statement: Postgres grants CONNECT on every new database to PUBLIC, so without this REVOKE
+            // workspace A's role can open workspace B's database.
+            argv: psql(`REVOKE CONNECT ON DATABASE "${name}" FROM PUBLIC; GRANT ALL PRIVILEGES ON DATABASE "${name}" TO "${name}"; ALTER DATABASE "${name}" OWNER TO "${name}";`),
+        },
+    ];
+}
+
+function mysqlSteps(client: 'mysql' | 'mariadb', admin: EngineAdmin, name: string, password: string): ProvisionStep[] {
+    return [
+        {
+            label: 'database and user',
+            argv: [
+                client, '-h', '127.0.0.1', `-u${admin.user}`, `-p${admin.password}`, '-e',
+                // The GRANT is scoped to this schema — never `ON *.*` — which is what keeps one workspace out of another's tables.
+                'CREATE DATABASE IF NOT EXISTS `' + name + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; '
+                    + `CREATE USER IF NOT EXISTS '${name}'@'%' IDENTIFIED BY '${password}'; `
+                    + `ALTER USER '${name}'@'%' IDENTIFIED BY '${password}'; `
+                    + 'GRANT ALL PRIVILEGES ON `' + name + "`.* TO '" + name + "'@'%'; FLUSH PRIVILEGES;",
+            ],
+        },
+    ];
+}
+
+function redisSteps(admin: EngineAdmin, name: string, password: string): ProvisionStep[] {
+    return [
+        {
+            label: 'acl user',
+            // `reset` first: a re-provision is a full redefinition — the only way this converges after a restart dropped it.
+            argv: ['redis-cli', '-h', '127.0.0.1', '-a', admin.password, '--no-auth-warning', 'ACL', 'SETUSER', name, 'reset', ...redisUserAclRule(name, password)],
+            expect: /^OK$/m,
+        },
+        {
+            // The postcondition itself: the credential the workspace is handed authenticates.
+            label: 'workspace credential',
+            argv: ['redis-cli', '-h', '127.0.0.1', '--user', name, '--pass', password, '--no-auth-warning', 'PING'],
+            expect: /^PONG$/m,
+        },
+    ];
+}
+
+/** The commands that carve one workspace's slice out of a shared engine, as its superuser. */
+export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<AdoptedSlice, 'identifier' | 'password'>): ProvisionStep[] {
+    const name = assertSliceIdentifier(slice.identifier);
+    const password = assertGeneratedPassword(slice.password, 'workspace');
+    assertGeneratedPassword(admin.password, 'admin');
+    switch (engine) {
+        case 'postgres':
+            return postgresSteps(admin, name, password);
+        case 'mysql':
+            return mysqlSteps('mysql', admin, name, password);
+        case 'mariadb':
+            // MariaDB 11's image ships `mariadb` and no `mysql` client; 10.x ships both.
+            return mysqlSteps('mariadb', admin, name, password);
+        case 'redis':
+            return redisSteps(admin, name, password);
+        default:
+            throw new Error(`${engine} is not carved into per-workspace slices`);
+    }
+}
+
+/** Did a step do what it says? Exit 0 and (where the client's exit code lies) the expected output — or a tolerated answer. */
+export function stepSucceeded(step: ProvisionStep, result: { readonly stdout: string; readonly exitCode: number }): boolean {
+    if (result.exitCode === 0 && (!step.expect || step.expect.test(result.stdout))) return true;
+    return step.tolerate?.test(result.stdout) === true;
+}

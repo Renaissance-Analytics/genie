@@ -28,6 +28,15 @@
  * workspace (`ws_<slug>`), each with its own password. That is a `slice` per workspace, and the
  * env an adopted instance emits is Genie 1's own — the exact names and values its env-wiring
  * produced in host form — so what Genie 2 hands a process equals what is already in the `.env`.
+ *
+ * ## New shared engines are multi-tenant the same way (hosting ship line H3)
+ *
+ * A SHARED Postgres / MySQL / MariaDB / Redis that Genie 2 creates is carved exactly like Genie 1's: the engine
+ * keeps its own superuser (`admin`, generated once), and each workspace that uses it gets a `slice` — its own
+ * database + role (or Redis ACL user + key prefix) named `ws_<slug>`, with its own password
+ * (core/service-provision.ts). So env emission is ONE path: an instance with `slices` gives a workspace only its
+ * own slice's connection, whoever created the engine. A shared engine created before slices existed (no `slices`
+ * field) keeps the single credential it was created with — re-keying it would move every app off its data.
  */
 
 export type ServiceScope = { kind: 'shared' } | { kind: 'dedicated'; workspaceId: string };
@@ -51,6 +60,8 @@ export interface EngineDef {
     readonly adoptOnly?: true;
     /** The container's own credential env, from the instance's credentials. */
     readonly containerEnv: (c: Credentials) => Record<string, string>;
+    /** The container's command (after the image), from the password it is protected with — Redis's `--requirepass`. */
+    readonly command?: (password: string) => readonly string[];
     /** The host-form env a workspace gets. */
     readonly hostEnv: (host: string, port: number, c: Credentials) => Record<string, string>;
 }
@@ -60,6 +71,26 @@ export interface Credentials {
     readonly password?: string;
     readonly database?: string;
 }
+
+/** An engine's own superuser: kept (it is baked into the volume on first init), never handed to a workspace. */
+export interface EngineAdmin {
+    readonly user: string;
+    readonly password: string;
+}
+
+/**
+ * The engines a NEW shared instance is created multi-tenant on: its superuser's name and the container env that
+ * creates it. Nothing else is created in the container — every workspace's database and role is a slice.
+ */
+export const SHARED_TENANCY: Readonly<Record<string, { readonly adminUser: string; readonly containerEnv: (adminPassword: string) => Record<string, string> }>> = {
+    // POSTGRES_DB=postgres: the image creates no extra database when it is the maintenance one.
+    postgres: { adminUser: 'genie', containerEnv: (pw) => ({ POSTGRES_USER: 'genie', POSTGRES_PASSWORD: pw, POSTGRES_DB: 'postgres' }) },
+    // Root only: the image refuses MYSQL_USER=root, and a second user here would be one no workspace's slice is.
+    mysql: { adminUser: 'root', containerEnv: (pw) => ({ MYSQL_ROOT_PASSWORD: pw }) },
+    mariadb: { adminUser: 'root', containerEnv: (pw) => ({ MARIADB_ROOT_PASSWORD: pw }) },
+    // `--requirepass` (the launch command) sets the `default` user's password; each workspace is an ACL user.
+    redis: { adminUser: 'default', containerEnv: () => ({}) },
+};
 
 export interface ServiceInstance {
     readonly id: string;
@@ -79,15 +110,19 @@ export interface ServiceInstance {
     readonly volume?: string;
     /** Taken over from Genie 1 in place: never created, pulled, or re-keyed by Genie 2. */
     readonly adopted?: 'v1';
-    /** The engine's own superuser, as Genie 1 minted it. Kept (it is baked into the volume); never handed to a workspace. */
-    readonly admin?: { readonly user: string; readonly password: string };
-    /** Per workspace id: that workspace's slice of this engine — what its env is built from. */
+    /** The engine's own superuser — as Genie 1 minted it, or generated once for a new shared engine. Kept (it is baked into the volume); never handed to a workspace. */
+    readonly admin?: EngineAdmin;
+    /**
+     * Per workspace id: that workspace's slice of this engine — what its env is built from. Present on every adopted
+     * engine and every NEW shared multi-tenant one (possibly empty: no workspace uses it yet); absent = the instance's
+     * own `credentials` are its env (a dedicated engine, or a shared one created before slices existed).
+     */
     readonly slices?: Readonly<Record<string, AdoptedSlice>>;
     /** Every surface the container publishes, by Genie 1's surface name (Mailpit's `ui`, MinIO's `console`). */
     readonly publishedPorts?: Readonly<Record<string, number>>;
 }
 
-/** One workspace's slice of an adopted engine, as Genie 1 provisioned it. */
+/** One workspace's slice of a multi-tenant engine — as Genie 1 provisioned it, or as Genie 2 did (core/service-provision.ts). */
 export interface AdoptedSlice {
     /** Genie 1's `ws_<slug>`: the database, the role, the Redis ACL user, the mail tag. */
     readonly identifier: string;
@@ -139,7 +174,11 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
     {
         engine: 'redis', image: 'redis', internalPort: 6379, majors: ['7', '8'], sharing: 'shared-or-dedicated',
         containerEnv: () => ({}),
-        hostEnv: (host, port) => ({ REDIS_URL: `redis://${host}:${port}`, REDIS_HOST: host, REDIS_PORT: String(port) }),
+        command: (password) => ['redis-server', '--requirepass', password],
+        // A Redis created before passwords were set (no `password`) keeps the URL it was created with.
+        hostEnv: (host, port, c) => (c.password
+            ? { REDIS_URL: `redis://:${c.password}@${host}:${port}`, REDIS_HOST: host, REDIS_PORT: String(port), REDIS_PASSWORD: c.password }
+            : { REDIS_URL: `redis://${host}:${port}`, REDIS_HOST: host, REDIS_PORT: String(port) }),
     },
     {
         engine: 'mongo', image: 'mongo', internalPort: 27017, majors: ['7', '8'], sharing: 'shared-or-dedicated',
@@ -185,17 +224,18 @@ function compareVersions(a: string, b: string): number {
 /**
  * The host-form env for a workspace: exactly one instance per engine, active first, else highest version.
  *
- * `workspaceId` is whose env this is. An adopted Genie 1 engine serves a workspace only through that
- * workspace's SLICE — a shared Postgres holding three workspaces' databases has nothing to say to a
- * fourth — and its "active" is the slice's, because one shared engine is active for one workspace and
- * not for another. Without a `workspaceId` no adopted instance emits.
+ * `workspaceId` is whose env this is. A multi-tenant engine (one with `slices`: adopted from Genie 1, or
+ * a new shared one) serves a workspace only through that workspace's SLICE — a shared Postgres holding
+ * three workspaces' databases has nothing to say to a fourth — and its "active" is the slice's, because
+ * one shared engine is active for one workspace and not for another. Without a `workspaceId` no
+ * multi-tenant instance emits.
  */
 export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string): Record<string, string> {
     const sliceOf = (i: ServiceInstance): AdoptedSlice | undefined => (workspaceId === undefined ? undefined : i.slices?.[workspaceId]);
     const byEngine = new Map<string, ServiceInstance[]>();
     for (const i of instances) {
         let view = i;
-        if (i.adopted === 'v1') {
+        if (i.slices !== undefined) {
             const slice = sliceOf(i);
             if (!slice) continue;
             view = { ...i, active: slice.active === true };
@@ -214,9 +254,9 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
             continue;
         }
         const one = chosen.get(engine)!;
-        if (one.adopted === 'v1') {
+        if (one.slices !== undefined) {
             // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
-            Object.assign(env, v1HostEnv(engine, one.publishedPort, sliceOf(one)!, { primaryRelational: engine !== 'mysql' || !chosen.has('postgres') }));
+            Object.assign(env, v1HostEnv(engine, one.publishedPort, sliceOf(one)!, { primaryRelational: (engine !== 'mysql' && engine !== 'mariadb') || !chosen.has('postgres') }));
             continue;
         }
         const def = SERVICE_CATALOG.find((e) => e.engine === engine);
@@ -227,7 +267,8 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
 }
 
 /**
- * GENIE 1's env for one workspace's slice, in HOST form — byte for byte what Genie 1's
+ * The env for one workspace's slice of a multi-tenant engine — Genie 1's or a new shared one — in HOST
+ * form: GENIE 1's names and values, byte for byte what Genie 1's
  * `serviceEnv` over `provisionedForHost` produced (main/dev-server/services/env-wiring.ts), which is
  * what its env-sync wrote into the workspace's `.env`. Names and values both: a Genie 2 that renamed
  * one (`MYSQL_TCP_PORT` for `MYSQL_PORT`) or dropped one (`REDIS_USERNAME`) would hand a process an
@@ -245,6 +286,7 @@ export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, opt
                 ...(options.primaryRelational ? { DATABASE_URL: `postgresql://${id}:${pw}@${HOST}:${p}/${id}`, DB_CONNECTION: 'pgsql', DB_HOST: HOST, DB_PORT: p, DB_DATABASE: id, DB_USERNAME: id, DB_PASSWORD: pw } : {}),
             };
         case 'mysql':
+        case 'mariadb':
             return {
                 MYSQL_HOST: HOST, MYSQL_PORT: p, MYSQL_USER: id, MYSQL_PASSWORD: pw, MYSQL_DATABASE: id,
                 ...(options.primaryRelational ? { DATABASE_URL: `mysql://${id}:${pw}@${HOST}:${p}/${id}`, DB_CONNECTION: 'mysql', DB_HOST: HOST, DB_PORT: p, DB_DATABASE: id, DB_USERNAME: id, DB_PASSWORD: pw } : {}),
@@ -274,20 +316,31 @@ export interface ContainerPlan {
     /** `127.0.0.1:<published>:<internal>` — loopback only. */
     readonly publish: string;
     readonly env: Record<string, string>;
+    /** The container's command after the image, when the engine needs one (Redis's `--requirepass`). */
+    readonly command?: readonly string[];
 }
 
-export function containerPlan(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials }): ContainerPlan {
+/**
+ * `admin` = a new SHARED multi-tenant engine: the container is created with its superuser only (SHARED_TENANCY), and
+ * every workspace's credential is a slice made later. Otherwise `credentials` are the container's own.
+ */
+export function containerPlan(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
     if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
     if (!def.majors.includes(input.major)) throw new Error(`${input.engine} ${input.major} is not a major Genie knows (${def.majors.join(', ')})`);
     if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+    const tenancy = input.admin ? SHARED_TENANCY[def.engine] : undefined;
+    if (input.admin && !tenancy) throw new Error(`${input.engine} is not carved into per-workspace slices; it has no admin-only container`);
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}-${input.major}`;
+    const password = input.admin?.password ?? input.credentials?.password;
+    const command = def.command && password ? def.command(password) : undefined;
     return {
         image: imageFor(def, input.major),
         name: `genie-${key}`,
         volume: `genie-${key}-data`,
         publish: `${HOST}:${input.publishedPort}:${def.internalPort}`,
-        env: def.containerEnv(input.credentials ?? {}),
+        env: tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {}),
+        ...(command ? { command } : {}),
     };
 }
