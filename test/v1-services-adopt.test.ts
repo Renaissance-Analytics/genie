@@ -294,7 +294,10 @@ describe('at boot, through composition', () => {
     });
 
     // `v1Services` is the input boot wires to Genie 1's database; the cast keeps this file loadable on a tree without it.
-    const compose = () => composeServices({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, now: () => Date.UTC(2026, 9, 14), docker: docker.run, v1Services: { database: v1File } } as never);
+    const compose = () => composeServices({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, now: () => Date.UTC(2026, 9, 14), docker: docker.run, v1Services: { database: v1File },
+        // The machine's own ports are not this test's subject: a real probe made 4102 'taken' whenever anything else in the
+        // run held it (1 suite in 3, 2026-10-15). What is free is decided here, as every other composeServices test does.
+        portFree: async () => true } as never);
 
     it("composition takes Genie 1's engines over before anything reads a workspace's env, and writes the report", async () => {
         writeV1(v1File);
