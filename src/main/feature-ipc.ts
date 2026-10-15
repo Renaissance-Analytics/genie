@@ -1,15 +1,14 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { classifyNavigation } from '../core/browser-policy.js';
 import type { SyncResult } from '../core/integrations.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, siteFormDefaults, validateFlowForm, validateKnowledgeForm, validateServiceForm, validateSiteForm } from '../core/forms.js';
+import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm } from '../core/forms.js';
 import type { FlowAdding, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { ComposedServices } from './compose.js';
+import { createService, createSite, removeService, removeSite, setActiveService, siteDefaults, startService, startSite, stopService, stopSite } from './hosting-actions.js';
 import type { ProcessBook } from './process-book.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 
@@ -89,27 +88,6 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 
 const USER = { kind: 'user' } as const;
 
-/** What the form defaults are derived from: the repo's top-level files plus one level of built dirs, and package.json scripts. */
-async function repoFacts(repoPath: string): Promise<{ files: string[]; packageScripts: Record<string, string> }> {
-    const files: string[] = [];
-    let packageScripts: Record<string, string> = {};
-    try {
-        for (const entry of await readdir(repoPath, { withFileTypes: true })) {
-            files.push(entry.name);
-            if (entry.isDirectory() && ['dist', 'build', 'out', 'public'].includes(entry.name)) {
-                try {
-                    for (const inner of await readdir(join(repoPath, entry.name))) files.push(`${entry.name}/${inner}`);
-                } catch { /* unreadable built dir: not a fact we have */ }
-            }
-        }
-        if (files.includes('package.json')) {
-            const pkg = JSON.parse(await readFile(join(repoPath, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
-            packageScripts = pkg.scripts ?? {};
-        }
-    } catch { /* a folder we cannot read yields no facts, and the form says so through its hint */ }
-    return { files, packageScripts };
-}
-
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason. */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
     const next: FeatureState = { ...state };
@@ -129,11 +107,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (!(await services.flows.remove(action.flowId))) throw new Error(`no flow ${action.flowId}`);
             break;
         // (the old no-op cases for flows.add / hosting.addSite were removed: a switch takes the first match)
-        case 'hosting.addSite': {
-            const facts = await repoFacts(action.repoPath);
-            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: siteFormDefaults({ repoPath: action.repoPath, ...facts }), problems: [] };
+        case 'hosting.addSite':
+            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaults(action.repoPath), problems: [] };
             break;
-        }
         case 'hosting.cancelForm':
             next.siteAdding = null;
             break;
@@ -144,27 +120,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.flowAdding = null;
             break;
         case 'hosting.createSite': {
-            const problems = validateSiteForm(action.form, services.sites.list().map((s) => s.host));
-            if (problems.length > 0) {
+            // The same call an agent's `sites add` makes (hosting-actions.ts): one validation, one env, one envelope write.
+            const r = await createSite(services, { workspaceId: action.workspaceId, repoPath: action.repoPath, form: action.form });
+            if (r.kind === 'problems') {
                 // A refused submit is DATA for the form: shown beside the fields, where it was caused.
-                const open = state.siteAdding ?? { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: siteFormDefaults({ repoPath: action.repoPath, ...(await repoFacts(action.repoPath)) }), problems: [] };
-                next.siteAdding = { ...open, problems };
+                const open = state.siteAdding ?? { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaults(action.repoPath), problems: [] };
+                next.siteAdding = { ...open, problems: r.problems };
                 break;
             }
             next.siteAdding = null;
-            const f = action.form;
-            // The workspace's service env (its engines + the shared ones) reaches every process of the site.
-            const env = services.engines.envFor(action.workspaceId);
-            // Kept in the workspace's envelope (project.json `sites`), so it is there on the next launch.
-            await services.envelopeSites.create({
-                ...(Object.keys(env).length > 0 ? { env } : {}),
-                name: f.name,
-                workspaceId: action.workspaceId,
-                repoPath: action.repoPath,
-                serve: f.mode === 'proxy' ? { mode: 'proxy' } : f.mode === 'static' ? { mode: 'static', root: f.root ?? 'dist', spa: f.spa } : { mode: 'php', root: f.root ?? 'public' },
-                ...(f.devServer ? { devServer: f.devServer } : {}),
-                ...(f.hostPort !== null ? { hostPort: f.hostPort } : {}),
-            });
             break;
         }
         case 'flows.create': {
@@ -188,15 +152,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'hosting.startSite':
             // The person's Start: serves a listed site that is not running, and lifts a remembered Stop.
-            await services.envelopeSites.start(action.siteId);
+            await startSite(services, action.siteId);
             break;
         case 'hosting.stopSite':
             // The person's Stop, remembered on this machine: the next launch leaves it down.
-            if (!(await services.envelopeSites.stop(action.siteId))) throw new Error(`no site ${action.siteId}`);
+            await stopSite(services, action.siteId);
             break;
         case 'hosting.removeSite':
             // Removed from the workspace's envelope too, so it does not come back on the next launch.
-            if (!(await services.envelopeSites.remove(action.siteId))) throw new Error(`no site ${action.siteId}`);
+            await removeSite(services, action.siteId);
             break;
         // A process the person keeps goes through the book, so their start/stop is written down and
         // holds through a restart; a site's or the front door's process is the supervisor's alone.
@@ -231,13 +195,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'services.create': {
             const open: ServiceAdding = state.serviceAdding ?? { workspaceId: action.form.workspaceId, defaults: action.form, problems: [], consent: null };
-            const problems = validateServiceForm(action.form);
-            if (problems.length > 0) {
-                next.serviceAdding = { ...open, problems, consent: null };
+            // The same call an agent's `services add` makes (hosting-actions.ts); for an agent, the person's approval is the consent.
+            const r = await createService(services, action.form, action.consent);
+            if (r.kind === 'problems') {
+                next.serviceAdding = { ...open, problems: r.problems, consent: null };
                 break;
             }
-            const scope = action.form.scope === 'shared' ? { kind: 'shared' as const } : { kind: 'dedicated' as const, workspaceId: action.form.workspaceId };
-            const r = await services.engines.add({ engine: action.form.engine, major: action.form.major, scope, consent: action.consent });
             if (r.kind === 'needs-consent') {
                 // The pull is a download the person should know about: the form stays open, ASKING, with the image named.
                 next.serviceAdding = { ...open, problems: [], consent: { image: r.image, note: r.note, form: action.form } };
@@ -247,16 +210,16 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'services.setActive':
-            await services.engines.setActive(action.workspaceId, action.engine, action.version);
+            await setActiveService(services, action.workspaceId, action.engine, action.version);
             break;
         case 'services.start':
-            await services.startEngine(action.serviceId);
+            await startService(services, action.serviceId);
             break;
         case 'services.stop':
-            await services.stopEngine(action.serviceId);
+            await stopService(services, action.serviceId);
             break;
         case 'services.remove':
-            await services.removeEngine(action.serviceId, { deleteData: action.deleteData });
+            await removeService(services, action.serviceId, { deleteData: action.deleteData });
             break;
         case 'toolchain.check': {
             const tc = ports.toolchain;

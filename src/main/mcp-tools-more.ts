@@ -23,7 +23,7 @@ export type ApprovalGate = (caller: Caller, action: 'create' | 'write', detail: 
 
 export interface TerminalsPort {
     list(): ReadonlyArray<{ id: string; workspaceId: string; cwd?: string; pid: number; shell: string }>;
-    open(options: { workspaceId: string; cwd: string; command?: string }): { id: string; pid: number; shell: string; scrollback: string };
+    open(options: { workspaceId: string; cwd: string; command?: string; env?: Readonly<Record<string, string>> }): { id: string; pid: number; shell: string; scrollback: string };
     write(id: string, data: string): boolean;
     scrollback(id: string): string | undefined;
     /** The engine's scrollback cap in characters; a buffer at the cap has been cut. */
@@ -35,6 +35,11 @@ export interface MoreToolsDeps {
     readonly terminals: TerminalsPort;
     readonly approve: ApprovalGate;
     readonly resolveCaller: (terminalId: string) => Caller | null;
+    /**
+     * The env a terminal in that workspace gets — the SAME the Terminals tab gives its shells (hosting-actions.ts
+     * `terminalEnvFor`: the workspace's service engines, then Genie's MCP endpoint). Absent = none (doctor mode).
+     */
+    readonly envFor?: (workspaceId: string) => Readonly<Record<string, string>>;
 }
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
@@ -132,7 +137,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
     const manageTerminals: Registration = {
         definition: new ToolDefinition(
             'manageTerminals',
-            'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap).',
+            'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell — with the workspace’s service variables already set); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap). Databases, Redis and other engines are the `services` tool’s, and sites are the `sites` tool’s: never run `docker` in a terminal for them.',
             {
                 type: 'object',
                 properties: {
@@ -159,7 +164,10 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     const command = str(args.command);
                     const verdict = await deps.approve(caller, 'create', command ?? '(a shell)');
                     if (verdict !== 'allowed') return err(`creating a terminal was denied by the user`);
-                    const opened = deps.terminals.open({ workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command } : {}) });
+                    // The workspace's service env and Genie's endpoint, as the person's own shells get them: a shell an agent
+                    // opened once had neither, and could not reach the database the person's could.
+                    const env = deps.envFor?.(caller.workspaceId) ?? {};
+                    const opened = deps.terminals.open({ workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) });
                     return ok({ ok: true, terminal: { id: opened.id, pid: opened.pid, shell: opened.shell } });
                 }
                 case 'write': {

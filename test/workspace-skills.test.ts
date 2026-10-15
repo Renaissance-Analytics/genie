@@ -24,8 +24,8 @@ function memFs(files: Record<string, string>) {
 const W = '/w/moic';
 const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20261012' });
 
-// The ten tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts).
-const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent'];
+// The twelve tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts).
+const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites'];
 const V1_ONLY = ['connectToGenie', 'genieGuide', 'checkIssues', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
 
 describe('Genie 2\'s skills', () => {
@@ -33,7 +33,7 @@ describe('Genie 2\'s skills', () => {
         const { fs, store } = memFs({});
         await run(fs);
         for (const s of GENIE_SKILLS) {
-            const named = [...s.body.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge)/.test(n));
+            const named = [...s.body.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge|services|sites)/.test(n));
             for (const n of named) expect(SERVED, `${s.name} names ${n}`).toContain(n);
             for (const v1 of V1_ONLY) expect(s.body, `${s.name}`).not.toContain(v1);
             for (const dir of ['.claude/skills', '.agents/skills']) {

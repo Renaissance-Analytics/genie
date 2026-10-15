@@ -71,6 +71,7 @@ import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
+import { terminalEnvFor } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -750,13 +751,13 @@ async function boot(): Promise<void> {
         const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
         const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
         try {
-            // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do.
-            const serviceEnv = services?.engines.envFor(workspace.id) ?? {};
             // cwd RESUME (§6.5): a new terminal opens where the workspace's last shell was, when tracking is on.
             const trackCwd = (services?.settings.snapshot() ?? {}).track_cwd !== false;
             const cwd = (trackCwd ? terminals.lastCwd(workspace.id) : null) ?? workspace.path;
-            // GENIE_MCP_URL / GENIE_MCP_TOKEN in EVERY terminal (§6.9); the pty port adds GENIE_TERMINAL_ID itself.
-            const env = { ...serviceEnv, ...mcpEnv() };
+            // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do, and
+            // GENIE_MCP_URL / GENIE_MCP_TOKEN (§6.9); the pty port adds GENIE_TERMINAL_ID itself. The SAME function gives an
+            // agent's `manageTerminals create` its env (the `terminalEnv` part below).
+            const env = terminalEnvFor(services, workspace.id, mcpEnv());
             return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
@@ -1078,6 +1079,10 @@ async function boot(): Promise<void> {
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // The Services and Hosting tabs redraw when an AGENT acts through its `services` / `sites` tools, not only when the
+    // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
+    composed.engines.onChange(pushFeatures);
+    composed.sites.onChange(pushFeatures);
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
     processBook = await ProcessBook.open(genieHome(), {
@@ -1122,6 +1127,10 @@ async function boot(): Promise<void> {
                 // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
                 scrollbackCap: 1_000_000,
             },
+            // An agent's terminal gets the env the Terminals tab gives the person's (service engines + Genie's endpoint).
+            terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
+            // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
+            hosting: composed,
             sidecar: {
                 register: (input) => registry!.register(input),
                 start: (record, cwd) => host!.start(record, cwd),

@@ -19,6 +19,9 @@ import { readJson, writeJsonAtomic } from './store.js';
  * as they are — their container, volume, port and credentials — with no driver call at all. Nothing
  * in this file ever creates, pulls or re-keys an adopted instance: `add` answers it as `exists`, and
  * there is no path that writes a credential over one.
+ *
+ * `onChange` fires after every write and every start or stop, whoever asked — the person's Services tab or an agent's
+ * `services` tool — so the tab redraws when an agent acts (main.ts pushes the feature snapshot on it).
  */
 
 export interface RegistryDeps {
@@ -58,6 +61,7 @@ export class ServiceRegistry {
     readonly #driver: ServiceDriver;
     readonly #deps: RegistryDeps;
     #data: RegistryFile;
+    readonly #listeners = new Set<() => void>();
 
     private constructor(file: string, driver: ServiceDriver, deps: RegistryDeps, data: RegistryFile) {
         this.#file = file;
@@ -158,10 +162,22 @@ export class ServiceRegistry {
 
     async start(id: string): Promise<void> {
         await this.#driver.start(this.#nameOf(id));
+        this.#changed();
     }
 
     async stop(id: string): Promise<void> {
         await this.#driver.stop(this.#nameOf(id));
+        this.#changed();
+    }
+
+    /** Fires after an engine is added, adopted, made active, removed, started or stopped. Returns an unsubscribe. */
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+
+    #changed(): void {
+        for (const l of this.#listeners) l();
     }
 
     async remove(id: string, options: { deleteData: boolean }): Promise<void> {
@@ -182,6 +198,7 @@ export class ServiceRegistry {
 
     async #flush(): Promise<void> {
         await writeJsonAtomic(this.#file, this.#data);
+        this.#changed();
     }
 }
 

@@ -23,7 +23,14 @@ interface Pending {
     readonly resolvers: Array<(v: Verdict) => void>;
 }
 
-const VERBS: Record<string, string> = { create: 'open a terminal', write: 'write to a terminal' };
+const VERBS: Record<string, string> = {
+    create: 'open a terminal',
+    write: 'write to a terminal',
+    // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
+    'services.add': 'add a service',
+    'services.remove': 'remove a service',
+    'sites.remove': 'remove a site',
+};
 
 export class ApprovalQueue {
     readonly #now: () => number;
