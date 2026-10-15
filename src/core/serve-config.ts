@@ -107,7 +107,15 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
         // plain-HTTP hop, so PHP saw `http` and Laravel built `http://<name>.gen/...` asset links on an https page: blocked
         // as mixed content, every page blank (measured on moic.gen, 2026-10-14). HTTPS/scheme/port are what PHP's own
         // `$_SERVER` reports for a TLS request, so frameworks generate https URLs without trusting any proxy header.
-        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t}', '\tfile_server');
+        //
+        // X-Forwarded-Proto must say the same (B22, moic.gen, 2026-10-15). An app that trusts 127.0.0.1 as a proxy — a
+        // Laravel app does — takes the scheme from X-Forwarded-Proto over HTTPS=on (Symfony's Request), and this Caddy
+        // REPLACES that header with its own scheme, `http`: it ignores incoming X-Forwarded-* "to prevent spoofing" unless
+        // the sender is a trusted proxy (Caddy's reverse_proxy docs, which php_fastcgi inherits). Measured in WSL with
+        // Caddy 2.11.7 + php-cgi 8.3 + symfony/http-foundation 7.4: HTTP_X_FORWARDED_PROTO=http, url http://moic.gen/...
+        // Set here, it is https for every request and NO proxy is trusted: `trusted_proxies` would also pass a caller's
+        // X-Forwarded-For through to PHP (measured with `private_ranges`: a peer's spoofed 203.0.113.9 reached PHP).
+        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t\theader_up X-Forwarded-Proto https', '\t}', '\tfile_server');
     }
     lines.push('}', '');
     return lines.join('\n');

@@ -83,6 +83,24 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         expect(php).toContain('file_server');
     });
 
+    // B22, moic.gen again (2026-10-15): with HTTPS=on set, Laravel STILL built http:// asset links. The site's Caddy
+    // sets X-Forwarded-Proto to its OWN scheme (`http`, its listener) and ignores the front door's `https`, because it
+    // trusts no proxy; a Laravel app trusts 127.0.0.1, and Symfony prefers a trusted X-Forwarded-Proto over HTTPS=on.
+    // Measured in WSL genie-test with Caddy 2.11.7 + php-cgi 8.3 + symfony/http-foundation 7.4: HTTP_X_FORWARDED_PROTO=http,
+    // symfony.url=http://moic.gen/... The cure tells PHP the same thing on both signals and trusts NO proxy header.
+    it('php: X-Forwarded-Proto is https to PHP, set in the php_fastcgi block, with no proxy trusted', () => {
+        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const block = /php_fastcgi 127\.0\.0\.1:4102 \{([\s\S]*?)\n\t\}/.exec(php)?.[1] ?? '';
+        // COUNTED: exactly one, inside the php_fastcgi block (anywhere else it would not reach PHP).
+        expect(block.match(/^\t\theader_up X-Forwarded-Proto https$/gm) ?? []).toHaveLength(1);
+        expect(php.match(/X-Forwarded-Proto/g) ?? []).toHaveLength(1);
+        // NOT the other proposed cure: trusting proxies would also pass a caller's X-Forwarded-For through to PHP
+        // (measured: `trusted_proxies static private_ranges` delivered a private peer's spoofed `203.0.113.9`).
+        expect(php).not.toMatch(/trusted_proxies|client_ip_headers/);
+        // CONTROL: a static site runs no PHP and gets neither.
+        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })).not.toContain('X-Forwarded-Proto');
+    });
+
     // The owner, 2026-10-14, on beta.24: "Zero *.gen sites are being served". Measured on his machine: one site's own
     // Caddy (127.0.0.1:4109) also held 0.0.0.0:80 and 127.0.0.1:2019 — automatic HTTPS opens a redirect server on :80
     // and every Caddy opens its admin API on :2019 — so the other four PHP sites and Genie's front door could not start.
