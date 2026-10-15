@@ -194,7 +194,7 @@ describe('the two lists', () => {
         const added = await store.lists.add({ list: 'agent', workspaceId: 'tynn', agentId: agent, text: 'a' });
         if (added.kind !== 'added') throw new Error('unreachable');
         await store.lists.add({ list: 'agent', workspaceId: 'tynn', agentId: agent, text: 'b' });
-        await store.lists.done({ workspaceId: 'tynn', id: added.item.id });
+        await store.lists.done({ workspaceId: 'tynn', id: added.item.id, by: agent });
 
         const reopened = await AttentionStore.open(dir, inbox, now);
         const items = reopened.lists.show({ list: 'agent', workspaceId: 'tynn', agentId: agent });

@@ -341,7 +341,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                 case 'done': {
                     const id = str(args.id);
                     if (!id) return err('done needs `id`');
-                    const hit = await deps.attention.lists.done({ workspaceId: caller.workspaceId, id });
+                    const hit = await deps.attention.lists.done({ workspaceId: caller.workspaceId, id, by: caller.agentId });
                     return hit ? ok(show()) : err(`no list item ${id} in this workspace`);
                 }
                 case 'clear': {

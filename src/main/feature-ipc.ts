@@ -586,7 +586,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
                     break;
                 case 'list-done':
-                    if (!(await services.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId }))) throw new Error(`no list item ${command.itemId}`);
+                    // The PERSON's Done: the store mails the agent that put the item on their list (attention-store.ts).
+                    if (!(await services.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId, by: HUMAN }))) throw new Error(`no list item ${command.itemId}`);
                     break;
                 case 'mark-read': {
                     const unread = services.inbox.unread(HUMAN);
