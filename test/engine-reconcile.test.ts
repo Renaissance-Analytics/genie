@@ -19,9 +19,10 @@ const MYSQL = inst('svc_mysql', 'mysql', '8', 4106);
 const UP: DockerAvailability = { ok: true, version: '28.1.0' };
 const DOWN: DockerAvailability = { ok: false, reason: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' };
 
-function world(input: { docker?: DockerAvailability; instances: ServiceInstance[]; states: Record<string, ContainerState>; stopped?: string[]; answersAfter?: Record<string, number>; startFails?: Record<string, string> }) {
+function world(input: { docker?: DockerAvailability; instances: ServiceInstance[]; states: Record<string, ContainerState>; stopped?: string[]; answersAfter?: Record<string, number>; startFails?: Record<string, string>; restoreFails?: Record<string, string> }) {
     const states = { ...input.states };
     const started: string[] = [];
+    const restored: string[] = [];
     const probed: string[] = [];
     const inspected: string[] = [];
     let availableAsked = 0;
@@ -47,8 +48,13 @@ function world(input: { docker?: DockerAvailability; instances: ServiceInstance[
         },
         now: () => clock,
         sleep: async (ms) => { slept++; clock += ms; },
+        restore: async (i) => {
+            const fail = input.restoreFails?.[i.id];
+            if (fail) throw new Error(fail);
+            restored.push(i.id);
+        },
     };
-    return { ports, started, probed, inspected, get availableAsked() { return availableAsked; }, get slept() { return slept; } };
+    return { ports, started, probed, inspected, restored, get availableAsked() { return availableAsked; }, get slept() { return slept; } };
 }
 
 const bound = { timeoutMs: 5_000, pollMs: 500 };
@@ -115,6 +121,48 @@ describe('reconcile at Genie start', () => {
         const w = world({ docker: DOWN, instances: [], states: {} });
         expect(await reconcileEngines(w.ports, bound)).toEqual({ docker: null, engines: [] });
         expect(w.availableAsked).toBe(0);
+    });
+});
+
+describe('engines taken over from Genie 1 that no workspace uses (H5)', () => {
+    // An adopted engine as core/v1-services.ts plans it: `slices` is who uses it.
+    const adopted = (id: string, slices: NonNullable<ServiceInstance['slices']>): ServiceInstance => ({
+        id, engine: 'postgres', version: '16', scope: { kind: 'shared' }, publishedPort: 4110, credentials: {}, active: false,
+        adopted: 'v1', containerName: `genie-svc-${id}`, admin: { user: 'postgres', password: 'admin-example-pw' }, slices,
+    });
+    const UNUSED = adopted('svc_v1_unused', {});
+    const USED = adopted('svc_v1_used', { 'example-a': { identifier: 'ws_example_a', password: 'example-a-pw', active: true } });
+
+    it('an unused adopted engine is NOT started — counted; the used one beside it IS (the control)', async () => {
+        const w = world({ instances: [UNUSED, USED], states: { svc_v1_unused: 'exited', svc_v1_used: 'exited' } });
+        const report = await reconcileEngines(w.ports, bound);
+        expect(w.started).toEqual(['svc_v1_used']);
+        expect(report.engines).toEqual([
+            { id: 'svc_v1_unused', outcome: 'unused', reason: 'postgres 16 on 127.0.0.1:4110: taken over from Genie 1, but no workspace uses it; left stopped' },
+            { id: 'svc_v1_used', outcome: 'started' },
+        ]);
+    });
+
+    it('an unused adopted engine that is already running is left running and reported so — never stopped by the reconcile', async () => {
+        const w = world({ instances: [UNUSED], states: { svc_v1_unused: 'running' } });
+        expect((await reconcileEngines(w.ports, bound)).engines).toEqual([{ id: 'svc_v1_unused', outcome: 'running' }]);
+        expect(w.started).toEqual([]);
+    });
+});
+
+describe('an engine found running gets what lives in its memory put back', () => {
+    it('`restore` is called once for each engine found RUNNING — not for one it started (start does that), nor one the person stopped', async () => {
+        const w = world({ instances: [PG, REDIS, MYSQL], states: { svc_pg: 'exited', svc_redis: 'running', svc_mysql: 'running' }, stopped: ['svc_mysql'] });
+        await reconcileEngines(w.ports, bound);
+        expect(w.restored).toEqual(['svc_redis']);
+    });
+
+    it('a restore that fails is that engine’s outcome, with the engine’s words; the others are untouched', async () => {
+        const w = world({ instances: [REDIS, PG], states: { svc_redis: 'running', svc_pg: 'running' }, restoreFails: { svc_redis: 'redis 7: making the acl user for ws_example_a failed: ERR' } });
+        expect((await reconcileEngines(w.ports, bound)).engines).toEqual([
+            { id: 'svc_redis', outcome: 'failed', reason: "redis 7 on 127.0.0.1:4104 is running, but its workspaces' users could not be put back: redis 7: making the acl user for ws_example_a failed: ERR" },
+            { id: 'svc_pg', outcome: 'running' },
+        ]);
     });
 });
 

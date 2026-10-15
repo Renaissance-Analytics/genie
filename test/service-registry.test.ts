@@ -32,6 +32,8 @@ function fakeDocker() {
         if (cmd === 'start') { containers.set(args[1]!, 'running'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'stop') { containers.set(args[1]!, 'exited'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'rm') { containers.delete(args[2]!); return { stdout: '', exitCode: 0 }; }
+        // An engine's own client inside its container: redis-cli prints the server's answer (it exits 0 either way).
+        if (cmd === 'exec') return { stdout: args.includes('PING') ? 'PONG\n' : args.includes('SETUSER') ? 'OK\n' : '', exitCode: 0 };
         return { stdout: '', exitCode: 0 };
     };
     return { run, calls, images, containers };
@@ -46,7 +48,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-services-'));
     docker = fakeDocker();
     nextPort = 54300;
-    registry = await ServiceRegistry.open(dir, new ServiceDriver(docker.run), { allocatePort: () => ++nextPort, randomPassword: () => 'pw1' });
+    registry = await ServiceRegistry.open(dir, new ServiceDriver(docker.run), { allocatePort: () => ++nextPort, randomPassword: () => 'pw1-generated' });
 });
 
 afterEach(async () => {
@@ -63,7 +65,7 @@ describe('adding an engine', () => {
 
     it('with consent: pulls, allocates a loopback port and credentials, creates and starts the container, and remembers the instance durably', async () => {
         const r = await registry.add({ engine: 'postgres', major: '17', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true });
-        expect(r).toMatchObject({ kind: 'added', instance: { engine: 'postgres', version: '17', publishedPort: 54301, credentials: { user: 'genie', password: 'pw1', database: 'tynn' }, active: true } });
+        expect(r).toMatchObject({ kind: 'added', instance: { engine: 'postgres', version: '17', publishedPort: 54301, credentials: { user: 'genie', password: 'pw1-generated', database: 'tynn' }, active: true } });
         expect(docker.containers.get('genie-tynn-postgres-17')).toBe('running');
         const reopened = await ServiceRegistry.open(dir, new ServiceDriver(docker.run), { allocatePort: () => 0, randomPassword: () => 'x' });
         expect(reopened.list('tynn').map((i) => [i.engine, i.version, i.publishedPort])).toEqual([['postgres', '17', 54301]]);
@@ -88,14 +90,19 @@ describe('adding an engine', () => {
 });
 
 describe('env and status', () => {
-    it('a workspace’s env covers its own engines AND the shared ones, in host form', async () => {
+    it('a workspace’s env covers its own engines AND the shared ones it USES, in host form — its own Redis user on the shared engine', async () => {
+        // H3: a shared Redis is multi-tenant. The workspace that adds it gets its own ACL user; one that has not
+        // used it gets nothing from it (it used to get the one unauthenticated URL every workspace shared).
         await registry.add({ engine: 'postgres', major: '17', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true });
-        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true });
+        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true, workspaceId: 'tynn' });
         const env = registry.envFor('tynn');
         expect(env.DB_PORT).toBe('54301');
-        expect(env.REDIS_URL).toBe('redis://127.0.0.1:54302');
-        expect(registry.envFor('fancy').REDIS_URL).toBe('redis://127.0.0.1:54302');
+        expect(env.REDIS_URL).toBe('redis://ws_tynn:pw1-generated@127.0.0.1:54302');
+        expect(env.REDIS_USERNAME).toBe('ws_tynn');
+        expect(registry.envFor('fancy').REDIS_URL).toBeUndefined();
         expect(registry.envFor('fancy').DB_PORT).toBeUndefined();
+        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true, workspaceId: 'fancy' });
+        expect(registry.envFor('fancy').REDIS_URL).toBe('redis://ws_fancy:pw1-generated@127.0.0.1:54302');
     });
 
     it('status is read from Docker on every ask; stop and start go through the driver; remove keeps data unless asked', async () => {

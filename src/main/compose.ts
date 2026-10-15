@@ -49,6 +49,7 @@ import { RemoteHost, type HostApi } from './remote-host.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
 import { ServiceDriver, dockerRunnerOver, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
+import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
@@ -98,6 +99,8 @@ export interface ComposeInput {
     readonly engineAnswers?: (instance: ServiceInstance) => Promise<boolean>;
     /** How long an engine started at Genie start is waited for, and how often it is asked. */
     readonly engineReadiness?: ReadinessBound;
+    /** Does git ignore a `.env` in a folder (`git check-ignore` by default)? Asked before a service password is written into one. */
+    readonly gitIgnored?: DotEnvSyncPorts['gitIgnored'];
     /** The OS hosts file; the real one by default. */
     readonly hostsIo?: HostsIo;
     /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
@@ -184,6 +187,8 @@ export interface ComposedServices {
     startEngine(id: string): Promise<void>;
     stopEngine(id: string): Promise<void>;
     removeEngine(id: string, options: { deleteData: boolean }): Promise<void>;
+    /** The workspace's service connection kept current in each site repo's `.env` — refused where git would commit it. */
+    readonly envFiles: DotEnvSync;
     readonly frontDoor: GenRouterServer;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: ApprovalQueue;
@@ -483,6 +488,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             ...enginePorts,
             personStopped: () => engineStopped,
             start: (id) => engines.start(id),
+            // Found running: a shared Redis's workspace users are put back (`start` above does it for one it starts).
+            restore: (i) => engines.restoreSlices(i.id),
             answers: input.engineAnswers ?? ((i) => loopbackAnswers(i.publishedPort, readinessHandshake(i.engine))),
             now: Date.now,
             sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -568,6 +575,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
+    // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
+    const envFiles = new DotEnvSync({
+        envFor: (workspaceId) => engines.envFor(workspaceId),
+        sites: () => sites.list(),
+        fs: nodeEnvelopeFs(),
+        gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
+        log: (line) => console.error(line),
+    });
+    const syncEnvFiles = () => { envFiles.syncAll().catch((error: unknown) => console.error(`[env] ${error instanceof Error ? error.message : String(error)}`)); };
+    syncEnvFiles();
+    engines.onChange(syncEnvFiles);
+    sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
         envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
     }) ?? (() => {});
@@ -591,6 +610,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         envelopeSites,
         engines,
         engineReconcile,
+        envFiles,
         engineStatuses: () => engineStatusesOf(enginePorts),
         startEngine: async (id) => {
             // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).

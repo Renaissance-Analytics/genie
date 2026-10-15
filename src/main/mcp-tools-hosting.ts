@@ -69,7 +69,8 @@ function visibleTo(i: ServiceInstance, workspaceId: string): boolean {
 
 /** An engine without its credentials: an answer never carries one (`env` is where a process's connection lives). */
 function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<EngineStatusView, 'status' | 'note'>): Record<string, unknown> {
-    const active = i.adopted === 'v1' ? i.slices?.[workspaceId]?.active === true : i.active;
+    // A multi-tenant engine (adopted, or a new shared one) is active per workspace: its slice's.
+    const active = i.slices !== undefined ? i.slices[workspaceId]?.active === true : i.active;
     return {
         id: i.id,
         engine: i.engine,

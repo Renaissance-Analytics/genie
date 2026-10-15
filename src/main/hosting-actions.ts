@@ -88,12 +88,16 @@ export type CreateServiceOutcome =
     | { readonly kind: 'needs-consent'; readonly image: string; readonly note: string }
     | { readonly kind: 'added' | 'exists'; readonly instance: ServiceInstance };
 
-/** Add an engine from the form: validated first; an image not on the machine is pulled only with `consent`. */
+/**
+ * Add an engine from the form: validated first; an image not on the machine is pulled only with `consent`. The form's
+ * workspace is the one that USES it: on a shared Postgres/MySQL/MariaDB/Redis it gets its own database and role (or
+ * Redis user), made once — whether the engine is new or already serves other workspaces.
+ */
 export async function createService(s: HostingServices, form: ServiceForm, consent: boolean): Promise<CreateServiceOutcome> {
     const problems = validateServiceForm(form);
     if (problems.length > 0) return { kind: 'problems', problems };
     const scope = form.scope === 'shared' ? { kind: 'shared' as const } : { kind: 'dedicated' as const, workspaceId: form.workspaceId };
-    const r = await s.engines.add({ engine: form.engine, major: form.major, scope, consent });
+    const r = await s.engines.add({ engine: form.engine, major: form.major, scope, consent, workspaceId: form.workspaceId });
     return r.kind === 'needs-consent' ? { kind: 'needs-consent', image: r.image, note: r.note } : r;
 }
 

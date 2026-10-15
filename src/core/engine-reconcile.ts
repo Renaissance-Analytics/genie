@@ -13,6 +13,11 @@ import type { ServiceInstance } from './services.js';
  *     then waited for: running per `docker inspect` AND answering on its loopback port (the engine's
  *     own handshake where it has one — see `readinessHandshake`), bounded by a deadline. An engine the
  *     person stopped stays stopped across a restart.
+ *   - An engine taken over from Genie 1 that NO workspace uses (no slice) is never started: it would run for
+ *     nobody. The take-over planner (core/v1-services.ts) already leaves those stopped; a later boot must not wake
+ *     them (hosting ship line H5). One that is already running is reported as running and left alone.
+ *   - An engine that is up (found running, or started) gets `restore` — what lives only in its memory put back
+ *     (a shared Redis's workspace users; Docker restarts a container on a reboot without asking Genie).
  *
  * Every effect is a port; the clock and the sleep are injected, so the bound is tested without waiting.
  */
@@ -43,12 +48,20 @@ export interface ReconcilePorts extends EnginePorts {
     readonly answers: (instance: ServiceInstance) => Promise<boolean>;
     readonly now: () => number;
     readonly sleep: (ms: number) => Promise<void>;
+    /** For an engine found already RUNNING: put back what lives only in its memory. A failure is the engine's outcome. */
+    readonly restore?: (instance: ServiceInstance) => Promise<void>;
+}
+
+/** An engine taken over from Genie 1 that no workspace holds a slice of: it gives nobody any env. */
+export function unusedAdopted(i: ServiceInstance): boolean {
+    return i.adopted === 'v1' && Object.keys(i.slices ?? {}).length === 0;
 }
 
 export type EngineOutcome =
     | { readonly id: string; readonly outcome: 'running' }
     | { readonly id: string; readonly outcome: 'started' }
     | { readonly id: string; readonly outcome: 'person-stopped' }
+    | { readonly id: string; readonly outcome: 'unused'; readonly reason: string }
     | { readonly id: string; readonly outcome: 'docker-not-running'; readonly reason: string }
     | { readonly id: string; readonly outcome: 'absent'; readonly reason: string }
     | { readonly id: string; readonly outcome: 'failed'; readonly reason: string }
@@ -100,7 +113,15 @@ export async function reconcileEngines(ports: ReconcilePorts, bound: ReadinessBo
         instances.map(async (i): Promise<EngineOutcome> => {
             if (stopped.has(i.id)) return { id: i.id, outcome: 'person-stopped' };
             const state = await ports.state(i.id);
-            if (state === 'running') return { id: i.id, outcome: 'running' };
+            if (state !== 'running' && unusedAdopted(i)) return { id: i.id, outcome: 'unused', reason: `${label(i)}: taken over from Genie 1, but no workspace uses it; left stopped` };
+            if (state === 'running') {
+                try {
+                    await ports.restore?.(i);
+                } catch (error) {
+                    return { id: i.id, outcome: 'failed', reason: `${label(i)} is running, but its workspaces' users could not be put back: ${error instanceof Error ? error.message : String(error)}` };
+                }
+                return { id: i.id, outcome: 'running' };
+            }
             if (state === 'absent') return { id: i.id, outcome: 'absent', reason: `${label(i)}: its container is not in Docker any more; remove the engine and add it again (its data volume is kept unless you delete it)` };
             try {
                 await ports.start(i.id);
