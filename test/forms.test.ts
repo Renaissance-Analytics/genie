@@ -33,11 +33,11 @@ describe('Add a site', () => {
 
     it('validation names every problem at once', () => {
         expect(validateSiteForm({ name: '', mode: 'proxy', devServer: null, hostPort: null, root: null, spa: false }, [])).toEqual([
-            { field: 'name', message: 'A site needs a name — one hostname label (a-z, 0-9, hyphens).' },
+            { field: 'name', message: 'A site needs a name — one or more hostname labels separated by dots (a-z, 0-9, hyphens), like web or web.acme.' },
             { field: 'hostPort', message: 'A proxy site needs either a dev server command or a port you already run.' },
         ]);
         expect(validateSiteForm({ name: 'Bad Name', mode: 'static', devServer: null, hostPort: null, root: '', spa: true }, [])).toEqual([
-            { field: 'name', message: '"Bad Name" is not a hostname label — use a-z, 0-9 and hyphens.' },
+            { field: 'name', message: '"Bad Name" is not a site name: "bad name" is not a hostname label (a-z, 0-9, hyphens inside, at most 63 characters). Use labels of a-z, 0-9 and hyphens, separated by dots.' },
             { field: 'root', message: 'A static site needs the built directory to serve (for example dist).' },
         ]);
         expect(validateSiteForm({ name: 'docs', mode: 'proxy', devServer: null, hostPort: 5173, root: null, spa: false }, ['docs.gen'])).toEqual([
@@ -46,6 +46,32 @@ describe('Add a site', () => {
         expect(validateSiteForm({ name: 'docs', mode: 'proxy', devServer: null, hostPort: 70000, root: null, spa: false }, [])).toEqual([
             { field: 'hostPort', message: 'A port is a number from 1 to 65535.' },
         ]);
+    });
+
+    it('S5: a multi-label name is valid; each bad label is named; a taken multi-label name is taken — counted', () => {
+        const form = { mode: 'proxy' as const, devServer: null, hostPort: 5173, root: null, spa: false };
+        expect(validateSiteForm({ ...form, name: 'web.acme' }, [])).toEqual([]);
+        expect(validateSiteForm({ ...form, name: 'Web.Acme.gen' }, [])).toEqual([]);
+        const bad = ['web..acme', 'web_1.acme', '-web.acme'].map((name) => validateSiteForm({ ...form, name }, []));
+        expect(bad.map((p) => p.map((x) => x.field))).toEqual([['name'], ['name'], ['name']]);
+        expect(bad[1]![0]!.message).toMatch(/"web_1" is not a hostname label/);
+        expect(validateSiteForm({ ...form, name: 'web.acme' }, ['web.acme.gen'])).toEqual([{ field: 'name', message: 'web.acme.gen is already a site.' }]);
+    });
+
+    it('EDIT uses the same validation: the site’s own host left out of the taken list keeps its name valid; another site’s is still taken', () => {
+        const form = { name: 'docs', mode: 'proxy' as const, devServer: null, hostPort: 5173, root: null, spa: false };
+        const all = ['docs.gen', 'shop.gen'];
+        // Editing docs: its own host is not "taken" by itself …
+        expect(validateSiteForm(form, all.filter((h) => h !== 'docs.gen'))).toEqual([]);
+        // … renaming it onto shop is.
+        expect(validateSiteForm({ ...form, name: 'shop' }, all.filter((h) => h !== 'docs.gen'))).toEqual([{ field: 'name', message: 'shop.gen is already a site.' }]);
+    });
+
+    it('S5: the default name is Genie 1’s <folder>.<workspace> when the workspace is known; the workspace’s own folder is its name alone', () => {
+        expect(siteFormDefaults({ repoPath: '/w/example/repos/web', workspaceName: 'Example', workspacePath: '/w/example', files: [], packageScripts: {} }).name).toBe('web.example');
+        expect(siteFormDefaults({ repoPath: '/w/example', workspaceName: 'Example', workspacePath: '/w/example', files: [], packageScripts: {} }).name).toBe('example');
+        // Control: with no workspace given, the folder alone, exactly as before.
+        expect(siteFormDefaults({ repoPath: '/w/example/repos/web', files: [], packageScripts: {} }).name).toBe('web');
     });
 
     it('a valid form has no problems — the positive control', () => {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isGenHost, siteNameProblem } from './gen-name.js';
 
 /**
  * A WORKSPACE'S SITES, AS ITS ENVELOPE DECLARES THEM (§6.6) — the pure half.
@@ -53,7 +54,6 @@ export interface UnservableSite {
 export type EnvelopeSite = ServableSite | UnservableSite;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * Where `repo` points, against the manifest's `repos[]`: an entry whose slug, name, path or folder name
@@ -138,10 +138,11 @@ function mapEntry(manifest: Record<string, unknown>, key: string, entry: Record<
     const host = genName ?? `${rawName.toLowerCase()}.gen`;
     const refuse = (reason: string): UnservableSite => ({ key, ok: false, name: rawName, enabled, host, repoDir, reason });
 
-    // The `.gen` name is the site's NAME in Genie 2: one label, `<name>.gen` (the front door serves no other shape).
+    // The `.gen` name is the site's NAME in Genie 2: `<name>.gen`, `<name>` one or more labels — `tynn.gen`, and Genie 1's
+    // own default `<site>.<workspace>.gen` (gen-name.ts). Every label is checked; the refusal names the one that is wrong.
     if (!host.endsWith('.gen')) return refuse(`its name ${host} is not a .gen name`);
     const label = host.slice(0, -'.gen'.length);
-    if (!LABEL.test(label)) return refuse(`Genie 2 serves a site at one label, <name>.gen; ${host} has more than one label (rename it to serve it here)`);
+    if (!isGenHost(host)) return refuse(`its name ${host} is not a hostname Genie can serve: ${siteNameProblem(label) ?? 'not a .gen name'}`);
     if (repoDir === null) return refuse(`its repo ${JSON.stringify(repo)} is not a folder name inside the envelope`);
     if (entry.kind !== undefined && entry.kind !== 'http') return refuse(`it is a ${String(entry.kind)} site; Genie 2 hosts http sites`);
     const runMode = entry.runMode ?? 'host';
@@ -219,13 +220,32 @@ export function siteEntryFor(manifest: Record<string, unknown>, site: NewSiteEnt
         if (repo !== null && resolveRepoDir(manifest, repo) !== site.repoDir) repo = null;
     }
     if (repo === null) return { ok: false, reason: `${site.repoDir} is not a registered repo of this workspace, nor a folder under repos/; add it as a repo first` };
-    const entry: Record<string, unknown> = { repo, runMode: 'host', kind: 'http', enabled: true, name: site.name, genName: `${site.name}.gen` };
+    // Genie 1's shape: `name` is ONE label (Genie 1 drops a row whose name is not one — sites-config.ts
+    // `sanitizeDevSitePatch`), `genName` the full host. A Genie 2 site `web.acme` is { name: 'web', genName: 'web.acme.gen' },
+    // exactly what Genie 1's own default wrote; one label `docs` is { name: 'docs', genName: 'docs.gen' } as before.
+    const entry: Record<string, unknown> = { repo, runMode: 'host', kind: 'http', enabled: true, name: site.name.split('.')[0]!, genName: `${site.name}.gen` };
     if (site.serve.mode === 'static') entry.hostServe = { mode: 'static', root: site.serve.root, spa: site.serve.spa };
     else if (site.serve.mode === 'php') entry.hostServe = { mode: 'php', root: site.serve.root };
     else if (site.hostPort !== undefined) entry.hostPort = site.hostPort;
     else if (site.devServer) entry.command = argvOf(site.devServer.command);
     else return { ok: false, reason: 'a proxy site needs a dev server or a hostPort' };
     return { ok: true, entry };
+}
+
+/** The fields that say HOW a site is served — replaced whole by an edit, never mixed (a stale `hostPort` beside a new `hostServe` would be two answers). */
+const SERVE_FIELDS = ['hostServe', 'hostPort', 'command', 'serve'] as const;
+
+/**
+ * An EDITED site's entry: the existing entry with its name, folder and way of serving replaced by `next` (a
+ * {@link siteEntryFor} result), and everything else it carries — `enabled`, Genie 1's own fields (`framework`, `stack`,
+ * `upstreamHost`…) — kept as it was, in its place. Genie 2 changes what the person edited and nothing they did not.
+ */
+export function editedSiteEntry(existing: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
+    const kept = Object.fromEntries(Object.entries(existing).filter(([k]) => !(SERVE_FIELDS as readonly string[]).includes(k)));
+    const merged: Record<string, unknown> = { ...kept, ...next };
+    // Whether it starts is the person's, from before the edit: an edit is not an enable.
+    if ('enabled' in existing) merged.enabled = existing.enabled;
+    return merged;
 }
 
 /** The manifest with `sites[key]` set (or deleted when `entry` is null); every other key and its order kept. */

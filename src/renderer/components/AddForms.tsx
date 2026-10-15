@@ -37,12 +37,15 @@ export interface AddSiteFormProps {
     readonly problems: readonly Problem[];
     readonly onSubmit: (form: { name: string; mode: SiteMode; command: string; hostPort: number | null; root: string | null; spa: boolean }) => void;
     readonly onCancel: () => void;
+    /** The same form edits a site (`edit-site`, "Save") — one set of fields, one validation, for Add and Edit. */
+    readonly formId?: 'add-site' | 'edit-site';
+    readonly submitLabel?: string;
 }
 
-export function AddSiteForm({ defaults, problems, onSubmit, onCancel }: AddSiteFormProps) {
+export function AddSiteForm({ defaults, problems, onSubmit, onCancel, formId = 'add-site', submitLabel = 'Add site' }: AddSiteFormProps) {
     return (
         <form
-            data-form="add-site"
+            data-form={formId}
             className="flex flex-col gap-4 p-5"
             onSubmit={(e) => {
                 e.preventDefault();
@@ -60,7 +63,7 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel }: AddSiteF
         >
             <p className="text-sm text-[var(--fg-3)]">{defaults.hint}</p>
             <Row label="Name">
-                <Input name="name" defaultValue={defaults.name} placeholder="tynn" />
+                <Input name="name" defaultValue={defaults.name} placeholder="web.acme" />
                 <ProblemLine field="name" problems={problems} />
             </Row>
             <Row label="Serve mode">
@@ -86,7 +89,7 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel }: AddSiteF
                 Single-page app — serve index.html for unknown paths
             </label>
             <div className="flex gap-2">
-                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add site</button>
+                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{submitLabel}</button>
                 <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
             </div>
         </form>

@@ -29,6 +29,7 @@ const VERBS: Record<string, string> = {
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
     'services.add': 'add a service',
     'services.remove': 'remove a service',
+    'sites.update': 'change a site',
     'sites.remove': 'remove a site',
     // An agent's `processes` tool (mcp-tools-processes.ts): the detail names the command, the folder and the policy.
     'processes.add': 'keep a background process running',

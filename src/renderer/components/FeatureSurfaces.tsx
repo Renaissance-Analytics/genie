@@ -4,7 +4,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
-import type { FeatureAction, FeatureData, FrontDoorStatus } from '../features.js';
+import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
@@ -179,6 +179,95 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
     );
 }
 
+/**
+ * ONE SITE'S ROW (§6.6) — Genie 1's site row (WorkspaceSiteManager.tsx): the host, its state and port, and what can be
+ * done with it. Every control makes the same call an agent's `sites` tool makes (hosting-actions.ts):
+ *
+ * - **Open** (up): the site in Genie's own browser — main shows the pane and brings the browser surface up on it.
+ * - **Restart** (up, Genie's own process): stopped and started again, its config and env read anew.
+ * - **Stop** (up) / **Start** (down).
+ * - **Edit**: the Add form, prefilled with how it is declared now, the same validation; saved to project.json.
+ * - **Logs**: each of its processes' output, the supervisor's tail — there after a crash (as a Processes row's Log).
+ * - **Remove**: behind a confirm that says what it does (project.json, never the folder).
+ *
+ * A site Genie 2 cannot serve says why and offers nothing to click. Hook-free: what is open is native `<details>` or the
+ * main process's form state, so the row renders the same on the server, in a test and on screen.
+ */
+export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+    const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
+    const button = 'text-[13px]';
+    return (
+        <li data-site={s.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+            <span className="font-mono">{s.host}</span>
+            <Badge variant="soft" size="sm">{s.state}</Badge>
+            {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
+            {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
+            {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
+            {s.state === 'unservable' ? null : (
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                    {up ? (
+                        <button type="button" data-site-action="open" className={button} onClick={() => onAction({ kind: 'hosting.openSite', siteId: s.id })}>Open</button>
+                    ) : null}
+                    {up && s.state !== 'external' ? (
+                        <button type="button" data-site-action="restart" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Restart</button>
+                    ) : null}
+                    {up ? (
+                        <button type="button" data-site-action="stop" className={button} onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
+                    ) : (
+                        <button type="button" data-site-action="start" className={button} onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>
+                    )}
+                    {editing ? null : (
+                        <button type="button" data-site-action="edit" className={button} onClick={() => onAction({ kind: 'hosting.editSite', siteId: s.id })}>Edit</button>
+                    )}
+                </span>
+            )}
+            {editing ? (
+                <div data-site-edit={s.id} className="basis-full">
+                    <AddSiteForm
+                        formId="edit-site"
+                        submitLabel="Save"
+                        defaults={{ ...editing.defaults, hint: `Editing ${editing.host}. Saved to the workspace’s project.json; a running site comes back up as edited.` }}
+                        existingHosts={[]}
+                        problems={editing.problems}
+                        onSubmit={(f) =>
+                            onAction({
+                                kind: 'hosting.updateSite',
+                                siteId: s.id,
+                                form: {
+                                    name: f.name,
+                                    mode: f.mode,
+                                    devServer: f.command ? { stack: editing.defaults.devServer?.stack ?? 'node', command: f.command } : null,
+                                    hostPort: f.hostPort,
+                                    root: f.root,
+                                    spa: f.spa,
+                                },
+                            })
+                        }
+                        onCancel={() => onAction({ kind: 'hosting.cancelForm' })}
+                    />
+                </div>
+            ) : null}
+            {(s.logs ?? []).map((log) => (
+                <details key={log.processId} data-site-log={log.processId} className="basis-full">
+                    <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
+                        Logs · {log.name} · last {log.lines} line{log.lines === 1 ? '' : 's'}{log.dropped > 0 ? ' (earlier output was cut)' : ''}
+                    </summary>
+                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{log.text}</pre>
+                </details>
+            ))}
+            {s.state === 'unservable' ? null : (
+                <details data-site-remove={s.id} className="basis-full text-xs">
+                    <summary className="cursor-pointer text-[var(--fg-3)]">Remove…</summary>
+                    <div className="mt-1 flex items-center gap-3">
+                        <span>Remove {s.host}? It is stopped and taken out of this workspace’s project.json. Its folder and files are not touched.</span>
+                        <button type="button" data-site-action="remove" className="rounded-lg border border-[var(--danger)] px-2.5 py-1 text-[13px] text-[var(--danger)]" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</button>
+                    </div>
+                </details>
+            )}
+        </li>
+    );
+}
+
 export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
     const hosting = data.hosting;
     return (
@@ -238,18 +327,7 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
                             ) : (
                                 <ul className="divide-y divide-[var(--border-1)]">
                                     {hosting.sites.map((s) => (
-                                        <li key={s.id} data-site={s.id} className="flex items-center gap-3 px-5 py-2">
-                                            <span className="font-mono">{s.host}</span>
-                                            <Badge variant="soft" size="sm">{s.state}</Badge>
-                                            {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
-                                            {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
-                                            {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
-                                            {s.state === 'running' || s.state === 'restarting' || s.state === 'external' ? (
-                                                <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
-                                            ) : s.state === 'unservable' ? null : (
-                                                <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>
-                                            )}
-                                        </li>
+                                        <SiteRow key={s.id} site={s} editing={hosting.editing?.siteId === s.id ? hosting.editing : null} onAction={onAction} />
                                     ))}
                                 </ul>
                             )}

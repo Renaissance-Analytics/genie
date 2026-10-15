@@ -5,14 +5,17 @@ import { isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm } from '../core/forms.js';
-import type { FlowAdding, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding } from '../renderer/features.js';
+import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { ComposedServices } from './compose.js';
-import { createService, createSite, removeService, removeSite, setActiveService, siteDefaults, startService, startSite, stopService, stopSite } from './hosting-actions.js';
+import {
+    createService, createSite, openSite, removeService, removeSite, restartSite, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite,
+    type OpenInBrowser,
+} from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
 import type { FeatureAction, FeatureData, InstallPreview, ToolchainSection } from '../renderer/features.js';
 
@@ -46,6 +49,8 @@ export interface FeaturePorts {
         /** T2: Check and repair. */
         repair?(): Promise<RepairReport>;
     };
+    /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
+    readonly openInBrowser?: OpenInBrowser;
 }
 
 export interface FeatureState {
@@ -61,6 +66,7 @@ export interface FeatureState {
     toolchainWarning?: ToolchainSection['warning'] | null;
     toolchainResult?: string | null;
     siteAdding?: SiteAdding | null;
+    siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
     serviceAdding?: ServiceAdding | null;
     knowledgeAdding?: KnowledgeAdding | null;
@@ -135,6 +141,14 @@ function describeUpdate(tool: string, outcome: RepairOutcome): string {
 /** How much of a process's log rides each snapshot: the end of it. All of it is the agents' `processes logs`. */
 export const ROW_LOG_LINES = 40;
 
+/** Each site with the end of its processes' output — the same read as the agents' `sites logs` (hosting-actions.ts). */
+function sitesWithLogs(services: ComposedServices): HostedSite[] {
+    return services.sites.list().map((site) => {
+        const logs = siteLogs(services, site.id, ROW_LOG_LINES).filter((l) => l.lines > 0);
+        return logs.length > 0 ? { ...site, logs } : site;
+    });
+}
+
 function withLogTails(services: ComposedServices, rows: readonly HostedProcess[]): HostedProcess[] {
     return rows.map((row) => {
         const log = services.supervisor.readLog(row.id, ROW_LOG_LINES);
@@ -154,7 +168,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
-        hosting: { sites: services.sites.list(), processes: withLogTails(services, ports.processes ? ports.processes.list() : services.supervisor.list()), adding: state.siteAdding ?? null, frontDoor: services.externalFrontDoor },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : services.supervisor.list()), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
         services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null },
         toolchain: toolchainSection(state),
@@ -200,11 +214,42 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         // (the old no-op cases for flows.add / hosting.addSite were removed: a switch takes the first match)
         case 'hosting.addSite':
-            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaults(action.repoPath), problems: [] };
+            // Named Genie 1's way, `<folder>.<workspace>` — the agents' `sites add` and `detect` get the same defaults.
+            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaultsIn(services, action.workspaceId, action.repoPath), problems: [] };
+            next.siteEditing = null;
             break;
         case 'hosting.cancelForm':
             next.siteAdding = null;
+            next.siteEditing = null;
             break;
+        case 'hosting.editSite': {
+            // The form opens on the site as it is declared now; a site that cannot be edited says why (thrown).
+            const target = siteEditTarget(services, action.siteId);
+            next.siteEditing = { siteId: action.siteId, host: target.site.host, defaults: target.form, problems: [] };
+            next.siteAdding = null;
+            break;
+        }
+        case 'hosting.updateSite': {
+            // The same call an agent's `sites update` makes (hosting-actions.ts): the Add form's validation, one envelope write.
+            const r = await updateSite(services, { siteId: action.siteId, form: action.form });
+            if (r.kind === 'problems') {
+                const open = state.siteEditing ?? { siteId: action.siteId, host: services.sites.get(action.siteId)?.host ?? action.siteId, defaults: action.form, problems: [] };
+                next.siteEditing = { ...open, defaults: action.form, problems: r.problems };
+                break;
+            }
+            next.siteEditing = null;
+            break;
+        }
+        case 'hosting.restartSite':
+            // The same call an agent's `sites restart` makes: stopped and started again, and a remembered Stop lifted.
+            await restartSite(services, action.siteId);
+            break;
+        case 'hosting.openSite': {
+            // The same call an agent's `sites open` makes: checked against the front door's routes, then shown in Genie's browser.
+            if (!ports.openInBrowser) throw new Error('this Genie has no browser to open a site in');
+            next.browserUrl = (await openSite(services, action.siteId, ports.openInBrowser)).url;
+            break;
+        }
         case 'flows.add':
             next.flowAdding = { defaults: flowFormDefaults({ workspaceId: action.workspaceId }), problems: [] };
             break;
@@ -216,7 +261,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const r = await createSite(services, { workspaceId: action.workspaceId, repoPath: action.repoPath, form: action.form });
             if (r.kind === 'problems') {
                 // A refused submit is DATA for the form: shown beside the fields, where it was caused.
-                const open = state.siteAdding ?? { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaults(action.repoPath), problems: [] };
+                const open = state.siteAdding ?? { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaultsIn(services, action.workspaceId, action.repoPath), problems: [] };
                 next.siteAdding = { ...open, problems: r.problems };
                 break;
             }

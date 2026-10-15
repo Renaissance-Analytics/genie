@@ -1,5 +1,6 @@
-import { basename } from 'node:path';
+import { basename, relative } from 'node:path';
 import { parseCron } from './cron.js';
+import { defaultSiteName, normalizeSiteName, siteNameProblem } from './gen-name.js';
 import { SERVICE_CATALOG } from './services.js';
 import { detectDevServer, detectStaticServe, type DevServer, type RepoFacts } from './serve-config.js';
 
@@ -32,14 +33,31 @@ export interface Problem {
     readonly message: string;
 }
 
-const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-
 function labelFromFolder(repoPath: string): string {
     return basename(repoPath.replace(/[\\/]+$/, ''))
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '')
         .slice(0, 63);
+}
+
+/** Where a site is, for its default name. Both absent = the folder's label alone (what a caller with no workspace gets). */
+export interface SiteWhere {
+    /** The workspace's name (its project.json `name`, else its folder) — the `<workspace>` of Genie 1's `<site>.<workspace>`. */
+    readonly workspaceName?: string | null;
+    /** The workspace's folder: a site AT it is named for the workspace alone. */
+    readonly workspacePath?: string | null;
+}
+
+/**
+ * The default name: Genie 1's `<site>.<workspace>` (gen-name.ts `defaultSiteName`) when the workspace is known — a site
+ * at the workspace's own folder is the workspace's name alone — else the folder's label, as before.
+ */
+function defaultName(repoPath: string, where: SiteWhere): string {
+    const workspace = where.workspaceName ?? null;
+    if (workspace === null) return labelFromFolder(repoPath);
+    const atRoot = typeof where.workspacePath === 'string' && relative(where.workspacePath, repoPath) === '';
+    return defaultSiteName({ folder: atRoot ? null : labelFromFolder(repoPath), workspace });
 }
 
 const STACK_LABEL: Record<DevServer['stack'], string> = { laravel: 'Laravel', node: 'A Node dev script', django: 'Django', go: 'Go' };
@@ -50,8 +68,8 @@ const STACK_HINT: Record<DevServer['stack'], string> = {
     go: 'Genie will run `go run .`; make sure it reads PORT.',
 };
 
-export function siteFormDefaults(input: RepoFacts & { repoPath: string }): SiteFormDefaults {
-    const name = labelFromFolder(input.repoPath);
+export function siteFormDefaults(input: RepoFacts & { repoPath: string } & SiteWhere): SiteFormDefaults {
+    const name = defaultName(input.repoPath, input);
     const dev = detectDevServer(input);
     if (dev) {
         return { name, mode: 'proxy', devServer: dev, root: null, spa: false, hostPort: null, hint: `${STACK_LABEL[dev.stack]} detected — ${STACK_HINT[dev.stack]}` };
@@ -63,12 +81,17 @@ export function siteFormDefaults(input: RepoFacts & { repoPath: string }): SiteF
     return { name, mode: 'proxy', devServer: null, root: null, spa: false, hostPort: null, hint: 'No dev server was recognised — give the port you already run on, or a command Genie should run.' };
 }
 
+/**
+ * Every problem with a site form at once — the ONE validation for Add and for Edit, the Hosting tab's and the agents'.
+ * `existingHosts` are the hosts the name may not take: every site's for an Add; every site's but its own for an Edit.
+ */
 export function validateSiteForm(form: SiteForm, existingHosts: readonly string[]): Problem[] {
     const problems: Problem[] = [];
-    const label = form.name.toLowerCase();
-    if (form.name.trim().length === 0) problems.push({ field: 'name', message: 'A site needs a name — one hostname label (a-z, 0-9, hyphens).' });
-    else if (!LABEL.test(label)) problems.push({ field: 'name', message: `"${form.name}" is not a hostname label — use a-z, 0-9 and hyphens.` });
-    else if (existingHosts.includes(`${label}.gen`)) problems.push({ field: 'name', message: `${label}.gen is already a site.` });
+    const name = normalizeSiteName(form.name);
+    const nameProblem = siteNameProblem(form.name);
+    if (form.name.trim().length === 0) problems.push({ field: 'name', message: 'A site needs a name — one or more hostname labels separated by dots (a-z, 0-9, hyphens), like web or web.acme.' });
+    else if (nameProblem !== null) problems.push({ field: 'name', message: `"${form.name}" is not a site name: ${nameProblem}. Use labels of a-z, 0-9 and hyphens, separated by dots.` });
+    else if (existingHosts.includes(`${name}.gen`)) problems.push({ field: 'name', message: `${name}.gen is already a site.` });
 
     if (form.mode === 'proxy') {
         if (form.hostPort !== null && !(Number.isInteger(form.hostPort) && form.hostPort >= 1 && form.hostPort <= 65535)) {

@@ -119,11 +119,12 @@ describe('on launch', () => {
         const wallet = sites.find((x) => x.host === 'wallet.gen')!;
         expect(wallet).toMatchObject({ workspaceId: 'acme', state: 'unservable' });
         expect(wallet.problem).toMatch(/container/);
+        // S5: Genie 1's own default name, `<site>.<workspace>.gen`, is SERVED now (it was listed unservable: "one label").
         const web = sites.find((x) => x.host === 'web.acme.gen')!;
-        expect(web).toMatchObject({ state: 'unservable' });
-        expect(web.problem).toMatch(/one label/);
-        // Unservable rows route nothing.
+        expect(web).toMatchObject({ workspaceId: 'acme', name: 'web.acme', state: 'running', problem: null });
+        // Unservable rows route nothing; the multi-label site is routed under its full name.
         expect(s.routes().map((r) => r.host)).not.toContain('wallet.gen');
+        expect(s.routes().map((r) => r.host)).toContain('web.acme.gen');
     });
 
     it('starts the ENABLED sites of AWAKE workspaces with the serve mode project.json names, in the repo repos[] resolves', async () => {
@@ -133,12 +134,12 @@ describe('on launch', () => {
         expect(byHost('shop.gen').state).toBe('running');
         expect(byHost('api.gen').state).toBe('running');
         expect(byHost('legacy.gen').state).toBe('external');
-        // php: the FastCGI worker and Caddy, both in repos/shop.
-        expect(opened.filter((o) => o.cwd === join(acme, 'repos', 'shop')).map((o) => o.command.split(' ')[0])).toEqual(['php-cgi', '/opt/genie/runtime/caddy']);
+        // php: the FastCGI worker and Caddy, both in repos/shop — for shop.gen, and for web.acme.gen (S5), which serves the same repo.
+        expect(opened.filter((o) => o.cwd === join(acme, 'repos', 'shop')).map((o) => o.command.split(' ')[0])).toEqual(['php-cgi', '/opt/genie/runtime/caddy', 'php-cgi', '/opt/genie/runtime/caddy']);
         // proxy: the stored argv with the port Genie allocated in place of the one written down.
         const api = opened.find((o) => o.cwd === join(acme, 'repos', 'api'))!;
         expect(api.command).toBe(`npm run dev -- --port ${byHost('api.gen').port}`);
-        expect(s.routes().map((r) => r.host).sort()).toEqual(['api.gen', 'legacy.gen', 'shop.gen']);
+        expect(s.routes().map((r) => r.host).sort()).toEqual(['api.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']);
     });
 
     it('a disabled site, and every site of a hibernating workspace, is listed but NOT started', async () => {
@@ -148,8 +149,8 @@ describe('on launch', () => {
         expect(sites.find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'stopped', workspaceId: 'sleepy', processIds: [] });
         expect(opened.some((o) => o.cwd.startsWith(sleepy))).toBe(false);
         expect(opened.some((o) => o.cwd === join(acme, 'repos', 'docs-site'))).toBe(false);
-        // Positive control in the same run: the scan does find processes started in acme.
-        expect(opened.filter((o) => o.cwd.startsWith(acme)).length).toBe(3);
+        // Positive control in the same run: the scan does find processes started in acme (shop's two, api's one, web.acme's two).
+        expect(opened.filter((o) => o.cwd.startsWith(acme)).length).toBe(5);
     });
 
     it('a waking workspace brings its enabled sites up', async () => {
@@ -171,7 +172,9 @@ describe('the person’s Start and Stop', () => {
         await handleFeatureAction(s, { kind: 'hosting.stopSite', siteId: 'site_shop' }, state());
         s = await relaunch();
         expect((await sitesOf(s)).find((x) => x.host === 'shop.gen')).toMatchObject({ state: 'stopped' });
-        expect(opened.some((o) => o.cwd === join(acme, 'repos', 'shop'))).toBe(false);
+        // shop.gen's own server did not start; web.acme.gen, which serves the same repo, did (the control that the scan sees one).
+        expect(opened.filter((o) => o.command.includes(join('site_shop', 'Caddyfile')))).toHaveLength(0);
+        expect(opened.filter((o) => o.command.includes(join('site_web.acme', 'Caddyfile')))).toHaveLength(1);
         // The stop is machine-local: the git-tracked envelope still says enabled.
         expect(((await manifestOf(acme)).sites as Record<string, { enabled: boolean }>).aaaa000000000001!.enabled).toBe(true);
 

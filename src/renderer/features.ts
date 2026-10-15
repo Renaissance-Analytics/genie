@@ -9,6 +9,7 @@ import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
+import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
 import type { AnnotatedRow, GithubAppStatus, SyncResult } from '../core/integrations.js';
@@ -34,6 +35,17 @@ export interface SiteAdding {
     readonly defaults: SiteFormDefaults;
     readonly problems: readonly Problem[];
 }
+
+/** An Edit-a-site form open in the Hosting surface: the site as it is declared now, problems from the last refused save. */
+export interface SiteEditing {
+    readonly siteId: string;
+    readonly host: string;
+    readonly defaults: SiteForm;
+    readonly problems: readonly Problem[];
+}
+
+/** A site row: the site, and the end of each of its processes' output (the supervisor's tail — there after a crash). */
+export type HostedSite = SiteInfo & { readonly logs?: readonly SiteProcessLog[] };
 
 /** An Add-a-flow form open in the Flows surface. */
 export interface FlowAdding {
@@ -132,7 +144,7 @@ export interface ToolchainSection {
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
-    readonly hosting: { sites: readonly SiteInfo[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; frontDoor: FrontDoorStatus } | null;
+    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
     readonly toolchain: ToolchainSection | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
@@ -183,6 +195,14 @@ export type FeatureAction =
     | { kind: 'hosting.startSite'; siteId: string }
     | { kind: 'hosting.stopSite'; siteId: string }
     | { kind: 'hosting.removeSite'; siteId: string }
+    /** Stopped and started again, as Start starts it; a remembered Stop is lifted. */
+    | { kind: 'hosting.restartSite'; siteId: string }
+    /** Open it in Genie's browser (the browser surface shows it). */
+    | { kind: 'hosting.openSite'; siteId: string }
+    /** Open the Edit form for a site, prefilled with how it is declared now. `hosting.cancelForm` closes it. */
+    | { kind: 'hosting.editSite'; siteId: string }
+    /** The Edit form, submitted: the Add form's validation, then written back to the workspace's project.json. */
+    | { kind: 'hosting.updateSite'; siteId: string; form: SiteForm }
     | { kind: 'hosting.restartProcess'; processId: string }
     | { kind: 'hosting.stopProcess'; processId: string }
     /** Add a background process the person keeps (§6.6): started now, written down, brought back on launch. */
