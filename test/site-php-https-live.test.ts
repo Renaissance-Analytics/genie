@@ -20,26 +20,44 @@ afterAll(() => { for (const p of procs) p.kill(); for (const d of dirs) rmSync(d
 
 const freePort = () => new Promise<number>((resolve) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as { port: number }).port; s.close(() => resolve(p)); }); });
 const reachable = (port: number) => new Promise<boolean>((resolve) => { const s = connect({ host: '127.0.0.1', port, timeout: 1000 }, () => { s.destroy(); resolve(true); }); s.on('error', () => resolve(false)); s.on('timeout', () => { s.destroy(); resolve(false); }); });
-const get = (port: number, host: string) => new Promise<string>((resolve) => {
-    const req = request({ host: '127.0.0.1', port, path: '/index.php', headers: { Host: host }, timeout: 5000 }, (res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve(b)); });
+const get = (port: number, host: string, extra: Record<string, string> = {}) => new Promise<string>((resolve) => {
+    const req = request({ host: '127.0.0.1', port, path: '/index.php', headers: { ...extra, Host: host }, timeout: 5000 }, (res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve(b)); });
     req.on('error', (e) => resolve(`ERROR ${e.message}`)); req.end();
 });
 
+/** A php site as Genie writes it — the generated Caddyfile, a real php-cgi — serving `index.php`; answers its port. */
+async function servePhp(indexPhp: string): Promise<number> {
+    const repo = mkdtempSync(join(tmpdir(), 'genie2-php-'));
+    dirs.push(repo);
+    mkdirSync(join(repo, 'public'));
+    writeFileSync(join(repo, 'public', 'index.php'), indexPhp);
+    const [sitePort, fcgiPort] = [await freePort(), await freePort()];
+    const file = join(repo, 'Caddyfile');
+    writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, serve: { mode: 'php', root: 'public', fcgiPort } })!);
+    procs.push(spawn(phpCgi!, ['-b', `127.0.0.1:${fcgiPort}`], { stdio: 'ignore' }));
+    procs.push(spawn(bin!, ['run', '--config', file, '--adapter', 'caddyfile'], { stdio: 'ignore' }));
+    let up = false;
+    for (let i = 0; i < 50 && !up; i++) { up = (await reachable(sitePort)) && (await reachable(fcgiPort)); if (!up) await new Promise((r) => setTimeout(r, 200)); }
+    expect(up).toBe(true);
+    return sitePort;
+}
+
 describe.skipIf(!bin || !phpCgi)('a PHP site behind its own Caddy, as Genie writes it', () => {
     it('PHP reports the request as HTTPS (HTTPS=on, scheme https, port 443) for the front door’s Host', async () => {
-        const repo = mkdtempSync(join(tmpdir(), 'genie2-php-'));
-        dirs.push(repo);
-        mkdirSync(join(repo, 'public'));
-        writeFileSync(join(repo, 'public', 'index.php'), "<?php echo ($_SERVER['HTTPS'] ?? 'off'), '|', ($_SERVER['REQUEST_SCHEME'] ?? ''), '|', ($_SERVER['SERVER_PORT'] ?? '');\n");
-        const [sitePort, fcgiPort] = [await freePort(), await freePort()];
-        const file = join(repo, 'Caddyfile');
-        writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, serve: { mode: 'php', root: 'public', fcgiPort } })!);
-        procs.push(spawn(phpCgi!, ['-b', `127.0.0.1:${fcgiPort}`], { stdio: 'ignore' }));
-        procs.push(spawn(bin!, ['run', '--config', file, '--adapter', 'caddyfile'], { stdio: 'ignore' }));
-        let up = false;
-        for (let i = 0; i < 50 && !up; i++) { up = (await reachable(sitePort)) && (await reachable(fcgiPort)); if (!up) await new Promise((r) => setTimeout(r, 200)); }
-        expect(up).toBe(true);
+        const sitePort = await servePhp("<?php echo ($_SERVER['HTTPS'] ?? 'off'), '|', ($_SERVER['REQUEST_SCHEME'] ?? ''), '|', ($_SERVER['SERVER_PORT'] ?? '');\n");
         expect(await get(sitePort, 'moic.example.gen')).toBe('on|https|443');
+    }, 30_000);
+
+    // B22: a Laravel app trusts 127.0.0.1, and Symfony takes a trusted X-Forwarded-Proto over HTTPS=on — so the header
+    // PHP receives decides the scheme of every URL it builds. The front door sends `X-Forwarded-Proto: https` from
+    // 127.0.0.1; before the fix this Caddy replaced it with its own `http` (measured: HTTP_X_FORWARDED_PROTO=http).
+    it('PHP receives X-Forwarded-Proto: https for the front door’s request, and no caller-supplied X-Forwarded-For', async () => {
+        const sitePort = await servePhp("<?php echo ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '(unset)'), '|', ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '(unset)'), '|', ($_SERVER['REMOTE_ADDR'] ?? '');\n");
+        // What the front door sends (core/front-door-caddy.ts reverse_proxy; main/gen-router-server.ts `forwarded`).
+        expect(await get(sitePort, 'moic.example.gen', { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'moic.example.gen', 'X-Forwarded-For': '127.0.0.1' })).toBe('https|127.0.0.1|127.0.0.1');
+        // What a caller CLAIMS is not passed on: no proxy is trusted, so a spoofed client address never reaches PHP, and
+        // the scheme stays https — the only way a person reaches a .gen site is through the https front door.
+        expect(await get(sitePort, 'moic.example.gen', { 'X-Forwarded-Proto': 'http', 'X-Forwarded-For': '203.0.113.9' })).toBe('https|127.0.0.1|127.0.0.1');
     }, 30_000);
 });
 
