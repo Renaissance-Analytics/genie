@@ -62,7 +62,7 @@ import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
-import type { FileEvent } from '../core/files-panel.js';
+import { fileEventsOf } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
@@ -489,8 +489,8 @@ async function boot(): Promise<void> {
         eventsOf: (agentId) => {
             const record = registry?.find(agentId as AgentId);
             if (!record || !host) return [];
-            return host.rowsFor(record.id).flatMap((row): FileEvent[] =>
-                row.event.kind === 'tool' ? [{ agentId: record.id, agentName: record.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput, at: row.at }] : []);
+            // One event per tool CALL, its rows folded (files-panel.ts): row by row, no Claude edit was ever attributed.
+            return fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name });
         },
     });
     filesHost.onChange((workspaceId) => broadcast('genie:files-changed', workspaceId));
