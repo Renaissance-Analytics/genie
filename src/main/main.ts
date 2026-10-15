@@ -84,6 +84,7 @@ import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-runn
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
+import { wireInboxPush } from './inbox-push.js';
 
 /**
  * THE MAIN PROCESS.
@@ -1350,15 +1351,8 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
-    // §6.4 REMINDERS, event-driven: a message landing for an agent, or that agent's session changing (a turn
-    // ending), never a poll. Only an IDLE agent is told; the book keeps the gap. Other agents' gaps are untouched
-    // when one agent is being considered.
-    const remind = (only: string) => {
-        for (const r of composed.inboxReminders({ now: Date.now(), idle: (id) => id === only && host?.probe(id as AgentId)?.turnState === 'idle' })) {
-            host?.prompt(r.agentId as AgentId, r.text, 'genie');
-        }
-    };
-    composed.inbox.onSend((to) => { if (to !== 'human') remind(to); });
+    // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
+    wireInboxPush({ inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered) });
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });
@@ -1367,7 +1361,6 @@ async function boot(): Promise<void> {
     composed.inbox.onSend(() => { registry?.touch(); });
     // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
     composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
-    host.subscribe((agentId) => remind(agentId));
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
     // the surface's busy line, pushed — nobody polls an install.
     const toolchainOps = (): ToolchainOpsPorts => ({

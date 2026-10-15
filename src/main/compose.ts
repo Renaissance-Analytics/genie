@@ -240,8 +240,13 @@ export interface ComposedServices {
     readonly feedback: FeedbackStore;
     /** The Deck's signal strip, MEASURED from the stores (§4.5). */
     signals(context: { osAgentWorking: boolean }): SignalState;
-    /** §6.4: the reminders due now for registered agents with unread mail that are idle. Decides; never sends. */
-    inboxReminders(input: { now: number; idle: (agentId: string) => boolean }): Array<{ agentId: string; text: string }>;
+    /**
+     * §6.4 THE INBOX PUSH: the notices due now — registered agents with mail they have not been told about whose session
+     * can take a turn (`run` answers its run, or `null` while it cannot). Once per arrival batch. Decides; never sends.
+     */
+    inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string }>;
+    /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
+    inboxNoticeSettled(agentId: string, delivered: boolean): void;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
     integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
@@ -863,11 +868,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 }),
             ];
         },
-        inboxReminders: ({ now, idle }) =>
+        inboxReminders: ({ run }) =>
             [...agents().keys()].flatMap((id) => {
-                const text = reminders.due({ agentId: id, unread: inbox.unread(id as never).length, idle: idle(id), now });
+                const unread = inbox.unread(id as never);
+                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: run(id) });
                 return text ? [{ agentId: id, text }] : [];
             }),
+        inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         signals: ({ osAgentWorking }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
             // Mail agents have not collected: unread for every registered agent, the human excluded.
