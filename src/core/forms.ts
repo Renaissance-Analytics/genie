@@ -1,5 +1,6 @@
 import { basename, relative } from 'node:path';
-import { parseCron } from './cron.js';
+import { parseCron, timeZoneProblem } from './cron.js';
+import { flowDocument, flowNodes } from './flow-form.js';
 import { defaultSiteName, normalizeSiteName, siteNameProblem } from './gen-name.js';
 import { SERVICE_CATALOG } from './services.js';
 import { detectDevServer, detectStaticServe, type DevServer, type RepoFacts } from './serve-config.js';
@@ -122,18 +123,12 @@ export interface FlowForm {
     readonly armed: boolean;
 }
 
+/** Every hour, on a log step; the person picks what it runs (core/flow-form.ts builds the document). */
 export function flowFormDefaults(input: { workspaceId: string }): FlowForm {
     return {
         workspaceId: input.workspaceId,
         name: `${input.workspaceId} hourly`,
-        document: {
-            version: 1,
-            nodes: [
-                { id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 * * * *', timezone: 'UTC' } },
-                { id: 'l', kind: 'log', position: { x: 240, y: 0 }, config: { message: 'tick' } },
-            ],
-            edges: [{ id: 'e1', source: 't', target: 'l' }],
-        },
+        document: flowDocument({ workspaceId: input.workspaceId, cron: '0 * * * *', step: { kind: 'log' } }),
         armed: false,
     };
 }
@@ -141,13 +136,24 @@ export function flowFormDefaults(input: { workspaceId: string }): FlowForm {
 export function validateFlowForm(form: FlowForm): Problem[] {
     const problems: Problem[] = [];
     if (form.name.trim().length === 0) problems.push({ field: 'name', message: 'A flow needs a name.' });
-    const doc = form.document as { nodes?: Array<{ id: string; kind: string; config?: Record<string, unknown> }> } | null;
-    for (const n of doc?.nodes ?? []) {
-        if (!/(^|\/)schedule_trigger$/.test(n.kind)) continue;
-        const cron = typeof n.config?.cron === 'string' ? n.config.cron : '';
-        const tz = typeof n.config?.timezone === 'string' ? n.config.timezone : undefined;
-        if (parseCron(cron) === null) problems.push({ field: 'cron', message: `Node ${n.id}: "${cron}" is not a cron expression Genie can evaluate (five fields: minute hour day month weekday).` });
-        if (tz !== undefined && tz !== 'UTC' && tz !== 'Etc/UTC') problems.push({ field: 'timezone', message: `Node ${n.id}: timezone ${tz} is not supported yet; schedules are evaluated in UTC.` });
+    for (const n of flowNodes(form.document)) {
+        const text = (key: string) => (typeof n.config?.[key] === 'string' ? (n.config[key] as string).trim() : '');
+        if (/(^|\/)schedule_trigger$/.test(n.kind)) {
+            const cron = typeof n.config?.cron === 'string' ? n.config.cron : '';
+            const tz = typeof n.config?.timezone === 'string' && n.config.timezone.trim() !== '' ? n.config.timezone : undefined;
+            if (parseCron(cron) === null) problems.push({ field: 'cron', message: `Node ${n.id}: "${cron}" is not a cron expression Genie can evaluate (five fields: minute hour day month weekday).` });
+            const zone = timeZoneProblem(tz);
+            if (zone !== null) problems.push({ field: 'timezone', message: `Node ${n.id}: ${zone}.` });
+        } else if (n.kind === 'genie/terminal_run') {
+            if (!text('command')) problems.push({ field: 'command', message: `Node ${n.id}: a command to run is needed.` });
+            const folder = text('cwd');
+            if (folder && (/^([a-zA-Z]:)?[\\/]/.test(folder) || folder.split(/[\\/]/).includes('..'))) {
+                problems.push({ field: 'folder', message: `Node ${n.id}: the folder must be inside the workspace — a relative path like repos/app.` });
+            }
+        } else if (n.kind === 'genie/agent_prompt') {
+            if (!text('agent')) problems.push({ field: 'agent', message: `Node ${n.id}: which agent to prompt — an address like claude:atlas.` });
+            if (!text('prompt')) problems.push({ field: 'prompt', message: `Node ${n.id}: a prompt to send is needed.` });
+        }
     }
     return problems;
 }

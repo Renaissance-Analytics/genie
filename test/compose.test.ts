@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { AgentRecord } from '../src/core/identity.js';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
@@ -100,7 +101,7 @@ describe('wiring', () => {
     });
 
     it('the Flow scheduler re-plans from the store: arming a flow sets the one timer', async () => {
-        const doc = { version: 1, nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '*/5 * * * *', timezone: 'UTC' } }], edges: [] };
+        const doc = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '*/5 * * * *', timezone: 'UTC' } }], edges: [] } };
         const flow = await services.flows.create({ workspaceId: 'tynn', name: 'tick', document: doc, by: { kind: 'user' }, armed: true });
         expect(services.flowScheduler.nextDue()?.flowId).toBe(flow.id);
         await services.flows.disarm(flow.id, { kind: 'user' });

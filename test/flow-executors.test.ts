@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GENIE_NODE_KINDS, genieExecutors, type FlowPorts } from '../src/main/flow-executors.js';
+import { genieExecutors, type FlowPorts } from '../src/main/flow-executors.js';
+import { GENIE_NODE_KINDS } from '../src/main/flow-kinds.js';
 
 /**
  * FLOW EXECUTORS — Genie's own node kinds for fancy-flow, with every effect behind an injected port
@@ -33,10 +34,11 @@ describe('the kinds', () => {
     it('are three genie/ kinds, each with a category, ports and a config schema the canvas can draw', () => {
         expect(GENIE_NODE_KINDS.map((k) => k.name).sort()).toEqual(['genie/agent_prompt', 'genie/knowledge_add', 'genie/terminal_run']);
         for (const k of GENIE_NODE_KINDS) {
-            expect(['action']).toContain(k.category);
-            expect(k.inputs.length).toBeGreaterThan(0);
-            expect(k.outputs.length).toBeGreaterThan(0);
-            expect(k.configSchema.length).toBeGreaterThan(0);
+            // A category fancy-flow's NodeCategory has; the old 'action' is not one of them.
+            expect(['ai', 'io', 'data']).toContain(k.category);
+            expect((k.inputs as unknown[]).length).toBeGreaterThan(0);
+            expect((k.outputs as unknown[]).length).toBeGreaterThan(0);
+            expect(k.configSchema!.length).toBeGreaterThan(0);
             expect(k.label.length).toBeGreaterThan(0);
         }
     });

@@ -11,7 +11,8 @@
  *   start at launch; a `was_running`-only spec comes across stopped, listed, one Start away.
  * - restart: v1 restarted on ANY exit unless `restart_on_exit === false` (process-lifecycle's
  *   decideOnExit, capped) — that is Genie 2's `always` (also capped); false is `never`.
- * - Scheduled specs (`meta.schedule`) are Flows' business, not processes: never imported, noted.
+ * - Scheduled specs (`meta.schedule`) are Flows' business, not processes: never imported HERE, noted;
+ *   core/v1-schedules.ts brings them over as disarmed flows.
  * - Not imported, and noted with why: no workspace, a workspace Genie 2 does not have, no
  *   command, a folder that is not inside its workspace (process-book refuses those too).
  * - Imported, and noted: disabled in v1 (comes across stopped); a custom shell (Genie 2 runs
@@ -62,7 +63,7 @@ export function planV1ProcessImport(
         const name = spec.label.trim() || (typeof meta.command === 'string' ? meta.command.trim() : '') || spec.id;
         const say = (why: string) => notes.push(`process ${spec.id} ("${name}"): ${why}`);
         if (typeof meta.schedule === 'string' && meta.schedule.trim() !== '') {
-            say('scheduled in Genie 1 — that belongs to Flows, not background processes; not imported');
+            say('scheduled in Genie 1 — it comes over as a flow in Flows (disarmed, core/v1-schedules.ts), not as a background process');
             continue;
         }
         if (spec.workspaceId === null) {
@@ -114,13 +115,22 @@ function parseMeta(text: string): Record<string, unknown> {
  * resolved first, so `<ws>/a/../..` is outside and `<ws>-2` is not `<ws>`.
  */
 export function folderInside(workspacePath: string, folder: string): boolean {
+    return folderWithin(workspacePath, folder) !== null;
+}
+
+/**
+ * `folder` relative to the workspace, `/`-separated (`''` = the workspace itself), or `null` when it is
+ * not inside it — the same rule as `folderInside`, answering WHERE inside.
+ */
+export function folderWithin(workspacePath: string, folder: string): string | null {
     const ws = segments(workspacePath);
     const f = segments(folder);
-    if (ws === null || f === null) return false;
+    if (ws === null || f === null) return null;
     const windows = ws.windows || f.windows;
     const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
-    if (f.parts.length < ws.parts.length) return false;
-    return ws.parts.every((part, i) => same(part, f.parts[i]!));
+    if (f.parts.length < ws.parts.length) return null;
+    if (!ws.parts.every((part, i) => same(part, f.parts[i]!))) return null;
+    return f.parts.slice(ws.parts.length).join('/');
 }
 
 /** Absolute path → its resolved segments (root first); a relative or empty path is `null`. */

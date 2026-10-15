@@ -197,6 +197,8 @@ export type FeatureAction =
     | { kind: 'flows.arm'; flowId: string }
     | { kind: 'flows.disarm'; flowId: string }
     | { kind: 'flows.remove'; flowId: string }
+    /** The person's Run now: one run of the flow, armed or not; its outcome lands in the flow's run history. */
+    | { kind: 'flows.runNow'; flowId: string }
     | { kind: 'flows.add'; workspaceId: string }
     | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */
