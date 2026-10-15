@@ -7,7 +7,7 @@ import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
-import { switchActiveWarning, type ServiceInstance } from '../../core/services.js';
+import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
@@ -602,7 +602,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                         return (
                             <li key={i.id} data-service={i.id} data-service-status={status} data-active={i.active ? 'true' : 'false'} className="flex flex-col gap-1 px-5 py-2">
                                 <div className="flex items-center gap-3">
-                                    <span className="font-mono">{i.engine} {i.version}</span>
+                                    <span className="font-mono">{i.engine}{i.variant ? ` (${i.variant})` : ''} {i.version}{i.kind ? ` · a ${i.kind}` : ''}</span>
                                     <Badge variant="soft" size="sm">{scope.kind === 'shared' ? 'shared' : workspaceLabel(workspaces, scope.workspaceId)}</Badge>
                                     <Badge variant="soft" size="sm">{status === 'docker-not-running' ? 'Docker is not running' : status}</Badge>
                                     {i.active ? <Badge variant="soft" size="sm">active</Badge> : null}
@@ -610,7 +610,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                     {i.engine === 'custom' && i.image ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
                                     <span className="ml-auto flex gap-3 text-[13px]">
                                         {warning !== null && scope.kind === 'dedicated' ? (
-                                            <button type="button" onClick={() => onAction({ kind: 'services.setActive', workspaceId: scope.workspaceId, engine: i.engine, version: i.version })}>Make active</button>
+                                            <button type="button" onClick={() => onAction({ kind: 'services.use', workspaceId: scope.workspaceId, serviceId: i.id })}>Make active</button>
                                         ) : null}
                                         {inbox ? (
                                             // In Genie's own browser: the surface first (it reports the box the page is placed in), then the page.
@@ -643,6 +643,45 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                     })}
                 </ul>
             )}
+            <EngineChoices instances={services.instances.map((v) => v.instance)} workspaces={workspaces} onAction={onAction} />
+        </div>
+    );
+}
+
+/**
+ * WHICH ENGINE EACH WORKSPACE USES, per kind — wherever there is a choice to see: more than one candidate, or a shared one
+ * (Genie 1's included) a workspace could detach from. The same rule main emits env by (core/services.ts `chooseEngines`),
+ * so what this says a workspace uses is what its processes get. "Use" picks one; "Detach" stops a shared one giving the
+ * workspace its connection, keeping its database and data; a detached one offers "Attach" (the same `use`).
+ */
+export function EngineChoices({ instances, workspaces, onAction }: { instances: readonly ServiceInstance[]; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+    const label = (i: ServiceInstance) => `${i.engine === 'custom' ? `custom ${i.version}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`}${i.adopted ? ' · Genie 1’s' : i.scope.kind === 'shared' ? ' · shared' : ''}`;
+    const rows = workspaces.flatMap((w) => {
+        const visible = instances.filter((i) => (i.scope.kind === 'dedicated' ? i.scope.workspaceId === w.id : true));
+        return chooseEngines(visible, w.id)
+            .filter((c) => c.candidates.length > 1 || c.candidates.some((x) => !x.own))
+            .map((c) => ({ workspace: w, choice: c }));
+    });
+    if (rows.length === 0) return null;
+    return (
+        <div data-engine-choices className="flex flex-col gap-1 border-t border-[var(--border-1)] px-5 py-2 text-sm">
+            <span className="font-medium">In use</span>
+            {rows.map(({ workspace: w, choice: c }) => (
+                <div key={`${w.id}:${c.kind}`} data-engine-choice={`${w.id}:${c.kind}`} data-chosen={c.chosen?.id ?? ''} className="flex flex-wrap items-center gap-3">
+                    <span>{workspaceLabel(workspaces, w.id)} · {c.kind}:</span>
+                    <span className="font-mono">{c.chosen ? label(c.chosen) : 'none'}</span>
+                    <span className="ml-auto flex flex-wrap gap-3 text-[13px]">
+                        {c.candidates.filter((x) => x.instance.id !== c.chosen?.id).map((x) => (
+                            <button key={x.instance.id} type="button" data-use={x.instance.id} onClick={() => onAction({ kind: 'services.use', workspaceId: w.id, serviceId: x.instance.id })}>
+                                {x.detached ? `Attach ${label(x.instance)}` : `Use ${label(x.instance)}`}
+                            </button>
+                        ))}
+                        {c.chosen && c.chosen.scope.kind === 'shared' ? (
+                            <button type="button" data-detach={c.chosen.id} onClick={() => onAction({ kind: 'services.detach', workspaceId: w.id, serviceId: c.chosen!.id })}>Detach {label(c.chosen)} (keeps its data)</button>
+                        ) : null}
+                    </span>
+                </div>
+            ))}
         </div>
     );
 }

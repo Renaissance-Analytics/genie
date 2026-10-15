@@ -250,6 +250,10 @@ export type FeatureAction =
     | { kind: 'services.create'; form: ServiceForm; consent: boolean }
     /** The warning is on the row before this is sent (core/services.ts says it). */
     | { kind: 'services.setActive'; workspaceId: string; engine: string; version: string }
+    /** This engine is the one of its kind the workspace uses (attaching a detached shared one again) — by id, never by version. */
+    | { kind: 'services.use'; workspaceId: string; serviceId: string }
+    /** This SHARED engine stops giving the workspace its env; its slice and data stay. */
+    | { kind: 'services.detach'; workspaceId: string; serviceId: string }
     | { kind: 'services.start'; serviceId: string }
     | { kind: 'services.stop'; serviceId: string }
     /**

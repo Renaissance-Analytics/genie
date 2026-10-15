@@ -2,7 +2,7 @@ import { basename, relative } from 'node:path';
 import { parseCron, timeZoneProblem } from './cron.js';
 import { flowDocument, flowNodes } from './flow-form.js';
 import { defaultSiteName, normalizeSiteName, siteNameProblem } from './gen-name.js';
-import { SERVICE_CATALOG } from './services.js';
+import { CUSTOM_KINDS, SERVICE_CATALOG } from './services.js';
 import { detectDevServer, detectStaticServe, type DevServer, type RepoFacts } from './serve-config.js';
 
 /**
@@ -169,6 +169,8 @@ export interface CustomServiceForm {
     readonly port: number | null;
     /** The container's env, and the workspace's (Genie 1 gave both). */
     readonly env: Readonly<Record<string, string>>;
+    /** The engine the image IS (postgres, mysql, mariadb, redis, mongo): the workspace then gets that engine's env from it. Absent = only its own names. */
+    readonly kind?: string;
 }
 
 /** "Add an engine": which engine, which major, dedicated to the workspace or shared by the workstation. */
@@ -178,6 +180,8 @@ export interface ServiceForm {
     /** The major; ignored for `custom`, which has none. */
     readonly major: string;
     readonly scope: ServiceScopeKind;
+    /** The engine's variant (postgres: `pgvector`); absent = the engine's own image. */
+    readonly variant?: string;
     /** `custom` only. */
     readonly custom?: CustomServiceForm;
 }
@@ -205,6 +209,7 @@ function validateCustom(form: ServiceForm, problems: Problem[]): void {
     const badNames = Object.keys(c.env).filter((k) => !ENV_NAME.test(k));
     if (badNames.length > 0) problems.push({ field: 'env', message: `Not environment variable names: ${badNames.map((k) => JSON.stringify(k)).join(', ')} (one NAME=value per line).` });
     if (Object.values(c.env).some((v) => typeof v !== 'string' || v.includes('\0'))) problems.push({ field: 'env', message: 'An environment value cannot hold a NUL byte.' });
+    if (c.kind !== undefined && !CUSTOM_KINDS.includes(c.kind)) problems.push({ field: 'kind', message: `"${c.kind}" is not an engine a custom image can be (${CUSTOM_KINDS.join(', ')}).` });
 }
 
 export function validateServiceForm(form: ServiceForm): Problem[] {
@@ -220,8 +225,13 @@ export function validateServiceForm(form: ServiceForm): Problem[] {
         return problems;
     }
     if (def.custom) {
+        if (form.variant !== undefined) problems.push({ field: 'variant', message: 'A custom image has no variants: it is the image you name.' });
         validateCustom(form, problems);
         return problems;
+    }
+    if (form.variant !== undefined && !def.variants?.[form.variant]) {
+        const offered = Object.keys(def.variants ?? {});
+        problems.push({ field: 'variant', message: offered.length > 0 ? `${form.engine} has no variant "${form.variant}" (${offered.join(', ')}).` : `${form.engine} has no variants.` });
     }
     if (!def.majors.includes(form.major)) problems.push({ field: 'major', message: `${form.engine} ${form.major} is not a version Genie knows (${def.majors.join(', ')}).` });
     if (def.sharing === 'shared-only' && form.scope === 'dedicated') problems.push({ field: 'scope', message: `${form.engine} is a shared service — one per workstation, never per workspace.` });

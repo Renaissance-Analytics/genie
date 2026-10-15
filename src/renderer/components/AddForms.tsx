@@ -3,7 +3,7 @@ import { Input } from '@particle-academy/react-fancy';
 import { flowFields, flowFormFromFields, type FlowStep } from '../../core/flow-form.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
-import { DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
+import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
 
 /**
  * THE FORMS — "Add a site" and "Add a flow".
@@ -223,6 +223,8 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
     // Which engine is picked decides which fields there are: a custom image has no version, and needs its image and port.
     const [engine, setEngine] = useState(defaults.engine);
     const custom = engine === 'custom';
+    // An engine with variants (postgres → pgvector) offers them; the engine's own image is the first choice.
+    const variants = Object.entries(SERVICE_CATALOG.find((d) => d.engine === engine)?.variants ?? {});
     return (
         <form
             data-form="add-service"
@@ -233,12 +235,15 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
                 const pull = (e.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'pull';
                 const picked = String(data.get('engine') ?? '');
                 const port = String(data.get('port') ?? '').trim();
+                const variant = String(data.get('variant') ?? '').trim();
+                const kind = String(data.get('kind') ?? '').trim();
                 onSubmit(
                     {
                         workspaceId: defaults.workspaceId,
                         engine: picked,
                         major: String(data.get('major') ?? '').trim(),
                         scope: data.get('scope') === 'shared' ? 'shared' : 'dedicated',
+                        ...(picked !== 'custom' && variant !== '' ? { variant } : {}),
                         ...(picked === 'custom'
                             ? {
                                 custom: {
@@ -246,6 +251,7 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
                                     image: String(data.get('image') ?? '').trim(),
                                     port: port === '' ? null : Number(port),
                                     env: parseEnvLines(String(data.get('env') ?? '')),
+                                    ...(kind !== '' ? { kind } : {}),
                                 },
                             }
                             : {}),
@@ -283,12 +289,30 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
                         <textarea name="env" rows={3} defaultValue={Object.entries(defaults.custom?.env ?? {}).map(([k, v]) => `${k}=${v}`).join('\n')} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 font-mono text-sm" />
                         <ProblemLine field="env" problems={problems} />
                     </Row>
+                    <Row label="It is a… (the workspace then gets that engine’s variables from it, with its live port and the credentials in its environment)">
+                        <select name="kind" data-custom-kind defaultValue={defaults.custom?.kind ?? ''} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                            <option value="">something else — only GENIE_SERVICE_CUSTOM_* and its own environment</option>
+                            {CUSTOM_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                        </select>
+                        <ProblemLine field="kind" problems={problems} />
+                    </Row>
                 </div>
             ) : (
-                <Row label="Version (major)">
-                    <Input name="major" defaultValue={defaults.major} placeholder="17" />
-                    <ProblemLine field="major" problems={problems} />
-                </Row>
+                <>
+                    <Row label="Version (major)">
+                        <Input name="major" defaultValue={defaults.major} placeholder="17" />
+                        <ProblemLine field="major" problems={problems} />
+                    </Row>
+                    {variants.length > 0 ? (
+                        <Row label="Image">
+                            <select name="variant" data-service-variant defaultValue={defaults.variant ?? ''} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                                <option value="">{engine} — the official image</option>
+                                {variants.map(([name, v]) => <option key={name} value={name}>{name} — {v.summary}</option>)}
+                            </select>
+                            <ProblemLine field="variant" problems={problems} />
+                        </Row>
+                    ) : null}
+                </>
             )}
             <fieldset className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Scope</span>

@@ -92,6 +92,7 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
 
 - \`services\` with action \`catalog\` lists the engines and versions; \`list\` shows this workspace's engines and the shared ones with their live status; \`env\` shows the variables every process here gets, secrets masked.
 - \`services\` with action \`add\` (engine, version, scope) asks the person first, and they see the image Genie will pull. \`start\` and \`stop\` act at once. \`remove\` asks the person and always keeps the data.
+- A workspace's own engine is the one its variables come from, before any shared one. Postgres with pgvector is \`add\` with \`variant: "pgvector"\`; a custom image that is a Postgres (or MySQL, MariaDB, Redis, Mongo) is \`add\` with \`kind\`, and the workspace then gets DB_* from it. \`use\` (an engine's id) makes one engine the workspace's for its kind, and \`detach\` stops a shared one giving the workspace its variables while keeping its data; both ask the person.
 - \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use (the name is \`<folder>.<workspace>\` unless you give one); \`detect\` says what Genie would serve for a folder without doing anything; \`list\`, \`status\`, \`start\`, \`stop\`, \`restart\` and \`logs\` act at once; \`open\` shows the site to the person in Genie's browser; \`update\` and \`remove\` ask the person.
 - Terminals and site processes already have the service variables.
 `,

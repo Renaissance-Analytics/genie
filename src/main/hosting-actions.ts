@@ -4,7 +4,7 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { siteFormDefaults, validateServiceForm, validateSiteForm, type Problem, type ServiceForm, type SiteForm, type SiteFormDefaults } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { ProcessLog } from '../core/output-tail.js';
-import type { ServiceInstance } from '../core/services.js';
+import type { EngineChoice, ServiceInstance } from '../core/services.js';
 import type { ComposedServices } from './compose.js';
 import type { ProcessState, ProcessStatus } from './process-supervisor.js';
 import type { CreateSiteInput, SiteInfo } from './site-manager.js';
@@ -260,13 +260,23 @@ export async function createService(s: HostingServices, form: ServiceForm, conse
     // A custom image (validated above): its name is its "version" — one per name per workspace — and the rest is the person's.
     const c = form.engine === 'custom' ? form.custom : undefined;
     const r = await s.engines.add(c
-        ? { engine: form.engine, major: c.name, scope, consent, workspaceId: form.workspaceId, custom: { image: c.image, internalPort: c.port!, env: { ...c.env } } }
-        : { engine: form.engine, major: form.major, scope, consent, workspaceId: form.workspaceId });
+        ? { engine: form.engine, major: c.name, scope, consent, workspaceId: form.workspaceId, custom: { image: c.image, internalPort: c.port!, env: { ...c.env }, ...(c.kind !== undefined ? { kind: c.kind } : {}) } }
+        : { engine: form.engine, major: form.major, scope, consent, workspaceId: form.workspaceId, ...(form.variant !== undefined ? { variant: form.variant } : {}) });
     return r.kind === 'needs-consent' ? { kind: 'needs-consent', image: r.image, note: r.note } : r;
 }
 
 export function setActiveService(s: HostingServices, workspaceId: string, engine: string, version: string): Promise<void> {
     return s.engines.setActive(workspaceId, engine, version);
+}
+
+/** Make this engine the one of its kind the workspace uses (service-registry.ts `use`) — the Services tab's and an agent's. */
+export function useService(s: HostingServices, workspaceId: string, id: string): Promise<EngineChoice> {
+    return s.engines.use(workspaceId, id);
+}
+
+/** Stop a shared engine giving this workspace its env; its slice and data stay (service-registry.ts `detach`). */
+export function detachService(s: HostingServices, workspaceId: string, id: string): Promise<EngineChoice> {
+    return s.engines.detach(workspaceId, id);
 }
 
 /** Start / stop / remove, recorded (machine-local) so a restart keeps a stopped engine stopped. */

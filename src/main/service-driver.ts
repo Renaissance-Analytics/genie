@@ -130,7 +130,7 @@ export class ServiceDriver {
     }
 
     /** `configFile`: the host file an engine that reads its tenants from one (Sockudo) is given, read-only. */
-    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin; surfacePorts?: Readonly<Record<string, number>>; custom?: CustomEngineSpec; configFile?: string }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
+    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin; surfacePorts?: Readonly<Record<string, number>>; custom?: CustomEngineSpec; configFile?: string; variant?: string }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
         const plan = containerPlan(input);
         const existing = await this.#run(['container', 'inspect', plan.name]);
         if (existing.exitCode === 0) return { ok: true, name: plan.name, existed: true };
