@@ -6,13 +6,17 @@ import type { DeckItem } from './deck.js';
  * sync)"). The window and the Pending Questions list read the SAME items; this picks the one the window shows:
  *
  * - only questions this machine can answer (a form that carries its questions);
+ * - only LIVE ones: a STALE question (its agent gone, its session ended, or asked by an earlier run — core/deck.ts) stays
+ *   in the Deck, marked, with Dismiss, and never takes the window — nobody is waiting for its answer. A question from a
+ *   previous run is stale by definition; an agent that is resumed and still needs it asks again, as a new question.
+ *   One that goes stale while on screen leaves the window the same way an answered one does;
  * - one at a time, the OLDEST first (a person works down the queue in the order agents waited);
  * - the one on screen STAYS while it is still asked, even if an older one arrives — the window never changes under a
  *   person who is answering it;
  * - one put off with Later (or a closed window) is not shown again this session; it stays in Pending Questions.
  */
 export function isWindowQuestion(item: DeckItem): boolean {
-    return item.source === 'agent-question' && item.answer.kind === 'form' && (item.answer.questions?.length ?? 0) > 0;
+    return item.source === 'agent-question' && item.answer.kind === 'form' && (item.answer.questions?.length ?? 0) > 0 && item.stale === undefined;
 }
 
 export function nextQuestion(items: readonly DeckItem[], dismissed: ReadonlySet<string>, current: string | null): DeckItem | null {

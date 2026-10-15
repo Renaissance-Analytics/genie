@@ -15,7 +15,8 @@ export interface QuestionAppProps {
     readonly refusal: string | null;
     readonly onAnswer: (selections: string[][], notes: string[]) => void;
     readonly onLater: () => void;
-    readonly onDismiss: () => void;
+    /** Dismiss without an answer, with the notes written in the form (one per question) — they reach the agent. */
+    readonly onDismiss: (notes: string[]) => void;
     /** The clock the age is read against; now by default (tests pass a fixed one). */
     readonly now?: number;
 }

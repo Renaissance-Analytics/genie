@@ -78,6 +78,34 @@ export interface DeckItem {
      * starts a clean draft when the content changes under it; absent = never updated.
      */
     revision?: number | undefined;
+    /**
+     * Its agent NO LONGER WAITS for it (deck-sources.ts `questionStale`): the agent is gone from the roster, its session
+     * ended, or the session running now started after it was asked (an earlier run asked it). Absent = live, or not
+     * judged (no liveness was given). The owner, 2026-10-15, on old items: "Keep, but mark stale" — it stays on the
+     * Deck, greyed and said, with one-click Dismiss and "Dismiss all stale".
+     */
+    stale?: StaleReason | undefined;
+}
+
+/** Why a question's agent no longer waits for it. */
+export type StaleReason = 'agent-gone' | 'session-ended' | 'earlier-run';
+
+/** The words a person reads for each reason. */
+export function staleLabel(reason: StaleReason): string {
+    switch (reason) {
+        case 'agent-gone': return 'agent gone';
+        case 'session-ended': return 'session ended';
+        case 'earlier-run': return 'asked by an earlier run';
+    }
+}
+
+export function isStale(item: DeckItem): boolean {
+    return item.stale !== undefined;
+}
+
+/** What "Dismiss all stale" removes: the dismissable questions nobody waits for any more. */
+export function dismissableStale(items: readonly DeckItem[]): readonly DeckItem[] {
+    return items.filter((i) => isDismissable(i) && isStale(i));
 }
 
 /** A day, in ms — "Dismiss all older than 1 day" on the Deck's questions band. */
@@ -161,9 +189,62 @@ export function sinceYouLooked(items: readonly DeckItem[]): readonly DeckItem[] 
     return items.filter((item) => item.source === 'finished-handoff').slice().sort((a, b) => b.at - a.at);
 }
 
-/** The rail's badge and the header's count: what is WAITING on you — never a finished agent. */
+/**
+ * The rail's badge and the header's count: what is WAITING on you — never a finished agent, and never a STALE question:
+ * its agent is not waiting, so it is not a number that asks for the person. Stale ones are said beside it, by name.
+ */
 export function needsYouCount(items: readonly DeckItem[]): number {
-    return deckBand(items).length;
+    return deckBand(items).filter((i) => !isStale(i)).length;
+}
+
+/**
+ * ONE WORKSPACE'S PART OF THE DECK (the owner, 2026-10-15: "Grouped by workspace" — sections per workspace, then rows).
+ * `workspaceId` null is Genie's own section: its items (a main-process error, trusting the certificate) belong to no
+ * workspace. `label` is the workspace's NAME as the rail says it — never its id; one not known here is said as such.
+ */
+export interface DeckSection {
+    readonly key: string;
+    readonly workspaceId: string | null;
+    readonly label: string;
+    readonly items: readonly DeckItem[];
+    /** How many of its items are waiting on the person (not stale). */
+    readonly live: number;
+    readonly stale: number;
+}
+
+/** Genie's own section's label, and the one for a workspace this machine has no name for. */
+export const GENIE_SECTION = 'Genie';
+export const UNNAMED_WORKSPACE = 'A workspace not known here';
+
+/**
+ * The Needs-you band, IN SECTIONS. The ranking is the band's (`deckBand`: blocking, priority, oldest) and it decides
+ * both orders, so the most-worth-doing thing is still at the top of the screen:
+ *
+ * - within a section, live items in rank order, then its stale ones in rank order (a stale question waits for nobody);
+ * - sections in the order of their best LIVE item; a section holding only stale items comes after every live one.
+ */
+export function deckSections(items: readonly DeckItem[]): readonly DeckSection[] {
+    const band = deckBand(items);
+    const ordered = [...band.filter((i) => !isStale(i)), ...band.filter(isStale)];
+    const sections = new Map<string, { workspaceId: string | null; label: string | null; items: DeckItem[] }>();
+    for (const item of ordered) {
+        const key = item.workspaceId ?? 'genie:';
+        let section = sections.get(key);
+        if (!section) {
+            section = { workspaceId: item.workspaceId, label: null, items: [] };
+            sections.set(key, section);
+        }
+        if (section.label === null && item.workspaceName !== undefined) section.label = item.workspaceName;
+        section.items.push(item);
+    }
+    return [...sections.entries()].map(([key, s]) => ({
+        key,
+        workspaceId: s.workspaceId,
+        label: s.workspaceId === null ? GENIE_SECTION : (s.label ?? UNNAMED_WORKSPACE),
+        items: s.items,
+        live: s.items.filter((i) => !isStale(i)).length,
+        stale: s.items.filter(isStale).length,
+    }));
 }
 
 /**

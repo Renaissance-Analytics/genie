@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
-import { deckItemsFrom } from '../core/deck-sources.js';
+import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
 import { folderName } from '../core/workspace-name.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
@@ -173,6 +173,13 @@ export interface ComposeInput {
      * Deck and the question window say the same name the rail does, never the id. The folder's name by default.
      */
     readonly workspaceName?: (path: string) => string;
+    /**
+     * Is an agent still WAITING for what it asked — its session as Genie runs it (or its Take Over terminal), `null` when
+     * it has none (main.ts asks the session host and the take-over host), `undefined` while LIVENESS IS NOT KNOWN yet
+     * (before the roster and the session host have reported once). The Deck marks a question whose agent no longer
+     * waits as STALE (core/deck-sources.ts `questionStale`); absent, or `undefined`, no question is judged.
+     */
+    readonly askerLive?: (agentId: string) => AskerState | null | undefined;
 }
 
 /**
@@ -835,18 +842,26 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         deferTrustCertificate: frontDoorCtl.deferTrust,
         routes,
         configuredHosts,
-        deckItems: () => [
-            ...approvals.deckItems(),
-            ...frontDoorCtl.deckItems(),
-            ...deckItemsFrom({
-                questions: attention.pending(),
-                userList: attention.allUserItems(),
-                unreadDms: inbox.unread(HUMAN),
-                finished: attention.finished(),
-                agents: Object.fromEntries(agents()),
-                workspaceNames: Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)])),
-            }),
-        ],
+        deckItems: () => {
+            const workspaceNames: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
+            return [
+                // An approval is grouped under its workspace on the Deck like a question is, so it carries the same NAME.
+                ...approvals.deckItems().map((i) => {
+                    const name = i.workspaceId === null ? undefined : workspaceNames[i.workspaceId];
+                    return name === undefined ? i : { ...i, workspaceName: name };
+                }),
+                ...frontDoorCtl.deckItems(),
+                ...deckItemsFrom({
+                    questions: attention.pending(),
+                    userList: attention.allUserItems(),
+                    unreadDms: inbox.unread(HUMAN),
+                    finished: attention.finished(),
+                    agents: Object.fromEntries(agents()),
+                    workspaceNames,
+                    ...(input.askerLive ? { asker: input.askerLive } : {}),
+                }),
+            ];
+        },
         inboxReminders: ({ now, idle }) =>
             [...agents().keys()].flatMap((id) => {
                 const text = reminders.due({ agentId: id, unread: inbox.unread(id as never).length, idle: idle(id), now });

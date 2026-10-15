@@ -24,7 +24,11 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         return ctl.answer(sel, per);
     });
     ipcMain.handle('question:later', () => { input.controller()?.later(); });
-    ipcMain.handle('question:dismiss', () => input.controller()?.dismiss() ?? { ok: false, reason: 'Genie is not ready' });
+    // Dismiss carries the person's notes, one per question, like an answer; anything that is not a string is no note.
+    ipcMain.handle('question:dismiss', (_e, notes: unknown) => {
+        const per = Array.isArray(notes) ? notes.map((n) => (typeof n === 'string' ? n : '')) : [];
+        return input.controller()?.dismiss(per) ?? { ok: false, reason: 'Genie is not ready' };
+    });
 
     return (onClosed) => {
         const area = screen.getPrimaryDisplay().workArea;

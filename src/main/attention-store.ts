@@ -45,7 +45,8 @@ import { readJson, reportFlush, writeJsonAtomic } from './store.js';
  *
  * - **answered** by the person — the answer is mailed to the agent;
  * - **dismissed** by the person, without an answer (one, or "all older than 1 day") — the agent is mailed
- *   "<header>: dismissed by the person, without an answer", so it stops waiting and decides on its own;
+ *   "<header>: dismissed by the person, without an answer", so it stops waiting and decides on its own — with any note
+ *   the person left on a question ("Note on <header>: …"); "Dismiss all stale" sends exactly the ones the person saw;
  * - **withdrawn** by the agent that asked (ForceTheQuestion `action: 'cancel'`) — nothing is mailed: the agent knows;
  * - **updated** by the agent that asked (`action: 'update'`) — not a leaving: same id, same place in the queue, new
  *   content, and a new `revision` so a half-filled form for the old content is dropped.
@@ -300,13 +301,29 @@ export class AttentionStore {
      * The person DISMISSES a question without answering it. It leaves the Deck and the question window, and the asker is
      * mailed — from the human, like an answer — that it was dismissed, so it stops waiting. Once: a second dismiss of the
      * same id finds nothing and throws, mailing nobody.
+     *
+     * `notes` — one per question, as the form holds them — travel with the dismissal (the owner, 2026-10-15: "I NEED THE
+     * ABILITY TO ADD NOTES TO ANY AND ALL QUESTIONS"): a person putting a question aside can still say why, or what to do.
      */
-    async dismiss(questionId: string): Promise<void> {
+    async dismiss(questionId: string, notes: readonly string[] = []): Promise<void> {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         await this.#flush();
-        await this.#mailDismissed(q);
+        await this.#mailDismissed(q, notes);
+    }
+
+    /**
+     * "Dismiss all stale": exactly these questions leave — the ones the person SAW marked stale — each asker mailed once.
+     * An id no longer pending is skipped, never a reason to stop. One write for all of them. Returns how many left.
+     */
+    async dismissMany(questionIds: readonly string[]): Promise<number> {
+        const gone = this.#data.questions.filter((q) => questionIds.includes(q.id));
+        if (gone.length === 0) return 0;
+        this.#data.questions = this.#data.questions.filter((q) => !gone.includes(q));
+        await this.#flush();
+        for (const q of gone) await this.#mailDismissed(q);
+        return gone.length;
     }
 
     /**
@@ -363,12 +380,20 @@ export class AttentionStore {
         return q;
     }
 
-    async #mailDismissed(q: PendingQuestion): Promise<void> {
+    async #mailDismissed(q: PendingQuestion, notes: readonly string[] = []): Promise<void> {
+        // Each note the person left, under the header of the question it is about; blank ones say nothing.
+        const noted = q.questions.flatMap((question, i) => {
+            const own = (notes[i] ?? '').trim();
+            return own ? [`Note on ${question.header}: ${own}`] : [];
+        });
         await this.#inbox.send({
             from: HUMAN,
             to: q.agentId,
-            text: `${questionTitle(q.questions)}: dismissed by the person, without an answer.
-(Your question ${q.id}. Nothing was chosen; decide without it, or ask again if it still matters.)`,
+            text: [
+                `${questionTitle(q.questions)}: dismissed by the person, without an answer.`,
+                `(Your question ${q.id}. Nothing was chosen; decide without it, or ask again if it still matters.)`,
+                ...noted,
+            ].join('\n'),
         });
     }
 

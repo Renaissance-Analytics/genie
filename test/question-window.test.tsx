@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { DeckItem } from '../src/core/deck.js';
+import { deckSections, needsYouCount, type DeckItem } from '../src/core/deck.js';
 import { QuestionWindow, type QuestionView } from '../src/main/question-window.js';
 import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
 
@@ -10,6 +10,10 @@ import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
  * Five questions sat unseen. Genie 1's rules: one shared window, the oldest question first, never swapped under the
  * person answering, the next after an answer, closed when none are left; Later and closing PARK the question (it stays
  * in Pending Questions); a question answered in Pending Questions leaves the window too.
+ *
+ * Closing parks ONLY the question that was shown (the owner, 2026-10-15: "I got a toast but no FTQ popup; I see the
+ * question in the Deck" — closing had parked every question the window held, including ones queued behind it that the
+ * person never saw). A question arriving while the window is closing still ends up shown.
  *
  * On beta.26 (the owner, 2026-10-14): "I click the answer button but nothing happens." The refusal was printed at the TOP
  * of a scrolled window while the person was looking at the button. Now it is said beside the button, and each question
@@ -117,6 +121,24 @@ describe('the ForceTheQuestion window', () => {
         expect(h.log.slice(-2)).toEqual(['open', 'show c +0']);
     });
 
+    it('closing with two queued behind parks ONLY the shown one: the window comes back at once for the next (counted)', () => {
+        const h = harness([q('a', 10), q('b', 20), q('c', 30)]);
+        h.ctl.changed();
+        expect(h.log).toEqual(['open', 'show a +2']);
+        h.personCloses();
+        // COUNTED: a second window, showing b — with ONE waiting behind it (c): a is parked, b and c are not.
+        expect(h.log).toEqual(['open', 'show a +2', 'open', 'show b +1']);
+        expect(h.ctl.showing).toBe('b');
+        // The park set is exactly {a}: Later on b shows c (never a again), Later on c closes, and nothing reopens.
+        h.ctl.later();
+        expect(h.log.at(-1)).toBe('show c +0');
+        h.ctl.later();
+        expect(h.log.at(-1)).toBe('close');
+        h.ctl.changed();
+        expect(h.log.filter((l) => l === 'open')).toHaveLength(2);
+        expect(h.log.filter((l) => l.startsWith('show a '))).toHaveLength(1);
+    });
+
     it('a refused answer comes back with the reason and the question stays on screen', async () => {
         const h = harness([q('a', 10)]);
         h.ctl.changed();
@@ -130,6 +152,83 @@ describe('the ForceTheQuestion window', () => {
         h.ctl.changed();
         expect(await h.ctl.answer([[]], ['neither — use C'])).toEqual({ ok: true });
         expect(h.sent).toEqual([{ selections: [[]], notes: ['neither — use C'] }]);
+    });
+});
+
+describe('only LIVE questions take the window (stale ones stay in the Deck, marked)', () => {
+    const stale = (id: string, at: number, reason: 'session-ended' | 'earlier-run'): DeckItem => ({ ...q(id, at), stale: reason });
+
+    it('two stale and one live: the window opens on the LIVE one, with nothing waiting behind it; the Deck still holds all three', () => {
+        // The stale ones are OLDER — on origin/main the oldest-first queue showed one of them.
+        const items = [stale('old1', 10, 'earlier-run'), stale('old2', 20, 'session-ended'), q('live', 30)];
+        const h = harness(items);
+        h.ctl.changed();
+        // COUNTED: one window, the live question, +0 (stale ones are not "waiting behind").
+        expect(h.log).toEqual(['open', 'show live +0']);
+        // The Deck counts them: one waiting on you, two stale — kept, in the workspace's section.
+        expect(needsYouCount(items)).toBe(1);
+        expect(deckSections(items).map((s) => [s.live, s.stale])).toEqual([[1, 2]]);
+    });
+
+    it('only stale questions: no window at all — they are in the Deck', () => {
+        const h = harness([stale('old1', 10, 'earlier-run'), stale('old2', 20, 'session-ended')]);
+        h.ctl.changed();
+        expect(h.log).toEqual([]);
+        expect(h.ctl.showing).toBeNull();
+    });
+
+    it('control: all live — the window shows the OLDEST, with the others counted behind it', () => {
+        const h = harness([q('c', 30), q('a', 10), q('b', 20)]);
+        h.ctl.changed();
+        expect(h.log).toEqual(['open', 'show a +2']);
+    });
+});
+
+describe('a question arriving while the window is closing', () => {
+    /** Windows that close the way Electron's do: `close()` only ASKS; `closed` arrives later. */
+    function slowWindows(initial: DeckItem[]) {
+        let items = initial;
+        const windows: { shown: string[]; closeAsked: boolean; closed: boolean; fireClosed: () => void }[] = [];
+        const ctl = new QuestionWindow({
+            items: () => items,
+            open: (onClosed) => {
+                const w = { shown: [] as string[], closeAsked: false, closed: false, fireClosed: () => { w.closed = true; onClosed(); } };
+                windows.push(w);
+                return { show: (v: QuestionView) => { w.shown.push(v.item.id); }, close: () => { w.closeAsked = true; } };
+            },
+            answer: async () => {},
+            dismiss: async () => {},
+        });
+        return { ctl, windows, set: (next: DeckItem[]) => { items = next; ctl.changed(); } };
+    }
+
+    it('the late question is shown in a window that is not closing — and stays shown when the old one’s `closed` arrives', () => {
+        const h = slowWindows([q('a', 10)]);
+        h.ctl.changed();
+        // a is answered elsewhere: the window is asked to close, and has not closed yet...
+        h.set([]);
+        expect(h.windows[0]!.closeAsked).toBe(true);
+        // ...when b arrives.
+        h.set([q('b', 20)]);
+        h.windows[0]!.fireClosed();
+        // COUNTED: two windows; b is in the second, which nobody asked to close; b is what is showing.
+        expect(h.windows).toHaveLength(2);
+        expect(h.windows[1]!.shown).toEqual(['b']);
+        expect(h.windows[1]!.closeAsked).toBe(false);
+        expect(h.windows[0]!.shown).toEqual(['a']);
+        expect(h.ctl.showing).toBe('b');
+    });
+
+    it('control: the old window’s `closed` does not park the late question — the person never closed anything', () => {
+        const h = slowWindows([q('a', 10)]);
+        h.ctl.changed();
+        h.set([]);
+        h.set([q('b', 20)]);
+        h.windows[0]!.fireClosed();
+        // b still answerable in the window: a later change keeps it on screen, no third window.
+        h.set([q('b', 20)]);
+        expect(h.ctl.showing).toBe('b');
+        expect(h.windows).toHaveLength(2);
     });
 });
 

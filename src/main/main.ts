@@ -154,6 +154,12 @@ let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
+/**
+ * Has Genie heard the roster and the session host ONCE? Until then a question's agent cannot be judged: "we have not
+ * heard" is not "it is gone", so the Deck marks nothing stale (`askerLive` answers `undefined`). Set after the
+ * registry's first load, when the session host already exists.
+ */
+let askerLivenessKnown = false;
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 let updates: UpdateHost | null = null;
@@ -506,6 +512,8 @@ async function boot(): Promise<void> {
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
+    askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
         dir: osaHomeDir(),
@@ -1069,6 +1077,17 @@ async function boot(): Promise<void> {
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
         workspaceName: workspaceNameFor,
+        // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
+        // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
+        askerLive: (id) => {
+            // Not heard yet: nothing is judged (undefined), never "gone" or "ended".
+            if (!askerLivenessKnown) return undefined;
+            const session = host?.probe(id as AgentId) ?? null;
+            if (session?.running) return { running: true, startedAt: session.startedAt };
+            const takeOver = takeOvers?.probe(id as AgentId) ?? null;
+            if (takeOver) return { running: true, startedAt: takeOver.startedAt };
+            return session ? { running: false, startedAt: session.startedAt } : null;
+        },
         /*
          * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
          * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
@@ -1408,8 +1427,9 @@ async function boot(): Promise<void> {
         items: () => composed.deckItems(),
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow }),
         answer: async (item, selections, notes) => { await handleFeatureAction(composed, { kind: 'deck.answerForm', item, selections, notes, note: '' }, featureState, featurePorts); },
-        // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told.
-        dismiss: async (item) => { await handleFeatureAction(composed, { kind: 'deck.dismiss', item }, featureState, featurePorts); },
+        // Dismiss, beside Later: the same action as the Deck's — the question leaves both and its agent is told, with the
+        // notes the person wrote in the form.
+        dismiss: async (item, notes) => { await handleFeatureAction(composed, { kind: 'deck.dismiss', item, notes }, featureState, featurePorts); },
     });
     composed.attention.onChange(() => questionWindow?.changed());
     // Questions already waiting when Genie starts come up too.
