@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
+import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
@@ -122,6 +123,8 @@ const REPAIR_LABEL = (r: Repair): string =>
     : `restart fresh — ${r.reason}`;
 
 export interface AgentViewProps {
+    /** Where the index column's collapsed state is remembered; `undefined` = the browser's localStorage, `null` = nowhere (tests). */
+    indexStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -224,9 +227,13 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
+    // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
+    const indexStore = indexStorage === undefined ? (typeof localStorage === 'undefined' ? null : localStorage) : indexStorage;
+    const [indexCollapsed, setIndexCollapsed] = useState(() => readIndexCollapsed(indexStore));
+    const toggleIndex = () => setIndexCollapsed((was) => { writeIndexCollapsed(indexStore, !was); return !was; });
     const clock = now ?? (() => Date.now());
     // CHANGES (§4.2): the files THIS agent changed this session, from the file host's groups; re-read on every change
     // the host reports. `null` = absent — the tab says so in a sentence.
@@ -671,11 +678,33 @@ export function AgentView({
             </div>
 
             <div className="flex min-h-0 flex-1">
-                {index ? (
+                {index && indexCollapsed ? (
+                    <nav data-index-column="collapsed" className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-[var(--border-1)] px-1 py-3">
+                        <button type="button" data-index-toggle="expand" aria-label="Expand the turns column" title="Expand" onClick={toggleIndex} className="mb-1.5 rounded-md p-1 text-[var(--fg-4)] hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
+                            <Icon name="chevron-right" size="xs" />
+                        </button>
+                        {turnNumbers(index).map((t) => {
+                            const door = `genie://agent/${agent.id}?tab=stream&at=${t.rowId}`;
+                            return (
+                                <button key={t.id} type="button" data-index-number={t.n} {...(t.live ? { 'data-live': t.live } : {})} data-nav={door} title={`Turn ${t.n}`} onClick={() => onNavigate(door)} className={`flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[11px] text-[var(--fg-2)] ${t.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}>
+                                    {t.live ? <span className={`size-1.5 shrink-0 animate-pulse rounded-full ${INDEX_LIVE[t.live]}`} /> : null}
+                                    {t.n}
+                                </button>
+                            );
+                        })}
+                    </nav>
+                ) : index ? (
                     <nav data-index-column="" className="flex min-h-0 w-[216px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--border-1)] px-2 py-3">
-                        {index.map((section) => (
+                        {index.map((section, i) => (
                             <div key={section.title} className="mb-3.5 flex shrink-0 flex-col gap-0.5">
-                                <h2 className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{section.title}</h2>
+                                <h2 className="flex items-center px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                                    <span className="flex-1">{section.title}</span>
+                                    {i === 0 ? (
+                                        <button type="button" data-index-toggle="collapse" aria-label="Collapse the turns column to its numbers" title="Collapse" onClick={toggleIndex} className="rounded-md p-0.5 normal-case hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
+                                            <Icon name="chevron-left" size="xs" />
+                                        </button>
+                                    ) : null}
+                                </h2>
                                 {section.items.map((item) => {
                                     const door = `genie://agent/${agent.id}?tab=stream&at=${item.rowId}`;
                                     return (
