@@ -15,11 +15,13 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
     // The page's three calls, registered once: what to show (asked on load), an answer, Later.
     let last: QuestionView | null = null;
     ipcMain.handle('question:current', () => last);
-    ipcMain.handle('question:answer', (_e, selections: unknown, note: unknown) => {
+    ipcMain.handle('question:answer', (_e, selections: unknown, notes: unknown) => {
         const ctl = input.controller();
         if (!ctl) return { ok: false, reason: 'Genie is not ready' };
         const sel = Array.isArray(selections) ? selections.map((s) => (Array.isArray(s) ? s.map(String) : [])) : [];
-        return ctl.answer(sel, typeof note === 'string' ? note : '');
+        // One note per question; anything that is not a string is no note.
+        const per = Array.isArray(notes) ? notes.map((n) => (typeof n === 'string' ? n : '')) : [];
+        return ctl.answer(sel, per);
     });
     ipcMain.handle('question:later', () => { input.controller()?.later(); });
 

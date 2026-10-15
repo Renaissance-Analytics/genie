@@ -30,8 +30,8 @@ export interface QuestionWindowDeps {
     readonly items: () => readonly DeckItem[];
     /** Opens the window; the controller calls `show` on it right after. `onClosed` fires on ANY close (ours or the person's). */
     readonly open: (onClosed: () => void) => QuestionWindowPort;
-    /** Sends an answer the way Pending Questions does (`deck.answerForm`). A refusal throws, with the reason. */
-    readonly answer: (item: DeckItem, selections: string[][], note: string) => Promise<void>;
+    /** Sends an answer the way Pending Questions does (`deck.answerForm`): labels and one note per question. A refusal throws, with the reason. */
+    readonly answer: (item: DeckItem, selections: string[][], notes: string[]) => Promise<void>;
 }
 
 export class QuestionWindow {
@@ -64,11 +64,11 @@ export class QuestionWindow {
     }
 
     /** The person answered the shown question. A refusal comes back as the reason; the question stays shown. */
-    async answer(selections: string[][], note: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    async answer(selections: string[][], notes: string[]): Promise<{ ok: true } | { ok: false; reason: string }> {
         const item = this.#deps.items().find((i) => i.id === this.#current);
         if (!item) { this.changed(); return { ok: false, reason: 'that question was already answered' }; }
         try {
-            await this.#deps.answer(item, selections, note);
+            await this.#deps.answer(item, selections, notes);
         } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }

@@ -3,15 +3,16 @@ import type { DeckItem } from '../../core/deck.js';
 import { QuestionForm } from './QuestionForm.js';
 
 /**
- * THE FORCETHEQUESTION WINDOW'S CONTENT: who asks (and from which workspace), how many more wait, the questions with their
- * note, Answer or Later. Frameless, so the header is the handle the window is dragged by. A refused answer is said here,
- * where it was given — never only in a log.
+ * THE FORCETHEQUESTION WINDOW'S CONTENT: who asks (and from which workspace), how many more wait, the questions each with
+ * its own note, Answer or Later. Frameless, so the header is the handle the window is dragged by. A refused answer is said
+ * BESIDE the Answer button, where it was given — not at the top of a window the person has scrolled away from (the owner,
+ * 2026-10-14: "I click the answer button but nothing happens"), and never only in a log.
  */
 export interface QuestionAppProps {
     readonly view: { item: DeckItem; waiting: number } | null;
     readonly sending: boolean;
     readonly refusal: string | null;
-    readonly onAnswer: (selections: string[][], note: string) => void;
+    readonly onAnswer: (selections: string[][], notes: string[]) => void;
     readonly onLater: () => void;
 }
 
@@ -29,8 +30,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater }: Quest
                 {waiting > 0 ? <span data-question-waiting={waiting} className="ml-auto text-[11px] text-[var(--fg-3)]">{waiting} more after this</span> : null}
             </header>
             <main style={NO_DRAG} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                {refusal ? <p data-question-refusal="" className="mb-2 rounded-md border border-[var(--danger)] px-2 py-1 text-[12px] text-[var(--danger)]">{refusal}</p> : null}
-                <QuestionForm item={item} answering={sending ? item.id : null} cancelLabel="Later" onCancel={onLater} onSubmit={onAnswer} />
+                {/* Keyed by the question, so the next question starts with a clean draft. */}
+                <QuestionForm key={item.id} item={item} answering={sending ? item.id : null} refusal={refusal} cancelLabel="Later" onCancel={onLater} onSubmit={onAnswer} />
             </main>
         </div>
     );

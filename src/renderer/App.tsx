@@ -619,6 +619,11 @@ function DesktopApp({ bridge }: AppProps) {
      * answered state back. Clearing it on a timer would guess at when the provider replied.
      */
     const [answering, setAnswering] = useState<string | null>(null);
+    /**
+     * The last REFUSED form answer in Pending Questions, said beside that item's Answer button (the owner, 2026-10-14: "I
+     * click the answer button but nothing happens" — a refusal that only reached the console was nothing happening).
+     */
+    const [deckFormRefusal, setDeckFormRefusal] = useState<{ itemId: string; reason: string } | null>(null);
 
     /**
      * The chat subject comes from the ROUTE, so a link can open a conversation — and so a
@@ -744,13 +749,19 @@ function DesktopApp({ bridge }: AppProps) {
                 setAnswering(optionId);
                 resolvedBridge?.answerApproval(agentId, optionId);
             }}
-            onAnswerDeckForm={(item, selections, note) => {
-                // The filled form goes to main as one feature action; a refusal (an unanswered question, a label that is
-                // not an option) comes back as the reason and is never swallowed.
-                void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answerForm', item, selections, note }).then(setFeatures).catch((error: unknown) => {
-                    console.error('[genie] deck form refused:', (error as Error).message);
+            onAnswerDeckForm={(item, selections, notes) => {
+                // The filled form goes to main as one feature action — labels and one note per question; the form shows
+                // no overall note. A refusal (a question with neither an option nor a note, a label that is not an
+                // option) comes back as the reason and is said beside the Answer button, never only in the console.
+                setDeckFormRefusal(null);
+                void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answerForm', item, selections, notes, note: '' }).then(setFeatures).catch((error: unknown) => {
+                    // Electron wraps a handler's throw as "Error invoking remote method '<channel>': Error: <reason>".
+                    const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+                    console.error('[genie] deck form refused:', reason);
+                    setDeckFormRefusal({ itemId: item.id, reason });
                 });
             }}
+            deckFormRefusal={deckFormRefusal}
             onAnswerDeckItem={(item, optionId) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.

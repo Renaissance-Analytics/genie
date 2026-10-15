@@ -104,7 +104,13 @@ export interface PendingQuestion {
 export interface Answer {
     /** One array of chosen labels per question, in order. */
     readonly selections: readonly (readonly string[])[];
-    /** Always present — the modal always offers free text. May be empty. */
+    /**
+     * One note per question, in order ('' where none). The form offers a note under every question (Genie 1's FTQ did;
+     * the owner asked for it back, 2026-10-14), and a note alone answers its question. Optional for callers that only
+     * ever had the overall note; missing means no question carries one.
+     */
+    readonly notes?: readonly string[];
+    /** The overall note. Always present; may be empty. The form no longer shows one — a caller other than it may still send it. */
     readonly note: string;
 }
 
@@ -243,14 +249,19 @@ export class AttentionStore {
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         await this.#flush();
 
+        // Each question, what was chosen, and — right under it — that question's own note. "(no option chosen)" says a
+        // note answered it instead; the overall Note line is only there when an overall note was given.
         const lines = q.questions.map((question, i) => {
             const chosen = answer.selections[i] ?? [];
-            return `- **${question.header}** — ${question.question}\n  → ${chosen.length > 0 ? chosen.join(', ') : '(no option chosen)'}`;
+            const own = (answer.notes?.[i] ?? '').trim();
+            const picked = chosen.length > 0 ? chosen.join(', ') : own ? '(no option chosen)' : '(no option chosen, no note)';
+            return `- **${question.header}** — ${question.question}\n  → ${picked}${own ? `\n  Note: ${own}` : ''}`;
         });
+        const overall = answer.note.trim();
         const text = [
             `Answer to your question ${questionId}:`,
             ...lines,
-            answer.note.trim() ? `\nNote: ${answer.note.trim()}` : '\nNote: (none)',
+            ...(overall ? [`\nNote: ${overall}`] : []),
         ].join('\n');
         await this.#inbox.send({ from: HUMAN, to: q.agentId, text });
     }

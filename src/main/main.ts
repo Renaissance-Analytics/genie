@@ -1254,7 +1254,7 @@ async function boot(): Promise<void> {
     questionWindow = new QuestionWindow({
         items: () => composed.deckItems(),
         open: electronQuestionWindow({ here, preload: join(here, 'question-preload.cjs'), controller: () => questionWindow }),
-        answer: async (item, selections, note) => { await handleFeatureAction(composed, { kind: 'deck.answerForm', item, selections, note }, featureState, featurePorts); },
+        answer: async (item, selections, notes) => { await handleFeatureAction(composed, { kind: 'deck.answerForm', item, selections, notes, note: '' }, featureState, featurePorts); },
     });
     composed.attention.onChange(() => questionWindow?.changed());
     // Questions already waiting when Genie starts come up too.

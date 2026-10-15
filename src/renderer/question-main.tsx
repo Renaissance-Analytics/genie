@@ -13,7 +13,7 @@ import './styles.css';
 type View = { item: DeckItem; waiting: number };
 interface QuestionBridge {
     current(): Promise<View | null>;
-    answer(selections: string[][], note: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    answer(selections: string[][], notes: string[]): Promise<{ ok: true } | { ok: false; reason: string }>;
     later(): Promise<void>;
     onShow(listener: (view: View) => void): () => void;
 }
@@ -34,9 +34,14 @@ function Question({ bridge }: { bridge: QuestionBridge }) {
             view={view}
             sending={sending}
             refusal={refusal}
-            onAnswer={(selections, note) => {
+            onAnswer={(selections, notes) => {
                 setSending(true);
-                void bridge.answer(selections, note).then((r) => { if (!r.ok) setRefusal(r.reason); }).finally(() => setSending(false));
+                setRefusal(null);
+                // A refusal, and a bridge that failed outright, are both said beside the Answer button — never swallowed.
+                void bridge.answer(selections, notes)
+                    .then((r) => { if (!r.ok) setRefusal(r.reason); })
+                    .catch((error: unknown) => { setRefusal(error instanceof Error ? error.message : String(error)); })
+                    .finally(() => setSending(false));
             }}
             onLater={() => { void bridge.later(); }}
         />

@@ -10,8 +10,7 @@ import type { InboxMessage } from '../main/inbox-store.js';
  * Approvals arrive from the session layer already. The other three come from tonight's stores:
  *
  * - an AGENT QUESTION is BLOCKING — the agent has stopped until a person answers. A single
- *   question with plain options is answered inline; anything multi-part, multi-select or
- *   free-text-only expands into a form in place.
+ *   question, even a single one with plain options, is a form: options plus a note per question.
  * - a USER-LIST item is a thing only a person can DO; it blocks nobody and is done inline.
  * - an UNREAD DM to the human is low priority, titled by sender and first line, marked read inline.
  * - a FINISH WITH A HANDOFF carries the note, with Open / Restart with this / mark read. A finish
@@ -40,7 +39,6 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
 
     for (const q of input.questions) {
         const first = q.questions[0]!;
-        const inline = q.questions.length === 1 && first.multiSelect !== true;
         items.push({
             id: q.id,
             source: 'agent-question',
@@ -51,9 +49,9 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             blocking: true,
             priority: q.priority,
             at: Date.parse(q.askedAt),
-            answer: inline
-                ? { kind: 'inline', options: first.options.map((o) => option(o.label, o.label)) }
-                : { kind: 'form', fields: q.questions.length, questions: q.questions },
+            // EVERY agent question is a form (the owner, 2026-10-14): ForceTheQuestion opens its window on top, and every
+            // question carries its own note. A one-click inline answer had no note and never reached the window.
+            answer: { kind: 'form', fields: q.questions.length, questions: q.questions },
             forwardedFrom: null,
         });
     }

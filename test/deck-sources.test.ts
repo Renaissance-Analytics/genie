@@ -51,10 +51,11 @@ const finished = (over: Partial<Finished> = {}): Finished => ({
 const names = { agent_a: { name: 'atlas', workspaceId: 'tynn' } };
 
 describe('agent questions', () => {
-    it('a single question with plain options answers INLINE; multi-part, multi-select or free-text-only expands into a FORM', () => {
+    // EVERY agent question is a form (the owner, 2026-10-14): ForceTheQuestion opens its window, and every question has its own note.
+    it('every agent question is a FORM carrying its questions — a single plain one too; multi-part and multi-select as before', () => {
         const [single] = deckItemsFrom({ questions: [question()], userList: [], unreadDms: [], finished: [], agents: names });
         expect(single).toMatchObject({ source: 'agent-question', agentId: 'agent_a', agentName: 'atlas', workspaceId: 'tynn', blocking: true, priority: 'normal', title: 'Which engine?', forwardedFrom: null });
-        expect(single!.answer).toEqual({ kind: 'inline', options: [{ id: 'a', label: 'a', tone: 'neutral' }, { id: 'b', label: 'b', tone: 'neutral' }] });
+        expect(single!.answer).toEqual({ kind: 'form', fields: 1, questions: [question().questions[0]!] });
         expect(single!.at).toBe(Date.parse('2026-10-11T05:00:00.000Z'));
 
         const [multi] = deckItemsFrom({ questions: [question({ questions: [question().questions[0]!, { header: 'Where', question: 'Where?', options: [{ label: 'x' }, { label: 'y' }] }] })], userList: [], unreadDms: [], finished: [], agents: names });

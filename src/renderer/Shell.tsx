@@ -102,8 +102,10 @@ export interface ShellProps {
     /** Answering from the DECK names its agent, because the route is not on that agent. */
     /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
     onAnswerDeckItem: (item: DeckItem, optionId: string) => void;
-    /** A multi-part question's form, filled in place (§4.5). */
-    onAnswerDeckForm?: ((item: DeckItem, selections: string[][], note: string) => void) | undefined;
+    /** A multi-part question's form, filled in place (§4.5): labels and one note per question. */
+    onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The last refused form answer, said beside that item's Answer button. */
+    deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
     onTogglePin: () => void;
     onCloseChat: () => void;
     /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
@@ -233,6 +235,7 @@ export function Shell({
     onAnswerApproval,
     onAnswerDeckItem,
     onAnswerDeckForm,
+    deckFormRefusal,
     remote,
     remoteConnect,
     agentOps,
@@ -440,6 +443,7 @@ export function Shell({
                             answering={answeringApproval}
                             onAnswer={(item, optionId) => onAnswerDeckItem(item, optionId)}
                             onAnswerForm={onAnswerDeckForm}
+                            formRefusal={deckFormRefusal ?? null}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {
