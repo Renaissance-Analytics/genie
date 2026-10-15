@@ -31,6 +31,10 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'do_not_disturb', group: 'general', scope: 'host', label: 'Do not disturb', description: 'An agent that asks is told your reply at once; its question still waits for you.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
+    // TRAY-RESIDENT (core/tray-resident.ts): closing the window hides Genie; these two decide how it comes up.
+    { key: 'start_minimized', group: 'general', scope: 'host', label: 'Start minimized to tray', description: 'Genie starts without opening its window; open it from the tray icon.', type: 'boolean', default: false },
+    { key: 'launch_at_login', group: 'general', scope: 'host', label: 'Launch at sign-in', description: 'Start Genie when you sign in to this computer.', type: 'boolean', default: false },
+    { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
     { key: 'agent_cap', group: 'agents', scope: 'workspace', label: 'Running agents cap', description: 'How many agents may run at once in a workspace. A start past the cap is refused and says so; nothing queues.', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' },
     { key: 'restore_agents_on_launch', group: 'agents', scope: 'host', label: 'Restore agents on launch', description: 'Start the agents that were running when Genie last closed. Applies to every path that could restart an agent: launch, crash recovery, transport loss, upgrade.', type: 'boolean', default: false },
@@ -74,6 +78,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     detached_terminals: 'detached_terminals',
     notification_sounds: 'notification_sounds',
     dnd_reply: 'dnd_reply',
+    // Genie 1 stored it as 'on' / 'off' (genie main/db.ts). Its "launch at sign-in" lived in the OS, not here: read from the OS at boot (core/tray-resident.ts).
+    start_minimized: 'start_minimized',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {

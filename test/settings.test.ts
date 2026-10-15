@@ -30,6 +30,15 @@ describe('the registry', () => {
         expect(byKey.dnd_reply).toMatchObject({ type: 'string', group: 'general' });
         expect(byKey.notification_sounds).toMatchObject({ type: 'boolean', default: true, scope: 'device', group: 'general' });
     });
+
+    it('carries the tray-resident pair, both OFF by default, and the one-time notice marker hidden from the surface', () => {
+        const byKey = Object.fromEntries(SETTINGS.map((s) => [s.key, s])) as Record<string, SettingDef>;
+        expect(byKey.start_minimized).toMatchObject({ type: 'boolean', default: false, scope: 'host', group: 'general', label: 'Start minimized to tray' });
+        expect(byKey.launch_at_login).toMatchObject({ type: 'boolean', default: false, scope: 'host', group: 'general', label: 'Launch at sign-in' });
+        expect(byKey.tray_notice_shown).toMatchObject({ type: 'boolean', default: false, hidden: true });
+        expect(searchSettings('').map((s) => s.key)).toEqual(expect.arrayContaining(['start_minimized', 'launch_at_login']));
+        expect(searchSettings('').map((s) => s.key)).not.toContain('tray_notice_shown');
+    });
 });
 
 describe('search', () => {
@@ -62,6 +71,11 @@ describe('carrying v1 settings over', () => {
         expect(r.applied).toEqual({});
         expect(r.dropped.map((d) => d.key).sort()).toEqual(['restore_agents_on_launch', 'theme']);
         expect(r.dropped.find((d) => d.key === 'theme')!.reason).toMatch(/sepia/);
+    });
+
+    it('Genie 1’s start_minimized (stored as on / off) carries over; it was REPORTED as dropped before', () => {
+        expect(carryOverV1({ start_minimized: 'on' })).toEqual({ applied: { start_minimized: true }, dropped: [] });
+        expect(carryOverV1({ start_minimized: 'off' })).toEqual({ applied: { start_minimized: false }, dropped: [] });
     });
 
     it('nothing to carry is an empty result, not an error', () => {
