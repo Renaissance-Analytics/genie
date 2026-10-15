@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
-import { containerNameOf, dataVolumeOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, switchActiveWarning, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type ServiceInstance, type ServiceScope } from '../core/services.js';
+import { containerNameOf, dataVolumeOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type ServiceInstance, type ServiceScope } from '../core/services.js';
+import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
 import type { ServiceDriver } from './service-driver.js';
@@ -31,10 +33,18 @@ import { readJson, writeJsonAtomic } from './store.js';
  * workspace that stops using an engine keeps its data in it. A Redis slice lives in memory only, so it is put back
  * every time the engine is started (`start`) or found running at Genie start (`restoreSlices`).
  *
+ * A shared WEBSOCKETS engine (Sockudo, hosting ship line H8) is carved the same way with nothing run inside it: a
+ * workspace's slice is an APP — `ws_<slug>` as id and key, a generated secret — in the engine's config file, which
+ * Genie writes whole (core/websockets.ts) beside services.json and the container reads read-only. A change to the apps
+ * rewrites the file and restarts a running engine (Genie 1 restarted its server the same way). Its slices are the one
+ * kind that IS dropped (`releaseSlice`): an app holds no data, and dropping it revokes the secret.
+ *
  * Deleting an engine's DATA (hosting ship line H6) is refused while any workspace other than the one asking keeps data
  * in its volume, naming them (core/service-tenancy.ts): the check runs before the first Docker call, so a refusal
  * removes nothing at all. A Mailpit is created with its web inbox published too, a Meilisearch with its master key, a
  * shared SeaweedFS with its admin identity and a bucket per workspace, and a custom image exactly as the person named it.
+ * A WebSocket engine has no volume at all (stateless): there is no data to delete, and a workspace leaving it is
+ * `releaseSlice`, never a delete.
  *
  * `onChange` fires after every write and every start or stop, whoever asked — the person's Services tab or an agent's
  * `services` tool — so the tab redraws when an agent acts (main.ts pushes the feature snapshot on it).
@@ -48,7 +58,33 @@ export interface RegistryDeps {
     readonly sliceReadiness?: { readonly timeoutMs: number; readonly pollMs: number };
     readonly now?: () => number;
     readonly sleep?: (ms: number) => Promise<void>;
+    /** Where an engine's config file is read and written (Sockudo's apps). Defaults to the disk. */
+    readonly files?: ConfigFiles;
 }
+
+export interface ConfigFiles {
+    /** The file's text, or `null` when there is none. */
+    readText(path: string): Promise<string | null>;
+    /** Replace it whole (temp + rename). */
+    writeText(path: string, text: string): Promise<void>;
+    remove(path: string): Promise<void>;
+}
+
+/**
+ * The disk. Mode 0644 on purpose: the engine's container runs as its own unprivileged user, which must read the file
+ * through the bind mount; the folder it lives in is Genie's runtime folder, beside services.json, which holds the same
+ * secrets.
+ */
+export const diskConfigFiles: ConfigFiles = {
+    readText: (path) => readFile(path, 'utf8').catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e; }),
+    writeText: async (path, text) => {
+        await mkdir(dirname(path), { recursive: true });
+        const tmp = `${path}.${process.pid}.tmp`;
+        await writeFile(tmp, text, { encoding: 'utf8', mode: 0o644 });
+        await rename(tmp, path);
+    },
+    remove: (path) => rm(path, { force: true }),
+};
 
 export const DEFAULT_SLICE_READINESS = { timeoutMs: 60_000, pollMs: 500 } as const;
 
@@ -160,17 +196,27 @@ export class ServiceRegistry {
         // A shared Postgres/MySQL/MariaDB/Redis/SeaweedFS holds only its superuser; every workspace's credential is a slice.
         const tenancy = input.scope.kind === 'shared' && SLICED_ENGINES.has(def.engine) ? SHARED_TENANCY[def.engine] : undefined;
         const admin: EngineAdmin | undefined = tenancy ? { user: tenancy.adminUser, password: this.#deps.randomPassword() } : undefined;
-        const credentials: Credentials = admin || def.engine === 'reverb' || def.custom
+        const credentials: Credentials = admin || def.config || def.custom
             ? {}
             // Redis's `--requirepass`; Meilisearch's master key (its only credential — namespace isolation, as Genie 1's).
             : def.engine === 'redis' || def.engine === 'meilisearch'
                 ? { password: this.#deps.randomPassword() }
                 : { user: 'genie', password: this.#deps.randomPassword(), database };
+        // An engine that reads its workspaces from a file (Sockudo's apps): the file exists, with the asking workspace's
+        // app already in it, BEFORE the container does — so it starts once, serving that app.
+        let appSlices: Record<string, AdoptedSlice> | undefined;
+        let configFile: string | undefined;
+        if (def.config) {
+            appSlices = input.workspaceId !== undefined ? { [input.workspaceId]: this.#newSlice(input.workspaceId, input.engine, {}) } : {};
+            configFile = this.#configPath(containerNameOf({ scope: input.scope, engine: input.engine, version: input.major }));
+            await this.#files.writeText(configFile, renderSockudoConfig({ port: def.internalPort, apps: Object.values(appSlices).map(websocketAppOf) }));
+        }
         const created = await this.#driver.create({
             engine: input.engine, major: input.major, scope: input.scope, publishedPort, credentials,
             ...(admin ? { admin } : {}),
             ...(def.surfaces ? { surfacePorts } : {}),
             ...(input.custom ? { custom: input.custom } : {}),
+            ...(configFile ? { configFile } : {}),
         });
         if (!created.ok) throw new Error(created.reason);
         await this.#driver.start(created.name);
@@ -185,6 +231,7 @@ export class ServiceRegistry {
             credentials,
             active: siblings.length === 0,
             ...(admin ? { admin, slices: {} } : {}),
+            ...(appSlices ? { slices: appSlices } : {}),
             ...(def.surfaces ? { publishedPorts: surfacePorts } : {}),
             ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env } } : {}),
         };
@@ -203,21 +250,13 @@ export class ServiceRegistry {
     #useSlice(id: string, workspaceId: string): Promise<ServiceInstance> {
         const run = this.#slicing.then(async () => {
             const i = this.#find(id);
-            if (i.slices === undefined || !i.admin || !SLICED_ENGINES.has(i.engine) || i.scope.kind !== 'shared') return i;
-            if (i.slices[workspaceId]) return i;
-            const identifier = workspaceSqlIdentifier(workspaceId);
-            const holder = Object.entries(i.slices).find(([, s]) => s.identifier === identifier);
-            if (holder) throw new Error(`${i.engine} ${i.version}: workspace ${holder[0]} already holds the database named ${identifier}, which workspace ${workspaceId} would also be named; nothing was created`);
-            const slice: AdoptedSlice = {
-                identifier,
-                password: this.#deps.randomPassword(),
-                ...(i.engine === 'redis' ? { prefix: `${identifier}:` } : {}),
-                // SeaweedFS: the bucket, which is also the access key — a DNS label (`ws-<slug>`), as Genie 1's.
-                ...(i.engine === 'seaweedfs' ? { bucket: workspaceDnsName(workspaceId) } : {}),
-                // The first version of an engine a workspace uses is its active one, as for a dedicated engine.
-                ...(this.#hasActive(workspaceId, i.engine) ? {} : { active: true }),
-            };
-            await this.#provision(i, [slice]);
+            if (i.slices === undefined || i.scope.kind !== 'shared' || i.slices[workspaceId]) return i;
+            const app = sliceIsDroppable(i.engine);
+            if (!app && (!i.admin || !SLICED_ENGINES.has(i.engine))) return i;
+            const slice = this.#newSlice(workspaceId, i.engine, i.slices, `${i.engine} ${i.version}`);
+            // A WebSocket app is a line in the engine's config; a database slice is made inside the engine.
+            if (app) await this.#applyApps({ ...i, slices: { ...i.slices, [workspaceId]: slice } });
+            else await this.#provision(i, [slice]);
             const updated: ServiceInstance = { ...this.#find(id), slices: { ...this.#find(id).slices, [workspaceId]: slice } };
             this.#data = { ...this.#data, instances: this.#data.instances.map((x) => (x.id === id ? updated : x)) };
             await this.#flush();
@@ -228,6 +267,75 @@ export class ServiceRegistry {
     }
 
     /**
+     * A workspace's slice, not yet made: `ws_<slug>`, a generated password (a WebSocket app's secret), Redis's prefix,
+     * SeaweedFS's bucket, and active when it is the workspace's first of the engine. Refuses a name another workspace
+     * already holds.
+     */
+    #newSlice(workspaceId: string, engine: string, slices: Readonly<Record<string, AdoptedSlice>>, what: string = engine): AdoptedSlice {
+        const identifier = workspaceSqlIdentifier(workspaceId);
+        const holder = Object.entries(slices).find(([, s]) => s.identifier === identifier);
+        if (holder) throw new Error(`${what}: workspace ${holder[0]} already holds the ${sliceIsDroppable(engine) ? 'app' : 'database'} named ${identifier}, which workspace ${workspaceId} would also be named; nothing was created`);
+        return {
+            identifier,
+            password: this.#deps.randomPassword(),
+            ...(engine === 'redis' ? { prefix: `${identifier}:` } : {}),
+            // SeaweedFS: the bucket, which is also the access key — a DNS label (`ws-<slug>`), as Genie 1's.
+            ...(engine === 'seaweedfs' ? { bucket: workspaceDnsName(workspaceId) } : {}),
+            // The first version of an engine a workspace uses is its active one, as for a dedicated engine.
+            ...(this.#hasActive(workspaceId, engine) ? {} : { active: true }),
+        };
+    }
+
+    /**
+     * Drop a workspace's slice — only where that loses nothing: a WebSocket app (its config entry, and so its secret,
+     * are gone; a running engine is restarted on the new list). A database or Redis slice holds the workspace's data and
+     * is never dropped here. No slice for the workspace: nothing is done.
+     */
+    releaseSlice(id: string, workspaceId: string): Promise<ServiceInstance> {
+        const run = this.#slicing.then(async () => {
+            const i = this.#find(id);
+            if (!sliceIsDroppable(i.engine)) throw new Error(`${i.engine} ${i.version}: a workspace's slice holds its data, and Genie does not drop it; nothing was done`);
+            if (!i.slices?.[workspaceId]) return i;
+            const rest = Object.fromEntries(Object.entries(i.slices).filter(([ws]) => ws !== workspaceId));
+            const updated: ServiceInstance = { ...i, slices: rest };
+            await this.#applyApps(updated);
+            this.#data = { ...this.#data, instances: this.#data.instances.map((x) => (x.id === id ? updated : x)) };
+            await this.#flush();
+            return updated;
+        });
+        this.#slicing = run.catch(() => undefined);
+        return run;
+    }
+
+    get #files(): ConfigFiles {
+        return this.#deps.files ?? diskConfigFiles;
+    }
+
+    /** An engine's config file: beside services.json, named for its container. */
+    #configPath(containerName: string): string {
+        return join(dirname(this.#file), 'engine-config', `${containerName}.toml`);
+    }
+
+    /**
+     * Make the engine's config file say exactly `i`'s apps. Unchanged: nothing is written or restarted. Changed: the file
+     * is rewritten whole and a RUNNING engine is restarted to read it (a stopped one reads it when it next starts). The
+     * restart drops every workspace's open sockets for a moment and their clients reconnect — Genie 1's behaviour
+     * (host-websocket.ts `restart`).
+     */
+    async #applyApps(i: ServiceInstance, options: { restart: boolean } = { restart: true }): Promise<void> {
+        const def = SERVICE_CATALOG.find((e) => e.engine === i.engine);
+        if (!def?.config) return;
+        const name = this.#nameOf(i.id);
+        const path = this.#configPath(name);
+        const text = renderSockudoConfig({ port: def.internalPort, apps: Object.values(i.slices ?? {}).map(websocketAppOf) });
+        if ((await this.#files.readText(path)) === text) return;
+        await this.#files.writeText(path, text);
+        if (!options.restart || (await this.#driver.status(name)).state !== 'running') return;
+        await this.#driver.stop(name);
+        await this.#driver.start(name);
+    }
+
+    /**
      * Put a NEW shared Redis's ACL users back — they live in the engine's memory and are gone after any restart of
      * it (Docker's `unless-stopped` restarts it on a reboot without asking Genie). Waits for the engine first. A
      * no-op for every other engine (a database and role are in the data volume) and for an adopted one (Genie 1
@@ -235,6 +343,8 @@ export class ServiceRegistry {
      */
     async restoreSlices(id: string): Promise<void> {
         const i = this.#find(id);
+        // A WebSocket engine found running: its config says what the registry says (rewritten and restarted only if not).
+        if (sliceIsDroppable(i.engine)) return this.#applyApps(i);
         if (i.engine !== 'redis' || i.adopted || !i.admin || i.slices === undefined) return;
         const slices = Object.values(i.slices);
         if (slices.length > 0) await this.#provision(i, slices);
@@ -298,6 +408,8 @@ export class ServiceRegistry {
 
     /** Started, and a new shared Redis's workspace users put back (they do not survive a restart of the engine). */
     async start(id: string): Promise<void> {
+        // A WebSocket engine's config first, so it starts on the registry's apps (written only if it differs; no restart).
+        if (sliceIsDroppable(this.#find(id).engine)) await this.#applyApps(this.#find(id), { restart: false });
         await this.#driver.start(this.#nameOf(id));
         this.#changed();
         await this.restoreSlices(id);
@@ -329,7 +441,10 @@ export class ServiceRegistry {
             const verdict = deleteDataVerdict(i, options.workspaceId);
             if (!verdict.allowed) throw new Error(verdict.reason);
         }
-        await this.#driver.remove(this.#nameOf(id), { deleteData: options.deleteData, volume: dataVolumeOf(i) });
+        const name = this.#nameOf(id);
+        await this.#driver.remove(name, { deleteData: options.deleteData, volume: dataVolumeOf(i) });
+        // The apps' secrets go with the engine: nothing is left on disk that could sign for an app no engine serves.
+        if (SERVICE_CATALOG.find((e) => e.engine === i.engine)?.config) await this.#files.remove(this.#configPath(name));
         this.#data.instances = this.#data.instances.filter((x) => x.id !== id);
         await this.#flush();
     }

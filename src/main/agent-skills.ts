@@ -85,7 +85,7 @@ Use \`runAgent\` with action \`sidecar\` to start \`<agent>-slave\`, your review
     },
     {
         name: 'genie-services',
-        description: 'Use when the workspace needs a database, Redis, mail, Reverb or a site served in Genie: Genie runs them, never docker.',
+        description: 'Use when the workspace needs a database, Redis, mail, WebSockets or a site served in Genie: Genie runs them, never docker.',
         body: `# Services and sites
 
 Genie sets up, starts and stops the workspace's service engines and sites. Never run docker, docker compose, or a database or web server of your own for them.

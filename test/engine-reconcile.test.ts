@@ -209,14 +209,14 @@ describe('what "answering" means per engine', () => {
         expect(h.expect!(new Uint8Array())).toBe(false);
     });
 
-    it('mysql/mariadb greet first; reverb answers HTTP; mongo has no cheap greeting (connection-held only)', () => {
+    it('mysql/mariadb greet first; websockets (Sockudo) answers HTTP; mongo has no cheap greeting (connection-held only)', () => {
         for (const e of ['mysql', 'mariadb']) {
             const h = readinessHandshake(e);
             expect(h.send).toBeNull();
             expect(h.expect!(Uint8Array.from([0x4a, 0, 0, 0, 0x0a, 0x38]))).toBe(true);
             expect(h.expect!(new Uint8Array())).toBe(false);
         }
-        expect(readinessHandshake('reverb').expect!(bytes('HTTP/1.1 404 Not Found'))).toBe(true);
+        expect(readinessHandshake('websockets').expect!(bytes('HTTP/1.1 404 Not Found'))).toBe(true);
         expect(readinessHandshake('mongo')).toEqual({ send: null, expect: null });
     });
 });

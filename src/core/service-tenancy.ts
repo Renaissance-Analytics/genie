@@ -1,4 +1,4 @@
-import { dataVolumeOf, type ServiceInstance } from './services.js';
+import { dataVolumeOf, isStateless, type ServiceInstance } from './services.js';
 
 /**
  * WHOSE DATA IS IN AN ENGINE'S VOLUME — and therefore whether "delete data" is destruction (hosting ship line H6).
@@ -14,6 +14,11 @@ import { dataVolumeOf, type ServiceInstance } from './services.js';
  * - a shared engine with no slices (Mailpit, Meilisearch, or one created before slices existed): every workspace on
  *   the machine is handed its connection, so Genie cannot know whose data it holds. UNKNOWN is treated as occupied —
  *   the one place where guessing destroys what cannot be brought back. It can still be removed keeping its data.
+ *
+ * - a STATELESS engine (the WebSocket server, Sockudo): no volume exists, so there is nothing to delete and nothing to
+ *   refuse. Its per-workspace records ARE slices — each an app in its config — but an app is not data: a workspace
+ *   leaving it is `releaseSlice` (service-registry.ts), which drops only that app; it is never a "delete data". Its
+ *   slices must not be read as data holders, or one workspace's app would block a removal that destroys nothing.
  *
  * `workspaceId` is who is asking: their own data is theirs to delete; any OTHER holder refuses it, by name. The volume
  * cannot appeal to the engine (Docker has no notion of a volume with three tenants), so this guard is Genie's alone and
@@ -32,6 +37,8 @@ function listOf(parts: readonly string[]): string {
 
 /** Each workspace with data in the instance's volume, and what that data is CALLED there — so a refusal can be checked. */
 export function dataHolders(i: ServiceInstance): { workspaceId: string; holds: string }[] | null {
+    // A stateless engine keeps no data at all: its slices are apps in a config (dropped by `releaseSlice`), not data.
+    if (isStateless(i.engine)) return [];
     if (i.slices !== undefined) {
         const holders = Object.entries(i.slices).map(([workspaceId, s]) => ({ workspaceId, holds: s.bucket ?? s.identifier }));
         // An adopted DEDICATED engine is its workspace's even where Genie 1 recorded no slice for it.
@@ -57,7 +64,10 @@ export function deleteDataVerdict(i: ServiceInstance, workspaceId?: string, labe
     const named = (h: { workspaceId: string; holds: string }): string => `${h.holds} (workspace ${label(h.workspaceId)})`;
     const what = `${i.engine} ${i.version}`;
     const volume = dataVolumeOf(i);
-    if (volume === null) return { allowed: true, volume: null, deletes: `nothing: ${what} is a custom image and keeps no data volume` };
+    if (volume === null) {
+        const why = isStateless(i.engine) ? 'is stateless (its apps are a config file, not data)' : 'is a custom image';
+        return { allowed: true, volume: null, deletes: `nothing: ${what} ${why} and keeps no data volume` };
+    }
     const holders = dataHolders(i);
     if (holders === null) {
         return {

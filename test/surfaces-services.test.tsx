@@ -121,7 +121,7 @@ describe('Add an engine', () => {
 
     it('offers every engine in the catalog, prefills the newest major, and defaults to dedicated', () => {
         const html = renderToStaticMarkup(<AddServiceForm defaults={defaults} problems={[]} consent={null} onSubmit={() => {}} onCancel={() => {}} />);
-        for (const e of ['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(html).toContain(`value="${e}"`);
+        for (const e of ['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'websockets', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(html).toContain(`value="${e}"`);
         // MinIO is in the catalog only so Genie 1's can be taken over: never offered (its images are gone).
         expect(html).not.toContain('value="minio"');
         expect(html).toContain('value="17"');

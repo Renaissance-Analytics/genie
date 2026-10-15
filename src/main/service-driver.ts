@@ -94,7 +94,6 @@ const DATA_DIRS: Record<string, string> = {
     mariadb: '/var/lib/mysql',
     redis: '/data',
     mongo: '/data/db',
-    reverb: '/data',
     mailpit: '/data',
     minio: '/data',
     meilisearch: '/meili_data',
@@ -130,15 +129,22 @@ export class ServiceDriver {
         return { kind: 'pulled', image };
     }
 
-    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin; surfacePorts?: Readonly<Record<string, number>>; custom?: CustomEngineSpec }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
+    /** `configFile`: the host file an engine that reads its tenants from one (Sockudo) is given, read-only. */
+    async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin; surfacePorts?: Readonly<Record<string, number>>; custom?: CustomEngineSpec; configFile?: string }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
         const plan = containerPlan(input);
         const existing = await this.#run(['container', 'inspect', plan.name]);
         if (existing.exitCode === 0) return { ok: true, name: plan.name, existed: true };
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine)!;
+        // `--mount` is comma-separated: a source with a comma would be read as another field, so it is refused, not guessed.
+        const bad = (plan.mounts ?? []).find((m) => m.source.includes(','));
+        if (bad) return { ok: false, reason: `the config file for ${plan.name} is at a path with a comma (${bad.source}), which Docker's --mount cannot take; nothing was created` };
         const args = ['create', '--name', plan.name];
         // Every surface the plan publishes (Mailpit's SMTP AND its web inbox), each loopback-only.
         for (const p of plan.publish) args.push('-p', p);
+        // No volume for a custom image or a stateless engine (Sockudo): `null` in the plan.
         if (plan.volume !== null) args.push('-v', `${plan.volume}:${DATA_DIRS[def.engine] ?? '/data'}`);
+        // `--mount`, not `-v`: a Windows source path's drive colon would split a `-v` spec.
+        for (const m of plan.mounts ?? []) args.push('--mount', `type=bind,source=${m.source},target=${m.target},readonly`);
         args.push('--restart', 'unless-stopped');
         // `--entrypoint` takes one word and must precede the image; what it runs follows the image (SeaweedFS's `-c …`).
         if (plan.entrypoint) args.push('--entrypoint', plan.entrypoint);
