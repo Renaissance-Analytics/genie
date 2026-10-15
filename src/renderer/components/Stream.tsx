@@ -181,7 +181,8 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
     }
 
     return (
-        <div data-stream="rows" className="relative h-full">
+        <div data-stream="rows" className="flex h-full flex-col">
+            <div className="relative min-h-0 flex-1">
             <VirtualList
                 items={prepared}
                 height="100%"
@@ -205,6 +206,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                     {parked}
                 </div>
             ) : null}
+            </div>
 
             {/*
              * The `↓ n new` pill is ours to render, from `onUnseenChange`. It appears only
@@ -212,23 +214,26 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
              * reading `↓ 0 new` would be furniture.
              */}
             {/*
-             * THE FOLLOW PILL (the board, bottom right): `Following live` while the ledger tails its own end;
-             * `Parked` once the reader scrolled away or arrived by a deep link — with `↓ n new` while rows arrive
-             * meanwhile — and the parked pill is the door back to the tail.
+             * THE FOLLOW PILL: `Following live` while the ledger tails its own end; `Parked` once the reader scrolled
+             * away or arrived by a deep link — with `↓ n new` while rows arrive meanwhile — and the parked pill is the
+             * door back to the tail. It lives in the STATUS BAR under the stream, never over it (the owner, 2026-10-14:
+             * floating bottom-right it covered the newest row's text and the scrollbar).
              */}
+            <div data-stream-status="" className="flex h-7 shrink-0 items-center justify-end gap-2 border-t border-[var(--border-1)] bg-[var(--surface)] px-3">
             {following ? (
-                <span data-follow="live" className="absolute bottom-3 right-3 rounded-full border border-[var(--border-1)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-4)]">Following live</span>
+                <span data-follow="live" className="rounded-full border border-[var(--border-1)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-4)]">Following live</span>
             ) : (
                 <button
                     type="button"
                     data-follow="parked"
                     {...(unseen > 0 ? { 'data-unseen': unseen } : {})}
                     onClick={() => setFollowing(true)}
-                    className="absolute bottom-3 right-3 rounded-full border border-[var(--border-2)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
+                    className="rounded-full border border-[var(--border-2)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
                 >
                     Parked{unseen > 0 ? ` · ↓ ${unseen} new` : ''}
                 </button>
             )}
+            </div>
         </div>
     );
 }

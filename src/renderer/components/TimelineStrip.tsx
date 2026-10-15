@@ -116,7 +116,12 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
         onChange(next.length === 0 || next.length === FILTERS.length ? null : next);
     };
     return (
-        <div data-chips="" className="flex h-11 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-4">
+        <div data-chips="" className="flex h-11 min-w-0 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-4">
+            {/*
+             * The chips SCROLL sideways in their own lane when the column is narrow; the find box never moves out of
+             * view (the owner, 2026-10-14: it ran under the right column and was cut off).
+             */}
+            <div data-chip-lane="" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
             {chips.map((chip) => (
                 <button
                     key={chip.id}
@@ -125,7 +130,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
                     data-on={chip.on ? 'true' : 'false'}
                     aria-pressed={chip.on}
                     onClick={() => toggle(chip)}
-                    className={`flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[12px] ${
+                    className={`flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] ${
                         chip.on ? 'border-[var(--border-2)] bg-[var(--bg-3)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'
                     }`}
                 >
@@ -134,8 +139,9 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
                     <span {...(chip.id === 'all' ? {} : (FACETS as readonly string[]).includes(chip.id) ? { 'data-facet-count': chip.n } : { 'data-lane-count': chip.n })} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{chip.n}</span>
                 </button>
             ))}
+            </div>
             {/* FIND IN STREAM (the board's `Find in stream  /`): a box at the right; Escape clears it and gives the keys back. */}
-            <label className="ml-auto flex h-6 items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 text-[12px] text-[var(--fg-3)] focus-within:border-[var(--border-2)]">
+            <label data-find-box="" className="flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 text-[12px] text-[var(--fg-3)] focus-within:border-[var(--border-2)]">
                 <Icon name="search" size="xs" />
                 <input
                     ref={findRef}
