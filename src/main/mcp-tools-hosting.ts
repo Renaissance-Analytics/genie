@@ -1,10 +1,14 @@
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
+import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
 import { imageFor, SERVICE_CATALOG, type ServiceInstance } from '../core/services.js';
-import { createService, createSite, removeService, removeSite, siteDefaults, startService, startSite, stopService, stopSite, type HostingServices } from './hosting-actions.js';
+import {
+    createService, createSite, detectSite, openSite, removeService, removeSite, restartSite, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite,
+    type HostingServices, type OpenInBrowser,
+} from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 import type { SiteInfo } from './site-manager.js';
@@ -17,21 +21,30 @@ import type { SiteInfo } from './site-manager.js';
  * What an agent may do is decided HERE, before anything is called:
  * - Its OWN workspace only. It sees its workspace's engines and the shared ones; it changes only its workspace's own
  *   (a shared engine serves every workspace, so stopping or removing one is the person's). A site is its workspace's.
- * - `services add` and `remove`, and `sites remove`, wait for the PERSON's approval (approval-queue.ts). For an add the
- *   person sees the engine, the version and the image Genie will pull — that approval is the pull's consent.
+ * - `services add` and `remove`, and `sites update` and `remove`, wait for the PERSON's approval (approval-queue.ts). For
+ *   an add the person sees the engine, the version and the image Genie will pull — that approval is the pull's consent;
+ *   for a site update, every field that changes, before and after. A change Genie would refuse is refused WITHOUT asking.
+ * - `sites detect` reads a folder and answers what Genie would serve: nothing is started, written or kept. `status`,
+ *   `logs`, `restart` and `open` act at once, on the workspace's own sites only; `open` puts the site in front of the
+ *   person in Genie's browser.
  * - Never deleting data: `remove` keeps the engine's data volume, and asking for anything else is refused outright.
  * - `env` names every variable with its value, secrets masked — the processes get the real ones, the transcript does not.
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
-export type HostingApproval = 'services.add' | 'services.remove' | 'sites.remove';
+export type HostingApproval = 'services.add' | 'services.remove' | 'sites.update' | 'sites.remove';
 
 export interface HostingToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
     readonly approve: (caller: Caller, action: HostingApproval, detail: string) => Promise<'allowed' | 'denied'>;
     /** The composed services; `null` where this Genie has none (doctor mode), and every action says so. */
     readonly services: HostingServices | null;
+    /** Genie's browser, for `sites open` — the same one the Hosting tab's Open uses. Absent = none here (doctor mode). */
+    readonly openInBrowser?: OpenInBrowser;
 }
+
+/** How much of each of a site's processes' output `sites logs` reads by default — as `processes logs` does. */
+export const DEFAULT_SITE_LOG_LINES = 200;
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string, extra: Record<string, unknown> = {}): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message, ...extra }), isError: true });
@@ -210,28 +223,86 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         }),
     };
 
+    const modes: readonly SiteMode[] = ['proxy', 'static', 'php'];
+    const stacks: readonly Stack[] = ['laravel', 'node', 'django', 'go'];
+    /** The arguments' shape, refused by name before anything is read or asked. */
+    const shapeProblem = (args: JsonObject): string | null => {
+        if (args.mode !== undefined && !modes.includes(args.mode as SiteMode)) return '`mode` is proxy, static or php';
+        if (args.stack !== undefined && !stacks.includes(args.stack as Stack)) return '`stack` is laravel, node, django or go';
+        if (args.hostPort !== undefined && typeof args.hostPort !== 'number') return '`hostPort` is a number';
+        if (args.lines !== undefined && (typeof args.lines !== 'number' || !Number.isFinite(args.lines) || args.lines < 1)) return '`lines` is a positive number';
+        return null;
+    };
+    /** A folder the agent named, resolved in ITS workspace — or the refusal, before anything is read there. */
+    const folderIn = (caller: Caller, given: string | undefined, fallback: string): string | { refused: string } => {
+        const repoPath = given ? (isAbsolute(given) ? given : resolve(caller.workspacePath, given)) : fallback;
+        const rel = relative(caller.workspacePath, repoPath);
+        if (rel.startsWith('..') || isAbsolute(rel)) return { refused: `${given ?? repoPath} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
+        return repoPath;
+    };
+    /**
+     * The form an agent asks for: `base` (the folder's detected defaults for an add, the site as it is for an update),
+     * then whatever the agent said. A command given is the dev server; a port given is a server it already runs.
+     */
+    const formOf = (base: SiteForm, args: JsonObject): SiteForm => {
+        const mode = (args.mode as SiteMode | undefined) ?? base.mode;
+        const devCommand = str(args.devCommand);
+        // A command given replaces a port the site had (it is now Genie's dev server), as a port given replaces the command.
+        const hostPort = typeof args.hostPort === 'number' ? args.hostPort : devCommand ? null : base.hostPort;
+        const devServer = devCommand
+            ? { stack: (args.stack as Stack | undefined) ?? base.devServer?.stack ?? 'node', command: devCommand }
+            : typeof args.hostPort === 'number' ? null : base.devServer;
+        return {
+            name: str(args.name) ?? base.name,
+            mode,
+            devServer: mode === 'proxy' ? devServer : null,
+            hostPort: mode === 'proxy' ? hostPort : null,
+            root: mode === 'proxy' ? null : (str(args.root) ?? base.root),
+            spa: typeof args.spa === 'boolean' ? args.spa : base.spa,
+        };
+    };
+    /** What an update changes, for the person who approves it: each field that differs, before → after. */
+    const changesOf = (before: SiteForm, after: SiteForm): string[] => {
+        const show = (v: unknown) => (v === null || v === undefined || v === '' ? 'none' : String(v));
+        const out: string[] = [];
+        if (normalizeSiteName(after.name) !== normalizeSiteName(before.name)) out.push(`name ${normalizeSiteName(before.name)}.gen → ${normalizeSiteName(after.name)}.gen`);
+        if (after.mode !== before.mode) out.push(`mode ${before.mode} → ${after.mode}`);
+        if (after.root !== before.root) out.push(`root ${show(before.root)} → ${show(after.root)}`);
+        if (after.spa !== before.spa) out.push(`spa ${before.spa} → ${after.spa}`);
+        if (after.hostPort !== before.hostPort) out.push(`port ${show(before.hostPort)} → ${show(after.hostPort)}`);
+        if ((after.devServer?.command ?? null) !== (before.devServer?.command ?? null)) out.push(`command ${show(before.devServer?.command)} → ${show(after.devServer?.command)}`);
+        return out;
+    };
+    const SITE_ACTIONS = 'list, status, detect, add, start, stop, restart, logs, open, update, remove';
+
     const sites: Registration = {
         definition: new ToolDefinition(
             'sites',
-            'Your workspace’s sites, served by Genie at https://<name>.gen. GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
+            'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
                 + 'Actions: `list`. '
+                + '`status` {site} — the site and each of its processes as Genie sees them now. '
+                + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
                 + '`add` {name?, repoPath? (a folder in this workspace; default its root), mode? proxy | static | php, devCommand? (put {port} where the port goes — Genie picks it), stack? laravel | node | django | go, hostPort? (a server you already run), root? (static/php: the folder to serve), spa?} — anything left out takes the defaults Genie detects from the folder, exactly as the Hosting tab’s form does, and it is kept in the workspace’s project.json. '
-                + '`start` / `stop` {site} — by id, name or host. '
+                + '`start` / `stop` / `restart` {site} — by id, name or host. '
+                + '`logs` {site, lines?} — the end of each of its processes’ output (default 200 lines), still there after a crash. '
+                + '`open` {site} — opens it in Genie’s browser for the person, and answers its URL. '
+                + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
                 + '`remove` {site} — the person approves it; the folder and its files are never touched.',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'add', 'start', 'stop', 'remove'] },
-                    site: { type: 'string', description: 'start / stop / remove: the site’s id, name or host, from `list`.' },
-                    name: { type: 'string', description: 'add: one hostname label (a-z, 0-9, hyphens); the site is https://<name>.gen.' },
-                    repoPath: { type: 'string', description: 'add: the folder to serve, inside this workspace (relative to its root, or absolute).' },
+                    action: { type: 'string', enum: ['list', 'status', 'detect', 'add', 'start', 'stop', 'restart', 'logs', 'open', 'update', 'remove'] },
+                    site: { type: 'string', description: 'status / start / stop / restart / logs / open / update / remove: the site’s id, name or host, from `list`.' },
+                    name: { type: 'string', description: 'add / update: one or more hostname labels separated by dots (a-z, 0-9, hyphens); the site is https://<name>.gen.' },
+                    repoPath: { type: 'string', description: 'detect / add / update: the folder to serve, inside this workspace (relative to its root, or absolute).' },
                     mode: { type: 'string', enum: ['proxy', 'static', 'php'] },
-                    devCommand: { type: 'string', description: 'add (proxy): the dev server Genie runs, with {port} where the port goes.' },
+                    devCommand: { type: 'string', description: 'add / update (proxy): the dev server Genie runs, with {port} where the port goes.' },
                     stack: { type: 'string', enum: ['laravel', 'node', 'django', 'go'] },
-                    hostPort: { type: 'number', description: 'add (proxy): a port a server you already run listens on; Genie starts nothing.' },
-                    root: { type: 'string', description: 'add (static / php): the folder to serve, relative to repoPath (dist, public…).' },
-                    spa: { type: 'boolean', description: 'add (static): serve index.html for unknown paths.' },
+                    hostPort: { type: 'number', description: 'add / update (proxy): a port a server you already run listens on; Genie starts nothing. On update, a devCommand replaces it.' },
+                    root: { type: 'string', description: 'add / update (static / php): the folder to serve, relative to repoPath (dist, public…).' },
+                    spa: { type: 'boolean', description: 'add / update (static): serve index.html for unknown paths.' },
+                    lines: { type: 'number', description: 'logs: how many lines from the end of each process’s output (default 200).' },
                 },
                 required: ['action'],
             },
@@ -239,6 +310,9 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         ),
         handler: withServices(async (s, caller, args) => {
             const action = str(args.action) ?? '';
+            const shape = shapeProblem(args);
+            if (shape) return err(shape);
+            // Its OWN workspace's sites only: another workspace's is "no site" here, refused before anything is asked or done.
             const own = (key: string | undefined): SiteInfo | string => {
                 if (!key) return `${action} needs \`site\`; \`sites list\` shows them`;
                 const site = s.sites.list(caller.workspaceId).find((x) => x.id === key || x.name === key || x.host === key);
@@ -247,30 +321,25 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             switch (action) {
                 case 'list':
                     return ok({ ok: true, sites: s.sites.list(caller.workspaceId).map(siteView) });
+                case 'status': {
+                    const site = own(str(args.site));
+                    if (typeof site === 'string') return err(site);
+                    const st = siteStatus(s, site.id);
+                    return ok({ ok: true, site: siteView(st.site), processes: st.processes.map((p) => ({ id: p.id, name: p.name, state: p.state, pid: p.pid, exitCode: p.exitCode, restarts: p.restarts, ...(p.reason ? { reason: p.reason } : {}) })) });
+                }
+                case 'detect': {
+                    const repoPath = folderIn(caller, str(args.repoPath), caller.workspacePath);
+                    if (typeof repoPath !== 'string') return err(repoPath.refused);
+                    const d = await detectSite(s, { workspaceId: caller.workspaceId, repoPath });
+                    const taken = s.sites.list().some((x) => x.host === `${d.name}.gen`);
+                    return ok({ ok: true, repoPath, detected: d, host: `${d.name}.gen`, ...(taken ? { note: `${d.name}.gen is already a site; \`add\` needs another \`name\`` } : {}), sideEffects: 'none — nothing was started, written or kept' });
+                }
                 case 'add': {
-                    const given = str(args.repoPath);
-                    const repoPath = given ? (isAbsolute(given) ? given : resolve(caller.workspacePath, given)) : caller.workspacePath;
-                    const modes: readonly SiteMode[] = ['proxy', 'static', 'php'];
-                    const stacks: readonly Stack[] = ['laravel', 'node', 'django', 'go'];
-                    if (args.mode !== undefined && !modes.includes(args.mode as SiteMode)) return err('`mode` is proxy, static or php');
-                    if (args.stack !== undefined && !stacks.includes(args.stack as Stack)) return err('`stack` is laravel, node, django or go');
-                    if (args.hostPort !== undefined && typeof args.hostPort !== 'number') return err('`hostPort` is a number');
+                    const repoPath = folderIn(caller, str(args.repoPath), caller.workspacePath);
+                    if (typeof repoPath !== 'string') return err(repoPath.refused);
                     // The Hosting tab's defaults for this folder, then what the agent said — and the tab's own validation.
-                    const d = await siteDefaults(repoPath);
-                    const mode = (args.mode as SiteMode | undefined) ?? d.mode;
-                    const devCommand = str(args.devCommand);
-                    const hostPort = typeof args.hostPort === 'number' ? args.hostPort : d.hostPort;
-                    const devServer = devCommand
-                        ? { stack: (args.stack as Stack | undefined) ?? d.devServer?.stack ?? 'node', command: devCommand }
-                        : typeof args.hostPort === 'number' ? null : d.devServer;
-                    const form: SiteForm = {
-                        name: str(args.name) ?? d.name,
-                        mode,
-                        devServer: mode === 'proxy' ? devServer : null,
-                        hostPort: mode === 'proxy' ? hostPort : null,
-                        root: mode === 'proxy' ? null : (str(args.root) ?? d.root),
-                        spa: typeof args.spa === 'boolean' ? args.spa : d.spa,
-                    };
+                    const d = await siteDefaultsIn(s, caller.workspaceId, repoPath);
+                    const form = formOf(d, args);
                     const r = await createSite(s, { workspaceId: caller.workspaceId, repoPath, form });
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
                     return ok({ ok: true, site: siteView(r.site) });
@@ -287,6 +356,49 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const after = s.sites.get(site.id);
                     return ok({ ok: true, site: after ? siteView(after) : { id: site.id, state: 'stopped' } });
                 }
+                case 'restart': {
+                    const site = own(str(args.site));
+                    if (typeof site === 'string') return err(site);
+                    return ok({ ok: true, site: siteView(await restartSite(s, site.id)) });
+                }
+                case 'logs': {
+                    const site = own(str(args.site));
+                    if (typeof site === 'string') return err(site);
+                    const logs = siteLogs(s, site.id, typeof args.lines === 'number' ? Math.floor(args.lines) : DEFAULT_SITE_LOG_LINES);
+                    return ok({
+                        ok: true,
+                        site: siteView(site),
+                        processes: logs.map((l) => ({ id: l.processId, name: l.name, state: l.state, log: l.text, lines: l.lines, dropped: l.dropped })),
+                        ...(logs.length === 0 ? { note: site.state === 'external' ? 'a server you run yourself: Genie runs no process for it, so it has no log here' : 'Genie has no output from this site since Genie started: none of its processes has run since then' } : {}),
+                    });
+                }
+                case 'open': {
+                    const site = own(str(args.site));
+                    if (typeof site === 'string') return err(site);
+                    if (!deps.openInBrowser) return err('this Genie has no browser to open it in (doctor mode); nothing was opened', { url: `https://${site.host}/` });
+                    const r = await openSite(s, site.id, deps.openInBrowser);
+                    return ok({ ok: true, url: r.url, opened: 'in Genie’s browser, in front of the person' });
+                }
+                case 'update': {
+                    const site = own(str(args.site));
+                    if (typeof site === 'string') return err(site);
+                    const target = siteEditTarget(s, site.id);
+                    const given = str(args.repoPath);
+                    const repoPath = given ? folderIn(caller, given, target.site.repoPath) : target.site.repoPath;
+                    if (typeof repoPath !== 'string') return err(repoPath.refused);
+                    const form = formOf(target.form, args);
+                    // The Edit form's own validation, BEFORE anyone is asked: a change Genie would refuse is never put to the person.
+                    const problems = siteEditProblems(s, site.id, form);
+                    if (problems.length > 0) return err(problems.map((p) => p.message).join(' '), { problems, form });
+                    const changes = changesOf(target.form, form);
+                    if (repoPath !== target.site.repoPath) changes.push(`folder ${target.site.repoPath} → ${repoPath}`);
+                    if (changes.length === 0) return ok({ ok: true, site: siteView(site), note: 'nothing to change: the site is already served that way; the person was not asked' });
+                    const verdict = await deps.approve(caller, 'sites.update', `${site.host} — ${changes.join('; ')} — written to this workspace’s project.json and served as changed`);
+                    if (verdict !== 'allowed') return err(`changing ${site.host} was denied by the person; nothing was done`);
+                    const r = await updateSite(s, { siteId: site.id, form, repoPath });
+                    if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
+                    return ok({ ok: true, site: siteView(r.site), changed: changes });
+                }
                 case 'remove': {
                     const site = own(str(args.site));
                     if (typeof site === 'string') return err(site);
@@ -296,7 +408,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     return ok({ ok: true, removed: site.id });
                 }
                 default:
-                    return err(`unknown action ${JSON.stringify(action)}; the actions are list, add, start, stop, remove`);
+                    return err(`unknown action ${JSON.stringify(action)}; the actions are ${SITE_ACTIONS}`);
             }
         }),
     };

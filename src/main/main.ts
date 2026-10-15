@@ -76,7 +76,8 @@ import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
-import { terminalEnvFor } from './hosting-actions.js';
+import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
+import { browserRoute } from '../core/browser-policy.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -1151,6 +1152,17 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
+    // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
+    // `openSite` checks the site is served first): the pane loads it, the window comes up on the browser surface, and
+    // the snapshot's address bar says it. The person sees what the agent opened; nothing opens outside Genie.
+    const openInBrowser: OpenInBrowser = async (url) => {
+        if (!browserPane) return { ok: false, reason: 'Genie’s window is not open yet' };
+        featureState = { ...featureState, browserUrl: url };
+        broadcast('genie:navigate', browserRoute.format({ url }));
+        const shown = await browserPane.show(url);
+        pushFeatures();
+        return shown.ok ? { ok: true } : { ok: false, reason: shown.reason };
+    };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
     processBook = await ProcessBook.open(genieHome(), {
@@ -1199,6 +1211,8 @@ async function boot(): Promise<void> {
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
+            // `sites open` shows the site in the same browser pane the Hosting row's Open does.
+            openInBrowser,
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
             sidecar: {
@@ -1327,6 +1341,7 @@ async function boot(): Promise<void> {
     });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        openInBrowser,
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),
@@ -1383,7 +1398,7 @@ async function boot(): Promise<void> {
             const shown = await browserPane.show(data.browser.url);
             if (!shown.ok) console.error('[genie] browser:', shown.reason);
         }
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null };
         return data;
     });
 

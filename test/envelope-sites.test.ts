@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { devServerFor, formatLike, readEnvelopeSites, resolveRepoDir, siteEntryFor, siteKeyFor, withSiteEntry, type ServableSite, type UnservableSite } from '../src/core/envelope-sites.js';
+import { devServerFor, editedSiteEntry, formatLike, readEnvelopeSites, resolveRepoDir, siteEntryFor, siteKeyFor, withSiteEntry, type ServableSite, type UnservableSite } from '../src/core/envelope-sites.js';
 
 /**
  * A WORKSPACE'S SITES AS ITS ENVELOPE DECLARES THEM (§6.6) — the pure half. Each project.json `sites`
@@ -73,11 +73,44 @@ describe('each serve shape', () => {
     });
 });
 
+describe('S5: multi-label names — Genie 1’s <site>.<workspace>.gen is served', () => {
+    it('Genie 1’s default name is SERVED under its full name (it was refused as "more than one label")', () => {
+        const s = served({ ...host, repo: 'shop', name: 'web', genName: 'web.acme.gen', hostServe: { mode: 'php', root: 'public' } });
+        expect(s).toMatchObject({ name: 'web.acme', repoDir: 'repos/shop', serve: { mode: 'php', root: 'public' } });
+        expect(served({ ...host, repo: 'shop', genName: 'API.Docs.Acme.gen', hostPort: 8085 }).name).toBe('api.docs.acme');
+    });
+
+    it('CONTROL: a one-label name is read exactly as before', () => {
+        expect(served({ ...host, repo: 'shop', name: 'shop', genName: 'shop.gen', hostServe: { mode: 'php', root: 'public' } }).name).toBe('shop');
+    });
+
+    it('written back in Genie 1’s shape: `name` ONE label (Genie 1 drops any other), `genName` the full host — and it reads back as the same site', () => {
+        const m = manifest({});
+        const entry = siteEntryFor(m, { name: 'web.acme', repoDir: 'repos/shop', serve: { mode: 'php', root: 'public' } });
+        expect(entry).toEqual({ ok: true, entry: { repo: 'shop', runMode: 'host', kind: 'http', enabled: true, name: 'web', genName: 'web.acme.gen', hostServe: { mode: 'php', root: 'public' } } });
+        expect(readEnvelopeSites(withSiteEntry(m, 'k', (entry as { entry: Record<string, unknown> }).entry))[0]).toMatchObject({ ok: true, name: 'web.acme' });
+    });
+});
+
+describe('an EDITED entry', () => {
+    it('replaces the way it is served whole, keeps every other field — Genie 1’s own included — in place, and never re-enables it', () => {
+        const before = { repo: 'shop', runMode: 'host', kind: 'http', enabled: false, name: 'shop', genName: 'shop.gen', framework: 'laravel', upstreamHost: 'shop.test', command: ['php', 'artisan', 'serve'], hostPort: 9000 };
+        const next = (siteEntryFor(manifest({}), { name: 'web.acme', repoDir: 'repos/shop', serve: { mode: 'static', root: 'dist', spa: true } }) as { entry: Record<string, unknown> }).entry;
+        const edited = editedSiteEntry(before, next);
+        expect(edited).toEqual({ repo: 'shop', runMode: 'host', kind: 'http', enabled: false, name: 'web', genName: 'web.acme.gen', framework: 'laravel', upstreamHost: 'shop.test', hostServe: { mode: 'static', root: 'dist', spa: true } });
+        // Counted: the two stale ways of serving are gone, the two Genie 1 fields stay.
+        expect(['command', 'hostPort'].filter((k) => k in edited)).toEqual([]);
+        expect(['framework', 'upstreamHost'].filter((k) => k in edited)).toHaveLength(2);
+        expect(Object.keys(edited).slice(0, 6)).toEqual(['repo', 'runMode', 'kind', 'enabled', 'name', 'genName']);
+    });
+});
+
 describe('what Genie 2 cannot serve is listed with the reason, never dropped', () => {
     it.each([
         ['a container site', { ...host, runMode: 'explicit', repo: 'shop', genName: 'wallet.gen', command: ['node', 's.js'] }, /workspace container/],
         ['a production recipe', { ...host, runMode: 'recipe', repo: 'shop', genName: 'r.gen' }, /runMode "recipe"/],
-        ['a multi-label name', { ...host, repo: 'shop', genName: 'web.acme.gen', hostServe: { mode: 'php', root: 'public' } }, /one label/],
+        ['a name with an invalid label', { ...host, repo: 'shop', genName: 'web_1.acme.gen', hostServe: { mode: 'php', root: 'public' } }, /"web_1" is not a hostname label/],
+        ['a name with an empty label', { ...host, repo: 'shop', genName: 'web..acme.gen', hostServe: { mode: 'php', root: 'public' } }, /empty label/],
         ['octane', { ...host, repo: 'shop', genName: 'o.gen', hostServe: { mode: 'octane', server: 'swoole' } }, /"octane" is not one Genie 2 serves/],
         ['frankenphp', { ...host, repo: 'shop', genName: 'f.gen', hostServe: { mode: 'frankenphp', root: 'public' } }, /"frankenphp"/],
         ['a pinned PHP', { ...host, repo: 'shop', genName: 'p.gen', hostServe: { mode: 'php', root: 'public', version: '8.4' } }, /pins PHP 8\.4/],

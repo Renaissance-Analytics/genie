@@ -161,11 +161,76 @@ export class SiteManager {
         return this.#info(record);
     }
 
-    #newRecord(input: CreateSiteInput): SiteRecord {
-        const host = genHost(input.name);
-        for (const s of this.#sites.values()) {
-            if (s.host === host) throw new Error(`${host} is already a site (${s.id}); two sites cannot share a name`);
+    /**
+     * Restart a site by hand: its processes stop and it is STARTED AGAIN the way Start starts it — the Caddyfile written
+     * anew and the php worker's env read anew (a Check and repair reaches it), on freshly allocated ports — and a site
+     * that was down comes up. Its name, and so its hosts line and certificate, do not change. Throws the reason for a
+     * site Genie 2 cannot serve and for an external one (a server you run yourself has no process of Genie's to restart).
+     */
+    restart(id: string): SiteInfo {
+        const record = this.#sites.get(id);
+        if (!record) throw new Error(`no site ${id}`);
+        if (record.unservable) throw new Error(`${record.host} cannot be served by Genie 2: ${record.unservable.reason}`);
+        if (record.input?.hostPort !== undefined) throw new Error(`${record.host} is a server you run yourself on port ${record.input.hostPort}; Genie has no process of its own to restart for it`);
+        try {
+            this.#stopProcesses(record);
+            this.#start(record);
+        } catch (error) {
+            record.problem = error instanceof Error ? error.message : String(error);
+            this.#changed();
+            throw error;
         }
+        this.#changed();
+        return this.#info(record);
+    }
+
+    /** What the site was declared with — the Edit form's starting values. `null` for an unknown or unservable site. */
+    spec(id: string): CreateSiteInput | null {
+        return this.#sites.get(id)?.input ?? null;
+    }
+
+    /**
+     * Is `name` free for site `exceptId` (an Edit keeps its own name)? Throws the same refusal {@link create} would, so a
+     * caller can check BEFORE it writes anything.
+     */
+    assertNameFree(name: string, exceptId: string | null): string {
+        const host = genHost(name);
+        for (const s of this.#sites.values()) {
+            if (s.id !== exceptId && s.host === host) throw new Error(`${host} is already a site (${s.id}); two sites cannot share a name`);
+        }
+        return host;
+    }
+
+    /**
+     * An EDITED site: the old one stops and is forgotten, the new declaration takes its place — under its new name (and
+     * so its new id) when the name changed — and starts when `start` is true. ONE change event. The name is checked
+     * before anything stops: a refused name leaves the old site exactly as it was. A start that is refused keeps the
+     * site listed with the reason, the way {@link start} does, and is thrown.
+     */
+    replace(id: string, input: CreateSiteInput, options: { start: boolean }): SiteInfo {
+        const old = this.#sites.get(id);
+        if (!old) throw new Error(`no site ${id}`);
+        this.assertNameFree(input.name, id);
+        for (const procId of old.processIds) this.#deps.supervisor.forget(procId);
+        this.#sites.delete(id);
+        const record = this.#newRecord(input);
+        this.#sites.set(record.id, record);
+        if (options.start) {
+            try {
+                this.#start(record);
+            } catch (error) {
+                record.problem = error instanceof Error ? error.message : String(error);
+                this.#changed();
+                throw error;
+            }
+        }
+        this.#changed();
+        return this.#info(record);
+    }
+
+    #newRecord(input: CreateSiteInput): SiteRecord {
+        // One or more labels (`tynn.gen`, Genie 1's `web.acme.gen`); the id is the name, so a one-label site's is unchanged.
+        const host = this.assertNameFree(input.name, null);
         const id = `site_${host.slice(0, -'.gen'.length)}`;
         return { input, unservable: null, id, host, port: null, processIds: [], external: false, stopped: true, problem: null };
     }

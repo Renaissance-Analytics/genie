@@ -3,7 +3,7 @@ import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { FeedbackStore } from './feedback-store.js';
-import type { HostingServices } from './hosting-actions.js';
+import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
 import type { HostingApproval } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
 import type { InboxStore } from './inbox-store.js';
@@ -46,6 +46,8 @@ export interface GenieToolParts {
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** The services and sites the agents' `services` / `sites` tools act on. Absent = this Genie has none (doctor mode), and the tools say so. */
     readonly hosting?: HostingServices;
+    /** Genie's browser, for the agents' `sites open` — the pane the Hosting tab's Open uses. Absent = none (doctor mode), and the tool says so. */
+    readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
     readonly processes?: ProcessesPort;
     readonly sidecar: Pick<SidecarToolsDeps, 'register' | 'start' | 'running'>;
@@ -78,6 +80,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             resolveCaller: p.resolveCaller,
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             services: p.hosting ?? null,
+            ...(p.openInBrowser ? { openInBrowser: p.openInBrowser } : {}),
         },
         processes: {
             resolveCaller: p.resolveCaller,

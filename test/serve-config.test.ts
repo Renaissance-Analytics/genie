@@ -113,9 +113,24 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
 });
 
 describe('the .gen host name', () => {
-    it('is the site name lower-cased under .gen, and refuses anything that is not a hostname label', () => {
+    it('CONTROL: a one-label name is what it always was — lower-cased under .gen', () => {
         expect(genHost('Tynn')).toBe('tynn.gen');
         expect(genHost('my-site2')).toBe('my-site2.gen');
-        for (const bad of ['', 'a b', 'x.y', '-lead', 'trail-', 'a'.repeat(64)]) expect(() => genHost(bad)).toThrow();
+    });
+
+    it('S5: one or more labels — Genie 1’s default <site>.<workspace>.gen, and any valid custom a.b.gen; a typed .gen is not doubled', () => {
+        // Counted: three multi-label names in, three hosts out, each the full name.
+        const hosts = ['web.example', 'API.Docs.Example', 'a.b'].map(genHost);
+        expect(hosts).toEqual(['web.example.gen', 'api.docs.example.gen', 'a.b.gen']);
+        expect(genHost('web.example.gen')).toBe('web.example.gen');
+    });
+
+    it('every label is checked on its own — counted refusals, each naming why', () => {
+        const bad = ['', 'a b', 'web..example', '.web', '-lead.example', 'web.trail-', 'web_1.example', `web.${'a'.repeat(64)}`, `${'a.'.repeat(125)}a`];
+        const refused = bad.filter((b) => { try { genHost(b); return false; } catch { return true; } });
+        expect(refused).toEqual(bad);
+        expect(() => genHost('web_1.example')).toThrow(/"web_1" is not a hostname label/);
+        expect(() => genHost('web..example')).toThrow(/empty label/);
+        expect(() => genHost(`${'a.'.repeat(125)}a`)).toThrow(/longer than the 253/);
     });
 });

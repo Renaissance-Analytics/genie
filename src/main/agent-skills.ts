@@ -92,7 +92,7 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
 
 - \`services\` with action \`catalog\` lists the engines and versions; \`list\` shows this workspace's engines and the shared ones with their live status; \`env\` shows the variables every process here gets, secrets masked.
 - \`services\` with action \`add\` (engine, version, scope) asks the person first, and they see the image Genie will pull. \`start\` and \`stop\` act at once. \`remove\` asks the person and always keeps the data.
-- \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use; \`list\`, \`start\` and \`stop\` act at once; \`remove\` asks the person.
+- \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use (the name is \`<folder>.<workspace>\` unless you give one); \`detect\` says what Genie would serve for a folder without doing anything; \`list\`, \`status\`, \`start\`, \`stop\`, \`restart\` and \`logs\` act at once; \`open\` shows the site to the person in Genie's browser; \`update\` and \`remove\` ask the person.
 - Terminals and site processes already have the service variables.
 `,
     },

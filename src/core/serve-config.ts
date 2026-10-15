@@ -113,11 +113,8 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
     return lines.join('\n');
 }
 
-const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-
-/** The site's `.gen` host. One DNS label, lower-cased; anything else is refused. */
-export function genHost(name: string): string {
-    const label = name.toLowerCase();
-    if (!LABEL.test(label)) throw new Error(`${JSON.stringify(name)} is not a valid site name (one hostname label: a-z, 0-9, hyphens inside)`);
-    return `${label}.gen`;
-}
+/**
+ * The site's `.gen` host — now one or more labels (`tynn.gen`, Genie 1's `<site>.<workspace>.gen`). The rule lives in
+ * gen-name.ts, which the renderer can import; it is re-exported here where the site code has always found it.
+ */
+export { genHost } from './gen-name.js';

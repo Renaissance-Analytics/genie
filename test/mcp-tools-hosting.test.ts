@@ -22,11 +22,14 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  */
 
 const opened: Array<{ command?: string | undefined; env?: Readonly<Record<string, string>> | undefined }> = [];
+const dataListeners = new Set<(id: string, data: string) => void>();
 const pty: PtyPort = {
     open: (o) => { opened.push({ command: o.command, env: o.env }); return { id: `term_${opened.length}`, pid: 1, shell: o.command ?? 'sh', scrollback: '' }; },
     write: () => true, resize: () => true, kill: () => true, scrollback: () => '',
-    onData: () => () => {}, onExit: () => () => {},
+    onData: (l) => { dataListeners.add(l); return () => dataListeners.delete(l); }, onExit: () => () => {},
 };
+/** What `sites open` put in front of the person, in Genie's browser. */
+const shown: string[] = [];
 
 function fakeDocker() {
     const calls: (readonly string[])[] = [];
@@ -81,6 +84,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-mcp-hosting-'));
     docker = fakeDocker();
     opened.length = 0;
+    shown.length = 0;
     for (const ws of ['example', 'example-other']) {
         await mkdir(join(dir, ws), { recursive: true });
         await writeFile(join(dir, ws, 'project.json'), `${JSON.stringify({ name: ws, repos: [] }, null, 2)}\n`, 'utf8');
@@ -91,7 +95,7 @@ beforeEach(async () => {
     });
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: join(dir, 'example') };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: 'example-other', workspacePath: join(dir, 'example-other') };
-    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services });
+    tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });
 });
 
 afterEach(async () => {
@@ -359,6 +363,141 @@ describe('sites', () => {
         expect(services.sites.get('site_example')).toMatchObject({ state: 'running' });
         expect((await call('sites', 't-example', { action: 'stop', site: 'site_example' })).isError).toBe(false);
         expect(services.sites.get('site_example')).toMatchObject({ state: 'stopped' });
+    });
+});
+
+describe('sites: status, restart, logs, open, detect, update (S6)', () => {
+    const add = (terminalId: string, args: JsonObject) => call('sites', terminalId, { action: 'add', ...args });
+    const say = (text: string) => { const ptyId = `term_${opened.findIndex((o) => o.command?.startsWith('npm run dev')) + 1}`; for (const l of dataListeners) l(ptyId, text); };
+
+    it('status: the site and each of its processes as Genie sees them now', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const r = await call('sites', 't-example', { action: 'status', site: 'example.gen' });
+        expect(r.isError).toBe(false);
+        expect(r.json.site).toMatchObject({ id: 'site_example', host: 'example.gen', state: 'running' });
+        expect((r.json.processes as Array<Record<string, unknown>>).map((p) => [p.id, p.name, p.state])).toEqual([['site_example', 'example.gen dev server', 'running']]);
+    });
+
+    it('restart: a new run at once, no approval; the site is running', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const runs = () => opened.filter((o) => o.command?.startsWith('npm run dev')).length;
+        expect(runs()).toBe(1);
+        const r = await call('sites', 't-example', { action: 'restart', site: 'example' });
+        expect(r.json.site).toMatchObject({ state: 'running' });
+        expect(runs()).toBe(2);
+        expect(services.approvals.deckItems()).toEqual([]);
+    });
+
+    it('logs: the end of each process’s output, bounded by `lines`, still there after a stop', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        say('compiled 1\ncompiled 2\nError: Cannot find module vite\n');
+        await call('sites', 't-example', { action: 'stop', site: 'example' });
+        const all = await call('sites', 't-example', { action: 'logs', site: 'example' });
+        const p = (all.json.processes as Array<{ id: string; log: string; lines: number }>);
+        expect(p.map((x) => x.id)).toEqual(['site_example']);
+        expect(p[0]!.log).toContain('Error: Cannot find module vite');
+        const two = await call('sites', 't-example', { action: 'logs', site: 'example', lines: 2 });
+        expect((two.json.processes as Array<{ lines: number; log: string }>)[0]!.lines).toBe(2);
+        expect((await call('sites', 't-example', { action: 'logs', site: 'example', lines: 0 })).json.error).toBe('`lines` is a positive number');
+    });
+
+    it('open: answers the URL and puts it in front of the person in Genie’s browser; a stopped site is refused and nothing is opened (control)', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const r = await call('sites', 't-example', { action: 'open', site: 'example' });
+        expect(r.json).toMatchObject({ ok: true, url: 'https://example.gen/' });
+        expect(shown).toEqual(['https://example.gen/']);
+        await call('sites', 't-example', { action: 'stop', site: 'example' });
+        const refused = await call('sites', 't-example', { action: 'open', site: 'example' });
+        expect(refused.isError).toBe(true);
+        expect(refused.json.error).toMatch(/not being served \(stopped\); start it first/);
+        expect(shown).toHaveLength(1);
+    });
+
+    it('detect: what Genie would serve for a folder — Genie 1’s <folder>.<workspace> name — with NO side effect (nothing started, written, asked)', async () => {
+        await mkdir(join(dir, 'example', 'repos', 'web', 'dist'), { recursive: true });
+        await writeFile(join(dir, 'example', 'repos', 'web', 'dist', 'index.html'), '<!doctype html>', 'utf8');
+        const fileBefore = await readFile(join(dir, 'example', 'project.json'), 'utf8');
+        const r = await call('sites', 't-example', { action: 'detect', repoPath: 'repos/web' });
+        expect(r.isError).toBe(false);
+        expect(r.json.detected).toMatchObject({ name: 'web.example', mode: 'static', root: 'dist', spa: true });
+        expect(r.json.host).toBe('web.example.gen');
+        expect(opened).toEqual([]);
+        expect(services.sites.list()).toEqual([]);
+        expect(await readFile(join(dir, 'example', 'project.json'), 'utf8')).toBe(fileBefore);
+        expect(services.approvals.deckItems()).toEqual([]);
+    });
+
+    it('detect and add refuse a folder OUTSIDE the workspace before reading it — another workspace’s folder included', async () => {
+        for (const action of ['detect', 'add']) {
+            const r = await call('sites', 't-example', { action, repoPath: '../example-other' });
+            expect(r.isError).toBe(true);
+            expect(r.json.error).toMatch(/outside this workspace/);
+        }
+        expect(services.sites.list()).toEqual([]);
+    });
+
+    it('update ASKS the person, naming every change; DENIED changes nothing — not project.json, not the running site', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const fileBefore = await readFile(join(dir, 'example', 'project.json'), 'utf8');
+        const pending = call('sites', 't-example', { action: 'update', site: 'example', name: 'app.example', devCommand: 'npm start -- --port {port}' });
+        const item = await asked();
+        expect(item.title).toBe('atlas wants to change a site: example.gen — name example.gen → app.example.gen; command npm run dev -- --port {port} → npm start -- --port {port} — written to this workspace’s project.json and served as changed');
+        services.approvals.resolve(item.id, 'deny');
+        const r = await pending;
+        expect(r.isError).toBe(true);
+        expect(r.json.error).toMatch(/denied/);
+        expect(await readFile(join(dir, 'example', 'project.json'), 'utf8')).toBe(fileBefore);
+        expect(services.sites.list().map((x) => [x.host, x.state])).toEqual([['example.gen', 'running']]);
+    });
+
+    it('update ALLOWED: written to project.json under the same key and served under the new name', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const [key] = Object.keys((JSON.parse(await readFile(join(dir, 'example', 'project.json'), 'utf8')) as { sites: Record<string, unknown> }).sites);
+        const pending = call('sites', 't-example', { action: 'update', site: 'example', name: 'app.example' });
+        services.approvals.resolve((await asked()).id, 'allow');
+        const r = await pending;
+        expect(r.isError).toBe(false);
+        expect(r.json.site).toMatchObject({ id: 'site_app.example', host: 'app.example.gen', state: 'running' });
+        const kept = JSON.parse(await readFile(join(dir, 'example', 'project.json'), 'utf8')) as { sites: Record<string, Record<string, unknown>> };
+        expect(Object.keys(kept.sites)).toEqual([key]);
+        expect(kept.sites[key!]).toMatchObject({ name: 'app', genName: 'app.example.gen' });
+    });
+
+    it('update refused WITHOUT asking: an invalid name, a taken name, a static site with no root — the Edit form’s problems; and a change to nothing asks nothing', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        await add('t-example', { name: 'docs', hostPort: 5174 });
+        const refusals = [
+            await call('sites', 't-example', { action: 'update', site: 'example', name: 'bad_name.example' }),
+            await call('sites', 't-example', { action: 'update', site: 'example', name: 'docs' }),
+            await call('sites', 't-example', { action: 'update', site: 'example', mode: 'static', root: '' }),
+        ];
+        expect(refusals.map((r) => (r.json.problems as Array<{ field: string }>).map((p) => p.field))).toEqual([['name'], ['name'], ['root']]);
+        expect(refusals[1]!.json.error).toBe('docs.gen is already a site.');
+        const same = await call('sites', 't-example', { action: 'update', site: 'example', name: 'example' });
+        expect(same.json.note).toMatch(/nothing to change/);
+        expect(services.approvals.deckItems()).toEqual([]);
+    });
+
+    it('SCOPED: another workspace’s site is "no site" for status, restart, logs, open, update — refused, nothing asked, run, opened or written; its own agent’s call is the control', async () => {
+        await add('t-example', { name: 'example', devCommand: 'npm run dev -- --port {port}' });
+        const runs = opened.length;
+        const fileBefore = await readFile(join(dir, 'example', 'project.json'), 'utf8');
+        const refused = await Promise.all(['status', 'restart', 'logs', 'open', 'update'].map((action) => call('sites', 't-other', { action, site: 'site_example', name: 'stolen' })));
+        expect(refused.map((r) => [r.isError, /no site "site_example" in this workspace/.test(String(r.json.error))])).toEqual([[true, true], [true, true], [true, true], [true, true], [true, true]]);
+        expect(opened.length).toBe(runs);
+        expect(shown).toEqual([]);
+        expect(services.approvals.deckItems()).toEqual([]);
+        expect(await readFile(join(dir, 'example', 'project.json'), 'utf8')).toBe(fileBefore);
+        // Control: the owner's agent reaches it.
+        expect((await call('sites', 't-example', { action: 'status', site: 'site_example' })).isError).toBe(false);
+    });
+
+    it('the tool names every action, and an unknown one lists them', async () => {
+        const def = tools.find((t) => t.definition.name === 'sites')!.definition;
+        const schema = def.inputSchema as { properties: { action: { enum: string[] } } };
+        expect(schema.properties.action.enum).toEqual(['list', 'status', 'detect', 'add', 'start', 'stop', 'restart', 'logs', 'open', 'update', 'remove']);
+        const r = await call('sites', 't-example', { action: 'teleport' });
+        expect(r.json.error).toBe('unknown action "teleport"; the actions are list, status, detect, add, start, stop, restart, logs, open, update, remove');
     });
 });
 

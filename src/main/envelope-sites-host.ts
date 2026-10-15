@@ -1,6 +1,6 @@
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, relative } from 'node:path';
-import { formatLike, readEnvelopeSites, siteEntryFor, siteKeyFor, withSiteEntry } from '../core/envelope-sites.js';
+import { basename, isAbsolute, join, relative } from 'node:path';
+import { editedSiteEntry, formatLike, readEnvelopeSites, siteEntryFor, siteKeyFor, withSiteEntry } from '../core/envelope-sites.js';
 import type { CreateSiteInput, SiteInfo, SiteManager } from './site-manager.js';
 
 /**
@@ -238,6 +238,88 @@ export class EnvelopeSites {
         const info = this.#sites.start(siteId);
         await this.#remember(siteId, false);
         return info;
+    }
+
+    /** The person's (or an agent's) Restart: the processes run again, and — since it is now running — a remembered Stop is lifted. */
+    async restart(siteId: string): Promise<SiteInfo> {
+        const info = this.#sites.restart(siteId);
+        await this.#remember(siteId, false);
+        return info;
+    }
+
+    /**
+     * The workspace's NAME, for a site's default `<site>.<workspace>` (Genie 1 used the project's name): its project.json
+     * `name`, else its folder's name. `null` for a workspace this does not know.
+     */
+    async workspaceName(workspaceId: string): Promise<string | null> {
+        const w = this.#workspaces.get(workspaceId);
+        if (!w) return null;
+        try {
+            const text = await this.#ports.fs.readText(join(w.path, 'project.json'));
+            const manifest: unknown = text === null ? null : JSON.parse(text);
+            const name = typeof manifest === 'object' && manifest !== null ? (manifest as Record<string, unknown>).name : undefined;
+            if (typeof name === 'string' && name.trim() !== '') return name;
+        } catch { /* an unreadable manifest names nothing; the folder does */ }
+        return basename(w.path.replace(/[\\/]+$/, '')) || null;
+    }
+
+    /** A registered workspace's folder, or `null`. */
+    workspacePath(workspaceId: string): string | null {
+        return this.#workspaces.get(workspaceId)?.path ?? null;
+    }
+
+    /** The workspace a known site is declared in, and its folder — for scoping an Edit to the site's own workspace. */
+    declaredIn(siteId: string): { workspaceId: string; workspacePath: string } | null {
+        const t = this.#tracked.get(siteId);
+        const w = t ? this.#workspaces.get(t.workspaceId) : undefined;
+        return t && w ? { workspaceId: t.workspaceId, workspacePath: w.path } : null;
+    }
+
+    /**
+     * EDIT a site (name, folder, mode, root, port, command): its project.json entry is rewritten — what was edited
+     * replaced, everything else it carries kept (core/envelope-sites.ts `editedSiteEntry`), under the SAME key, so the
+     * person's machine-local Stop still applies — and the site manager's declaration is replaced. It comes back up when
+     * it was up.
+     *
+     * Nothing changes until everything is known to work: the name is checked against every other site and the entry
+     * built BEFORE the write, and the write happens BEFORE the running site is touched. A refused name, a folder that is
+     * not one of the workspace's repos, or a write that fails leaves the site exactly as it was.
+     */
+    async update(siteId: string, input: CreateSiteInput): Promise<SiteInfo> {
+        const t = this.#tracked.get(siteId);
+        if (!t) throw new Error(`${siteId} is not a site a workspace declares; only a site kept in a project.json can be edited`);
+        if (!t.servable) throw new Error(`${siteId} is listed with the reason Genie 2 cannot serve it; edit it in its project.json`);
+        if (input.workspaceId !== t.workspaceId) throw new Error(`a site stays in its own workspace (${t.workspaceId})`);
+        const before = this.#sites.get(siteId);
+        if (!before) throw new Error(`no site ${siteId}`);
+        this.#sites.assertNameFree(input.name, siteId);
+        const m = await this.#manifest(t.workspaceId);
+        const rel = relative(m.workspacePath, input.repoPath).replace(/\\/g, '/');
+        if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`a site serves a folder inside its workspace; ${input.repoPath} is outside it`);
+        const built = siteEntryFor(m.manifest, {
+            name: input.name.toLowerCase(),
+            repoDir: rel === '' ? '.' : rel,
+            serve: input.serve,
+            ...(input.devServer ? { devServer: input.devServer } : {}),
+            ...(input.hostPort !== undefined ? { hostPort: input.hostPort } : {}),
+        });
+        if (!built.ok) throw new Error(built.reason);
+        const sites = typeof m.manifest.sites === 'object' && m.manifest.sites !== null ? (m.manifest.sites as Record<string, unknown>) : {};
+        const existing = sites[t.key];
+        const entry = typeof existing === 'object' && existing !== null && !Array.isArray(existing) ? editedSiteEntry(existing as Record<string, unknown>, built.entry) : built.entry;
+        await this.#ports.fs.writeTextAtomic(m.path, formatLike(m.text, withSiteEntry(m.manifest, t.key, entry)));
+        const wasUp = before.state === 'running' || before.state === 'restarting' || before.state === 'external';
+        // Tracked under the new id from here on, with the same key: the remembered Stop and the next launch agree.
+        this.#tracked.delete(siteId);
+        try {
+            return this.#sites.replace(siteId, input, { start: wasUp });
+        } catch (error) {
+            // The edit IS kept (project.json was written, the site is listed as edited with the reason); only its start failed.
+            throw new Error(`${input.name.toLowerCase()}.gen was saved to ${m.path}, but did not start: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            const now = this.#sites.list(t.workspaceId).find((s) => s.host === `${input.name.toLowerCase()}.gen`);
+            if (now) this.#tracked.set(now.id, t);
+        }
     }
 
     async #manifest(workspaceId: string): Promise<{ path: string; text: string; manifest: Record<string, unknown>; workspacePath: string }> {

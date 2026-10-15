@@ -43,6 +43,17 @@ describe('resolving a request to a site', () => {
         expect(resolveRoute(undefined, routes)).toEqual({ kind: 'not-gen', host: null });
     });
 
+    it('S5: a multi-label .gen host — Genie 1’s <site>.<workspace>.gen — resolves to its route; a one-label one still does (control)', () => {
+        const more: GenRoute[] = [...routes, { host: 'web.example.gen', target: '127.0.0.1:4103' }, { host: 'api.docs.example.gen', target: '127.0.0.1:4104' }];
+        expect(resolveRoute('web.example.gen', more)).toEqual({ kind: 'site', host: 'web.example.gen', target: '127.0.0.1:4103' });
+        expect(resolveRoute('API.Docs.Example.gen:443', more)).toEqual({ kind: 'site', host: 'api.docs.example.gen', target: '127.0.0.1:4104' });
+        expect(resolveRoute('tynn.gen', more)).toEqual({ kind: 'site', host: 'tynn.gen', target: '127.0.0.1:4101' });
+        // A multi-label name nobody serves is no-site (with the fix to offer), never not-gen.
+        expect(resolveRoute('ghost.example.gen', more)).toEqual({ kind: 'no-site', host: 'ghost.example.gen' });
+        // A name that is not a valid hostname is still nothing the front door serves.
+        expect(['web..example.gen', 'web_1.example.gen', '.gen'].map((h) => resolveRoute(h, more).kind)).toEqual(['not-gen', 'not-gen', 'not-gen']);
+    });
+
     it('a target is always loopback — a route to anything else is refused at resolution, not proxied', () => {
         const bad: GenRoute[] = [{ host: 'evil.gen', target: '10.0.0.5:80' }];
         expect(resolveRoute('evil.gen', bad)).toEqual({ kind: 'no-site', host: 'evil.gen' });
@@ -58,6 +69,8 @@ describe('the hosts-file block for external browsers', () => {
             '127.0.0.1 dash.gen',
             '# <<< genie .gen sites',
         ]);
+        // A multi-label site gets its FULL name on its line (S5).
+        expect(hostsFileBlock([{ host: 'web.example.gen', target: '127.0.0.1:4103' }]).split('\n')[1]).toBe('127.0.0.1 web.example.gen');
         // No sites → the markers alone, which is how a removal looks.
         expect(hostsFileBlock([]).split('\n')).toHaveLength(2);
     });

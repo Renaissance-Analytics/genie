@@ -1,7 +1,9 @@
+import { isGenHost } from './gen-name.js';
+
 /**
  * THE `.gen` FRONT DOOR (§6.6) — the pure half.
  *
- * Every hosted site is `<name>.gen → 127.0.0.1:<port>`. The front door is one loopback listener
+ * Every hosted site is `<name>.gen → 127.0.0.1:<port>`, `<name>` one or more labels (gen-name.ts). The front door is one loopback listener
  * that reads the request's Host and proxies to the site's port. This file decides; the main-side
  * router only moves bytes. Two refusals matter:
  *
@@ -45,7 +47,7 @@ const LOOPBACK_TARGET = /^127\.0\.0\.1:\d{1,5}$/;
 
 export function resolveRoute(hostHeader: string | undefined, routes: readonly GenRoute[]): RouteResolution {
     const host = normalizeHost(hostHeader);
-    if (host === null || !host.endsWith('.gen') || host.slice(0, -'.gen'.length).includes('.')) return { kind: 'not-gen', host };
+    if (host === null || !isGenHost(host)) return { kind: 'not-gen', host };
     const route = routes.find((r) => r.host === host);
     if (!route || !LOOPBACK_TARGET.test(route.target)) return { kind: 'no-site', host };
     return { kind: 'site', host, target: route.target };
