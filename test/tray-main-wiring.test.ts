@@ -30,7 +30,7 @@ describe('main.ts wiring', () => {
     it('the tray’s Open and a second launch SHOW the window (focus alone does nothing to a hidden one)', () => {
         const src = main();
         expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/window\.show\(\);/);
-        expect(block(src, "app.on('second-instance'")).toMatch(/revealMainWindow\(\)/);
+        expect(block(src, "app.on('second-instance'")).toMatch(/reveal: revealMainWindow,/);
         expect(src).toMatch(/onOpen: revealMainWindow,/);
         // The tray's Quit is the one quit entry `Genie --quit` also runs (quit-flag below).
         expect(src).toMatch(/onQuit: requestQuit,/);
@@ -42,8 +42,11 @@ describe('main.ts wiring', () => {
         expect(block(src, 'function requestQuit', '\n}\n')).toMatch(/app\.quit\(\);/);
         const handler = block(src, "app.on('second-instance'");
         expect(handler).toMatch(/\(_event, argv, _workingDirectory, additionalData\) =>/);
-        expect(handler).toMatch(/if \(secondInstanceAction\(argv, additionalData\) === 'quit'\) \{\s*\n\s*requestQuit\(\);\s*\n\s*return;\s*\n\s*\}/);
-        expect(handler).toMatch(/revealMainWindow\(\);/);
+        // The SAME entry, deferred past the notification (core/quit-flag.ts `answerSecondInstance`, driven in
+        // quit-second-instance.test.ts): its question asked inside the handler had Genie terminated as hung.
+        expect(handler).toMatch(/answerSecondInstance\(argv, additionalData, \{ quit: requestQuit, reveal: revealMainWindow, defer: \(run\) => \{ setImmediate\(run\); \} \}\);/);
+        // Never run inside the handler.
+        expect(handler).not.toMatch(/requestQuit\(\)/);
         // Not a second, private quit path: the handler never calls app.quit itself.
         expect(handler).not.toMatch(/app\.quit\(/);
     });

@@ -46,3 +46,23 @@ export function secondInstanceAction(argv: readonly string[], additionalData: un
     const data = additionalData !== null && typeof additionalData === 'object' ? (additionalData as { genie?: unknown }) : null;
     return data?.genie === QUIT_DATA.genie || asksToQuit(argv) ? 'quit' : 'reveal';
 }
+
+/**
+ * ANSWER a second launch — and WHEN. A plain second launch reveals the window at once. A `--quit` is DEFERRED past the
+ * notification (`defer`, main.ts: `setImmediate`): the quit can ask "Quit Genie?" (core/quit.ts `quitPlan`, whenever an
+ * agent runs), and that question is a synchronous modal. Asked inside the `second-instance` handler it held the asking
+ * launch's single-instance notification unanswered, and the asking launch had Chromium's ProcessSingleton terminate
+ * Genie as hung (RESULT_CODE_HUNG, exit code 2): no before-quit, no shutdown, the agents' providers left running
+ * (installed-app acceptance, Windows VM, 2026-10-15). Deferred, the handler returns, the asking launch exits, and the
+ * question waits for the person like the tray's Quit does.
+ */
+export function answerSecondInstance(
+    argv: readonly string[],
+    additionalData: unknown,
+    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void },
+): 'quit' | 'reveal' {
+    const action = secondInstanceAction(argv, additionalData);
+    if (action === 'quit') act.defer(act.quit);
+    else act.reveal();
+    return action;
+}

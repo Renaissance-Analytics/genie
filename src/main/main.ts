@@ -19,7 +19,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
-import { QUIT_DATA, asksToQuit, launchDecision, secondInstanceAction } from '../core/quit-flag.js';
+import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -1515,13 +1515,11 @@ async function boot(): Promise<void> {
     });
 }
 
-// A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead.
+// A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead,
+// run AFTER this handler returns (core/quit-flag.ts `answerSecondInstance`): its question is a synchronous modal, and
+// asked in here it left the asking launch unanswered until it had Genie terminated as hung (exit code 2, no shutdown).
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-    if (secondInstanceAction(argv, additionalData) === 'quit') {
-        requestQuit();
-        return;
-    }
-    revealMainWindow();
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: revealMainWindow, defer: (run) => { setImmediate(run); } });
 });
 
 /**
