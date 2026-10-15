@@ -265,6 +265,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 case 'mark-seen':
                     services.attention.markSeen(command.finishedId);
                     break;
+                case 'trust-certificate': {
+                    // The same Trust as Hosting's line: one elevation, and a failure comes back with its reason.
+                    const r = await services.trustCertificate();
+                    if (!r.ok) throw new Error(r.reason);
+                    break;
+                }
+                case 'defer-trust-certificate':
+                    services.deferTrustCertificate();
+                    break;
                 case 'answer-provider-approval':
                 case 'restart-with-handoff':
                 case 'navigate':

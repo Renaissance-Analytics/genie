@@ -129,7 +129,7 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
         pty = fakePty();
         let hostsContent = '127.0.0.1 localhost\n';
         const hostsIo: HostsIo = { read: async () => hostsContent, write: async (n) => { hostsContent = n; }, writeElevated: async (n) => { hostsContent = n; } };
-        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, runElevated: async () => {} });
+        services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, runElevated: async () => {}, trustStore: { has: async () => false } });
         await new Promise((r) => setTimeout(r, 15));
         const caddyProcs = () => pty.opened.filter((o) => o.command?.includes('/opt/genie/runtime/caddy run') && o.command.includes('--watch'));
         expect(caddyProcs()).toHaveLength(1);
@@ -138,12 +138,18 @@ describe('the front door for EXTERNAL browsers — Genie’s own Caddy on 443', 
 
         services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
         expect((await readFile(caddyfile)).toString()).toContain('https://docs.gen {');
+        // Served with Genie's own leaf, never Caddy's internal CA.
+        expect((await readFile(caddyfile)).toString()).toMatch(/https:\/\/docs\.gen \{\n\ttls "[^"]+\/gen-ca\/leaf\.crt" "[^"]+\/gen-ca\/leaf\.key"\n/);
+        expect((await readFile(caddyfile)).toString()).not.toContain('tls internal');
         services.sites.stop('site_docs');
         expect((await readFile(caddyfile)).toString()).not.toContain('docs.gen');
         // COUNTED: still one caddy process — --watch reloads it; we never spawn a second.
         expect(caddyProcs()).toHaveLength(1);
         await new Promise((r) => setTimeout(r, 15));
-        expect(services.externalFrontDoor).toEqual({ running: true, caddyfile, hostsPath: hostsFilePath(process.platform), hosts: { changed: true, elevated: false }, trusted: false });
+        expect(services.externalFrontDoor).toEqual({
+            running: true, caddyfile, hostsPath: hostsFilePath(process.platform), hosts: { changed: true, elevated: false },
+            authority: { source: 'created', thumbprint: expect.stringMatching(/^[0-9A-F]{40}$/) }, trusted: false, trustError: null, certificateError: null,
+        });
         expect(hostsContent).toContain('# >>> genie .gen sites');
 
         await services.shutdown();

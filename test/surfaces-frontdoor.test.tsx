@@ -10,7 +10,10 @@ import { EMPTY_FEATURES, type FeatureData, type FrontDoorStatus } from '../src/r
  * says so. All quiet → no line at all, never "everything fine" furniture.
  */
 
-const running: FrontDoorStatus = { running: true, caddyfile: '/h/.genie/runtime/caddy/Caddyfile', hostsPath: '/etc/hosts', hosts: { changed: false, elevated: false }, trusted: true };
+const running: FrontDoorStatus = {
+    running: true, caddyfile: '/h/.genie/runtime/caddy/Caddyfile', hostsPath: '/etc/hosts', hosts: { changed: false, elevated: false },
+    authority: { source: 'adopted-v1', thumbprint: '0123456789ABCDEF0123456789ABCDEF01234567' }, trusted: true, trustError: null, certificateError: null,
+};
 const render = (frontDoor: FrontDoorStatus) =>
     renderToStaticMarkup(<HostingSurface data={{ ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null, frontDoor } } as FeatureData} onAction={() => {}} onNavigate={() => {}} />);
 const lines = (html: string) => html.match(/data-frontdoor-line="[a-z-]+"/g) ?? [];
@@ -25,6 +28,25 @@ describe('the front door lines', () => {
         expect(lines(html)).toEqual(['data-frontdoor-line="trust"']);
         expect(html).toMatch(/Trust certificate/);
         expect(html).toMatch(/ask for permission once/);
+        expect(html).not.toContain('data-trust-error');
+    });
+
+    it('trust not read yet (null): no line — the store has not answered, so there is nothing to claim', () => {
+        expect(lines(render({ ...running, trusted: null }))).toEqual([]);
+    });
+
+    it('a failed Trust: the line keeps its action and says why it failed', () => {
+        const html = render({ ...running, trusted: false, trustError: 'Genie could not install its certificate into the trust store: certutil -addstore -f Root C:/g/ca.crt: the elevated run failed (exit 0x80070005)' });
+        expect(lines(html)).toEqual(['data-frontdoor-line="trust"']);
+        expect(html).toContain('data-trust-error');
+        expect(html).toMatch(/exit 0x80070005/);
+        expect(html).toMatch(/Trust certificate/);
+    });
+
+    it('a leaf that could not be issued: its own line with the reason', () => {
+        const html = render({ ...running, certificateError: 'Genie could not issue the certificate for docs.gen: EACCES' });
+        expect(lines(html)).toEqual(['data-frontdoor-line="certificate"']);
+        expect(html).toMatch(/could not issue the certificate for docs\.gen: EACCES/);
     });
 
     it('a declined hosts-file prompt: the error, the block to paste, where it goes, and Try again', () => {
