@@ -40,6 +40,7 @@ import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray } from './tray.js';
+import { genieWindowIcon } from './app-identity.js';
 import { showOnBoot } from '../core/tray-resident.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -191,6 +192,7 @@ function openTakeOverWindow(route: string): void {
     const win = new BrowserWindow({
         width: 1100,
         height: 700,
+        ...genieWindowIcon(here),
         backgroundColor: '#0a0a0c',
         show: false,
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -209,6 +211,7 @@ function openFilesWindow(route: string): void {
     const win = new BrowserWindow({
         width: 960,
         height: 720,
+        ...genieWindowIcon(here),
         backgroundColor: '#0a0a0c',
         show: false,
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -313,8 +316,8 @@ function createWindow(show: boolean): BrowserWindow {
         // Windows/Linux, a minimum size — is core/window.ts, where a test holds it. The owner's
         // first run had none of it: a window that could not be moved, resized or closed.
         ...mainWindowOptions(process.platform),
-        // Genie's own icon on the window and the taskbar in a dev run and on Linux; the packaged Windows app carries it in the exe.
-        ...(existsSync(join(here, '..', '..', 'build', 'icon.png')) ? { icon: join(here, '..', '..', 'build', 'icon.png') } : {}),
+        // Genie's own icon on the window and its taskbar button — installed and dev alike (main/app-identity.ts).
+        ...genieWindowIcon(here),
         backgroundColor: '#0a0a0c',
         show: false,
         webPreferences: {
