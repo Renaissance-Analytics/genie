@@ -25,12 +25,16 @@ const pg = (version: string, port: number, over: Partial<ServiceInstance> = {}):
 describe('the catalog', () => {
     it('names the engines Genie manages with their image, internal port and env template; each has at least one major', () => {
         const names = SERVICE_CATALOG.map((e) => e.engine);
-        for (const e of ['postgres', 'redis', 'mysql', 'mariadb', 'mongo', 'reverb']) expect(names).toContain(e);
-        for (const e of SERVICE_CATALOG) {
+        for (const e of ['postgres', 'redis', 'mysql', 'mariadb', 'mongo', 'reverb', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(names).toContain(e);
+        // Every engine but `custom`, whose image, port and env are the person's (the instance carries them).
+        const typed = SERVICE_CATALOG.filter((e) => !e.custom);
+        expect(typed).toHaveLength(SERVICE_CATALOG.length - 1);
+        for (const e of typed) {
             expect(e.image).toMatch(/^[a-z0-9./-]+$/);
             expect(e.internalPort).toBeGreaterThan(0);
             expect(e.majors.length).toBeGreaterThan(0);
         }
+        expect(SERVICE_CATALOG.find((e) => e.engine === 'custom')).toMatchObject({ image: '', majors: [], sharing: 'dedicated-only' });
     });
 
     it('reverb is SHARED by nature — the catalog says so, and a dedicated reverb is refused', () => {
@@ -74,11 +78,14 @@ describe('env wiring — host form, one version per engine', () => {
         expect(a.PGPORT).toBe('54317');
     });
 
-    it('redis emits REDIS_URL/REDIS_HOST/REDIS_PORT; a `custom` engine is exempt and emits only what it declares', () => {
+    it('redis emits REDIS_URL/REDIS_HOST/REDIS_PORT; a `custom` engine is exempt from one-per-engine and emits what it declares plus Genie 1’s GENIE_SERVICE_CUSTOM_<NAME>_HOST/PORT', () => {
         const redis: ServiceInstance = { id: 'svc_r', engine: 'redis', version: '7', scope: { kind: 'shared' }, publishedPort: 63790, credentials: {}, active: false };
         expect(serviceEnvFor([redis])).toEqual({ REDIS_URL: 'redis://127.0.0.1:63790', REDIS_HOST: '127.0.0.1', REDIS_PORT: '63790' });
         const custom: ServiceInstance = { id: 'svc_c', engine: 'custom', version: 'x', scope: { kind: 'shared' }, publishedPort: 9999, credentials: {}, active: false, env: { MY_SERVICE_URL: 'http://127.0.0.1:9999' } };
-        expect(serviceEnvFor([custom])).toEqual({ MY_SERVICE_URL: 'http://127.0.0.1:9999' });
+        expect(serviceEnvFor([custom])).toEqual({ GENIE_SERVICE_CUSTOM_X_HOST: '127.0.0.1', GENIE_SERVICE_CUSTOM_X_PORT: '9999', MY_SERVICE_URL: 'http://127.0.0.1:9999' });
+        // Two customs both emit — each namespaced by its own name (Genie 1's rule), neither shadows the other.
+        const second: ServiceInstance = { ...custom, id: 'svc_c2', version: 'y', publishedPort: 9998, env: {} };
+        expect(serviceEnvFor([custom, second])).toMatchObject({ GENIE_SERVICE_CUSTOM_X_PORT: '9999', GENIE_SERVICE_CUSTOM_Y_PORT: '9998' });
     });
 
     it('two different engines both emit; the env never carries a container hostname', () => {
@@ -102,12 +109,13 @@ describe('the container plan — port isolation only', () => {
             image: 'postgres:17',
             name: 'genie-tynn-postgres-17',
             volume: 'genie-tynn-postgres-17-data',
-            publish: '127.0.0.1:54321:5432',
+            publish: ['127.0.0.1:54321:5432'],
             env: { POSTGRES_USER: 'genie', POSTGRES_PASSWORD: 'pw', POSTGRES_DB: 'tynn' },
         });
         const shared = containerPlan({ engine: 'redis', major: '7', scope: { kind: 'shared' }, publishedPort: 63790 });
         expect(shared.name).toBe('genie-shared-redis-7');
-        expect(shared.publish).toBe('127.0.0.1:63790:6379');
+        // ONE publish: Redis has no surface beside its port (Mailpit's two are pinned in services-more.test.ts).
+        expect(shared.publish).toEqual(['127.0.0.1:63790:6379']);
     });
 
     it('an unknown engine or major is refused — never an invented image tag', () => {

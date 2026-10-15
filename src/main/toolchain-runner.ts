@@ -20,7 +20,13 @@ export interface RunOptions {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-export const execFileRunner: (binary: string, args: readonly string[], options?: RunOptions) => Promise<{ stdout: string; exitCode: number }> = (binary, args, options = {}) =>
+/** Both streams as written, for a caller that must not lose either (a container's log: Postgres writes only to stderr). */
+export interface RunStreams {
+    readonly stdout: string;
+    readonly stderr: string;
+}
+
+export const execFileRunner: (binary: string, args: readonly string[], options?: RunOptions) => Promise<{ stdout: string; exitCode: number; streams: RunStreams }> = (binary, args, options = {}) =>
     new Promise((resolve, reject) => {
         const child = execFile(
             binary,
@@ -37,7 +43,7 @@ export const execFileRunner: (binary: string, args: readonly string[], options?:
                 }
                 const exitCode = typeof child.exitCode === 'number' ? child.exitCode : error ? 1 : 0;
                 // Some tools print their banner on stderr (java, older php builds); the prober parses whatever came out.
-                resolve({ stdout: String(stdout) || String(stderr), exitCode });
+                resolve({ stdout: String(stdout) || String(stderr), exitCode, streams: { stdout: String(stdout), stderr: String(stderr) } });
             },
         );
     });

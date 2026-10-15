@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
-import { imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, switchActiveWarning, type AdoptedSlice, type Credentials, type EngineAdmin, type ServiceInstance, type ServiceScope } from '../core/services.js';
-import { workspaceSqlIdentifier } from '../core/v1-services.js';
+import { deleteDataVerdict } from '../core/service-tenancy.js';
+import { containerNameOf, dataVolumeOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, switchActiveWarning, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type ServiceInstance, type ServiceScope } from '../core/services.js';
+import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
 import type { ServiceDriver } from './service-driver.js';
 import { readJson, writeJsonAtomic } from './store.js';
@@ -29,6 +30,11 @@ import { readJson, writeJsonAtomic } from './store.js';
  * (core/service-provision.ts). Made once per workspace; asking again makes nothing. Nothing here drops a slice: a
  * workspace that stops using an engine keeps its data in it. A Redis slice lives in memory only, so it is put back
  * every time the engine is started (`start`) or found running at Genie start (`restoreSlices`).
+ *
+ * Deleting an engine's DATA (hosting ship line H6) is refused while any workspace other than the one asking keeps data
+ * in its volume, naming them (core/service-tenancy.ts): the check runs before the first Docker call, so a refusal
+ * removes nothing at all. A Mailpit is created with its web inbox published too, a Meilisearch with its master key, a
+ * shared SeaweedFS with its admin identity and a bucket per workspace, and a custom image exactly as the person named it.
  *
  * `onChange` fires after every write and every start or stop, whoever asked — the person's Services tab or an agent's
  * `services` tool — so the tab redraws when an agent acts (main.ts pushes the feature snapshot on it).
@@ -101,7 +107,8 @@ export class ServiceRegistry {
     /** A workspace's own engines plus the shared ones — what its processes and terminals get. */
     envFor(workspaceId: string): Record<string, string> {
         const mine = this.#data.instances.filter((i) => i.scope.kind === 'shared' || (i.scope.kind === 'dedicated' && i.scope.workspaceId === workspaceId));
-        return serviceEnvFor(mine, workspaceId);
+        // The namespace engines' tag and prefix are the workspace's derived name — the same `ws_<slug>` its slices use.
+        return serviceEnvFor(mine, workspaceId, { namespace: workspaceSqlIdentifier(workspaceId) });
     }
 
     /** The Genie 1 take-over's record, or `null` before any boot has looked. */
@@ -126,31 +133,45 @@ export class ServiceRegistry {
     /**
      * `workspaceId` is the workspace that will USE the engine: for a shared multi-tenant one, its slice is made (once)
      * before the answer — on a new engine and on one that already exists alike.
+     *
+     * `custom` = a custom image (validated by core/forms.ts before it gets here): `major` is the name the person gave
+     * it, and the image, port and env are theirs.
      */
-    async add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string }): Promise<AddResult> {
+    async add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec }): Promise<AddResult> {
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
         if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
         if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+        if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
+        if (def.custom && !input.custom) throw new Error(`${input.engine} needs its image, port and env`);
 
         // BEFORE the adopt-only refusal: asking for the MinIO Genie 1 left is answered with it, not refused.
         const existing = this.#data.instances.find((i) => i.engine === input.engine && i.version === input.major && sameScope(i.scope, input.scope));
         if (existing) return { kind: 'exists', instance: input.workspaceId !== undefined ? await this.#useSlice(existing.id, input.workspaceId) : existing };
         if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not added: its images are no longer published`);
 
-        const image = await this.#driver.ensureImage(imageFor(def, input.major), { consent: input.consent });
+        const image = await this.#driver.ensureImage(input.custom ? input.custom.image : imageFor(def, input.major), { consent: input.consent });
         if (image.kind === 'needs-consent') return { kind: 'needs-consent', image: image.image, note: image.note ?? '' };
 
         const publishedPort = this.#deps.allocatePort();
+        // Each surface beside the primary gets its own loopback port — Mailpit's web inbox.
+        const surfacePorts: Record<string, number> = {};
+        for (const surface of def.surfaces ?? []) surfacePorts[surface.name] = this.#deps.allocatePort();
         const database = input.scope.kind === 'dedicated' ? input.scope.workspaceId : 'app';
-        // A shared Postgres/MySQL/MariaDB/Redis holds only its superuser; every workspace's credential is a slice.
+        // A shared Postgres/MySQL/MariaDB/Redis/SeaweedFS holds only its superuser; every workspace's credential is a slice.
         const tenancy = input.scope.kind === 'shared' && SLICED_ENGINES.has(def.engine) ? SHARED_TENANCY[def.engine] : undefined;
         const admin: EngineAdmin | undefined = tenancy ? { user: tenancy.adminUser, password: this.#deps.randomPassword() } : undefined;
-        const credentials: Credentials = admin || def.engine === 'reverb'
+        const credentials: Credentials = admin || def.engine === 'reverb' || def.custom
             ? {}
-            : def.engine === 'redis'
+            // Redis's `--requirepass`; Meilisearch's master key (its only credential — namespace isolation, as Genie 1's).
+            : def.engine === 'redis' || def.engine === 'meilisearch'
                 ? { password: this.#deps.randomPassword() }
                 : { user: 'genie', password: this.#deps.randomPassword(), database };
-        const created = await this.#driver.create({ engine: input.engine, major: input.major, scope: input.scope, publishedPort, credentials, ...(admin ? { admin } : {}) });
+        const created = await this.#driver.create({
+            engine: input.engine, major: input.major, scope: input.scope, publishedPort, credentials,
+            ...(admin ? { admin } : {}),
+            ...(def.surfaces ? { surfacePorts } : {}),
+            ...(input.custom ? { custom: input.custom } : {}),
+        });
         if (!created.ok) throw new Error(created.reason);
         await this.#driver.start(created.name);
 
@@ -164,6 +185,8 @@ export class ServiceRegistry {
             credentials,
             active: siblings.length === 0,
             ...(admin ? { admin, slices: {} } : {}),
+            ...(def.surfaces ? { publishedPorts: surfacePorts } : {}),
+            ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env } } : {}),
         };
         this.#data.instances.push(instance);
         await this.#flush();
@@ -189,6 +212,8 @@ export class ServiceRegistry {
                 identifier,
                 password: this.#deps.randomPassword(),
                 ...(i.engine === 'redis' ? { prefix: `${identifier}:` } : {}),
+                // SeaweedFS: the bucket, which is also the access key — a DNS label (`ws-<slug>`), as Genie 1's.
+                ...(i.engine === 'seaweedfs' ? { bucket: workspaceDnsName(workspaceId) } : {}),
                 // The first version of an engine a workspace uses is its active one, as for a dedicated engine.
                 ...(this.#hasActive(workspaceId, i.engine) ? {} : { active: true }),
             };
@@ -293,11 +318,25 @@ export class ServiceRegistry {
         for (const l of this.#listeners) l();
     }
 
-    async remove(id: string, options: { deleteData: boolean }): Promise<void> {
-        const volume = this.#data.instances.find((x) => x.id === id)?.volume;
-        await this.#driver.remove(this.#nameOf(id), { ...options, ...(volume ? { volume } : {}) });
-        this.#data.instances = this.#data.instances.filter((i) => i.id !== id);
+    /**
+     * Removed, keeping its data volume — unless `deleteData`, which `workspaceId` (who is asking) may do only when no
+     * OTHER workspace keeps data in it (core/service-tenancy.ts). A refusal throws, naming them, before any Docker call:
+     * the container is not removed either, so a refused delete leaves everything exactly as it was.
+     */
+    async remove(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void> {
+        const i = this.#find(id);
+        if (options.deleteData) {
+            const verdict = deleteDataVerdict(i, options.workspaceId);
+            if (!verdict.allowed) throw new Error(verdict.reason);
+        }
+        await this.#driver.remove(this.#nameOf(id), { deleteData: options.deleteData, volume: dataVolumeOf(i) });
+        this.#data.instances = this.#data.instances.filter((x) => x.id !== id);
         await this.#flush();
+    }
+
+    /** The end of the engine's own output (`docker logs`, bounded — service-driver.ts `logTail`). */
+    logs(id: string, tail?: number): Promise<{ text: string; tail: number }> {
+        return this.#driver.logs(this.#nameOf(id), tail);
     }
 
     #find(id: string): ServiceInstance {
@@ -306,12 +345,9 @@ export class ServiceRegistry {
         return i;
     }
 
+    /** An adopted container keeps Genie 1's name (`genie-svc-postgres-17`): deriving one would address a container that does not exist. */
     #nameOf(id: string): string {
-        const i = this.#find(id);
-        // An adopted container keeps Genie 1's name (`genie-svc-postgres-17`): deriving one would address a container that does not exist.
-        if (i.containerName) return i.containerName;
-        const key = i.scope.kind === 'shared' ? 'shared' : i.scope.workspaceId;
-        return `genie-${key}-${i.engine}-${i.version}`;
+        return containerNameOf(this.#find(id));
     }
 
     async #flush(): Promise<void> {

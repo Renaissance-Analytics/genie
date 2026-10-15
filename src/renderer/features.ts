@@ -64,6 +64,14 @@ export interface ServiceAdding {
 /** Docker's state for the container, or `docker-not-running` when Docker itself is not there to ask (never read as `absent`). */
 export type ServiceStatus = 'running' | 'exited' | 'absent' | 'docker-not-running';
 
+/** The end of one engine's own output, as `docker logs --tail` gave it when the person asked (H6). */
+export interface ServiceLogs {
+    readonly serviceId: string;
+    readonly text: string;
+    /** How many lines were asked of Docker (bounded): fewer came back if the engine has written fewer. */
+    readonly tail: number;
+}
+
 /** One engine instance with its status as Docker reported it on this snapshot — never remembered. */
 export interface ServiceView {
     readonly instance: ServiceInstance;
@@ -145,7 +153,8 @@ export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
-    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null } | null;
+    /** `logs`: the one engine log the person opened, or null/absent when none is open. */
+    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null } | null;
     readonly toolchain: ToolchainSection | null;
     readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
@@ -218,7 +227,14 @@ export type FeatureAction =
     | { kind: 'services.setActive'; workspaceId: string; engine: string; version: string }
     | { kind: 'services.start'; serviceId: string }
     | { kind: 'services.stop'; serviceId: string }
-    | { kind: 'services.remove'; serviceId: string; deleteData: boolean }
+    /**
+     * `deleteData` acts for `workspaceId` — the engine's sole data holder, which the row sends (core/service-tenancy.ts
+     * `soleHolderOf`); main refuses it, naming them, while any OTHER workspace keeps data in the engine.
+     */
+    | { kind: 'services.remove'; serviceId: string; deleteData: boolean; workspaceId?: string }
+    /** Read the end of an engine's output (`docker logs`, bounded); it stays open until `services.hideLogs`. */
+    | { kind: 'services.logs'; serviceId: string; tail?: number }
+    | { kind: 'services.hideLogs' }
     | { kind: 'toolchain.check'; force?: boolean }
     /** `confirmed`: the person read the warning (Docker's restart) and chose to go ahead. A REFUSAL is never confirmable. */
     | { kind: 'toolchain.update'; tool: string; confirmed?: boolean }

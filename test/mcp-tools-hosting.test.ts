@@ -48,11 +48,14 @@ function fakeDocker() {
         if (cmd === 'start') { containers.set(args[1]!, 'running'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'stop') { containers.set(args[1]!, 'exited'); return { stdout: '', exitCode: 0 }; }
         if (cmd === 'rm') { containers.delete(args[2]!); return { stdout: '', exitCode: 0 }; }
+        // What the engine wrote, as `docker logs` answers it (set per test).
+        if (cmd === 'logs') return { stdout: engineLog.text, exitCode: 0 };
         // An engine's own client inside its container (a shared engine's workspace slice): redis-cli prints the answer.
         if (cmd === 'exec') return { stdout: args.includes('PING') ? 'PONG\n' : args.includes('SETUSER') ? 'OK\n' : '', exitCode: 0 };
         return { stdout: '', exitCode: 0 };
     };
-    return { run, calls, containers };
+    const engineLog = { text: 'ready to accept connections\n' };
+    return { run, calls, containers, engineLog };
 }
 
 let dir: string;
@@ -108,7 +111,10 @@ describe('services: reading', () => {
         const r = await call('services', 't-example', { action: 'catalog' });
         expect(r.isError).toBe(false);
         const engines = r.json.engines as Array<{ engine: string; versions: string[]; images: string[]; scopes: string[] }>;
-        expect(engines.map((e) => e.engine)).toEqual(['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb', 'mailpit']);
+        expect(engines.map((e) => e.engine)).toEqual(['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']);
+        expect(engines.find((e) => e.engine === 'meilisearch')!.images).toEqual(['getmeili/meilisearch:v1']);
+        expect(engines.find((e) => e.engine === 'seaweedfs')).toMatchObject({ images: ['chrislusf/seaweedfs:4.48'], scopes: ['shared'] });
+        expect(engines.find((e) => e.engine === 'custom')).toMatchObject({ versions: [], images: [], scopes: ['dedicated'] });
         expect(engines.find((e) => e.engine === 'postgres')).toMatchObject({ versions: ['14', '15', '16', '17'], scopes: ['dedicated', 'shared'] });
         expect(engines.find((e) => e.engine === 'postgres')!.images).toContain('postgres:17');
         expect(engines.find((e) => e.engine === 'mailpit')!.images).toEqual(['axllent/mailpit:v1.30']);
@@ -293,6 +299,81 @@ describe('services: start, stop, remove', () => {
         services.approvals.resolve((await asked()).id, 'allow');
         await removing;
         expect(changes).toBe(4);
+    });
+});
+
+describe('services: logs (H6)', () => {
+    it('the end of the engine’s output, bounded — and every credential Genie holds for that engine MASKED in it (another workspace’s password is the control: present in the raw log)', async () => {
+        const shared = { engine: 'redis', major: '7', scope: 'shared' as const };
+        await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, workspaceId: 'example' }, consent: true }, state());
+        await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, workspaceId: 'example-other' }, consent: true }, state());
+        const redis = services.engines.list()[0]!;
+        const theirs = redis.slices!['example-other']!.password;
+        const admin = redis.admin!.password;
+        docker.engineLog.text = `ACL SETUSER ws_example_other reset on >${theirs} ~ws_example_other:*\nrequirepass ${admin}\nready\n`;
+
+        const r = await call('services', 't-example', { action: 'logs', id: redis.id, tail: 999_999 });
+        expect(r.isError).toBe(false);
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toEqual([['logs', '--timestamps', '--tail', '5000', 'genie-shared-redis-7']]);
+        expect(r.json).toMatchObject({ ok: true, id: redis.id, tail: 5000 });
+        expect(r.text).not.toContain(theirs);
+        expect(r.text).not.toContain(admin);
+        expect((r.json.logs as string).match(/\*{8}/g)).toHaveLength(2);
+        expect(r.json.logs).toContain('ready');
+    });
+
+    it('another workspace’s engine: refused without a Docker call — the owner’s own read is the control', async () => {
+        await handleFeatureAction(services, { kind: 'services.create', form: pg, consent: true }, state());
+        const id = services.engines.list()[0]!.id;
+        const refused = await call('services', 't-other', { action: 'logs', id });
+        expect(refused.isError).toBe(true);
+        expect(refused.json.error).toMatch(/not one of this workspace’s services/);
+        expect(dockerCalls('logs')).toBe(0);
+        expect((await call('services', 't-example', { action: 'logs', id })).isError).toBe(false);
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toEqual([['logs', '--timestamps', '--tail', '500', 'genie-example-postgres-17']]);
+    });
+});
+
+describe('services: a custom image goes through the person, image named (H7)', () => {
+    const IMAGE = 'registry.example/acme/echo:1';
+    const custom = { action: 'add', engine: 'custom', image: IMAGE, port: 8080, env: { GREETING: 'hello', API_TOKEN: 'not-for-the-approval' } };
+
+    it('DENIED: the person saw the image, its port and its env NAMES (never a value) — and nothing was pulled or created', async () => {
+        const pending = call('services', 't-example', custom);
+        const item = await asked();
+        expect(item.title).toBe(`atlas wants to add a service: a custom image ${IMAGE} named "custom" (listening on 8080 inside), env GREETING, API_TOKEN, for this workspace only — Genie pulls the image ${IMAGE} if it is not on this machine yet, then creates and starts the container`);
+        expect(item.title).not.toContain('not-for-the-approval');
+        services.approvals.resolve(item.id, 'deny');
+        const r = await pending;
+        expect(r.isError).toBe(true);
+        expect(r.json.error).toMatch(/denied/);
+        expect(dockerCalls('pull') + dockerCalls('create')).toBe(0);
+        expect(services.engines.list()).toEqual([]);
+    });
+
+    it('ALLOWED: pulled and created as named, dedicated to the workspace, and its connection is in the workspace’s env', async () => {
+        const pending = call('services', 't-example', custom);
+        services.approvals.resolve((await asked()).id, 'allow');
+        const r = await pending;
+        expect(r.isError).toBe(false);
+        expect(r.json.service).toMatchObject({ engine: 'custom', version: 'custom', scope: 'dedicated', image: IMAGE });
+        expect(docker.calls.filter((c) => c[0] === 'pull').map((c) => c[1])).toEqual([IMAGE]);
+        expect(docker.calls.filter((c) => c[0] === 'create')[0]!.at(-1)).toBe(IMAGE);
+        expect(services.engines.envFor('example')).toMatchObject({ GENIE_SERVICE_CUSTOM_CUSTOM_HOST: '127.0.0.1', GREETING: 'hello' });
+        expect(services.engines.envFor('example-other')).not.toHaveProperty('GREETING');
+    });
+
+    it('a custom image Genie would not run is refused WITHOUT asking — no image, a shared scope, an env that is not strings; counted, the deck empty', async () => {
+        const refusals = [
+            await call('services', 't-example', { action: 'add', engine: 'custom', port: 8080 }),
+            await call('services', 't-example', { ...custom, scope: 'shared' }),
+            await call('services', 't-example', { ...custom, env: { N: 1 } }),
+        ];
+        expect(refusals.map((r) => r.isError)).toEqual([true, true, true]);
+        expect(refusals[0]!.json.error).toMatch(/Name the image/);
+        expect(refusals[1]!.json.error).toMatch(/always dedicated/);
+        expect(services.approvals.deckItems()).toEqual([]);
+        expect(docker.calls.filter((c) => c[0] === 'pull' || c[0] === 'create')).toEqual([]);
     });
 });
 

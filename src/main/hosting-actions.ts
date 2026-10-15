@@ -235,7 +235,11 @@ export async function createService(s: HostingServices, form: ServiceForm, conse
     const problems = validateServiceForm(form);
     if (problems.length > 0) return { kind: 'problems', problems };
     const scope = form.scope === 'shared' ? { kind: 'shared' as const } : { kind: 'dedicated' as const, workspaceId: form.workspaceId };
-    const r = await s.engines.add({ engine: form.engine, major: form.major, scope, consent, workspaceId: form.workspaceId });
+    // A custom image (validated above): its name is its "version" — one per name per workspace — and the rest is the person's.
+    const c = form.engine === 'custom' ? form.custom : undefined;
+    const r = await s.engines.add(c
+        ? { engine: form.engine, major: c.name, scope, consent, workspaceId: form.workspaceId, custom: { image: c.image, internalPort: c.port!, env: { ...c.env } } }
+        : { engine: form.engine, major: form.major, scope, consent, workspaceId: form.workspaceId });
     return r.kind === 'needs-consent' ? { kind: 'needs-consent', image: r.image, note: r.note } : r;
 }
 
@@ -252,8 +256,14 @@ export function stopService(s: HostingServices, id: string): Promise<void> {
     return s.stopEngine(id);
 }
 
-export function removeService(s: HostingServices, id: string, options: { deleteData: boolean }): Promise<void> {
+/** `deleteData` acts for `workspaceId`, and is refused while any OTHER workspace keeps data in the engine (core/service-tenancy.ts). */
+export function removeService(s: HostingServices, id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void> {
     return s.removeEngine(id, options);
+}
+
+/** The end of an engine's own output (`docker logs`, bounded) — the Services tab's "Logs" and an agent's `services logs`. */
+export function serviceLogs(s: HostingServices, id: string, tail?: number): Promise<{ text: string; tail: number }> {
+    return s.engines.logs(id, tail);
 }
 
 /**

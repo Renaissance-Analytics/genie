@@ -21,7 +21,7 @@ describe('execFileRunner', () => {
 
     it('a non-zero exit is a RESULT, not a rejection — the exit code is the fact', async () => {
         const r = await execFileRunner('node', ['-e', 'process.stdout.write("partial"); process.exit(3)']);
-        expect(r).toEqual({ stdout: 'partial', exitCode: 3 });
+        expect(r).toEqual({ stdout: 'partial', exitCode: 3, streams: { stdout: 'partial', stderr: '' } });
     });
 
     it('arguments are never interpreted by a shell', async () => {

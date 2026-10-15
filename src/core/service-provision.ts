@@ -8,6 +8,9 @@ import type { AdoptedSlice, EngineAdmin } from './services.js';
  * prefix. All are named `ws_<slug>` (core/v1-services.ts `workspaceSqlIdentifier`) — the same names Genie 1 created,
  * so an engine taken over from Genie 1 and a new one carve their slices identically. Each runs as the engine's own
  * client INSIDE its container (`docker exec`), as the engine's superuser, which Genie generated once and keeps.
+ * A shared SeaweedFS (hosting ship line H7) gets a BUCKET and an access key admitted to it alone, both `ws-<slug>`
+ * (`workspaceDnsName`), with the workspace's own secret — Genie 1's S3 isolation. Its identities live in the filer,
+ * inside the data volume, so unlike Redis's they survive a restart.
  *
  * Ported from Genie 1 (repos/genie main/dev-server/services/provision.ts + redis-acl.ts); what changed is said there.
  *
@@ -46,13 +49,20 @@ export interface ProvisionStep {
 }
 
 /** The engines a shared instance is carved into per-workspace slices on. */
-export const SLICED_ENGINES: ReadonlySet<string> = new Set(['postgres', 'mysql', 'mariadb', 'redis']);
+export const SLICED_ENGINES: ReadonlySet<string> = new Set(['postgres', 'mysql', 'mariadb', 'redis', 'seaweedfs']);
 
 const SQL_IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 const GENERATED_PASSWORD = /^[A-Za-z0-9_-]{8,128}$/;
+/** Genie 1's DNS_NAME (provision.ts): a bucket name is a DNS label — the SQL identifier's underscores are illegal there. */
+const DNS_NAME = /^[a-z][a-z0-9-]{2,62}$/;
 
 export function assertSliceIdentifier(value: string): string {
     if (!SQL_IDENTIFIER.test(value)) throw new Error(`refusing to provision with the identifier ${JSON.stringify(value)}: it is not a derived workspace name`);
+    return value;
+}
+
+export function assertBucketName(value: string): string {
+    if (!DNS_NAME.test(value)) throw new Error(`refusing to provision with the bucket name ${JSON.stringify(value)}: it is not a derived workspace name`);
     return value;
 }
 
@@ -90,9 +100,58 @@ export function readinessProbe(engine: string, admin: EngineAdmin): ProvisionSte
             return { label: 'engine ready', argv: ['mariadb-admin', 'ping', '-h', '127.0.0.1', '-u', admin.user, `-p${admin.password}`, '--silent'] };
         case 'redis':
             return { label: 'engine ready', argv: ['redis-cli', '-h', '127.0.0.1', '-a', admin.password, '--no-auth-warning', 'PING'], expect: /^PONG$/m };
+        case 'seaweedfs':
+            // Genie 1's real-container test waited on exactly this: the S3 gateway accepting on its port inside the container.
+            return { label: 'engine ready', argv: ['sh', '-c', 'nc -z 127.0.0.1 8333'] };
         default:
             throw new Error(`${engine} is not carved into per-workspace slices`);
     }
+}
+
+/** Where SeaweedFS's S3 identity config lives inside its container (Genie 1's catalog.ts). */
+export const SEAWEED_CONFIG_PATH = '/etc/seaweedfs/s3.json';
+
+/**
+ * SeaweedFS's admin identity, as `-s3.config` reads it. `identities` is PLURAL: a singular `identity` loads as an empty
+ * config, which denies every request with nothing pointing at the mistake (auth_credentials.go, via Genie 1).
+ */
+export function seaweedAdminConfig(adminPassword: string): string {
+    return JSON.stringify({
+        identities: [{ name: 'genie', credentials: [{ accessKey: 'genie', secretKey: assertGeneratedPassword(adminPassword, 'admin') }], actions: ['Admin', 'Read', 'Write', 'List', 'Tagging'] }],
+    });
+}
+
+/**
+ * The script SeaweedFS's container runs (`--entrypoint sh` … `-c <this>`): write the admin identity, THEN exec the
+ * image's own `/entrypoint.sh` (which fixes /data ownership for its unprivileged user) with `-s3.config`. One step, so
+ * there is no window in which the S3 gateway is up without authentication. Genie 1's entrypoint, verbatim in effect;
+ * `-dir=/data` comes from the image entrypoint's own `server` case.
+ */
+export function seaweedEntrypointScript(adminPassword: string): string {
+    return `mkdir -p /etc/seaweedfs && printf '%s' '${seaweedAdminConfig(adminPassword)}' > ${SEAWEED_CONFIG_PATH} && `
+        + `exec /entrypoint.sh server -master.port=9333 -filer -filer.port=8888 -s3 -s3.port=8333 -s3.config=${SEAWEED_CONFIG_PATH}`;
+}
+
+/**
+ * SeaweedFS: one bucket and one credential admitted to that bucket alone (Genie 1's seaweedSteps, ported). The access
+ * key IS the bucket name. `s3.configure`, not `s3.user.provision` (which generates a key Genie could never learn);
+ * `-actions` excludes Admin (an Admin reaches every bucket); `-apply` or nothing is written. `s3.bucket.create` is not
+ * convergent, so the bucket step tolerates exactly "already exists" and nothing else. `weed shell` reads its commands
+ * on stdin, so each step is a `sh -c`; the only values in it are the asserted bucket name and generated password.
+ */
+function seaweedSteps(admin: EngineAdmin, bucket: string, password: string): ProvisionStep[] {
+    assertGeneratedPassword(admin.password, 'admin');
+    const weed = 'weed shell -master=localhost:9333 -filer=localhost:8888';
+    return [
+        {
+            label: 'bucket',
+            argv: ['sh', '-c', `out=$(printf '%s\\n' 's3.bucket.create -name ${bucket}' | ${weed} 2>&1) && exit 0; printf '%s\\n' "$out" >&2; case "$out" in *'already exists'*) exit 0 ;; esac; exit 1`],
+        },
+        {
+            label: 'user',
+            argv: ['sh', '-c', `printf '%s\\n' 's3.configure -user ${bucket} -access_key ${bucket} -secret_key ${password} -buckets ${bucket} -actions Read,Write,List,Tagging -apply' | ${weed}`],
+        },
+    ];
 }
 
 function postgresSteps(admin: EngineAdmin, name: string, password: string): ProvisionStep[] {
@@ -160,7 +219,7 @@ function redisSteps(admin: EngineAdmin, name: string, password: string): Provisi
 }
 
 /** The commands that carve one workspace's slice out of a shared engine, as its superuser. */
-export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<AdoptedSlice, 'identifier' | 'password'>): ProvisionStep[] {
+export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<AdoptedSlice, 'identifier' | 'password' | 'bucket'>): ProvisionStep[] {
     const name = assertSliceIdentifier(slice.identifier);
     const password = assertGeneratedPassword(slice.password, 'workspace');
     assertGeneratedPassword(admin.password, 'admin');
@@ -174,6 +233,8 @@ export function provisionSteps(engine: string, admin: EngineAdmin, slice: Pick<A
             return mysqlSteps('mariadb', admin, name, password);
         case 'redis':
             return redisSteps(admin, name, password);
+        case 'seaweedfs':
+            return seaweedSteps(admin, assertBucketName(slice.bucket ?? ''), password);
         default:
             throw new Error(`${engine} is not carved into per-workspace slices`);
     }

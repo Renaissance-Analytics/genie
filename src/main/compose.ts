@@ -194,7 +194,8 @@ export interface ComposedServices {
     /** The PERSON's start / stop / remove of an engine: recorded (machine-local), so a restart keeps a stopped engine stopped. */
     startEngine(id: string): Promise<void>;
     stopEngine(id: string): Promise<void>;
-    removeEngine(id: string, options: { deleteData: boolean }): Promise<void>;
+    /** `workspaceId` = who a delete-data acts for: refused while any OTHER workspace keeps data in it (core/service-tenancy.ts). */
+    removeEngine(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void>;
     /** The workspace's service connection kept current in each site repo's `.env` — refused where git would commit it. */
     readonly envFiles: DotEnvSync;
     readonly frontDoor: GenRouterServer;
