@@ -80,7 +80,7 @@ Services and sites are not terminal work: use \`services\` and \`sites\`, and Ge
 
 Neither is a process that must keep running (a queue worker, a watcher): add it with \`processes\`, and Genie keeps it running and keeps its log.
 
-Use \`runAgent\` with action \`sidecar\` to start \`<agent>-slave\`, your review partner. Calling it again rejoins the same one. Genie never stops it for you.
+Use \`runAgent\` with action \`sidecar\` to start \`<your name>-slave\`, your review partner. If you already have one it is rejoined, never a second. Genie never stops it for you.
 `,
     },
     {
