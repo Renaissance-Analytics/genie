@@ -26,7 +26,7 @@ const thread: ChatThread = {
     ],
 };
 const render = (t: ChatThread, pinned = false) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} pinned={pinned} contextTokens={200_000} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onPickThread={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={t} pinned={pinned} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onPickThread={() => {}} />);
 
 describe('the chat transcript', () => {
     it('renders every message with its speaker: you on the right, the agent by NAME, the peer as `peer → agent`', () => {

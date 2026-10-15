@@ -4,6 +4,7 @@ import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
 import { chatScope } from '../core/chat-scope.js';
+import { composerMeter } from '../core/composer.js';
 import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
@@ -663,7 +664,7 @@ export function Shell({
                     <ChatFlyout
                         thread={chatThread ? { ...chatThread, chips: tabs } : null}
                         pinned={pinned === 'chat'}
-                        contextTokens={200_000}
+                        contextUsage={chatThread ? composerMeter(chatSession) : null}
                         approval={chatApproval}
                         commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}

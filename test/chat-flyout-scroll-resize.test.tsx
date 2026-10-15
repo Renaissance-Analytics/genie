@@ -28,7 +28,7 @@ const memory = (value: string | null) => {
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); }, map: m };
 };
 const render = (pinned: boolean, stored: string | null = null) =>
-    renderToStaticMarkup(<ChatFlyout thread={thread} pinned={pinned} contextTokens={200_000} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} widthStorage={memory(stored)} />);
+    renderToStaticMarkup(<ChatFlyout thread={thread} pinned={pinned} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} widthStorage={memory(stored)} />);
 const classOf = (html: string, attr: string) => (html.match(new RegExp(`<[^>]*${attr}[^>]*class="([^"]*)"`)) ?? html.match(new RegExp(`<[^>]*class="([^"]*)"[^>]*${attr}`)))?.[1]?.split(/\s+/) ?? null;
 
 describe('the chat thread scrolls', () => {

@@ -10,7 +10,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  */
 const base: ChatThread = { agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Working', tone: 'ok' }, chips: [], messages: [] };
 const render = (t: ChatThread, extra: Partial<Parameters<typeof ChatFlyout>[0]> = {}) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} contextTokens={200_000} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} {...extra} />);
+    renderToStaticMarkup(<ChatFlyout thread={t} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} {...extra} />);
 
 describe('A / D in the chat', () => {
     const press = (key: string, typing = false) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing });

@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('genieDoctor', {
     facts: () => ipcRenderer.invoke('doctor:facts'),
     connect: () => ipcRenderer.invoke('doctor:connect'),
     detail: () => ipcRenderer.invoke('doctor:detail'),
-    prompt: (text: string) => ipcRenderer.invoke('doctor:prompt', text),
+    prompt: (text: string, files?: unknown) => ipcRenderer.invoke('doctor:prompt', text, files ?? []),
     start: () => ipcRenderer.invoke('doctor:start'),
     answerApproval: (optionId: string) => ipcRenderer.invoke('doctor:answer-approval', optionId),
     onChange: (listener: () => void) => {

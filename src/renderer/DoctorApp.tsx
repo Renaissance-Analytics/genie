@@ -1,9 +1,11 @@
 import { Skeleton } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { chatThreadFrom } from '../core/chat-view.js';
+import { composerMeter } from '../core/composer.js';
 import { parseRoute } from '../core/route.js';
 import type { Fidelity } from '../core/dashboard-view.js';
 import type { OsaFacts } from '../core/osa-home.js';
+import type { Attachment } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { AgentView } from './components/AgentView.js';
@@ -29,7 +31,8 @@ export interface DoctorBridge {
     /** The `claude mcp add …` line; `null` until the channel is listening. */
     connect(): Promise<string | null>;
     detail(): Promise<DoctorDetail | null>;
-    prompt(text: string): Promise<boolean>;
+    /** Your message, with the composer's files (picked, dropped or pasted) — sent as content blocks, as in Genie. */
+    prompt(text: string, attachments?: readonly Attachment[]): Promise<boolean>;
     start(): Promise<{ ok: true } | { ok: false; reason: string }>;
     answerApproval(optionId: string): Promise<boolean>;
     onChange(listener: () => void): () => void;
@@ -48,7 +51,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
     connect: string | null;
     /** `null` before the first read: a skeleton, never "not running". */
     detail: DoctorDetail | null;
-    onSend: (text: string) => void;
+    onSend: (text: string, attachments?: readonly Attachment[]) => void;
     onStart: () => void;
     onAnswerApproval: (optionId: string) => void;
     answeringApproval?: string | null;
@@ -108,7 +111,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
                     <ChatFlyout
                         thread={thread}
                         pinned
-                        contextTokens={200_000}
+                        contextUsage={composerMeter(detail.session)}
                         approval={detail.session?.pendingApproval ?? null}
                         commands={detail.session?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}

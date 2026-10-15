@@ -30,7 +30,7 @@ function Doctor({ bridge }: { bridge: DoctorBridge }) {
             facts={facts}
             connect={connect}
             detail={detail}
-            onSend={(text) => { void bridge.prompt(text); }}
+            onSend={(text, attachments) => { void bridge.prompt(text, attachments ?? []); }}
             onStart={() => { void bridge.start(); }}
             answeringApproval={answering}
             onAnswerApproval={(optionId) => { setAnswering(optionId); void bridge.answerApproval(optionId).finally(() => setAnswering(null)); }}
