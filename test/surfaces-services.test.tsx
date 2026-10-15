@@ -45,6 +45,18 @@ describe('the Services tab', () => {
         expect(html).toMatch(/exited/);
     });
 
+    it('with Docker not running the row SAYS so, with Docker’s reason — never `absent`; a row Docker answered for shows its state (control)', () => {
+        const reason = 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again';
+        const html = render({ ...base, services: { instances: [{ instance: pg('17', true, 54301), status: 'docker-not-running', note: reason }], adding: null } });
+        expect(html).toContain('data-service-status="docker-not-running"');
+        expect(html).toMatch(/Docker is not running/);
+        expect(html).toContain(reason);
+        expect(html).not.toMatch(/absent/);
+        const control = render({ ...base, services: { instances: [{ instance: pg('17', true, 54301), status: 'exited' }], adding: null } });
+        expect(control).toContain('data-service-status="exited"');
+        expect(control).not.toMatch(/Docker is not running/);
+    });
+
     it('the ACTIVE version is marked; a second version offers "Make active" with the data warning on the row BEFORE the click', () => {
         const html = render({ ...base, services: { instances: [{ instance: pg('16', true, 54301), status: 'running' }, { instance: pg('17', false, 54302), status: 'running' }], adding: null } });
         expect(html.match(/data-active="true"/g) ?? []).toHaveLength(1);
@@ -65,7 +77,9 @@ describe('Add an engine', () => {
 
     it('offers every engine in the catalog, prefills the newest major, and defaults to dedicated', () => {
         const html = renderToStaticMarkup(<AddServiceForm defaults={defaults} problems={[]} consent={null} onSubmit={() => {}} onCancel={() => {}} />);
-        for (const e of ['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb']) expect(html).toContain(`value="${e}"`);
+        for (const e of ['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'reverb', 'mailpit']) expect(html).toContain(`value="${e}"`);
+        // MinIO is in the catalog only so Genie 1's can be taken over: never offered (its images are gone).
+        expect(html).not.toContain('value="minio"');
         expect(html).toContain('value="17"');
         expect(html).toMatch(/name="scope"/);
         expect(html).not.toContain('data-consent');

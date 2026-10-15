@@ -24,4 +24,11 @@ describe('Add an engine', () => {
             { field: 'scope', message: 'reverb is a shared service — one per workstation, never per workspace.' },
         ]);
     });
+
+    it("MinIO is ADOPT-ONLY (Genie 1's, taken over; its images are gone): refused with why — and Mailpit, new to the catalog, is addable from its real version", () => {
+        expect(validateServiceForm({ workspaceId: 'tynn', engine: 'minio', major: 'latest', scope: 'shared' })).toEqual([
+            { field: 'engine', message: 'minio can only be taken over from Genie 1 — its images are no longer published.' },
+        ]);
+        expect(validateServiceForm({ workspaceId: 'tynn', engine: 'mailpit', major: '1.30', scope: 'shared' })).toEqual([]);
+    });
 });

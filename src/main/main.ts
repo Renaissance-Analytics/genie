@@ -964,6 +964,10 @@ async function boot(): Promise<void> {
         v1Knowledge: () => readV1Knowledge(v1DatabaseFile()),
         // Genie 1's AgentInbox history and its attachment bytes, read-only; the inbox decides whether it still needs them.
         v1Inbox: () => readV1Inbox(v1DatabaseFile()),
+        // Genie 1's service engines, TAKEN OVER in place (same containers, volumes, credentials, ports) and its sandbox/site
+        // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
+        // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
+        v1Services: { database: v1DatabaseFile() },
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
         frontDoorPort: 0,

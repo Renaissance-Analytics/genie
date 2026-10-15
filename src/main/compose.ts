@@ -4,6 +4,9 @@ import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom } from '../core/deck-sources.js';
+import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
+import { PortAllocator } from '../core/port-allocator.js';
+import type { ServiceInstance } from '../core/services.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
@@ -11,6 +14,7 @@ import { hostsFileBlock } from '../core/gen-router.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
+import { runV1ServicesAdoption } from './v1-services.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
@@ -39,7 +43,8 @@ import { runtimeDir } from './paths.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
-import { ServiceDriver, type DockerRunner } from './service-driver.js';
+import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
+import { ServiceDriver, dockerRunnerOver, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager } from './site-manager.js';
@@ -71,13 +76,25 @@ export interface ComposeInput {
     readonly v1Knowledge?: () => V1Knowledge | null;
     /** Reads Genie 1's AgentInbox history (`readV1Inbox`), or `null`; called at boot until the inbox records an import that saw v1. */
     readonly v1Inbox?: () => V1Inbox | null;
+    /**
+     * Genie 1's database, for TAKING OVER its service engines in place and stopping its sandbox/site containers
+     * (main/v1-services.ts) — at boot until services.json records a take-over that saw Genie 1 and Docker. Before the
+     * sites and the process book start, because both read the engines' env. Absent = no Genie 1 to take over from.
+     */
+    readonly v1Services?: { readonly database: string };
     readonly caddyBin: string | null;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
     readonly allocatePort?: () => number;
+    /** Whether 127.0.0.1:<port> is free to bind (the shared allocator's probe); a real bind probe by default. */
+    readonly portFree?: (port: number) => Promise<boolean>;
     readonly now?: () => number;
     /** Runs `docker <args>`; execFile in production. A missing Docker answers a non-zero exit, never a throw. */
     readonly docker?: DockerRunner;
+    /** ONE readiness probe of an engine on its loopback port; the engine's own handshake over a real socket by default. */
+    readonly engineAnswers?: (instance: ServiceInstance) => Promise<boolean>;
+    /** How long an engine started at Genie start is waited for, and how often it is asked. */
+    readonly engineReadiness?: ReadinessBound;
     /** The OS hosts file; the real one by default. */
     readonly hostsIo?: HostsIo;
     /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
@@ -126,6 +143,17 @@ export interface ComposedServices {
     readonly envelopeSites: EnvelopeSites;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
+    /**
+     * Genie start's pass over the registered engines (core/engine-reconcile.ts): the ones not running and not stopped by
+     * the person are started and waited for; with Docker down, each says so. Boot does not wait for it. Never rejects.
+     */
+    readonly engineReconcile: Promise<ReconcileReport>;
+    /** Every engine with its status for the Services tab — `docker-not-running`, with Docker's reason, when Docker is not there to ask. */
+    engineStatuses(): Promise<EngineStatusView[]>;
+    /** The PERSON's start / stop / remove of an engine: recorded (machine-local), so a restart keeps a stopped engine stopped. */
+    startEngine(id: string): Promise<void>;
+    stopEngine(id: string): Promise<void>;
+    removeEngine(id: string, options: { deleteData: boolean }): Promise<void>;
     readonly frontDoor: GenRouterServer;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: ApprovalQueue;
@@ -294,11 +322,70 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     flowScheduler.plan();
 
     const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
-    let nextPort = 4100;
-    // ONE loopback allocator for sites and engines: two things never share a port.
-    const allocatePort = input.allocatePort ?? (() => ++nextPort);
-    const docker: DockerRunner = input.docker ?? ((args) => execFileRunner('docker', args).catch((e: unknown) => ({ stdout: e instanceof Error ? e.message : String(e), exitCode: 127 })));
-    const engines = await ServiceRegistry.open(input.userData, new ServiceDriver(docker), { allocatePort, randomPassword: () => randomBytes(18).toString('base64url') });
+    // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
+    // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
+    // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).
+    let registry: ServiceRegistry | null = null;
+    const portAllocator = input.allocatePort
+        ? null
+        : new PortAllocator({ first: 4101, reserved: () => registry?.list().flatMap((i) => [i.publishedPort, ...Object.values(i.publishedPorts ?? {})]) ?? [], isFree: input.portFree ?? loopbackPortFree, log: (line) => console.error(line) });
+    const allocatePort = input.allocatePort ?? (() => portAllocator!.next());
+    // Only a pull gets the long bound (service-driver.ts); every other docker call keeps the short one.
+    const docker: DockerRunner = input.docker ?? dockerRunnerOver(execFileRunner);
+    const driver = new ServiceDriver(docker);
+    const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url') });
+    registry = engines;
+    // Genie 1's engines, taken over in place (and its sandboxes stopped) BEFORE anything reads a workspace's env, primes
+    // a port or reconciles: the adopted engines' ports are then reserved, and the reconcile sees them as registered.
+    if (input.v1Services) {
+        try {
+            await runV1ServicesAdoption(engines, {
+                database: input.v1Services.database,
+                docker,
+                reportFile: join(input.userData, 'v1-services.json'),
+                now,
+                workspaces: () => input.workspaces?.() ?? [],
+            });
+        } catch (error) {
+            // Not recorded as done, so the next boot tries again; the engines Genie 2 already had are untouched.
+            console.error(`[genie] taking over Genie 1's service engines failed: ${(error as Error).message}`);
+        }
+    }
+    await portAllocator?.prime();
+    // The person's engine Stops are machine-local like the sites' (site-run-state.json below): a restart keeps them stopped.
+    const engineRunState = join(runtimeDir(input.userData), 'engine-run-state.json');
+    const engineStopped = new Set<string>(
+        await readJson<{ stopped?: unknown }>(engineRunState, { stopped: [] }).then((data) => (Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [])),
+    );
+    const saveEngineStopped = () => writeJsonAtomic(engineRunState, { stopped: [...engineStopped] });
+    const enginePorts = {
+        available: () => driver.available(),
+        instances: () => engines.list(),
+        state: async (id: string) => (await engines.status(id)).state,
+    };
+    // Not awaited: readiness is bounded in tens of seconds and nothing else at boot needs it. The readiness clock is
+    // the real one, never `input.now` — a fixed test clock would never reach the deadline.
+    const engineReconcile: Promise<ReconcileReport> = reconcileEngines(
+        {
+            ...enginePorts,
+            personStopped: () => engineStopped,
+            start: (id) => engines.start(id),
+            answers: input.engineAnswers ?? ((i) => loopbackAnswers(i.publishedPort, readinessHandshake(i.engine))),
+            now: Date.now,
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        },
+        input.engineReadiness ?? DEFAULT_READINESS,
+    ).then(
+        (report) => {
+            for (const e of report.engines) if ('reason' in e) console.error(`[engines] ${e.outcome}: ${e.reason}`);
+            return report;
+        },
+        (error: unknown): ReconcileReport => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[engines] the registered engines could not be checked at start: ${message}`);
+            return { docker: null, engines: [], error: message };
+        },
+    );
     const sites = new SiteManager({
         supervisor,
         allocatePort,
@@ -383,6 +470,22 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         sites,
         envelopeSites,
         engines,
+        engineReconcile,
+        engineStatuses: () => engineStatusesOf(enginePorts),
+        startEngine: async (id) => {
+            // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).
+            if (engineStopped.delete(id)) await saveEngineStopped();
+            await engines.start(id);
+        },
+        stopEngine: async (id) => {
+            await engines.stop(id);
+            engineStopped.add(id);
+            await saveEngineStopped();
+        },
+        removeEngine: async (id, options) => {
+            await engines.remove(id, options);
+            if (engineStopped.delete(id)) await saveEngineStopped();
+        },
         frontDoor,
         approvals,
         remote,
@@ -492,6 +595,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 await flowScheduler.settled();
                 await remoteDevices.flushed();
                 await feedback.flushed();
+                await portAllocator?.settled();
                 knowledge.close();
             })();
             return down;
