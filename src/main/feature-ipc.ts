@@ -59,6 +59,8 @@ export interface FeaturePorts {
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
+    /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
+    readonly mainErrors?: { dismiss(id: string): boolean };
 }
 
 export interface FeatureState {
@@ -597,6 +599,11 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 }
                 case 'defer-trust-certificate':
                     services.deferTrustCertificate();
+                    break;
+                case 'dismiss-main-error':
+                    // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
+                    if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
+                    if (!ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
                     break;
                 case 'answer-provider-approval':
                 case 'restart-with-handoff':
