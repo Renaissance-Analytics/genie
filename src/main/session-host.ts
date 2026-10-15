@@ -206,6 +206,8 @@ export class SessionHost {
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #clock: () => number;
     readonly #running = new Map<AgentId, Running>();
+    /** Sessions stopped whose writes may still be in flight — what `settled()` waits for besides the running ones. */
+    readonly #stopped = new Set<AgentSession>();
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
     readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] } | 'loading'>();
     #listeners = new Set<(agentId: AgentId) => void>();
@@ -556,8 +558,29 @@ export class SessionHost {
 
         entry.session.stop();
         this.#running.delete(agentId);
+        // Its last rows (a cancelled approval, the reply the exit closes) are still on their way to the thread.
+        this.#stopped.add(entry.session);
         this.#emit(agentId);
         return true;
+    }
+
+    /**
+     * Resolves once every row this host's sessions have queued is in their threads — the running ones and the ones
+     * stopped since, whose last rows are written AFTER the stop returns (see `AgentSession.settled`).
+     *
+     * A row is shown before it is written, so whatever removes or reads the store as finished — a test's teardown, a
+     * quit — waits here first.
+     *
+     * A stopped session is forgotten only when its provider had EXITED (`exit` set) BEFORE this wait began — not merely
+     * when it reads as not running. The exit handler is what writes the reply it closes, and `running` can read false
+     * before that handler has run; an exit recorded before the wait had already queued its write, so the wait covered
+     * it. One that exits during the wait stays, and the next `settled()` covers it.
+     */
+    async settled(): Promise<void> {
+        const sessions = [...[...this.#running.values()].map((e) => e.session), ...this.#stopped];
+        const exited = sessions.filter((s) => this.#stopped.has(s) && s.exit !== null);
+        await Promise.all(sessions.map((s) => s.settled()));
+        for (const s of exited) this.#stopped.delete(s);
     }
 
     /**

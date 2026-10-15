@@ -20,8 +20,14 @@ import { openDurableStore, readHistory } from '../src/core/thread-store.js';
  * resumed, the view is the earlier run, a run marker, then this run — and its turns continue from 2, not "Turn 1".
  */
 let dir: string;
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-history-')); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+let hosts: SessionHost[] = [];
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-history-')); hosts = []; });
+// A row is SHOWN before it is WRITTEN, so the folder goes only after every write the sessions queued has landed. The
+// last assertion below passes on the ledger while `turn 2` and `second question` may still be on their way to disk; the
+// folder removed under them (a write re-creates it) is the race behind this test failing about one full suite in three
+// (2026-10-15; an afterEach error is reported as the test's) — a remove racing a create fails ENOTEMPTY. See
+// test/thread-writes-settle.test.ts.
+afterEach(async () => { await Promise.all(hosts.map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
 const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function host() {
@@ -30,7 +36,9 @@ function host() {
         events = options.events;
         return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return 'cli-1'; } };
     }) as unknown as SessionDriverFactory;
-    return { host: new SessionHost({ userData: dir, driverFor, processTree: tree }), end: () => events.onTurnEnd?.({ stopReason: 'end_turn' } as never) };
+    const made = new SessionHost({ userData: dir, driverFor, processTree: tree });
+    hosts.push(made);
+    return { host: made, end: () => events.onTurnEnd?.({ stopReason: 'end_turn' } as never) };
 }
 const said = (rows: readonly TimedEvent[]) => rows.flatMap((r) => (r.event.kind === 'message' ? [r.event.text] : []));
 const kinds = (rows: readonly TimedEvent[]) => rows.map((r) => (r.event.kind === 'turn' ? `turn ${r.event.n}` : r.event.kind === 'run' ? `run${r.event.resumed ? ' resumed' : ''}` : r.event.kind));

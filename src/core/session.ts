@@ -320,6 +320,27 @@ export class AgentSession {
         return this.#unpersisted;
     }
 
+    /**
+     * Resolves once every row this session has queued for its thread has been written — or counted as unpersisted.
+     *
+     * A row reaches the ledger SYNCHRONOUSLY and the thread LATER (`#emitRow`, `#enqueue`): the screen is never kept
+     * waiting on a disk. So "the row is on screen" says nothing about "the row is on disk", and before this there was no
+     * way to ask. A test that tore its store folder down the moment a row showed raced the session's own write (a lock
+     * file, a temporary file, the folder itself re-created by the write): agent-history's afterEach and turn-end-notify's
+     * afterAll each failed about one full suite in three (2026-10-15; the error text was not captured — a recursive remove
+     * racing a create fails ENOTEMPTY, which is what to look for).
+     *
+     * Waits until the chain stops growing, so a row queued while an earlier one was being written is waited for too.
+     * Never rejects: a failed write is counted (`unpersistedEvents`), not thrown, which is what the chain already does.
+     */
+    async settled(): Promise<void> {
+        let tail: Promise<void>;
+        do {
+            tail = this.#writes;
+            await tail;
+        } while (tail !== this.#writes);
+    }
+
     /** Turns this session has completed. The Budget panel's count comes from here. */
     get turns(): number {
         return this.#turns;
