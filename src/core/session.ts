@@ -193,6 +193,16 @@ export class AgentSession {
     #unpersisted = 0;
     /** Completed turns, failed ones included — a failed turn still happened and still cost. */
     #turns = 0;
+    /**
+     * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
+     * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
+     * when ITS turn starts — when the one before it ends. Writing it at send time numbered it as the running turn, so
+     * the owner's record read `10, 10, 10, 10, 11, 12, 14, 14…`: the same number per message sent mid-turn, and a gap for
+     * every queued turn that ended without a marker (the owner, 2026-10-14).
+     */
+    #inTurn = false;
+    /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
+    #queued: (string | null)[] = [];
     /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
     #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
@@ -451,6 +461,7 @@ export class AgentSession {
 
                     this.#turns += 1;
                     this.#endedThisRun += 1;
+                    this.#inTurn = false;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -470,6 +481,15 @@ export class AgentSession {
                         this.#failure = null;
                         this.#failedAt = null;
                     }
+                    // The next queued prompt's turn starts now: its marker, and `working` again. After a crashed turn
+                    // nothing is assumed to run: the queue is dropped and the failure stands.
+                    if (crashed) this.#queued = [];
+                    else if (this.#queued.length > 0) {
+                        const by = this.#queued.shift() ?? null;
+                        void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+                        this.#inTurn = true;
+                        this.#turnState = 'working';
+                    }
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
                     // Working (found in the first doctor trial, 2026-10-13).
@@ -482,6 +502,8 @@ export class AgentSession {
 
                     this.#alive = false;
                     this.#exited = true;
+                    this.#inTurn = false;
+                    this.#queued = [];
                     // Kept as node reported it — the one fact about the END of the process Genie actually has.
                     this.#exit = { code, signal };
 
@@ -541,8 +563,13 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null): void {
         if (!this.#driver) throw new Error('session is not started');
-        // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn.
-        void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+        // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
+        // turn is running, when this prompt waits for its own (see `#queued`).
+        if (this.#inTurn) this.#queued.push(by);
+        else {
+            void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+            this.#inTurn = true;
+        }
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
@@ -590,6 +617,8 @@ export class AgentSession {
 
         this.#alive = false;
         this.#turnState = 'stopped';
+        this.#inTurn = false;
+        this.#queued = [];
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */
@@ -725,6 +754,7 @@ export class AgentSession {
         // turn's end (usage, debug notices) is not activity and opens nothing.
         if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
             void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by: null });
+            this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
         }
