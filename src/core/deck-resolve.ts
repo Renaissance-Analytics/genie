@@ -1,4 +1,5 @@
 import type { DeckItem } from './deck.js';
+import { TRUST_DECK_ID } from './gen-ca.js';
 
 /**
  * RESOLVING A DECK ITEM IN PLACE (§4.5) — what pressing an option on each kind MEANS, as a plain
@@ -9,7 +10,7 @@ import type { DeckItem } from './deck.js';
  *
  * The item id's prefix is the item's ORIGIN, decided by whoever minted it: `q_` the attention
  * store's questions, `appr_` the approval queue, `approval:<agent>` a provider's permission request
- * (the session layer), `li_` list items, `msg_` mail, `fin_` finishes.
+ * (the session layer), `li_` list items, `msg_` mail, `fin_` finishes, `genie:` Genie's own asks.
  */
 
 export type DeckCommand =
@@ -21,6 +22,8 @@ export type DeckCommand =
     | { kind: 'mark-seen'; finishedId: string }
     | { kind: 'restart-with-handoff'; agentId: string; finishedId: string }
     | { kind: 'navigate'; route: string }
+    | { kind: 'trust-certificate' }
+    | { kind: 'defer-trust-certificate' }
     | { kind: 'refused'; reason: string };
 
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
@@ -138,5 +141,9 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand
             if (optionId === 'open') return { kind: 'navigate', route: `genie://agent/${item.agentId}?tab=stream` };
             if (optionId === 'restart' && item.agentId) return { kind: 'restart-with-handoff', agentId: item.agentId, finishedId: item.id };
             return { kind: 'mark-seen', finishedId: item.id };
+        case 'genie':
+            // Genie's own asks, by id; one it does not know is refused, never guessed.
+            if (item.id === TRUST_DECK_ID) return optionId === 'trust' ? { kind: 'trust-certificate' } : { kind: 'defer-trust-certificate' };
+            return refuse(`${item.id} is not an item Genie knows how to answer`);
     }
 }

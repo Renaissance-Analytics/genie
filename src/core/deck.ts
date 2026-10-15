@@ -38,7 +38,9 @@ export const PRIORITIES: readonly Priority[] = ['urgent', 'high', 'normal', 'low
  * Only `agent-question` produces items today. The others are declared because the ranking has
  * to be right before they arrive — not because anything is faking them.
  */
-export type DeckSource = 'agent-question' | 'user-list' | 'unread-dm' | 'finished-handoff';
+export type DeckSource = 'agent-question' | 'user-list' | 'unread-dm' | 'finished-handoff' | 'genie';
+// `genie`: Genie ITSELF asks — no agent behind it (agentId/agentName null). Its ids start `genie:`; today the one is
+// trusting Genie's certificate so https://<name>.gen works in the browser (core/gen-ca.ts trustDeckItem).
 
 export type DeckAnswer =
     /** Answering inline is the whole answer. */

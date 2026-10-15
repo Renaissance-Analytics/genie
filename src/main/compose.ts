@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,7 +9,9 @@ import { PortAllocator } from '../core/port-allocator.js';
 import type { ServiceInstance } from '../core/services.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
-import { frontDoorCaddyfile, hostsFilePath, trustPlan } from '../core/front-door-caddy.js';
+import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
+import { trustDeckItem, trustInstallStep } from '../core/gen-ca.js';
+import { GenCa, osTrustStore, type CaSource, type CertIssuer, type TrustStorePort } from './gen-ca.js';
 import { hostsFileBlock } from '../core/gen-router.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
@@ -99,6 +101,15 @@ export interface ComposeInput {
     readonly hostsIo?: HostsIo;
     /** Runs one step through the OS's elevation prompt; rejects when declined. The real prompt by default. */
     readonly runElevated?: (step: Step) => Promise<void>;
+    /**
+     * Genie 1's `host-gen` folders (`<Genie 1 userData>/host-gen`), where its `.gen` CA may be — ADOPTED by copying when
+     * Genie 2 has no CA of its own. None by default: only main.ts names Genie 1's real folders.
+     */
+    readonly v1CaDirs?: readonly string[];
+    /** The OS trust store, asked by thumbprint; the real one (read-only) by default. */
+    readonly trustStore?: TrustStorePort;
+    /** Issues the CA and the leaf; the node:crypto X.509 builder by default. */
+    readonly certIssuer?: CertIssuer;
     /** This machine's name as remote devices see it; the OS hostname by default. */
     readonly hostName?: string;
     /** Where remote connections come from (fancy-ws on a socket); none by default — nothing listens. */
@@ -125,9 +136,22 @@ export interface ComposeInput {
     readonly onWorkspacesChange?: (listener: () => void) => () => void;
 }
 
-/** The external front door, beyond "Caddy runs": the hosts block, and whether the local root is trusted. */
+/**
+ * The external front door, beyond "Caddy runs": the hosts block; Genie's CA (whose it is, its thumbprint) and whether
+ * the OS trust store holds it — READ from the store, `null` until the first read answers; the last Trust's failure, with
+ * its reason; and a leaf that could not be issued.
+ */
 export type FrontDoorStatus =
-    | { running: true; caddyfile: string; hostsPath: string; hosts: HostsSyncResult | null; trusted: boolean }
+    | {
+          running: true;
+          caddyfile: string;
+          hostsPath: string;
+          hosts: HostsSyncResult | null;
+          authority: { source: CaSource; thumbprint: string };
+          trusted: boolean | null;
+          trustError: string | null;
+          certificateError: string | null;
+      }
     | { running: false; reason: string };
 
 export interface ComposedServices {
@@ -183,8 +207,13 @@ export interface ComposedServices {
     onFrontDoorChange(listener: () => void): () => void;
     /** Sync the hosts block now — the person's "try again" after a declined prompt. */
     syncHosts(): Promise<HostsSyncResult>;
-    /** `caddy trust` through the OS prompt, once; remembered by a marker. */
+    /**
+     * Install Genie's CA into the OS trust store through ONE elevation. Trusted only when the store, read again
+     * afterwards, holds the CA's thumbprint; a declined prompt or a failed install answers its reason and marks nothing.
+     */
     trustCertificate(): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** The person's Not now on the Deck's Trust item: not asked again for this CA (Hosting's line stays). */
+    deferTrustCertificate(): void;
     /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
     routes(): GenRoute[];
     /** The Deck's items from the stores, now. */
@@ -197,23 +226,35 @@ export interface ComposedServices {
 }
 
 /**
- * The EXTERNAL front door: Genie's bundled Caddy serving https://<name>.gen on 443 with its internal
- * CA, as ONE supervised process started with --watch, so the routes change by rewriting the Caddyfile
- * and never by spawning a second Caddy. Without a bundled binary nothing starts, and the reason is
- * recorded for the Hosting surface — the in-app browser does not need this path.
+ * The EXTERNAL front door: Genie's bundled Caddy serving https://<name>.gen on 443 with GENIE'S OWN CA's leaf
+ * (core/gen-ca.ts — Genie 1's CA adopted on upgrade, so a root the browser already trusts), as ONE supervised process
+ * started with --watch, so the routes change by rewriting the Caddyfile and never by spawning a second Caddy. Without
+ * a bundled binary nothing starts, and the reason is recorded for the Hosting surface — the in-app browser does not
+ * need this path.
  */
 interface FrontDoorController {
     status(): FrontDoorStatus;
     onChange(listener: () => void): () => void;
     syncHosts(): Promise<HostsSyncResult>;
     trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
+    deferTrust(): void;
+    /** Genie's own Deck items about the front door: the one Trust ask. */
+    deckItems(): DeckItem[];
 }
 
 const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
 
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 function startExternalFrontDoor(input: {
     caddyBin: string | null;
     caddyDir: string;
+    caDir: string;
+    v1CaDirs: readonly string[];
+    issuer: CertIssuer | undefined;
+    trustStore: TrustStorePort;
+    platform: NodeJS.Platform;
+    now: () => number;
     sites: SiteManager;
     supervisor: ProcessSupervisor;
     hostsIo: HostsIo;
@@ -224,21 +265,64 @@ function startExternalFrontDoor(input: {
     const onChange = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
     const notify = () => { for (const l of listeners) l(); };
     const { caddyBin, caddyDir, sites, supervisor } = input;
-    if (caddyBin === null) {
-        return {
-            status: () => ({ running: false, reason: NO_CADDY }),
-            onChange,
-            syncHosts: async () => { throw new Error(NO_CADDY); },
-            trust: async () => ({ ok: false, reason: NO_CADDY }),
-        };
+    const off = (reason: string): FrontDoorController => ({
+        status: () => ({ running: false, reason }),
+        onChange,
+        syncHosts: async () => { throw new Error(reason); },
+        trust: async () => ({ ok: false, reason }),
+        deferTrust: () => {},
+        deckItems: () => [],
+    });
+    if (caddyBin === null) return off(NO_CADDY);
+    let ca: GenCa;
+    try {
+        ca = GenCa.open({ dir: input.caDir, v1Dirs: input.v1CaDirs, now: input.now, ...(input.issuer ? { issuer: input.issuer } : {}), log: (line) => console.log(line) });
+    } catch (error) {
+        // Without a CA there is no certificate to serve: say so, and start nothing that would serve a broken one.
+        console.error(`[gen-ca] ${message(error)}`);
+        return off(`Genie’s certificate authority could not be set up (${message(error)}); https://<name>.gen in external browsers is off, the in-app browser still works`);
     }
     const caddyfile = join(caddyDir, 'Caddyfile');
-    const marker = join(caddyDir, 'trusted');
+    // Earlier betas remembered `caddy trust` (Caddy's own root) with this marker. Trust is read from the OS store now,
+    // and that root is no longer served; the marker would only mislead whoever reads the folder.
+    rmSync(join(caddyDir, 'trusted'), { force: true });
     let hosts: HostsSyncResult | null = null;
-    let trusted = existsSync(marker);
+    let trusted: boolean | null = null;
+    let trustError: string | null = null;
+    let certificateError: string | null = null;
+    let askedAt: number | null = null;
+    let deferredFor = ca.trustDeferred();
+    let trusting: Promise<{ ok: true } | { ok: false; reason: string }> | null = null;
     const render = () => {
+        const routes = sites.routes();
+        let tls: FrontDoorTls | null = null;
+        if (routes.length > 0) {
+            try {
+                tls = ca.leafFor(routes.map((r) => r.host));
+                certificateError = null;
+            } catch (error) {
+                // The previous Caddyfile (and leaf) stay as they were; the failure is a fact on the Hosting surface.
+                certificateError = `Genie could not issue the certificate for ${routes.map((r) => r.host).join(', ')}: ${message(error)}`;
+                console.error(`[gen-ca] ${certificateError}`);
+                return;
+            }
+        }
         mkdirSync(caddyDir, { recursive: true });
-        writeFileSync(caddyfile, frontDoorCaddyfile(sites.routes()), 'utf8');
+        writeFileSync(caddyfile, frontDoorCaddyfile(routes, tls), 'utf8');
+    };
+    // READ from the OS store by the CA's thumbprint — never a marker. A store that cannot be read is untrusted with
+    // the reason, so the person still has the Trust door.
+    const readTrust = async (): Promise<boolean> => {
+        let holds: boolean;
+        try {
+            holds = await input.trustStore.has(ca.thumbprint);
+            if (holds) trustError = null;
+        } catch (error) {
+            holds = false;
+            trustError = `Genie could not read the trust store: ${message(error)}`;
+        }
+        trusted = holds;
+        return holds;
     };
     // The hosts block follows the routes; the OS prompt appears only when a plain write is refused
     // AND the block actually changed. A declined prompt is a recorded fact with the block to paste.
@@ -247,7 +331,7 @@ function startExternalFrontDoor(input: {
         try {
             hosts = await syncHostsFile(routes, input.hostsIo);
         } catch (error) {
-            hosts = { changed: false, elevated: false, error: error instanceof Error ? error.message : String(error), manualBlock: hostsFileBlock(routes) };
+            hosts = { changed: false, elevated: false, error: message(error), manualBlock: hostsFileBlock(routes) };
         }
         notify();
         return hosts;
@@ -265,22 +349,45 @@ function startExternalFrontDoor(input: {
         restart: 'always',
     });
     void syncHosts();
+    void readTrust().then(notify);
     return {
-        status: () => ({ running: true, caddyfile, hostsPath: input.hostsPath, hosts, trusted }),
+        status: () => ({ running: true, caddyfile, hostsPath: input.hostsPath, hosts, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError }),
         onChange,
         syncHosts,
-        trust: async () => {
-            if (trusted) return { ok: true };
-            const plan = trustPlan(caddyBin, caddyDir);
-            try {
-                await input.runElevated({ command: plan.command, args: plan.args, env: plan.env });
-            } catch (error) {
-                return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-            }
-            writeFileSync(marker, new Date().toISOString(), 'utf8');
-            trusted = true;
+        trust: () => {
+            // One Trust at a time: the Deck's and Hosting's buttons pressed together raise ONE prompt.
+            trusting ??= (async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+                if (await readTrust()) { notify(); return { ok: true }; }
+                try {
+                    await input.runElevated(trustInstallStep(input.platform, ca.certPath));
+                } catch (error) {
+                    trustError = `Genie could not install its certificate into the trust store: ${message(error)}`;
+                    notify();
+                    return { ok: false, reason: trustError };
+                }
+                // The install said it worked; the store is the judge.
+                trustError = null;
+                if (!(await readTrust())) {
+                    trustError ??= `the install finished, but the trust store does not hold Genie’s certificate (thumbprint ${ca.thumbprint})`;
+                    notify();
+                    return { ok: false, reason: trustError };
+                }
+                notify();
+                return { ok: true };
+            })().finally(() => { trusting = null; });
+            return trusting;
+        },
+        deferTrust: () => {
+            ca.deferTrust();
+            deferredFor = ca.thumbprint;
             notify();
-            return { ok: true };
+        },
+        deckItems: () => {
+            const all = sites.list();
+            if (trusted !== false || all.length === 0) return [];
+            askedAt ??= input.now();
+            const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
+            return item ? [item] : [];
         },
     };
 }
@@ -438,6 +545,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorCtl = startExternalFrontDoor({
         caddyBin: input.caddyBin,
         caddyDir: join(runtimeDir(input.userData), 'caddy'),
+        caDir: join(runtimeDir(input.userData), 'gen-ca'),
+        v1CaDirs: input.v1CaDirs ?? [],
+        issuer: input.certIssuer,
+        // Read-only: one PowerShell Test-Path per Root store on Windows, the System keychain on macOS, the bundles on Linux.
+        trustStore: input.trustStore ?? osTrustStore(process.platform, (command, args) => execFileRunner(command, args, { timeoutMs: 20_000 })),
+        platform: process.platform,
+        now,
         sites,
         supervisor,
         hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData), run: elevationRun }),
@@ -495,9 +609,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         onFrontDoorChange: frontDoorCtl.onChange,
         syncHosts: frontDoorCtl.syncHosts,
         trustCertificate: frontDoorCtl.trust,
+        deferTrustCertificate: frontDoorCtl.deferTrust,
         routes,
         deckItems: () => [
             ...approvals.deckItems(),
+            ...frontDoorCtl.deckItems(),
             ...deckItemsFrom({
                 questions: attention.pending(),
                 userList: attention.allUserItems(),

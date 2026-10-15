@@ -4,13 +4,16 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
+import { TRUST_DECK_ID } from '../src/core/gen-ca.js';
+import type { TrustStorePort } from '../src/main/gen-ca.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
  * THE FRONT DOOR IN THE HOSTING SNAPSHOT — its state rides `hosting.frontDoor`, and the two
  * person-triggered repairs are actions: trust the certificate (one OS prompt), and try the hosts
- * file again after a declined prompt. A refusal is thrown with the reason, never swallowed.
+ * file again after a declined prompt. A refusal is thrown with the reason, never swallowed. The
+ * Deck's Trust item answers through the same Trust; its Not now is remembered.
  */
 
 const pty: PtyPort = {
@@ -25,6 +28,10 @@ let services: ComposedServices;
 let content = '';
 let denyElevated = false;
 let declineTrust = false;
+/** The OS trust store: what it holds. The elevated install adds Genie's CA to it unless declined. */
+let held = new Set<string>();
+const trustStore: TrustStorePort = { has: async (t) => held.has(t) };
+const installed = () => { const fd = services.externalFrontDoor; if (fd.running) held.add(fd.authority.thumbprint); };
 const hostsIo: HostsIo = {
     read: async () => content,
     write: async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
@@ -36,10 +43,11 @@ beforeEach(async () => {
     content = '127.0.0.1 localhost\n';
     denyElevated = false;
     declineTrust = false;
+    held = new Set<string>();
     services = await composeServices({
         userData: dir, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0,
-        hostsIo,
-        runElevated: async () => { if (declineTrust) throw new Error('the user declined'); },
+        hostsIo, trustStore,
+        runElevated: async () => { if (declineTrust) throw new Error('the user declined'); installed(); },
     });
     await settle();
 });
@@ -64,8 +72,31 @@ describe('hosting.frontDoor', () => {
         await rm(dir, { recursive: true, force: true });
         dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-frontdoor-'));
         declineTrust = true;
-        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, runElevated: async () => { throw new Error('the user declined'); } });
-        await expect(handleFeatureAction(services, { kind: 'hosting.trustCertificate' }, state())).rejects.toThrow('the user declined');
+        services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, hostsIo, trustStore, runElevated: async () => { throw new Error('the user declined'); } });
+        await settle();
+        await expect(handleFeatureAction(services, { kind: 'hosting.trustCertificate' }, state())).rejects.toThrow('Genie could not install its certificate into the trust store: the user declined');
+        expect((await featureSnapshot(services, state())).hosting!.frontDoor).toMatchObject({ trusted: false, trustError: 'Genie could not install its certificate into the trust store: the user declined' });
+    });
+
+    it('the Deck’s Trust item: Trust trusts through the same one prompt; Not now removes it', async () => {
+        services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
+        await settle();
+        const item = services.deckItems().find((i) => i.id === TRUST_DECK_ID)!;
+        expect(item).toBeDefined();
+        const snap = await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'trust' }, state());
+        expect(snap.hosting!.frontDoor).toMatchObject({ trusted: true });
+        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeUndefined();
+    });
+
+    it('the Deck’s Not now: the item is gone; a declined Trust from the Deck is a thrown refusal with the reason', async () => {
+        services.sites.create({ name: 'docs', workspaceId: 'tynn', repoPath: dir, serve: { mode: 'proxy' }, hostPort: 5173 });
+        await settle();
+        const item = services.deckItems().find((i) => i.id === TRUST_DECK_ID)!;
+        declineTrust = true;
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'trust' }, state())).rejects.toThrow('the user declined');
+        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeDefined();
+        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'not-now' }, state());
+        expect(services.deckItems().find((i) => i.id === TRUST_DECK_ID)).toBeUndefined();
     });
 
     it('hosting.syncHosts tries the hosts file again after a declined prompt and the snapshot shows the outcome', async () => {

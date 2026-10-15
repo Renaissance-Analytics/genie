@@ -2,11 +2,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { elevationPlan, hostsWriteStep, realHostsIo, runElevated, type Plan } from '../src/main/elevate.js';
+import { elevationPlan, exitCodeText, hostsWriteStep, realHostsIo, runElevated, type Plan } from '../src/main/elevate.js';
 
 /**
  * ELEVATION, PER OS — the two things the external-browser path needs root/administrator for: writing
- * the hosts file and `caddy trust`. Each OS has ONE prompt of its own (UAC via Start-Process -Verb
+ * the hosts file and installing Genie's CA. Each OS has ONE prompt of its own (UAC via Start-Process -Verb
  * RunAs, macOS's administrator-privileges dialog via osascript, polkit via pkexec) and Genie goes
  * through that prompt, never through a stored password or a shell. Arguments are quoted so a path
  * with a space or an apostrophe arrives as one token; a declined prompt is an error with the
@@ -37,16 +37,28 @@ describe('elevationPlan', () => {
         expect(elevationPlan('darwin', { command: 'cp', args: ["/Users/it's me/h", '/etc/hosts'] }).args[1]).toBe(`do shell script "'cp' '/Users/it'\\\\''s me/h' '/etc/hosts'" with administrator privileges`);
     });
 
-    it('win32: PowerShell Start-Process -Verb RunAs -Wait, env set on the launcher, each argument its own double-quoted token, apostrophes doubled', () => {
+    it('win32: PowerShell Start-Process -Verb RunAs -Wait -PassThru, env set on the launcher, each argument its own double-quoted token, apostrophes doubled — and the ELEVATED exit code is the launcher’s', () => {
         expect(elevationPlan('win32', {
             command: 'C:\\Program Files\\Genie\\resources\\runtime\\caddy.exe',
             args: ['trust', '--config', 'C:\\Users\\me\\.genie\\caddy\\Caddyfile', '--adapter', 'caddyfile'],
             env: { XDG_DATA_HOME: 'C:\\Users\\me\\.genie\\caddy\\data' },
         })).toEqual({
             command: 'powershell',
-            args: ['-NoProfile', '-NonInteractive', '-Command', `$env:XDG_DATA_HOME='C:\\Users\\me\\.genie\\caddy\\data'; Start-Process -Wait -Verb RunAs -FilePath 'C:\\Program Files\\Genie\\resources\\runtime\\caddy.exe' -ArgumentList @('"trust"','"--config"','"C:\\Users\\me\\.genie\\caddy\\Caddyfile"','"--adapter"','"caddyfile"')`],
+            args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $env:XDG_DATA_HOME='C:\\Users\\me\\.genie\\caddy\\data'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\Program Files\\Genie\\resources\\runtime\\caddy.exe' -ArgumentList @('"trust"','"--config"','"C:\\Users\\me\\.genie\\caddy\\Caddyfile"','"--adapter"','"caddyfile"'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
         });
-        expect(elevationPlan('win32', { command: 'x.exe', args: ["it's"] }).args[3]).toBe(`Start-Process -Wait -Verb RunAs -FilePath 'x.exe' -ArgumentList @('"it''s"')`);
+        expect(elevationPlan('win32', { command: 'x.exe', args: ["it's"] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'x.exe' -ArgumentList @('"it''s"'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
+    });
+
+    // The bug this fixes: `Start-Process -Wait` alone returns nothing, so the launcher exited 0 whatever the elevated
+    // step did — a certutil that FAILED read as trusted. Without -PassThru there is no process to read a code from.
+    it('win32: the launcher can only succeed through the elevated process’s own exit code (no -PassThru = no code = every failure a success)', () => {
+        const script = elevationPlan('win32', { command: 'certutil', args: ['-addstore', '-f', 'Root', 'C:\\Users\\me\\.genie\\runtime\\gen-ca\\ca.crt'] }).args[3]!;
+        expect(script).toContain('-PassThru');
+        expect(script).toMatch(/; exit \$p\.ExitCode$/);
+        expect(script.startsWith(`$ErrorActionPreference='Stop'; `)).toBe(true);
+        expect(script).toContain("-ArgumentList @('\"-addstore\"','\"-f\"','\"Root\"','\"C:\\Users\\me\\.genie\\runtime\\gen-ca\\ca.crt\"')");
+        // No arguments: no empty -ArgumentList (Start-Process refuses an empty array).
+        expect(elevationPlan('win32', { command: 'x.exe', args: [] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'x.exe'; if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
     });
 });
 
@@ -68,6 +80,17 @@ describe('runElevated', () => {
         expect(runs).toHaveLength(1);
         await expect(runElevated('linux', trust, async () => ({ exitCode: 126, stdout: 'Error executing command as another user: Request dismissed' }))).rejects.toThrow('Request dismissed');
         await expect(runElevated('linux', trust, async () => ({ exitCode: 1, stdout: '' }))).rejects.toThrow(/exit 1/);
+    });
+
+    it('an elevated step that ran and FAILED rejects with its exit code — a Windows HRESULT in hex — and success stays the positive control', async () => {
+        const certutil = { command: 'certutil', args: ['-addstore', '-f', 'Root', 'C:\\g\\ca.crt'] };
+        // What the Windows launcher now hands back when certutil fails elevated: its code, nothing on stdout.
+        await expect(runElevated('win32', certutil, async () => ({ exitCode: -2147024891, stdout: '' }))).rejects.toThrow('certutil -addstore -f Root C:\\g\\ca.crt: the elevated run failed (exit 0x80070005)');
+        await expect(runElevated('win32', certutil, async () => ({ exitCode: 5, stdout: '' }))).rejects.toThrow(/exit 5\)$/);
+        await expect(runElevated('win32', certutil, async () => ({ exitCode: 0, stdout: '' }))).resolves.toBeUndefined();
+        expect(exitCodeText(0x80070005)).toBe('0x80070005');
+        expect(exitCodeText(-2147024891)).toBe('0x80070005');
+        expect(exitCodeText(1)).toBe('1');
     });
 });
 

@@ -270,7 +270,8 @@ export function HostingSurface({ data, onAction, adding, onCloseForm, workspaces
 
 /**
  * THE FRONT DOOR'S LINES — each a fact with its fix beside it, shown ONLY when true (§4.5's signal
- * rule): the root not yet trusted offers the one-click trust; a declined hosts-file prompt shows the
+ * rule): Genie's CA read as untrusted offers the one-click trust (with the last failure's reason; nothing while the
+ * store is still being read); a leaf that could not be issued says so; a declined hosts-file prompt shows the
  * error, the block to paste and where, and a retry; no bundled Caddy says so. All quiet → nothing.
  */
 function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; onAction: SurfaceProps['onAction'] }) {
@@ -279,11 +280,17 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
     const button = 'ml-auto shrink-0 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
         <>
-            {!frontDoor.trusted ? (
+            {frontDoor.trusted === false ? (
                 <div data-frontdoor-line="trust" className="flex items-center gap-3 border-b border-[var(--border-1)] px-5 py-2 text-sm">
-                    <span>https://&lt;name&gt;.gen in your browser needs Genie’s local certificate trusted; your OS will ask for permission once.</span>
+                    <span>
+                        https://&lt;name&gt;.gen in your browser needs Genie’s certificate trusted; your OS will ask for permission once.
+                        {frontDoor.trustError ? <span data-trust-error className="block text-[var(--fg-3)]">{frontDoor.trustError}</span> : null}
+                    </span>
                     <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</button>
                 </div>
+            ) : null}
+            {frontDoor.certificateError ? (
+                <p data-frontdoor-line="certificate" className="border-b border-[var(--border-1)] px-5 py-2 text-sm">{frontDoor.certificateError}</p>
             ) : null}
             {hosts && 'error' in hosts ? (
                 <div data-frontdoor-line="hosts" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-5 py-2 text-sm">

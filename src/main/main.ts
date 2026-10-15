@@ -971,6 +971,9 @@ async function boot(): Promise<void> {
         v1Services: { database: v1DatabaseFile() },
         // Genie's own Caddy, shipped beside the app (caddy-runtime.ts); null in a dev tree without it.
         caddyBin: caddyBinPath(process.resourcesPath, process.platform),
+        // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
+        // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
+        v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
         frontDoorPort: 0,
         hostName: hostname(),
         remoteTransport: remoteSocket.transport,
@@ -1219,6 +1222,8 @@ async function boot(): Promise<void> {
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
     // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
     registry.setDeckSource(() => composed.deckItems());
+    // Genie's own Deck item (Trust its certificate) follows the front door: read trusted, a site added, Not now.
+    composed.onFrontDoorChange(() => registry?.touch());
     // A question asked or answered, a list item, a finished agent: the snapshot (and so the Deck, its badge and the
     // "an agent asks you something" alert) follows at once.
     composed.attention.onChange(() => registry?.touch());
