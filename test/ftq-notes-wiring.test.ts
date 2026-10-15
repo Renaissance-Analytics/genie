@@ -68,9 +68,10 @@ describe('main and the renderers pass notes, never drop them', () => {
         const app = strip('../src/renderer/App.tsx');
         expect(app.match(/act\(\{\s*kind:\s*'deck\.answerForm',\s*item,\s*selections,\s*notes,\s*note:\s*''\s*\}\)/g) ?? []).toHaveLength(1);
     });
-    it('question-main.tsx: the window’s page sends the notes over the bridge', () => {
+    it('question-main.tsx: the window’s page sends the notes over the bridge — for the question they were written in', () => {
         const page = strip('../src/renderer/question-main.tsx');
-        expect(page.match(/bridge\.answer\(selections,\s*notes\)/g) ?? []).toHaveLength(1);
+        // The window holds a queue (ftq-queue.test.tsx): an answer names its question, so any of them can be answered.
+        expect(page.match(/bridge\.answer\(selections,\s*notes,\s*id\)/g) ?? []).toHaveLength(1);
     });
 });
 
