@@ -11,7 +11,7 @@ import {
 } from '../core/attention.js';
 import { questionTitle } from '../core/deck-sources.js';
 import type { AgentId } from '../core/identity.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, type Participant } from '../core/inbox.js';
 import type { InboxStore } from './inbox-store.js';
 import { runtimeDir } from './paths.js';
 import { readJson, reportFlush, writeJsonAtomic } from './store.js';
@@ -57,6 +57,12 @@ import { readJson, reportFlush, writeJsonAtomic } from './store.js';
  * Only the asking agent, in its own workspace, may withdraw or update its question. Before this, nothing removed a
  * question but an answer, and the Deck kept eight from the day before that the person had never been shown (the owner,
  * 2026-10-15: "some look really old").
+ *
+ * ## A Done on the person's list is told to the agent that put it there
+ *
+ * `lists.done` is the one place every Done goes through — the Deck's Done (feature IPC `list-done`) and the `lists` MCP
+ * tool alike — and it takes WHO marked it. When the person marks done an item an agent asked for, the asker is mailed
+ * from the human, the way an answer reaches it. Before, it only flipped `done` and the asker never heard (B23).
  */
 
 export interface HandoffSaved {
@@ -178,7 +184,12 @@ export class AttentionStore {
     readonly lists: {
         add(input: { list: ListKind; workspaceId: string; agentId: AgentId; text: string }): Promise<ListAddResult>;
         show(input: { list: ListKind; workspaceId: string; agentId: AgentId }): ListItem[];
-        done(input: { workspaceId: string; id: string }): Promise<boolean>;
+        /**
+         * Marks an item done. `by` is who did it — the person (`HUMAN`) or the calling agent — and is required, so no
+         * path can mark an item done without saying who: when the PERSON marks done an item an agent asked for, that
+         * agent is mailed (see `#mailListDone`). False when no such item is in that workspace.
+         */
+        done(input: { workspaceId: string; id: string; by: Participant }): Promise<boolean>;
         clear(input: { list: ListKind; workspaceId: string; agentId: AgentId }): Promise<number>;
     };
 
@@ -190,15 +201,16 @@ export class AttentionStore {
         this.lists = {
             add: (input) => this.#addToList(input),
             show: (input) => this.#scoped(input).map((r) => r.item),
-            done: async ({ workspaceId, id }) => {
-                let hit = false;
-                this.#data.lists = this.#data.lists.map((r) => {
-                    if (r.workspaceId !== workspaceId || r.item.id !== id) return r;
-                    hit = true;
-                    return { ...r, item: { ...r.item, done: true } };
-                });
-                if (hit) await this.#flush();
-                return hit;
+            done: async ({ workspaceId, id, by }) => {
+                const record = this.#data.lists.find((r) => r.workspaceId === workspaceId && r.item.id === id);
+                if (!record) return false;
+                // Already done: still true, nothing written, nobody mailed again.
+                if (record.item.done) return true;
+                this.#data.lists = this.#data.lists.map((r) => (r === record ? { ...r, item: { ...r.item, done: true } } : r));
+                await this.#flush();
+                // The item is done whatever happens to the mail: it is written before anyone is told.
+                if (by === HUMAN && record.item.askedBy !== HUMAN) await this.#mailListDone(record.item);
+                return true;
             },
             clear: async (input) => {
                 const gone = this.#scoped(input);
@@ -409,6 +421,20 @@ export class AttentionStore {
                 `(Your question ${q.id}. Nothing was chosen; decide without it, or ask again if it still matters.)`,
                 ...noted,
             ].join('\n'),
+        });
+    }
+
+    /**
+     * The person marked done something an agent put on their list. The asker is told the way an answer reaches it —
+     * mail FROM the human (`answer` above) — so its ordinary `receive` carries it and main's `inbox.onSend` wiring
+     * reminds it if it is idle. Mail to an agent this Genie no longer knows is kept like any other and wakes nobody.
+     * Only the person's Done is mailed: an agent marking its own item knows, and the same item done twice is mailed once.
+     */
+    async #mailListDone(item: ListItem): Promise<void> {
+        await this.#inbox.send({
+            from: HUMAN,
+            to: item.askedBy as AgentId,
+            text: [`The person marked done the item you put on their list: ${item.text}`, `(Your list item ${item.id}.)`].join('\n'),
         });
     }
 
