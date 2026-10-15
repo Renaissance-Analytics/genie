@@ -103,7 +103,11 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');
     } else {
-        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort}`, '\tfile_server');
+        // PHP is told the request is HTTPS. Every request reaches this Caddy through Genie's HTTPS front door, but over a
+        // plain-HTTP hop, so PHP saw `http` and Laravel built `http://<name>.gen/...` asset links on an https page: blocked
+        // as mixed content, every page blank (measured on moic.gen, 2026-10-14). HTTPS/scheme/port are what PHP's own
+        // `$_SERVER` reports for a TLS request, so frameworks generate https URLs without trusting any proxy header.
+        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t}', '\tfile_server');
     }
     lines.push('}', '');
     return lines.join('\n');
