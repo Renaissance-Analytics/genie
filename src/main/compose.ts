@@ -52,7 +52,7 @@ import { ServiceDriver, dockerRunnerOver, type DockerRunner } from './service-dr
 import { ServiceRegistry } from './service-registry.js';
 import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
 import { SettingsStore } from './settings-store.js';
-import { SiteManager } from './site-manager.js';
+import { SiteManager, type PhpCgiResolution } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
 import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
@@ -90,6 +90,8 @@ export interface ComposeInput {
     readonly caddyBin: string | null;
     /** What every site's php-cgi worker is given on top of the pty host's env: Genie's CA ini directory (toolchain-ops.ts). */
     readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
+    /** Which php-cgi a site's PHP pin runs (main/php-versions.ts `resolvePhpCgi`); absent = PATH php-cgi, pins refused. */
+    readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
     readonly allocatePort?: () => number;
@@ -634,6 +636,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             writeFileSync(path, content, 'utf8');
         },
         ...(input.phpWorkerEnv ? { phpWorkerEnv: input.phpWorkerEnv } : {}),
+        ...(input.resolvePhpCgi ? { resolvePhpCgi: input.resolvePhpCgi } : {}),
     });
     const routes = () => sites.routes();
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.

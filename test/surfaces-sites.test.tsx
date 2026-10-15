@@ -150,3 +150,32 @@ describe('S6: the site row’s controls are WIRED — each sends the action host
         ]);
     });
 });
+
+describe('T4: Edit carries a php site’s PHP pin', () => {
+    const shop = site({ id: 'site_shop', host: 'shop.gen', state: 'running', port: 4102, processIds: ['site_shop-fcgi', 'site_shop'], serve: { mode: 'php', root: 'public', version: '8.4' } as SiteInfo['serve'] });
+    const editing = { siteId: 'site_shop', host: 'shop.gen', defaults: { name: 'shop', mode: 'php', devServer: null, hostPort: null, root: 'public', spa: false, phpVersion: '8.4' }, problems: [], phpVersions: ['8.5.11', '8.4.26'] } as SiteEditing;
+
+    it('the Edit form is given the versions Add offers and opens ON the pin (a line pin named as the newest managed one, never "not installed")', () => {
+        const r = row(render([shop], editing), 'site_shop');
+        expect(r).toContain('data-php-version-select');
+        expect(r.match(/<option value="8\.5\.11">PHP 8\.5\.11 — managed by Genie<\/option>/g) ?? []).toHaveLength(1);
+        expect(r.match(/<option value="8\.4" selected="">PHP 8\.4 — the newest 8\.4 Genie manages<\/option>/g) ?? []).toHaveLength(1);
+        expect(r).not.toContain('not installed');
+        const form = elements(SiteRow({ site: shop, editing, onAction: () => {} })).find((e) => e.type === AddSiteForm)!;
+        expect(form.props.phpVersions).toEqual(['8.5.11', '8.4.26']);
+    });
+
+    it('Save sends the pin back — kept when the person changed something else, the new one when they changed it, none for a non-php mode', () => {
+        const sent: FeatureAction[] = [];
+        const form = elements(SiteRow({ site: shop, editing, onAction: (a) => sent.push(a) })).find((e) => e.type === AddSiteForm)!;
+        const submit = form.props.onSubmit as (f: unknown) => void;
+        submit({ name: 'store', mode: 'php', command: '', hostPort: null, root: 'public', spa: false, phpVersion: '8.4' });
+        submit({ name: 'shop', mode: 'php', command: '', hostPort: null, root: 'public', spa: false, phpVersion: '8.5.11' });
+        submit({ name: 'shop', mode: 'static', command: '', hostPort: null, root: 'dist', spa: false, phpVersion: '8.4' });
+        expect(sent.map((a) => (a.kind === 'hosting.updateSite' ? a.form : null))).toEqual([
+            { name: 'store', mode: 'php', devServer: null, hostPort: null, root: 'public', spa: false, phpVersion: '8.4' },
+            { name: 'shop', mode: 'php', devServer: null, hostPort: null, root: 'public', spa: false, phpVersion: '8.5.11' },
+            { name: 'shop', mode: 'static', devServer: null, hostPort: null, root: 'dist', spa: false },
+        ]);
+    });
+});

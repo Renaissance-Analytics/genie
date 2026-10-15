@@ -11,6 +11,7 @@ import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
+import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
 import {
     createService, createSite, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite,
@@ -48,6 +49,12 @@ export interface FeaturePorts {
         preview?(tool: string): Promise<InstallPreview>;
         /** T2: Check and repair. */
         repair?(): Promise<RepairReport>;
+        /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
+        php?: {
+            list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
+            install(version: string, consent: boolean): Promise<PhpInstallOutcome>;
+            remove(version: string, pins: readonly SitePin[]): PhpRemoveOutcome;
+        };
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
@@ -68,6 +75,7 @@ export interface FeatureState {
     toolchainRepairedAt?: number | null;
     toolchainWarning?: ToolchainSection['warning'] | null;
     toolchainResult?: string | null;
+    toolchainPhp?: PhpVersionsView | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
@@ -93,6 +101,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(typeof state.toolchainRepairedAt === 'number' ? { repairedAt: state.toolchainRepairedAt } : {}),
         ...(state.toolchainWarning ? { warning: state.toolchainWarning } : {}),
         ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
+        ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
     };
 }
 
@@ -106,13 +115,20 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainRepairedAt: section?.repairedAt ?? null,
         toolchainWarning: section?.warning ?? null,
         toolchainResult: section?.result ?? null,
+        toolchainPhp: section?.php ?? null,
     };
 }
 
 type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
 
+/** Every site's PHP pin — what the PHP versions list shows as "used by" and a removal is refused against. */
+export function sitePins(services: Pick<ComposedServices, 'sites'>): SitePin[] {
+    return services.sites.list().flatMap((s) => (s.serve?.mode === 'php' && s.serve.version ? [{ host: s.host, pin: s.serve.version }] : []));
+}
+
 /** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
-async function rescanToolchain(next: FeatureState, tc: ToolchainPort): Promise<void> {
+async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
+    if (tc.php) next.toolchainPhp = await tc.php.list(pins);
     const tools = await tc.probe();
     next.toolStatuses = tools;
     next.toolchainCheckedAt = tc.now();
@@ -199,6 +215,13 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 
 const USER = { kind: 'user' } as const;
 
+/** The Add-a-site form's PHP version choices: the versions Genie manages, newest first (none wired = no choices, the PATH PHP). */
+async function phpChoices(services: ComposedServices, ports: FeaturePorts): Promise<{ phpVersions?: string[] }> {
+    const php = ports.toolchain?.php;
+    if (!php) return {};
+    return { phpVersions: (await php.list(sitePins(services))).managed.map((m) => m.version) };
+}
+
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason. */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
     const next: FeatureState = { ...state };
@@ -220,7 +243,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         // (the old no-op cases for flows.add / hosting.addSite were removed: a switch takes the first match)
         case 'hosting.addSite':
             // Named Genie 1's way, `<folder>.<workspace>` — the agents' `sites add` and `detect` get the same defaults.
-            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaultsIn(services, action.workspaceId, action.repoPath), problems: [] };
+            next.siteAdding = { workspaceId: action.workspaceId, repoPath: action.repoPath, defaults: await siteDefaultsIn(services, action.workspaceId, action.repoPath), problems: [], ...(await phpChoices(services, ports)) };
             next.siteEditing = null;
             break;
         case 'hosting.cancelForm':
@@ -230,7 +253,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.editSite': {
             // The form opens on the site as it is declared now; a site that cannot be edited says why (thrown).
             const target = siteEditTarget(services, action.siteId);
-            next.siteEditing = { siteId: action.siteId, host: target.site.host, defaults: target.form, problems: [] };
+            // The PHP version choices Add offers, so the form shows the site's pin and saving it never drops it.
+            next.siteEditing = { siteId: action.siteId, host: target.site.host, defaults: target.form, problems: [], ...(await phpChoices(services, ports)) };
             next.siteAdding = null;
             break;
         }
@@ -238,7 +262,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // The same call an agent's `sites update` makes (hosting-actions.ts): the Add form's validation, one envelope write.
             const r = await updateSite(services, { siteId: action.siteId, form: action.form });
             if (r.kind === 'problems') {
-                const open = state.siteEditing ?? { siteId: action.siteId, host: services.sites.get(action.siteId)?.host ?? action.siteId, defaults: action.form, problems: [] };
+                const open = state.siteEditing ?? { siteId: action.siteId, host: services.sites.get(action.siteId)?.host ?? action.siteId, defaults: action.form, problems: [], ...(await phpChoices(services, ports)) };
                 next.siteEditing = { ...open, defaults: action.form, problems: r.problems };
                 break;
             }
@@ -381,7 +405,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const tc = ports.toolchain;
             if (!tc) throw new Error('no toolchain runner is wired into this Genie; the scan cannot run');
             if (shouldCheckUpdates(state.toolchainCheckedAt ?? null, tc.now(), action.force === true)) {
-                await rescanToolchain(next, tc);
+                await rescanToolchain(next, tc, sitePins(services));
             }
             break;
         }
@@ -403,7 +427,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') throw new Error(outcome.reason);
             next.toolchainResult = describeUpdate(action.tool, outcome);
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
-            await rescanToolchain(next, tc);
+            await rescanToolchain(next, tc, sitePins(services));
             break;
         }
         case 'toolchain.install': {
@@ -418,7 +442,30 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind !== 'not-installed' && next.toolchainFindings) {
                 next.toolchainFindings = next.toolchainFindings.filter((f) => !(f.result.kind === 'needs-install' && f.result.tool === action.tool));
             }
-            await rescanToolchain(next, tc);
+            await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+        case 'toolchain.installPhp': {
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) throw new Error(`Genie installs nothing without your go-ahead; PHP ${action.version} was not installed`);
+            const tc = ports.toolchain;
+            if (!tc?.php) throw new Error('no PHP version manager is wired into this Genie; nothing was installed');
+            const outcome = await tc.php.install(action.version, true);
+            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            next.toolchainResult =
+                outcome.kind === 'installed' ? `PHP ${outcome.version} is installed; a php site can be pinned to it.`
+                : outcome.kind === 'already-installed' ? `PHP ${outcome.version} was already installed; nothing was downloaded.`
+                : `PHP ${action.version} was not installed: ${outcome.reason}.`;
+            next.toolchainPhp = await tc.php.list(sitePins(services));
+            break;
+        }
+        case 'toolchain.removePhp': {
+            const tc = ports.toolchain;
+            if (!tc?.php) throw new Error('no PHP version manager is wired into this Genie; nothing was removed');
+            const outcome = tc.php.remove(action.version, sitePins(services));
+            if (outcome.kind === 'refused') throw new Error(outcome.reason);
+            next.toolchainResult = `PHP ${outcome.version} was removed.`;
+            next.toolchainPhp = await tc.php.list(sitePins(services));
             break;
         }
         case 'toolchain.repair': {
@@ -432,7 +479,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 report.findings.length === 0
                     ? "Nothing to repair: each tool runs its newest copy, PHP has a CA bundle, and nothing PHP needs is missing."
                     : `${report.findings.length} problem${report.findings.length === 1 ? '' : 's'} found, ${repaired} repaired.`;
-            await rescanToolchain(next, tc);
+            await rescanToolchain(next, tc, sitePins(services));
             break;
         }
         case 'deck.answer':

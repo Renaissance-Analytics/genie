@@ -26,7 +26,7 @@ import type { UpdateState } from '../bridge.js';
 
 /** A form open inside a surface — renderer-local state; the problems are the last refused submit's. */
 export type AddingForm =
-    | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[] }
+    | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[]; phpVersions?: readonly string[] }
     | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] }
     | { kind: 'service'; workspaceId: string; defaults: ServiceForm; problems: readonly Problem[]; consent: { image: string; note: string; form: ServiceForm } | null };
 
@@ -230,6 +230,7 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
                         defaults={{ ...editing.defaults, hint: `Editing ${editing.host}. Saved to the workspace’s project.json; a running site comes back up as edited.` }}
                         existingHosts={[]}
                         problems={editing.problems}
+                        {...(editing.phpVersions ? { phpVersions: editing.phpVersions } : {})}
                         onSubmit={(f) =>
                             onAction({
                                 kind: 'hosting.updateSite',
@@ -241,6 +242,8 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
                                     hostPort: f.hostPort,
                                     root: f.root,
                                     spa: f.spa,
+                                    // The pin the form opened on unless the person changed it — an Edit never drops it.
+                                    ...(f.mode === 'php' ? { phpVersion: f.phpVersion } : {}),
                                 },
                             })
                         }
@@ -289,6 +292,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                     defaults={adding.defaults}
                     existingHosts={(hosting?.sites ?? []).map((s) => s.host)}
                     problems={adding.problems}
+                    {...(adding.phpVersions ? { phpVersions: adding.phpVersions } : {})}
                     onSubmit={(f) =>
                         onAction({
                             kind: 'hosting.createSite',
@@ -301,6 +305,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                                 hostPort: f.hostPort,
                                 root: f.root,
                                 spa: f.spa,
+                                phpVersion: f.mode === 'php' ? f.phpVersion : null,
                             },
                         })
                     }
@@ -645,6 +650,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                     ))}
                 </ul>
             ) : null}
+            {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -680,6 +686,45 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                 </>
             )}
         </div>
+    );
+}
+
+/**
+ * T4 — PHP VERSIONS: what Genie manages (each with the sites pinned to it; Remove is refused while there are any, and the
+ * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
+ * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
+ */
+function PhpVersions({ php, busy, onAction }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    const addable = php.available.filter((a) => !a.installed);
+    return (
+        <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">PHP versions</h3>
+            <p data-php-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {php.system ? `Unpinned php sites run PHP ${php.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {php.managed.map((m) => (
+                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">PHP {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
+                        <button type="button" disabled={busy || m.usedBy.length > 0} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {php.installRefused ? (
+                <p data-php-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{php.installRefused}</p>
+            ) : addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from windows.php.net (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
+                            PHP {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
     );
 }
 

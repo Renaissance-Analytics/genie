@@ -45,6 +45,15 @@ describe('each serve shape', () => {
         expect(served({ ...host, repo: 'shop', genName: 'docs.gen', hostServe: { mode: 'static', root: 'dist' } }).serve).toEqual({ mode: 'static', root: 'dist', spa: false });
     });
 
+    it('a php site’s PHP pin (Genie 1’s hostServe.version) is carried to the site, and written back as it was read', () => {
+        expect(served({ ...host, repo: 'shop', genName: 'shop.gen', hostServe: { mode: 'php', root: 'public', version: '8.4' } }).serve).toEqual({ mode: 'php', root: 'public', version: '8.4' });
+        // Control: no pin, no version — the PATH PHP.
+        expect(served({ ...host, repo: 'shop', genName: 'shop.gen', hostServe: { mode: 'php', root: 'public' } }).serve).toEqual({ mode: 'php', root: 'public' });
+        const entry = siteEntryFor(manifest({}), { name: 'shop', repoDir: 'repos/shop', serve: { mode: 'php', root: 'public', version: '8.4.26' } });
+        expect(entry).toMatchObject({ ok: true, entry: { hostServe: { mode: 'php', root: 'public', version: '8.4.26' } } });
+        expect(served({ ...host, ...(entry as { entry: Record<string, unknown> }).entry }).serve).toEqual({ mode: 'php', root: 'public', version: '8.4.26' });
+    });
+
     it('hostPort → a proxy to a server already listening, nothing started', () => {
         expect(served({ ...host, repo: '', genName: 'legacy.gen', hostPort: 8085 })).toMatchObject({ serve: { mode: 'proxy' }, hostPort: 8085, repoDir: '.' });
     });
@@ -113,7 +122,8 @@ describe('what Genie 2 cannot serve is listed with the reason, never dropped', (
         ['a name with an empty label', { ...host, repo: 'shop', genName: 'web..acme.gen', hostServe: { mode: 'php', root: 'public' } }, /empty label/],
         ['octane', { ...host, repo: 'shop', genName: 'o.gen', hostServe: { mode: 'octane', server: 'swoole' } }, /"octane" is not one Genie 2 serves/],
         ['frankenphp', { ...host, repo: 'shop', genName: 'f.gen', hostServe: { mode: 'frankenphp', root: 'public' } }, /"frankenphp"/],
-        ['a pinned PHP', { ...host, repo: 'shop', genName: 'p.gen', hostServe: { mode: 'php', root: 'public', version: '8.4' } }, /pins PHP 8\.4/],
+        // A PIN is served now (T4) — only a pin that is not a version is refused; see "a php site’s PHP pin" above.
+        ['a PHP pin that is not a version', { ...host, repo: 'shop', genName: 'p.gen', hostServe: { mode: 'php', root: 'public', version: 'latest' } }, /hostServe\.version "latest" is not a PHP version/],
         ['a tcp site', { ...host, kind: 'tcp', repo: 'shop', genName: 't.gen', hostPort: 5432 }, /tcp site/],
         ['nothing to serve', { ...host, repo: 'shop', genName: 'n.gen' }, /no way to serve/],
         ['a repo outside', { ...host, repo: '../x', genName: 'o.gen', hostPort: 1 }, /not a folder name/],

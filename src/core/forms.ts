@@ -22,6 +22,8 @@ export interface SiteForm {
     readonly hostPort: number | null;
     readonly root: string | null;
     readonly spa: boolean;
+    /** php: the PHP version the site is pinned to (a Genie-managed one); absent or `null` = the PHP on PATH. */
+    readonly phpVersion?: string | null;
 }
 
 export interface SiteFormDefaults extends SiteForm {
@@ -32,6 +34,9 @@ export interface Problem {
     readonly field: string;
     readonly message: string;
 }
+
+/** A PHP pin: `8`, `8.4` or `8.4.26` (Genie 1's `cleanEngineVersion`). */
+const PHP_PIN = /^\d+(?:\.\d+){0,2}$/;
 
 function labelFromFolder(repoPath: string): string {
     return basename(repoPath.replace(/[\\/]+$/, ''))
@@ -101,6 +106,11 @@ export function validateSiteForm(form: SiteForm, existingHosts: readonly string[
         }
     } else if (!form.root || form.root.trim().length === 0) {
         problems.push({ field: 'root', message: form.mode === 'static' ? 'A static site needs the built directory to serve (for example dist).' : 'A PHP site needs its public directory (usually public).' });
+    }
+    const pin = form.phpVersion ?? null;
+    if (pin !== null && pin !== '') {
+        if (form.mode !== 'php') problems.push({ field: 'phpVersion', message: 'Only a php site runs on a PHP version Genie manages; clear the PHP version or serve it as php.' });
+        else if (!PHP_PIN.test(pin)) problems.push({ field: 'phpVersion', message: `"${pin}" is not a PHP version — use one like 8.4 or 8.4.26.` });
     }
     return problems;
 }

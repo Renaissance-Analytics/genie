@@ -292,6 +292,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         if (args.stack !== undefined && !stacks.includes(args.stack as Stack)) return '`stack` is laravel, node, django or go';
         if (args.hostPort !== undefined && typeof args.hostPort !== 'number') return '`hostPort` is a number';
         if (args.lines !== undefined && (typeof args.lines !== 'number' || !Number.isFinite(args.lines) || args.lines < 1)) return '`lines` is a positive number';
+        if (args.phpVersion !== undefined && args.phpVersion !== null && typeof args.phpVersion !== 'string') return '`phpVersion` is a PHP version like 8.4 or 8.4.26, or "" for the PHP on PATH';
         return null;
     };
     /** A folder the agent named, resolved in ITS workspace — or the refusal, before anything is read there. */
@@ -313,6 +314,10 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         const devServer = devCommand
             ? { stack: (args.stack as Stack | undefined) ?? base.devServer?.stack ?? 'node', command: devCommand }
             : typeof args.hostPort === 'number' ? null : base.devServer;
+        // The PHP pin: kept from `base` unless given; `""` / null clears it (the PATH PHP). Only a php site carries one —
+        // a pin GIVEN for another mode is passed on, so the form's validation refuses it by name rather than dropping it.
+        const givenPin = args.phpVersion === null ? null : typeof args.phpVersion === 'string' ? (args.phpVersion.trim() || null) : undefined;
+        const phpVersion = givenPin !== undefined ? givenPin : mode === 'php' ? (base.phpVersion ?? null) : null;
         return {
             name: str(args.name) ?? base.name,
             mode,
@@ -320,6 +325,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             hostPort: mode === 'proxy' ? hostPort : null,
             root: mode === 'proxy' ? null : (str(args.root) ?? base.root),
             spa: typeof args.spa === 'boolean' ? args.spa : base.spa,
+            ...(mode === 'php' || givenPin !== undefined ? { phpVersion } : {}),
         };
     };
     /** What an update changes, for the person who approves it: each field that differs, before → after. */
@@ -332,6 +338,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
         if (after.spa !== before.spa) out.push(`spa ${before.spa} → ${after.spa}`);
         if (after.hostPort !== before.hostPort) out.push(`port ${show(before.hostPort)} → ${show(after.hostPort)}`);
         if ((after.devServer?.command ?? null) !== (before.devServer?.command ?? null)) out.push(`command ${show(before.devServer?.command)} → ${show(after.devServer?.command)}`);
+        const pin = (v: string | null | undefined) => (v ? `PHP ${v}` : 'the PHP on PATH');
+        if ((after.phpVersion || null) !== (before.phpVersion || null)) out.push(`PHP version ${pin(before.phpVersion)} → ${pin(after.phpVersion)}`);
         return out;
     };
     const SITE_ACTIONS = 'list, status, detect, add, start, stop, restart, logs, open, update, remove';
@@ -343,11 +351,11 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 + 'Actions: `list`. '
                 + '`status` {site} — the site and each of its processes as Genie sees them now. '
                 + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
-                + '`add` {name?, repoPath? (a folder in this workspace; default its root), mode? proxy | static | php, devCommand? (put {port} where the port goes — Genie picks it), stack? laravel | node | django | go, hostPort? (a server you already run), root? (static/php: the folder to serve), spa?} — anything left out takes the defaults Genie detects from the folder, exactly as the Hosting tab’s form does, and it is kept in the workspace’s project.json. '
+                + '`add` {name?, repoPath? (a folder in this workspace; default its root), mode? proxy | static | php, devCommand? (put {port} where the port goes — Genie picks it), stack? laravel | node | django | go, hostPort? (a server you already run), root? (static/php: the folder to serve), spa?, phpVersion? (php: a PHP version Genie manages, like 8.4 or 8.4.26; absent = the PHP on PATH)} — anything left out takes the defaults Genie detects from the folder, exactly as the Hosting tab’s form does, and it is kept in the workspace’s project.json. '
                 + '`start` / `stop` / `restart` {site} — by id, name or host. '
                 + '`logs` {site, lines?} — the end of each of its processes’ output (default 200 lines), still there after a crash. '
                 + '`open` {site} — opens it in Genie’s browser for the person, and answers its URL. '
-                + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
+                + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa, phpVersion ("" = back to the PHP on PATH)} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
                 + '`remove` {site} — the person approves it; the folder and its files are never touched.',
             {
                 type: 'object',
@@ -363,6 +371,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     hostPort: { type: 'number', description: 'add / update (proxy): a port a server you already run listens on; Genie starts nothing. On update, a devCommand replaces it.' },
                     root: { type: 'string', description: 'add / update (static / php): the folder to serve, relative to repoPath (dist, public…).' },
                     spa: { type: 'boolean', description: 'add / update (static): serve index.html for unknown paths.' },
+                    phpVersion: { type: 'string', description: 'add / update (php): the PHP version the site runs — one Genie manages (8.4, or exactly 8.4.26); a version it does not manage is refused, nothing asked. Absent on add = the PHP on PATH; on update = kept; "" = back to the PHP on PATH.' },
                     lines: { type: 'number', description: 'logs: how many lines from the end of each process’s output (default 200).' },
                 },
                 required: ['action'],

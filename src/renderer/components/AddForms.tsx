@@ -36,14 +36,18 @@ export interface AddSiteFormProps {
     readonly defaults: SiteFormDefaults;
     readonly existingHosts: readonly string[];
     readonly problems: readonly Problem[];
-    readonly onSubmit: (form: { name: string; mode: SiteMode; command: string; hostPort: number | null; root: string | null; spa: boolean }) => void;
+    readonly onSubmit: (form: { name: string; mode: SiteMode; command: string; hostPort: number | null; root: string | null; spa: boolean; phpVersion: string | null }) => void;
     readonly onCancel: () => void;
+    /** The PHP versions Genie manages here (newest first) — a php site may be pinned to one; none = the PHP on your PATH. */
+    readonly phpVersions?: readonly string[];
     /** The same form edits a site (`edit-site`, "Save") — one set of fields, one validation, for Add and Edit. */
     readonly formId?: 'add-site' | 'edit-site';
     readonly submitLabel?: string;
 }
 
-export function AddSiteForm({ defaults, problems, onSubmit, onCancel, formId = 'add-site', submitLabel = 'Add site' }: AddSiteFormProps) {
+export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersions = [], formId = 'add-site', submitLabel = 'Add site' }: AddSiteFormProps) {
+    // An Edit opens on the site's pin; a pin to a version not installed here is shown as that, never swapped.
+    const pinned = defaults.phpVersion ?? '';
     return (
         <form
             data-form={formId}
@@ -59,6 +63,7 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel, formId = '
                     hostPort: port === '' ? null : Number(port),
                     root: String(data.get('root') ?? '') || null,
                     spa: data.get('spa') === 'on',
+                    phpVersion: String(data.get('phpVersion') ?? '') || null,
                 });
             }}
         >
@@ -84,6 +89,16 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel, formId = '
             <Row label="Root (static: the built directory; php: public)">
                 <Input name="root" defaultValue={defaults.root ?? ''} placeholder="dist" />
                 <ProblemLine field="root" problems={problems} />
+            </Row>
+            <Row label="PHP version (php sites)">
+                <select name="phpVersion" data-php-version-select="" defaultValue={pinned} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+                    <option value="">The PHP on your PATH</option>
+                    {phpVersions.map((v) => <option key={v} value={v}>PHP {v} — managed by Genie</option>)}
+                    {/* A pin to a version that is not installed stays visible as what it is, never silently swapped. */}
+                    {/* A LINE pin (`8.4`, Genie 1's shape) runs the newest managed 8.4.x — say so rather than "not installed". */}
+                    {pinned && !phpVersions.includes(pinned) ? <option value={pinned}>{phpVersions.some((v) => v.startsWith(`${pinned}.`)) ? `PHP ${pinned} — the newest ${pinned} Genie manages` : `PHP ${pinned} — not installed`}</option> : null}
+                </select>
+                <ProblemLine field="phpVersion" problems={problems} />
             </Row>
             <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" name="spa" defaultChecked={defaults.spa} />
