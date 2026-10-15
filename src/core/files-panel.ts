@@ -1,5 +1,5 @@
 import type { ToolKind } from './stream-event.js';
-import { editLineCounts } from './stream-view.js';
+import { editLineCounts, joinToolCalls, type TimedEvent } from './stream-view.js';
 
 /**
  * THE WORKSPACE FILE PANEL'S MODEL (§4.3) — pure. One panel per workspace. Attribution comes from
@@ -151,6 +151,19 @@ function latest(events: readonly FileEvent[], root: string, kind: ToolKind): Map
         last.set(`${e.agentId}\0${path}`, { agentId: e.agentId, agentName: e.agentName, path, status: e.status });
     }
     return last;
+}
+
+/**
+ * An agent's ledger rows as FILE EVENTS, one per tool call (the owner, 2026-10-14: the Changes tab never showed the
+ * agent's changes). A call is several rows: the `tool_call` names its kind (`edit`) while its input is still empty, and
+ * the `tool_call_update`s carry the input and the status but no kind. Read row by row, no row was ever both an edit and
+ * in progress or completed, so a Claude agent's 161 edits in one session were attributed to nobody. The rows are folded
+ * per call first (`joinToolCalls`, the Stream's own fold): kind and input from the frame that said them, status from
+ * the latest.
+ */
+export function fileEventsOf(rows: readonly TimedEvent[], agent: { id: string; name: string }): FileEvent[] {
+    return joinToolCalls(rows).flatMap((row): FileEvent[] =>
+        row.event.kind === 'tool' ? [{ agentId: agent.id, agentName: agent.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput, at: row.at }] : []);
 }
 
 export function attributionFrom(events: readonly FileEvent[], root: string): Map<string, FileAttribution> {
