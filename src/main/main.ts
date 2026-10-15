@@ -1,3 +1,4 @@
+import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -102,6 +103,19 @@ import { attachWebSocketServer } from '@particle-academy/fancy-ws';
  *
  * Terminals arrive in P5, for shells, builds and services. They will not arrive here.
  */
+
+/**
+ * THE POLICY FOR AN ERROR NOBODY CAUGHT — the first statement, before anything below can throw (core/main-errors.ts).
+ *
+ * Without an `uncaughtException` listener Electron answers a stray throw with its "A JavaScript error occurred in the
+ * main process" dialog, which on Linux is a modal GTK loop on this thread: on 2026-10-15 an uncaught EPIPE from the
+ * pty froze all of Genie behind it. With these listeners the error is logged with its stack, recorded on the Deck as
+ * Genie's own item (counted when it repeats, Dismiss to put it aside), and Genie keeps running — no dialog, no exit.
+ * One raised before the window exists is on the Deck when the window first reads it. A `boot()` that rejects is not
+ * this: Genie did not start, and `boot().catch` at the bottom says so and quits.
+ */
+const mainErrors = new MainErrorBook();
+installMainErrorPolicy(process, mainErrors);
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -1303,7 +1317,9 @@ async function boot(): Promise<void> {
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
     // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
-    registry.setDeckSource(() => composed.deckItems());
+    registry.setDeckSource(() => [...mainErrors.deckItems(), ...composed.deckItems()]);
+    // An error the main process caught and survived (the policy at the top of this file) reaches the Deck at once.
+    mainErrors.onChange(() => registry?.touch());
     // Genie's own Deck item (Trust its certificate) follows the front door: read trusted, a site added, Not now.
     composed.onFrontDoorChange(() => registry?.touch());
     // A question asked or answered, a list item, a finished agent: the snapshot (and so the Deck, its badge and the
@@ -1355,6 +1371,8 @@ async function boot(): Promise<void> {
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
+        // The Deck's Dismiss on a recorded main-process error.
+        mainErrors,
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),

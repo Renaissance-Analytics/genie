@@ -54,8 +54,9 @@ describe('the attention store announces its changes', () => {
 
 describe('main wires it', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    it('the registry’s Deck source is the composition root’s deckItems', () => {
-        expect(main.match(/registry\.setDeckSource\(\(\)\s*=>\s*composed\.deckItems\(\)\)/g) ?? []).toHaveLength(1);
+    it('the registry’s Deck source is the composition root’s deckItems, after the main process’s recorded errors (core/main-errors.ts)', () => {
+        expect(main.match(/registry\.setDeckSource\(\(\)\s*=>\s*\[\.\.\.mainErrors\.deckItems\(\),\s*\.\.\.composed\.deckItems\(\)\]\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/registry\.setDeckSource\(/g) ?? []).toHaveLength(1);
     });
     it('an attention change refreshes the snapshot', () => {
         expect(main.match(/composed\.attention\.onChange\(\(\)\s*=>\s*registry\?\.touch\(\)\)/g) ?? []).toHaveLength(1);
