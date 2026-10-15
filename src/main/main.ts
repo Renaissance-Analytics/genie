@@ -18,6 +18,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
+import { QUIT_DATA, asksToQuit, launchDecision, secondInstanceAction } from '../core/quit-flag.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -111,9 +112,19 @@ const here = fileURLToPath(new URL('.', import.meta.url));
  * owner's desktop while real agents were mid-turn. There is no `GENIE_E2E` escape hatch here:
  * a second instance focuses the first. Verification happens on a VM, where there is no first
  * instance to collide with.
+ *
+ * `--quit` (core/quit-flag.ts) rides the same lock: a second launch with it asks the first to run the tray's Quit, and
+ * a `--quit` that finds no Genie running exits without booting one. Neither ever creates a window: only a `boot`
+ * launch reaches `boot()`. They EXIT (app.exit), never app.quit: a quit would run this process's before-quit — Genie's
+ * shutdown, which ends by clearing the RUNNING Genie's genie-running file — in a process that owns nothing.
  */
-if (!app.requestSingleInstanceLock()) {
-    app.quit();
+const launch = launchDecision({
+    argv: process.argv,
+    primary: app.requestSingleInstanceLock(asksToQuit(process.argv) ? { ...QUIT_DATA } : undefined),
+});
+if (launch.kind === 'exit') {
+    console.log(`[genie] ${launch.reason}`);
+    app.exit(0);
 }
 
 let window: BrowserWindow | null = null;
@@ -137,6 +148,14 @@ let updates: UpdateHost | null = null;
  * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
  */
 const quit = quitSequence();
+
+/**
+ * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
+ * `app.quit()` runs before-quit, so the confirmation is asked only where it would be, and the shutdown runs once.
+ */
+function requestQuit(): void {
+    app.quit();
+}
 
 /**
  * A Take Over window: the OS frame (there is no Genie chrome to replace it), one terminal.
@@ -1420,13 +1439,17 @@ async function boot(): Promise<void> {
             broadcast('genie:navigate', 'genie://settings');
         },
         onCheckUpdates: () => { void updates?.check(); },
-        onQuit: () => app.quit(),
+        onQuit: requestQuit,
     }, trayIconPath());
     browserPane = new BrowserPane(electronBrowserView(window), () => composed.routes());
 }
 
-// A second launch shows the first one's window — hidden in the tray included.
-app.on('second-instance', () => {
+// A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead.
+app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
+    if (secondInstanceAction(argv, additionalData) === 'quit') {
+        requestQuit();
+        return;
+    }
     revealMainWindow();
 });
 
@@ -1454,6 +1477,9 @@ function recordShutdown(): Promise<unknown> {
 
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
 app.on('before-quit', (event) => {
+    // A launch that never booted (a second instance, a `--quit` with no Genie running) owns nothing to shut down — and
+    // clearing the genie-running file below would clear the RUNNING Genie's. It exits without a quit; this is the guard.
+    if (launch.kind !== 'boot') return;
     // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds. The steps and their
     // once-only guarantees are core/quit.ts `quitSequence`; a cancelled quit changes nothing — the window keeps hiding.
     const step = quit.beforeQuit({
@@ -1488,13 +1514,16 @@ app.on('before-quit', (event) => {
     clearGenieRunning(genieHome());
 });
 
-app.whenReady().then(boot).catch((error: unknown) => {
-    // A boot failure is shown, not logged to a console nobody is reading. The most likely
-    // cause is a store fault — and an unreadable `agents.json` is exactly the case where
-    // continuing would overwrite it.
-    dialog.showErrorBox('Genie could not start', String(error));
-    app.quit();
-});
+// Only a `boot` launch boots — and only `boot()` creates the main window (core/quit-flag.ts `launchDecision`).
+if (launch.kind === 'boot') {
+    app.whenReady().then(boot).catch((error: unknown) => {
+        // A boot failure is shown, not logged to a console nobody is reading. The most likely
+        // cause is a store fault — and an unreadable `agents.json` is exactly the case where
+        // continuing would overwrite it.
+        dialog.showErrorBox('Genie could not start', String(error));
+        app.quit();
+    });
+}
 
 /*
  * TRAY-RESIDENT: the last window closing is not a quit. The main window hides instead of closing (Windows, Linux), and
