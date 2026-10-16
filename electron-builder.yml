@@ -1,256 +1,151 @@
+# `ai.tynn.genie` is the appId every installed Genie carries (0.7.0-beta.342, 2.0.0-beta.4). Windows
+# identifies the application by it: keep it and the installer UPGRADES in place; change it and the
+# installer puts a second Genie beside the old one. test/upgrade.test.ts holds it.
 appId: ai.tynn.genie
+# And package.json is named `genie`, not genie2: a one-click per-user installer puts the app in
+# %LOCALAPPDATA%\Programs\<package name> (app-builder-lib targetUtil.getWindowsInstallationDirName —
+# only an assisted or per-machine install uses the product name). Every installed Genie is in
+# Programs\Genie because v1's package name is genie; measured 2026-10-10 when the first one-click
+# build landed in Programs\genie2 beside it. test/upgrade.test.ts holds both.
 productName: Genie
-copyright: Copyright © 2026 Renaissance Analytics
+copyright: Genie
 
 directories:
-  buildResources: resources
-  output: dist
+  output: release
+  buildResources: build
 
+# Only the built output and the manifest. The sources, the tests, the smoke scripts and the
+# design tokens are not shipped — they are how the app is made, not part of it.
 files:
-  - from: .
-    filter:
-      - app/**/*
-      # The tray icon + app icon live in resources/ and are read at
-      # runtime by main/background.ts (which expects them at
-      # <asar>/resources/*.png). Without this rule they're not in the
-      # asar bundle and the tray surfaces with a blank icon.
-      - resources/tray-icon.png
-      - resources/tray-icon-update.png
-      - resources/icon.png
-      # The in-app Docs viewer reads the user-guide markdown at runtime from
-      # <asar>/docs (main/docs/docs.ts resolveDocsDir). Ship the docs/ folder
-      # so docs:list / docs:read have something to serve in the packaged app.
-      - docs/**/*
-      # The ACP host script is spawned as PLAIN NODE, so it must exist as a real
-      # file. It is not a .ts, so nothing emits it into app/ -- ship it from source
-      # or a packaged install has no ACP transport at all.
-      - main/acp/prism-host.mjs
-      - package.json
+  - dist/**
+  - package.json
+  # node-pty is NOT listed here on purpose. electron-builder packs node_modules from its own
+  # dependency walk (`dependencies` + `optionalDependencies`, never peers, never `files`
+  # globs — app-builder-lib's nodeModulesCollector), so when node-pty was fancy-term-host's
+  # PEER every installer shipped without it, and the afterPack hook said so on both platforms:
+  # "node-pty not found under appOutDir". fancy-term-host 0.9.0 declares it as an
+  # optionalDependency, which the collector follows. The hook below is what proves that.
 
 asar: true
 
-# Post-pack fix: the Windows node-pty rebuild leaves conpty.dll / OpenConsole.exe
-# out of build/Release, so ConPTY fails to load at runtime ("Cannot find conpty.dll")
-# and NO terminal spawns on a packaged Windows install. This copies them into place.
-# See build/after-pack.js + genie #14.
-afterPack: build/after-pack.js
+# No native rebuild. The only native module is node-pty, and node-pty 1.x is Node-API
+# (`node-addon-api`): it ships `prebuilds/<platform>-<arch>/pty.node` and loads THAT at runtime —
+# ABI-independent, so the same binary serves Node 22 and Electron 44. electron-builder's default
+# `@electron/rebuild` pass does not know this and runs node-gyp from source anyway, which needs
+# Python + MSVC: present on GitHub's runners (so CI never noticed), absent on a clean machine
+# (the Windows test VM failed with "Could not find any Python installation to use"). The
+# prebuilt binary is what the dev tree's terminal smoke already runs on; packaging it unchanged
+# is the honest build. The afterPack hook and the installed-app terminal smoke measure it.
+npmRebuild: false
 
-# Tier 3 — detached pty-host packaging.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# TERMINALS IN THE INSTALLED APP — node-pty is native, and the asar cannot hold it.
 #
-# The detached host now ships inside @particle-academy/fancy-term-host
-# (dist/pty-host.js + its sibling chunk-*.js + package.json). It is spawned via
-# `process.execPath` with ELECTRON_RUN_AS_NODE=1, i.e. it runs as PLAIN NODE
-# whose require()/ESM resolution is NOT asar-aware — so the host script (and the
-# package.json that marks it `"type":"module"`) can't be loaded from inside
-# app.asar. And node-pty is a NATIVE module: its prebuilt .node can't be loaded
-# from inside an asar at all. The whole package dist + node-pty must be UNPACKED
-# to app.asar.unpacked so they exist as real files on disk. The package's
-# ptyHostScriptPath() resolves to the unpacked path first, then falls back
-# defensively (genie-adapter.ts guards with fs.existsSync → in-process fallback).
-asarUnpack:
-  - node_modules/@particle-academy/fancy-term-host/**
-  - node_modules/node-pty/**/*
-  # The MCP shuttle (genie#346) runs on the standalone Node runtime, which cannot
-  # read inside app.asar — packed, it would never start for anyone.
-  - app/mcp-shuttle.js
-  # The ACP host (genie 2) runs as plain Node under ELECTRON_RUN_AS_NODE, so neither
-  # it NOR the ESM library it imports can be resolved from inside app.asar. Both are
-  # needed on disk; unpacking only the script would fail at its first import.
-  - main/acp/prism-host.mjs
-  - node_modules/@particle-academy/prism-acp/**
-
-# Tier 3+ — per-user OS-service pty-host runtime (fancy-term-host@0.2.0 /service).
+# `fancy-term-host/docs/packaging.md`: a standard packaged Electron build spawns NO terminal at
+# all until three per-OS breakages are patched. node-pty's `.node` binaries and its helpers
+# (`conpty.dll` + `OpenConsole.exe` on Windows, `spawn-helper` on macOS/Linux) must live outside
+# the archive, and each OS needs a fix the package ships as an `afterPack` hook. Both halves
+# are required: the unpack alone leaves Windows without the `conpty/` subdir node-pty loads.
 #
-# The OS service runs the pty-host on its OWN STANDALONE NODE runtime (NOT
-# Genie's Electron binary — that's what pins the executable across updates).
-# That standalone Node has a DIFFERENT native ABI than Electron, so node-pty's
-# .node binding must be PREBUILT for THAT Node's ABI. Both are shipped beside the
-# app as extraResources at `<resources>/runtime/`:
-#
-#   resources/runtime/node[.exe]    a pinned standalone Node (the service's runtime)
-#   resources/runtime/node-pty/     node-pty PREBUILT for that Node's ABI
-#                                   (its build/Release/*.node + package.json +
-#                                    lib/, so `require('node-pty')` resolves with
-#                                    NODE_PATH=<resources>/runtime)
-#
-# At runtime main/terminal/host-service.ts resolveShippedRuntime() probes
-# `<process.resourcesPath>/runtime/node[.exe]` and points the service at it
-# (runtime.nodePath / runtime.nodePtyDir). When this directory is ABSENT (CI
-# hasn't produced it yet, or a dev build), resolveShippedRuntime() returns null,
-# ensureHostService() returns {ok:false}, and Genie FALLS BACK to the detached
-# spawn → in-process path. The app stays fully functional; the service simply
-# doesn't activate until CI ships the runtime.
-#
-# ====================================================================
-# CI MUST PRODUCE `resources/runtime/` BEFORE `electron-builder` (per OS×arch):
-#   1. Download a PINNED standalone Node for the target OS+arch (e.g. the
-#      official node-vX.Y.Z-win-x64 / -darwin-arm64 / -linux-x64 dist), and
-#      place its `node`/`node.exe` at resources/runtime/node[.exe].
-#   2. In a scratch dir, `npm i node-pty@^1.1.0` and REBUILD it against THAT
-#      standalone Node's ABI:
-#        node-gyp rebuild --target=<nodeVersion> --dist-url=https://nodejs.org/dist
-#      (or `prebuild-install --runtime=node --target=<nodeVersion>`), NOT against
-#      Electron. Copy the resulting node-pty package (lib/ + build/Release/*.node
-#      + package.json) to resources/runtime/node-pty/.
-#   3. Verify on the build agent:
-#        resources/runtime/node -e "process.env.NODE_PATH='resources/runtime'; \
-#          require('module').Module._initPaths(); require('node-pty'); \
-#          console.log('node-pty loads on standalone node ABI')"
-# This is intentionally NOT run in the local sandbox (native rebuilds can't be
-# exercised here) — the fallback covers a missing runtime. See README/the commit
-# body for the full checklist.
-# ====================================================================
-#
-# This block is a no-op until resources/runtime exists on the build agent
-# (electron-builder just skips a `from` that has no matches). It is safe to keep
-# committed: a dev/local build without the runtime simply ships nothing here and
-# uses the fallback chain.
+# `scripts/after-pack.cjs` turns the hook's `skipped`/`failed` result into a build failure,
+# because an installer that silently cannot open a terminal is the exact green build this
+# project exists to stop. The CI `it packages` jobs run it on both platforms.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# Genie's own Caddy (§6.6): fetched at build time by scripts/fetch-caddy.ts, pinned by version + sha512.
 extraResources:
-  - from: resources/runtime
+  - from: build/runtime
     to: runtime
-    filter:
-      - '**/*'
+    filter: ['caddy', 'caddy.exe']
+  # Genie's own tray mark, read at runtime from resources/ (an asar-packed PNG cannot be handed to the tray).
+  - from: build/tray-icon.png
+    to: tray-icon.png
+  # Genie's own window icon, read at runtime from resources/ by every Genie window (src/main/app-identity.ts). The
+  # installed app packs only dist/** — nothing from build/ — so without these the installed window had no icon of its own.
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.png
+    to: icon.png
 
-# Custom protocol — genie:// — registered at install time. Story #150 uses
-# this for the OAuth callback handoff from tynn.ai/login.
-protocols:
-  - name: Genie OAuth
-    schemes:
-      - genie
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+  # fancy-pty (fancy-term-host >= 0.10): one helper EXECUTABLE per pty, resolved in place under the
+  # package — it must live on disk, outside the asar, under the install dir (§7.2 scans there).
+  # Fancy: this one line is the whole packaging requirement for the fancy-pty engine.
+  - "**/node_modules/@particle-academy/fancy-pty/bin/**"
+afterPack: ./scripts/after-pack.cjs
 
-mac:
-  category: public.app-category.productivity
-  target:
-    - dmg
-    - zip
-  # No explicit .icns — electron-builder derives one from resources/icon.png
-  # at build time. Drop in a real icon.icns later for tighter control.
-  icon: resources/icon.png
-  hardenedRuntime: true
-  # node-pty forks the shell through a nested `spawn-helper` Mach-O. Under
-  # Hardened Runtime + notarization it (and node-pty's .node) are killed on exec
-  # unless the app is signed WITH these entitlements — without them the pty
-  # master opens (create() doesn't throw) but the shell never runs, so on signed
-  # Mac builds the terminal shows a cursor and no output. entitlementsInherit
-  # carries disable-library-validation onto the nested helper. See build/*.plist.
-  entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.inherit.plist
-  gatekeeperAssess: false
-  # Notarize when the build is Developer-ID signed (CI provides MAC_CSC_LINK +
-  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID). electron-builder
-  # skips notarization automatically for unsigned/ad-hoc builds, so this stays
-  # safe even before the signing secrets exist. macOS auto-update REQUIRES a
-  # signed + notarized app — an ad-hoc signature fails Squirrel.Mac validation
-  # ("code has no resources but signature indicates they must be present"),
-  # which is the exact failure this readies the real fix for.
-  notarize: true
-
-win:
-  target:
-    - target: nsis
-      arch:
-        - x64
-    # Portable is a self-extracting EXE that doesn't actually install —
-    # it runs Genie directly from a temp dir. We ship it alongside the
-    # NSIS installer so users can isolate "installer broken" vs "app
-    # broken" when the installer silently fails (Defender quarantine,
-    # corporate AV, NSIS extraction failure on the target machine).
-    - target: portable
-      arch:
-        - x64
-  # Hand-built multi-size .ico (build-icons.cjs) — each layer resampled
-  # individually so the 16/24/32px taskbar + alt-tab renderings stay
-  # legible instead of being Windows-shrunk from the 256px layer.
-  icon: resources/icon.ico
-  # Code signing happens via env vars in CI:
-  # CSC_LINK, CSC_KEY_PASSWORD
-
-nsis:
-  # ONE-CLICK (silent) installer so auto-updates are truly hands-free: on
-  # quitAndInstall, electron-updater runs the downloaded installer silently and
-  # swaps the app in place — NO wizard, no "install for all users / only me"
-  # page. `oneClick: false` made every auto-update launch the FULL assisted
-  # wizard, which is what surfaced the install-options page on a routine upgrade.
-  # Genie installs nothing new at install time — the Tier-3 pty-host is spawned
-  # at RUNTIME from the bundled runtime — so there is no per-upgrade setup to
-  # prompt for. (First install is one-click too: in NSIS the same flag governs
-  # both, and silent updates are the priority.)
-  oneClick: true
-  # `perMachine: false` keeps the install per-user (no UAC prompt), which also
-  # dodges the unsigned-binary + UAC silent-fail combo on Windows 11. (A oneClick
-  # installer is incompatible with a directory chooser, so
-  # allowToChangeInstallationDirectory is intentionally omitted.)
-  perMachine: false
-  createDesktopShortcut: true
-  createStartMenuShortcut: true
-  shortcutName: Genie
-  # Use the universal Unicode installer header so non-ASCII paths in
-  # the user profile (e.g. accented characters) don't break extraction.
-  unicode: true
-  # Surface uninstaller in Add/Remove Programs cleanly.
-  deleteAppDataOnUninstall: false
-  # Custom install/uninstall hooks (build/installer.nsh): open a tightly-scoped
-  # inbound Windows Firewall rule for the Mobile server port (51718, scoped to the
-  # Tailscale CGNAT range 100.64.0.0/10) so a paired phone can reach it, and remove
-  # it on uninstall. NOTE: netsh needs admin, so this only takes effect in an
-  # elevated/perMachine install (see build/installer.nsh) — the per-user runtime
-  # path adds it via a UAC prompt from Settings -> Mobile.
-  include: build/installer.nsh
-
-# Build the AppImage on the STATIC runtime instead of the legacy FUSE 2 one.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# PUBLISH — and the pairs this half belongs to.
 #
-# An AppImage is a self-mounting archive: the runtime stub prepended to it has
-# to mount the squashfs payload before a single line of Genie runs. The legacy
-# stub does that by `dlopen`ing `libfuse.so.2` — and modern Arch-based distros
-# ship FUSE 3 only. On Omarchy 4.0.2 there is no `/usr/lib/libfuse.so.2*` at
-# all, so our AppImage died on its first instruction with:
+# §0.8: the previous build's updater **could never see a release.** Every release published as
+# a prerelease, `allowPrerelease` defaults to false in electron-updater, and it was never set.
+# "Check for updates" had never worked, for the entire life of the product.
 #
-#     dlopen(): error loading libfuse.so.2
-#     AppImages require FUSE to run.
+# Two update channels now (the owner, 2026-10-12: "stable and dev update channels";
+# src/core/update-channel.ts), each a pair of a publish type and an updater flag:
 #
-# The same build, unpacked (`--appimage-extract` then `./squashfs-root/AppRun`),
-# reached Chromium display init on that machine. Genie was never the problem —
-# only the launcher wrapped around it, which could not start. The static runtime
-# mounts the payload itself and needs no libfuse of either generation.
+#   - DEV channel    ↔ prereleases:   `allowPrerelease: true`  sees a tag like v2.0.0-beta.20,
+#                                     published with `releaseType: prerelease` — the default HERE.
+#   - STABLE channel ↔ full releases: `allowPrerelease: false` sees a plain tag like v2.0.0,
+#                                     which .github/workflows/release.yml publishes by overriding
+#                                     this default with `--config.publish.releaseType=release`.
 #
-# This lives at the ROOT and not under `linux:` even though it only affects the
-# AppImage: app-builder-lib reads `packager.config.toolsets`, i.e. the top-level
-# config. Moving it into the linux block below silently reverts this fix, and
-# also violates electron-builder's own schema (LinuxConfiguration is
-# `additionalProperties: false`). scripts/__tests__/appimage-toolset.test.ts
-# asserts both halves.
+# test/update-channels.test.ts asserts every link (and test/upgrade.test.ts the default pair), so:
 #
-# `0.0.0` (or omitting the key, which is what we did until now) is the legacy
-# FUSE 2 toolset; `1.0.3` is upstream's newest AppImage bundle — "Runtime
-# 20251108 (Resolves GH issue #9598)" per app-builder-lib 26.15.3's own
-# ToolsetConfig docs. Two knock-on effects, both wanted:
-#   - Payload compression becomes zstd. The static runtime is compiled without
-#     xz support, so app-builder-lib maps xz/unset onto zstd for this path.
-#   - `--no-sandbox` is no longer baked into the .desktop `Exec=` line. The
-#     generated AppRun probes for user namespaces (`unshare -Ur true`) and adds
-#     the flag only on kernels that actually need it, instead of disabling the
-#     Chromium sandbox unconditionally for everyone.
-toolsets:
-  appimage: 1.0.3
-
-linux:
-  target:
-    - AppImage
-  icon: resources/icon.png
-  category: Development
-
+#   - changing this default to `release` fails the test rather than publishing every beta to
+#     the stable channel;
+#   - dropping the workflow's override fails the test rather than leaving a stable channel
+#     (`allowPrerelease` false) that is never offered anything;
+#   - dropping the flag fails the test rather than leaving a dev updater that cannot see what
+#     it publishes.
+#
+# If you change one, change the other, and the test will tell you if you did not.
+# ─────────────────────────────────────────────────────────────────────────────────────────
 publish:
   provider: github
   owner: Renaissance-Analytics
+  # The OLD repo, on purpose: every installed Genie (0.7.0-beta.342, 2.0.0-beta.4) carries this
+  # owner/repo in its app-update.yml, and that is where it looks. Publishing anywhere else means
+  # no installed copy ever sees Genie 2 (owner decision 2026-10-10). The code stays in genie2.
   repo: genie
-  # `latest.yml` (Win + Linux) and `latest-mac.yml` are written next to
-  # the installers when electron-builder ships a release. electron-updater
-  # reads them from this provider via GitHub Releases.
-  # `draft` so the Release stays INVISIBLE to electron-updater while the three
-  # per-OS jobs upload in parallel — release.yml's prepare-release job creates
-  # the draft, each platform attaches its artifacts, and finalize-release flips
-  # draft→prerelease only once latest.yml (Windows, uploaded last) and every
-  # installer are present. With `prerelease` here, a client that checked for
-  # updates during the ~6-min build window 404'd on the not-yet-uploaded
-  # latest.yml. (Stable cuts: drop --prerelease in finalize-release.)
-  releaseType: draft
+  releaseType: prerelease
+
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-setup.${ext}
+
+nsis:
+  # One-click and per-user, exactly as every installed Genie was built, so the upgrade is the
+  # same installer shape the in-app updater has always run (owner decision 2026-10-10).
+  oneClick: true
+  perMachine: false
+  # §7.1 is enforced in `src/main/paths.ts`: the runtime directory lives under `userData` and
+  # never under the install directory, so an upgrade cannot be blocked by a file a running
+  # helper holds open. That is the structural half of the fix for the 31-orphan jam; the
+  # teardown in `src/main/upgrade.ts` is the other half.
+  deleteAppDataOnUninstall: false
+  # Two Start-menu shortcuts: Genie, and Genie in doctor mode (owner, 2026-10-13). build/installer.nsh adds the doctor
+  # one beside electron-builder's own and removes it on uninstall.
+  include: build/installer.nsh
+
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+  category: Development
+  # `deb` is deliberately absent. It requires a maintainer EMAIL in `package.json`, and the
+  # choices were to invent an address or to publish the owner's personal one inside every
+  # package — neither of which is mine to decide. AppImage needs no install and no address,
+  # which makes it the more useful artifact here anyway.
+  #
+  # Add `deb` back with a real maintainer address if somebody wants one.
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  # Signing secrets are not configured. A macOS build produced without them is UNSIGNED and
+  # Gatekeeper will refuse it on another machine — a known, stated limitation rather than a
+  # surprise at install time.

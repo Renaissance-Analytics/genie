@@ -1,202 +1,77 @@
-# Genie
+# genie2
 
-The workstation for agentic work: `.agi` workspaces, durable AMS agents,
-AgentInbox, hosted `.gen` sites, managed toolchains, and plugin-provided Fancy
-surfaces in one desktop app.
+A rebuild of Genie. **An agent is a session. A session is not a terminal.**
 
-> **Status:** beta. Public so developers can audit what the binary
-> does on their machine and contribute back. Expect rapid iteration.
+Build specification: `.ai/plans/genie-2-spec-from-scratch.md` in the `tynn.ai` envelope.
 
-## What Genie is
+## The rule this repository exists for
 
-- **TheFloor** — a cross-project window with distinct terminal, AgentPanel,
-  editor, and plugin-panel surfaces, with adaptive grid layouts
-  (1 = full, 2 = split, 3 = focus-stack, 4 = grid). Terminals are real
-  PTYs (xterm.js + node-pty), so they run TUI apps like `claude code`,
-  `vim`, `htop` cleanly.
-- **Stage windows** — satellite workspace windows pinned to a single
-  project, sharing live PTYs with TheFloor so you can mirror a running
-  shell to a second monitor.
-- **Workspace upgrades** — wrap an existing folder (or a folder full
-  of sub-repos) as a `{slug}.agi` envelope: each sub-repo
-  becomes a git submodule under `repos/`; loose knowledge folders
-  (`plans/`, `docs/`, `k/`, etc.) migrate into `.ai/`.
-- **Genie OSA** — a built-in full-authority workstation operator with its own
-  private workspace and memory, first-boot orientation, and recovery boot.
-- **AgentInbox** — native messaging over Claude Code Channels and Codex
-  app-server, without pasting messages into terminal input.
-- **GitHub connection** — connect a GitHub account once, then create
-  `.agi` envelopes directly on GitHub under your user or any org you
-  belong to. No client secret stored anywhere — Device Flow + OS
-  keychain (`safeStorage`).
+No agent process is ever attached to a pty — for any reason, including "an unused one".
+`AgentEngine` has one member and no `'pty'`, so the state is unrepresentable rather than
+merely avoided. The only TUI path is **Take Over**, which opens a terminal in its own window
+with Genie's MCP available; Genie does not start, manage, restart or revive it.
 
-## Install
-
-### End-user install
-
-Download the installer for your platform from
-[Releases](https://github.com/Renaissance-Analytics/genie/releases):
-
-- **Windows:** `Genie-Setup-<version>.exe`
-- **macOS:** `Genie-<version>-arm64.dmg`
-- **Linux:** `Genie-<version>.AppImage`
-
-Auto-update is handled by `electron-updater` — once installed, Genie
-polls Releases on launch and prompts you when a newer build is
-available. Update payloads are checksum-verified (SHA-512 in
-`latest.yml`) before being applied.
-
-### First-launch prompts (alpha — installers are unsigned)
-
-Alpha builds are not yet code-signed, so your OS will prompt the first
-time you install. This is expected; the warning goes away once we
-have signing certificates configured. Follow the steps for your
-platform:
-
-- **Windows:** SmartScreen blocks the installer with *"Windows
-  protected your PC"*. Click **More info** → **Run anyway**, then
-  step through the NSIS installer normally.
-- **macOS:** Gatekeeper blocks the `.dmg` with *"can't be opened
-  because Apple cannot check it for malicious software"*. Open
-  **System Settings → Privacy & Security**, scroll to the bottom,
-  click **Open Anyway** on the blocked entry, then re-open the DMG.
-  (On older macOS: right-click the DMG → **Open** → **Open** at the
-  confirmation prompt.)
-- **Linux:** `chmod +x Genie-<version>.AppImage && ./Genie-<version>.AppImage`.
-  No prompt.
-
-You only see these prompts on the **first install**. Auto-updates
-after that run through `electron-updater`'s SHA-512-verified flow
-without re-prompting.
-
-#### If the Windows installer flashes and disappears
-
-If you click **Run anyway** through SmartScreen and the installer
-window closes without installing anything, **Windows Defender
-quarantined the unsigned `.exe` after SmartScreen approved it** —
-they're separate defense systems. Open **Windows Security → Virus
-& threat protection → Protection history**, find the entry for
-`Genie-Setup-<version>.exe`, click **Actions → Restore**, then
-re-run the installer. Signed installers don't hit this. Full
-diagnostic walkthrough in
-[docs/release-pipeline.md](docs/release-pipeline.md).
-
-> Installers are produced by
-> [release CI](.github/workflows/release.yml) on every `v*` tag.
-> Signed installers ship automatically once the code-signing secrets
-> are configured — see [docs/release-pipeline.md](docs/release-pipeline.md).
-
-### Developer install
-
-You need **Node.js ≥ 22**, **npm**, and **git**.
-
-```bash
-git clone https://github.com/renaissance-analytics/genie.git
-cd genie
-npm install
-npm run dev
-```
-
-On Windows, native modules (`node-pty`, `better-sqlite3`) ship with
-prebuilt binaries for common Electron ABIs. If `npm install` complains
-about Visual Studio Build Tools, the prebuilds are usually still
-enough for development — install Build Tools only if you need to
-package a release locally.
-
-In dev mode the updater path is the **Phase 1 git-pull-and-rebuild**
-flow (Settings → Updates), which runs `git fetch && git checkout
-<tag> && npm install && npm run build` in-place.
-
-## Project layout
+## Layers
 
 ```
-genie/
-├── main/                  ← Electron main process
-│   ├── background.ts      ← boot, window factory
-│   ├── terminal/          ← PTY + AgentPanel lifecycle
-│   ├── agentinbox/        ← durable native agent messaging
-│   ├── agents/            ← AMS + Genie OSA lifecycle
-│   ├── plugins/           ← signed plugins and contributed surfaces
-│   ├── workspace/         ← .agi envelope create / convert / analyse
-│   ├── github/            ← Device Flow OAuth + repo API
-│   └── updater/           ← git-pull-and-rebuild updater
-├── renderer/              ← Next.js 15 renderer
-│   ├── pages/master.tsx   ← TheFloor
-│   ├── components/Master/ ← chooser, grid, panels, context menus
-│   └── components/Terminal/XTerm.tsx
-├── packages/
-│   ├── app-sdk/           ← GApp host bridge
-│   └── plugin-sdk/        ← typed plugin manifest contracts
-├── docs/
-│   └── agi-format.md      ← public `.agi` envelope contract
-└── test/                  ← Vitest unit tests
+PROVIDER     @particle-academy/prism-acp       ClaudeDriver, CodexDriver — spawn, speak ACP
+DURABILITY   @particle-academy/prism-harness   Thread + FileSessionStore ONLY (not AgentRuntime)
+SURFACE      genie2                            renders the session model; never parses bytes
 ```
 
-## How updates work
+`prism-harness`'s `AgentRuntime` assumes Prism is the agent (`LlmClient = (req) => Promise<res>`)
+and has zero knowledge of ACP. Genie's agent is an external CLI owning its own thread over a
+streaming protocol, so only the durability half applies — confirmed as the intended seam by
+that package's author.
 
-Genie picks the right updater path automatically:
-
-### Packaged installs → `electron-updater` (Phase 2)
-
-When you run a signed installer from Releases, the running Genie polls
-its publish provider (GitHub Releases) for newer versions, downloads
-the new installer in the background, verifies the SHA-512 checksum
-recorded in `latest.yml`, and prompts you to restart. The restart
-swaps the binary atomically via the installer's own mechanism.
-
-### Developer installs → git-pull + rebuild (Phase 1)
-
-When you ran `git clone && npm install && npm run dev`, the updater
-detects you're not a packaged build and switches to the Phase 1 flow.
-Settings → Updates shows the same UI but executes:
+## Commands
 
 ```
-git fetch origin --tags
-git checkout <new-tag>
-npm install
-npm run build
+npm test              # 406 unit tests, ~2s
+npm run typecheck     # tsc; the no-pty rule lives in the type system, so this is a gate
+npm run build         # renderer (vite) + main (ESM) + preload (CJS — a sandboxed preload
+                      # supports only CommonJS; an ESM one loads as nothing)
+npm run verify        # typecheck + test + build
 ```
 
-Output streams into the Updates panel; on success you're prompted to
-restart. On failure the previous `HEAD` is restored.
+### Verification that is not a unit test
 
-The same Settings panel UI handles both — the backend is selected by
-`app.isPackaged`.
+```
+bash scripts/verify-linux.sh   # the whole gate on real Linux, in a container, ~40s
+bash scripts/smoke-linux.sh    # OPEN THE APP: a real window under Xvfb, driven over CDP
+npm run verify:live            # a real claude session: start, reply, persist, stop, process scan
+npm run verify:flow            # real frames -> ledger rows -> the row a person reads
+```
 
-## Architecture notes
+**`smoke-linux.sh` is the one that matters.** The build this replaces shipped four releases on
+green unit suites and every one was broken the moment somebody opened it, because nobody ever
+opened it. It runs on every push too, as a CI job called *a real window*, and uploads
+screenshots — looking at them has found five defects no test caught, including a Dashboard with
+no empty state and an entire application rendering in one font.
 
-- **TheFloor is a single window.** What looked like separate "tray
-  window / settings / workspace" surfaces in the early scaffold all
-  collapse into TheFloor's sidebar + Settings modal. Stage windows are
-  the only multi-window path, and they share PTYs with TheFloor via a
-  multi-attach pty manager.
-- **Multi-attach PTYs.** The `TerminalManager` lets a single pty be
-  rendered in N windows simultaneously. A scrollback buffer (1 MB cap)
-  replays history to a late-joining window so a Stage that opens a
-  terminal already running in TheFloor catches up instantly.
-- **Persistent terminal specs.** Each terminal is a row in SQLite
-  (`terminal_specs` table). Specs survive restart; the PTY itself does
-  not (we re-spawn from the spec when you reopen).
-- **Native deps are prebuilt-first.** `node-pty` and `better-sqlite3`
-  ship Windows + macOS prebuilds. `postinstall` runs
-  `electron-builder install-app-deps || echo "skipped"` so a dev
-  install on a machine without compilers still works.
+`verify:live` and `verify:flow` need the provider binary and spend real subscription tokens, so
+they are deliberately not part of `npm test`. Run them before anything is tagged.
 
-## Contributing
+### Nothing GUI runs on the owner's desktop
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome — anything from
-shell-detection fixes to new layout modes to TUI compatibility bug
-reports.
+Not a browser, not Electron, not a dev server. Every check above either runs headless in a
+`--rm` container or on CI. That is a standing rule of this workspace, not a preference.
 
-## Security
+## Where things are
 
-If you find something that looks like a security issue,
-**don't open a public issue**. See [SECURITY.md](SECURITY.md) for the
-private disclosure path.
+```
+src/core/      every DECISION, as pure functions — tested without a DOM
+src/main/      Electron main: registry, sessions, store, paths, upgrade
+src/renderer/  React surfaces; they render and decide nothing
+scripts/       verification that needs a machine rather than a test runner
+docs/          the decisions the spec left to the builder, and why
+```
 
-## Licence
+The split is load-bearing: a decision taken inside a component is a decision nobody checks, and
+that is where the previous build kept most of them.
 
-**Proprietary — © 2026 Wishborn. All rights reserved.** This source is made
-publicly viewable for reference, but it is **not** free or open-source software:
-no right to use, copy, modify, or distribute is granted except under a separate
-written agreement. See [LICENSE](LICENSE).
+## State
+
+`.ai/plans/genie-2-build-status.md` in the envelope says what is built, what is verified, **how
+it was verified, and what is not**. That separation is the point — four releases shipped on
+"the tests pass".

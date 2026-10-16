@@ -1,242 +1,309 @@
 name: CI
 
+# genie2's OWN pipeline. It shares nothing with the previous Genie repository — not a
+# workflow, not a script, not a cache key. The rebuild exists because the old code's core
+# abstraction was wrong, and a CI that reached back into it would be the first way that
+# abstraction came back.
+#
+# No Docker. These suites need no service containers, which also keeps them clear of the
+# Docker Hub unauthenticated pull quota that made the old repo's `hosting` job unrunnable
+# (Renaissance-Analytics/genie#864).
+
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
-# Least-privilege GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
-# this workflow only reads the repo — checkout, install, typecheck, test, build.
-# No PR writes, releases, or SARIF uploads, so read-only contents is sufficient.
 permissions:
   contents: read
 
-# Cancel a PR run the moment a newer push replaces the commit it was testing.
-# Measured over 2026-09-07..09: 52 CI/E2E runs kept going after a newer run on
-# the same branch had already started, burning 418 runner-minutes (1353 weighted
-# at Windows x2 / macOS x10) — 16% of all CI+E2E spend — to answer questions
-# about commits nobody would ever merge. On a squash-merged PR those intermediate
-# commits do not survive into `main` at all, so no coverage is lost.
-#
-# `cancel-in-progress` is `pull_request` ONLY. A push to `main` runs to
-# completion: main's per-commit green is the record of WHICH merged commit was
-# good, and cancelling it would trade a real fact for runner minutes.
-#
-# `github.event_name` is IN the group key, not only in the condition. Two runs in
-# one group with different `cancel-in-progress` values resolve to the newest
-# run's value — so a PR run sharing a group with a main run could cancel it.
-# Keying on the event makes that unrepresentable rather than merely unlikely.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
+    name: typecheck + unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` and not `npm install`: the lockfile is the contract. prism-acp is ESM-only
+      # and prism-harness pins the durability layer we build on, so a silent resolution drift
+      # is a behaviour change, not a version bump.
+      - run: npm ci
+
+      # Typecheck is a first-class gate, not a lint. The no-pty rule is enforced IN THE TYPE
+      # SYSTEM — `AgentEngine` has one member — so a green tsc is part of how that rule holds.
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # THE BUILD IS A GATE, not a release step.
+      #
+      # A typecheck says the sources agree with each other; it says nothing about whether the
+      # three bundles can be produced. Three ways this job has already earned its place:
+      #
+      #  - the renderer loads over `file://` in Electron, so `base` must stay relative — an
+      #    absolute `/assets/...` 404s into a blank white window that no unit test can see;
+      #  - the preload MUST come out as CommonJS, because a sandboxed preload supports only
+      #    CJS and an ESM one loads as nothing at all. `window.genie` is then simply absent and
+      #    the app opens looking like a Dashboard with no agents rather than a broken bridge;
+      #  - Tailwind only emits a class it finds in a scanned file, so a wrong `@source` ships
+      #    a stylesheet with none of the board's metrics in it and every surface collapses.
+      - run: npm run build
+
+      # The three artifacts, asserted individually. A green build step proves the commands
+      # exited 0; this proves they produced the files the app loads, with the content that
+      # makes them work. "It built" is not "it is there".
+      - name: the bundles exist, and are the right shape
+        run: |
+          set -euo pipefail
+          test -f dist/renderer/index.html
+          test -f dist/main/entry.js
+          test -f dist/main/main.js
+          test -f dist/main/doctor.js
+          test -f dist/main/preload.cjs
+          test -f dist/main/doctor-preload.cjs
+          test -f dist/renderer/doctor.html
+
+          # CommonJS, not ESM. `require`/`exports` present and no bare `import ... from`.
+          grep -q "require(" dist/main/preload.cjs
+          ! grep -qE "^import .* from" dist/main/preload.cjs
+
+          # Relative asset paths, or the window is white.
+          ! grep -qE '(src|href)="/' dist/renderer/index.html
+          ! grep -qE '(src|href)="/' dist/renderer/doctor.html
+
+          # Tailwind actually scanned our sources: the board's exact column template, the
+          # 280px palette box and the rail's 30px rows all have to be in the stylesheet.
+          # Two pages now (Genie and the doctor window), so two stylesheets: read the one index.html links.
+          css="dist/renderer/$(grep -m1 -oE 'assets/[^"]+\.css' dist/renderer/index.html)"
+          test -f "$css"
+          grep -q "150px_minmax" "$css"
+          grep -q "280px" "$css"
+          grep -q "30px" "$css"
+
+  smoke:
+    name: a real window
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install
-        run: npm ci
-      # Through the npm scripts, which name the project's own TypeScript: the renderer
-      # ships a TypeScript 6 `tsc` bin too, and a bare `tsc` is whichever npm
-      # linked last (scripts/__tests__/typecheck-uses-project-typescript.test.ts).
-      - name: Typecheck (main)
-        run: npm run typecheck:main
-      - name: Typecheck (renderer)
-        run: npm run typecheck:renderer
-      # The E2E specs used to be the one tree nothing typechecked, and the cost
-      # was not theoretical: a helper whose return type omitted a field made a
-      # spec wait 15 seconds for something that could never arrive, and the
-      # feature under test was working the whole time. Checked HERE (cheap,
-      # seconds) rather than discovered in the E2E workflow (minutes, per OS).
-      - name: Typecheck (e2e)
-        run: npm run typecheck:e2e
-      - name: Vitest
-        run: npm test
-      # Proves the renderer BUILDS on every PR, cheaply, before the per-OS E2E
-      # workflow spends minutes packaging it. Vite, not Next (Tynn #449).
-      - name: Build renderer
-        run: npm run build:renderer
+      - uses: actions/checkout@v4
 
-  # REAL hosting tests (`*.real.test.ts`) — launch the ACTUAL bundled Caddy /
-  # php-cgi and curl them, so a broken serve mode fails CI instead of shipping
-  # (the mocked hosting E2E never runs a web server; two hostServe sites colliding
-  # on Caddy's :2019 admin port sailed straight through it). Linux-only: the
-  # runner has Docker for future container-backed real tests, and php-cgi installs
-  # cleanly. Needs `build:runtime` first for the Caddy binary.
-  hosting:
-    runs-on: ubuntu-latest
-    # 20, not 15: apt now regularly waits on the runner's own
-    # unattended-upgrades holding the dpkg lock, and the real hosting tests need
-    # room after it.
-    #
-    # 30, not 20, since `postgres-image.real.test.ts`: that one BUILDS the Genie
-    # Postgres image (pull the pgvector base, apt-install PostGIS) before it can
-    # run a database and install every whitelisted extension into it. A few
-    # minutes, and worth them — it is the only place in this repository that
-    # proves the extensions Genie advertises are the extensions the image ships.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install
-        run: npm ci
-      # Bounded, and with its own timeout, because this step silently killed the
-      # gate. apt waits on the dpkg lock FOREVER by default; on 2026-08-19 the
-      # runner image began holding it long enough that apt ate 13m19s of a
-      # 15-minute job budget, so the job was CANCELLED — and a cancelled job does
-      # not read as a failure, so three merges went by with the real-hosting gate
-      # never running at all. DPkg::Lock::Timeout makes the wait bounded, and the
-      # step timeout turns any remaining hang into a visible FAILURE instead of a
-      # quiet cancellation.
-      # Only reach for apt when the runner does not already have php-cgi.
-      #
-      # This step silently killed the gate: apt waits forever by default, and on
-      # 2026-08-19 azure.archive.ubuntu.com stopped answering, so every repo was
-      # retried with backoff until the job hit its budget and was CANCELLED — and a
-      # cancelled job does not read as a failure, so three merges went by with the
-      # real-hosting gate never running.
-      #
-      # Asking whether the binary is there first makes the normal case instant and
-      # independent of any mirror. The apt path stays as the fallback, now bounded
-      # (retries + per-request timeouts + a lock timeout) and under a step timeout,
-      # so a hang is a visible FAILURE instead of a quiet cancellation.
-      - name: Ensure php-cgi (the FastCGI worker the php serve mode spawns)
-        timeout-minutes: 6
-        env:
-          DEBIAN_FRONTEND: noninteractive
+
+      # Electron is Chromium and needs its graphics, font and a11y libraries. `xauth` is not
+      # obvious and is not optional: `xvfb-run` shells out to it, and without it the launch
+      # dies with "xauth command not found" — which presents as "the window never appeared",
+      # pointing at the harness rather than at the missing package.
+      - name: install Electron's runtime libraries
         run: |
-          if command -v php-cgi >/dev/null 2>&1; then
-            echo "php-cgi already present: $(php-cgi --version | head -1)"
-            exit 0
-          fi
-          sudo apt-get update             -o DPkg::Lock::Timeout=180             -o Acquire::Retries=2             -o Acquire::http::Timeout=15             -o Acquire::https::Timeout=15
-          sudo apt-get install -y -o DPkg::Lock::Timeout=180 php-cgi
-      # FrankenPHP (genie#668). `frankenphp.real.test.ts` runs the OFFICIAL binary
-      # against the Caddyfile Genie writes — a config either works on the real
-      # binary or it does not, and a skipped suite reports the same green as a
-      # passing one. Pinned to the version frankenphp.ts installs, and cached on
-      # that file, so a version bump misses by construction and a normal run
-      # never touches GitHub's release CDN.
-      - name: Cache the FrankenPHP binary
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/genie-frankenphp
-          key: frankenphp-${{ runner.os }}-${{ hashFiles('main/dev-server/frankenphp.ts') }}
-      - name: Ensure FrankenPHP (the release frankenphp.ts pins)
-        timeout-minutes: 6
-        run: |
-          set -euo pipefail
-          v=$(node -e "const s=require('fs').readFileSync('main/dev-server/frankenphp.ts','utf8');const m=/FRANKENPHP_VERSION = '([^']+)'/.exec(s);if(!m)process.exit(1);console.log(m[1])")
-          bin="$HOME/.cache/genie-frankenphp/$v/frankenphp"
-          if [ ! -x "$bin" ]; then
-            mkdir -p "$(dirname "$bin")"
-            curl -fsSL --retry 3 --max-time 300 -o "$bin" "https://github.com/php/frankenphp/releases/download/v$v/frankenphp-linux-x86_64"
-            chmod +x "$bin"
-          fi
-          "$bin" version
-          echo "FRANKENPHP_BIN=$bin" >> "$GITHUB_ENV"
-      # PINNED, and at 1.25+. This job had no Go setup at all, so it built with
-      # whatever the runner image shipped — and on 2026-08-20 that broke outright:
-      # a transitive genproto module published the day before now requires
-      # go >= 1.25.0, while the image carried 1.24.13. `xcaddy build` resolves
-      # latest transitive deps, so an unpinned toolchain here is a build that can
-      # break with no commit of ours involved. It did.
-      - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          # Off, explicitly. This repository has no `go.sum` — Go is here solely
-          # so xcaddy can build Caddy — so setup-go's own cache has nothing to
-          # key on and every run logged
-          #   `Restore cache failed: Dependencies file is not found … go.sum`
-          # before compiling the whole graph from source anyway. The keyed cache
-          # below does the job the warning was pretending to.
-          cache: false
-      # Measured on run 34414872469: `go install xcaddy` 11.5s + `xcaddy build`
-      # 45.6s = 57s of EVERY hosting run spent re-downloading and re-compiling
-      # the same pinned dependency graph.
-      #
-      # Speed is the smaller half of the reason. It also deletes a dependency on
-      # proxy.golang.org from every run — and an external service deciding
-      # whether this gate runs is not hypothetical here: an unreachable apt
-      # mirror silently CANCELLED this job for three merges running (see the
-      # php-cgi step above). One less network in the critical path.
-      #
-      # Correctness does not rest on the key. Go's module and build caches are
-      # content-addressed, so a partially-matching restore is reused only where
-      # the inputs genuinely match and a miss just builds from source, exactly as
-      # today. The key hashes build-service-runtime.mjs because every pinned
-      # version xcaddy resolves — Caddy, replace-response, xcaddy itself — is
-      # declared in that file, so a bump misses by construction.
-      - name: Cache Go module + build caches (xcaddy's inputs)
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-caddy-${{ runner.os }}-go1.25-${{ hashFiles('scripts/build-service-runtime.mjs') }}
-          restore-keys: |
-            go-caddy-${{ runner.os }}-go1.25-
-      - name: Build the service runtime (bundled Caddy)
-        run: npm run build:runtime
-      # THE JOB HAD NO WAY TO GET ITS IMAGES (genie#636).
-      #
-      # `*.real.test.ts` runs REAL containers, and this job had no `docker pull`
-      # and no `docker login` — it depended entirely on whatever the runner image
-      # happened to cache, plus anonymous Docker Hub pulls. On 2026-09-11 both
-      # moved at once: `redis:7-alpine` was not cached and `minio/minio` answered
-      # anonymous clients with "pull access denied". Six tests failed, four of
-      # them as `expected 'failed' to be 'running'`, which reads as a product bug
-      # and cost two CI rounds before the cause was visible.
-      #
-      # Pulling them HERE, by name, is what makes a registry problem fail AS a
-      # registry problem, at a named step, before any test runs. The alternative
-      # — leaving it to the tests — is what produced the misdiagnosis.
-      #
-      # These are the images the real suite runs. The Genie Postgres image is NOT
-      # listed: `postgres-image.real.test.ts` builds it from the pgvector base
-      # below, which is the thing that needs fetching.
-      #
-      # `quay.io/minio/minio:latest` USED to be here and is gone. MinIO withdrew
-      # its images from BOTH registries — measured 2026-09-30, anonymous manifest
-      # GETs returned 401 from quay AND Docker Hub, and Hub's tag list reported
-      # `object not found`, while `library/redis:7-alpine` returned 200 from the
-      # same probe. That failure is what this step reported for weeks, correctly,
-      # AS a registry problem. The S3 engine is SeaweedFS now (genie#758), pinned
-      # to a real semver tag rather than a moving one, and the boundary test drives
-      # a real AWS CLI so the same tag discipline applies to it.
-      #
-      # Retried, because a registry blip is not a code failure and a one-shot
-      # pull turns one into the other. Still bounded: three attempts, then a
-      # loud, named failure.
-      #
-      # NOT THE WHOLE FIX. Anonymous pull limits are the root cause and they only
-      # tighten; `docker/login-action` with a Hub token would remove the class.
-      # That needs a repository secret, so it is the owner's to add — see #636.
-      - name: Pull the images the real tests run
-        timeout-minutes: 8
-        run: |
-          for image in redis:7-alpine pgvector/pgvector:pg17 chrislusf/seaweedfs:4.48 amazon/aws-cli:2.31.31; do
-            for attempt in 1 2 3; do
-              if docker pull "$image"; then
-                break
-              fi
-              if [ "$attempt" = 3 ]; then
-                echo "::error::Could not pull $image after 3 attempts. The real hosting tests cannot run without it; this is a registry/auth problem, not a code failure."
-                exit 1
-              fi
-              sleep $((attempt * 10))
-            done
+          sudo apt-get update
+          # Each package, with a `t64` fallback.
+          #
+          # Ubuntu 24.04 renamed several of these in the 64-bit time_t transition —
+          # `libasound2` became `libasound2t64`, and on noble the old name is a virtual package
+          # with "no installation candidate". The list here was taken from Debian bookworm,
+          # where the old names are correct, so a single flat `apt-get install` is wrong on one
+          # of the two and this survives both. It also survives the runner image moving again,
+          # which it will.
+          for pkg in xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6                      libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2                      libpangocairo-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3                      libxrandr2 fonts-liberation fontconfig; do
+            sudo apt-get install -y --no-install-recommends "$pkg"               || sudo apt-get install -y --no-install-recommends "${pkg}t64"               || { echo "could not install $pkg or ${pkg}t64"; exit 1; }
           done
-      - name: Real hosting tests (bundled Caddy + php-cgi)
-        run: npm run test:hosting
+
+      # Make font resolution representative of a desktop. Measured: without this the runner's
+      # `system-ui` can resolve to a MONOSPACE face, the whole app renders monospaced, and that
+      # is indistinguishable from a real stylesheet bug. A verification environment that cannot
+      # tell the two apart is not a verification environment.
+      - name: make font resolution representative
+        run: |
+          sudo cp scripts/smoke-fonts.conf /etc/fonts/local.conf
+          sudo fc-cache -f
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Seed a workspace and an agent, so the smoke proves a CLICK reaches a surface rather
+      # than only that an empty Dashboard renders. It writes the two JSON files a real machine
+      # would already have — nothing in `src/` knows it exists.
+      - run: node scripts/smoke-seed.mjs
+
+      # THE CHECK THAT WAS MISSING FROM ALL FOUR FAILED BETAS.
+      #
+      # Four releases shipped on green unit suites and every one was broken the moment a human
+      # opened it, because nobody ever opened the built app. This opens it: a real Electron
+      # window on a virtual display, driven over the Chrome DevTools Protocol — no third-party
+      # test framework and no test-only code in the product.
+      - name: open the app and drive it
+        run: |
+          # Point codex at the stub, exactly as `smoke-linux-inner.sh` does. Ordinary provider
+          # configuration — the product behaves identically with or without it — and it is what
+          # lets a REAL parked approval reach the screen in an environment with no codex.
+          chmod +x scripts/stub-codex.mjs
+          export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
+
+          xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
+          # `timeout` on each script, and it is not a formality. This step HUNG for 15 minutes
+          # on five consecutive runs today, and a job that hits its time limit reports as
+          # `cancelled` — which reads as "somebody pushed again", skips every `if: failure()`
+          # step, and so hides the one log that would have said where it stopped. A hang that
+          # fails in five minutes with its output attached is a bug report; one that is
+          # cancelled at fifteen is a shrug.
+          timeout 300 node scripts/agents-hold-no-pty-cdp.mjs
+          timeout 300 node scripts/smoke-cdp.mjs
+          timeout 300 node scripts/layout-sweep.mjs
+
+      - name: electron's own output
+        # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
+        # to GitHub, and that was exactly the case where this log mattered most.
+        if: always()
+        run: tail -100 electron.log || true
+
+      # The screenshots, for a human to look at. Writing one is not the same as somebody
+      # having seen it, and this step does not pretend otherwise — it just makes looking cheap.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshots
+          path: smoke-*.png
+          if-no-files-found: warn
+
+  package:
+    name: it packages
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The bundles first. `electron-builder` packs `dist/` — it does not produce it — so
+      # without this it packs an app.asar with no entry file and fails with
+      # "Application entry file dist/main/main.js is corrupted", which reads like a broken
+      # build rather than a missing step.
+      - run: npm run build
+
+      # `--publish never`, and it is not a formality.
+      #
+      # This job BUILDS an installer; it does not release one. Implementation authorisation is
+      # not release authorisation, and nothing here may create a tag, a release or an
+      # auto-update feed entry. Publishing is a separate, human-approved step.
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+
+      - name: build the installers
+        run: npx electron-builder --publish never
+
+      # The artifacts, so somebody can actually install one and find out. A build that produced
+      # a file nobody can reach proves only that the command exited zero.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.AppImage
+            release/*.yml
+          if-no-files-found: error
+
+  smoke-windows:
+    name: a real window (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # EVERY window this build has opened has been Linux, and the owner works on Windows.
+      #
+      # That is not a small difference for this app: `src/main/paths.ts` case-folds there and
+      # not elsewhere, the renderer picks `Ctrl` over the Apple key, Electron's window chrome
+      # differs, and a path separator bug on one platform is invisible on the other. This
+      # repository has already had a test that passed on Windows and broke on ubuntu for
+      # exactly that reason.
+      #
+      # A GitHub runner is not the owner's desktop, so the standing rule is satisfied — this is
+      # the "or in a VM" half of it.
+      - run: node scripts/smoke-seed.mjs
+
+      - name: open the app and drive it
+        shell: pwsh
+        run: |
+          # Windows runners have a desktop session, so Electron opens a real window with no
+          # virtual display needed. `--no-sandbox` is NOT passed: the sandbox works here, and
+          # weakening it to match the container would be testing a weaker product.
+          # `npx.cmd`, not `npx`. Start-Process launches an executable directly rather than
+          # through a shell, so a extensionless shim fails with
+          # "%1 is not a valid Win32 application" — which names neither the file nor the
+          # reason. The sibling Genie repo has hit this exact class before.
+          # The approval round trip runs HERE TOO, and getting to that took a wrong turn
+          # worth recording, because the wrong version of this comment was briefly committed.
+          #
+          # A bare spawn of an npm-installed "codex.cmd" app-server throws EINVAL
+          # synchronously on Windows: npm installs CLIs as .cmd shims and Node refuses to
+          # spawn one without `shell: true` (the CVE-2024-27980 fix). I measured that, and
+          # concluded codex could not be started here at all.
+          #
+          # It was the wrong call to measure. prism-acp passes
+          # `shell: process.platform === 'win32'` at BOTH of its spawn sites — verified in the
+          # installed 0.6.1 — so the library never makes the call I reproduced. Through the
+          # REAL driver, codex starts on Windows and reports a session id. Copying a
+          # library's binary and args faithfully while dropping its options object produces a
+          # repro that looks complete and is not.
+          #
+          # The stub is reached through a .cmd WRAPPER rather than directly, because
+          # `shell: true` means cmd.exe runs the binary and cmd.exe cannot execute a .mjs.
+          # That wrapper is also the shape a user actually has: a real npm-installed codex
+          # IS a .cmd.
+          $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.cmd"
+
+          $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
+                               -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
+          try {
+              node scripts/agents-hold-no-pty-cdp.mjs
+              node scripts/smoke-cdp.mjs
+              node scripts/layout-sweep.mjs
+          } finally {
+              if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+
+      - name: the app's own output, on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-Content electron-err.log -Tail 60 -ErrorAction SilentlyContinue
+          Get-Content electron-out.log -Tail 20 -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshots-windows
+          path: smoke-*.png
+          if-no-files-found: warn

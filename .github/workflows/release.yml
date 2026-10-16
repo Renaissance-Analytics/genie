@@ -1,268 +1,104 @@
-name: Release
+name: release
 
-# Builds signed installers for Windows and Linux on tag push.
-# Each platform runs on its native runner so node-pty + better-sqlite3
-# native modules link against the right ABI.
+# THE ONE DOOR OUT OF THIS REPOSITORY.
 #
-# macOS is PAUSED, not removed — owner's call, 2026-10-09: "let's drop mac support for
-# now, only ship to windows and linux". It was the only platform failing E2E, and it has
-# never been signable here anyway (the Developer ID secrets are unset, so every build was
-# unsigned and Gatekeeper would refuse it).
+# Runs for a `v*` tag and nothing else. A push to `main` builds in ci.yml and publishes
+# nothing; a tag is the owner's deliberate, approved act, and this workflow is what that act
+# triggers. `test/release-workflow.test.ts` holds every rule below.
 #
-# The macOS build and signing-verification steps below are KEPT and are inert: they are
-# guarded by `runner.os == 'macOS'`, which cannot be true while the matrix has no macOS
-# entry. Re-enabling is one line — put `- os: macos-latest` / `artifact: 'Genie-*.dmg'`
-# back in the matrix — and the same goes for `test-build.yml` and the `e2e.yml` matrix.
-# Deleting the steps would make coming back a rewrite instead.
+# WHERE IT PUBLISHES: `Renaissance-Analytics/genie` — the OLD repository — because that is the
+# owner/repo inside every installed Genie's `app-update.yml` (0.7.0-beta.342 and 2.0.0-beta.4
+# alike), and an installed copy looks nowhere else. The code lives here; the releases live
+# there (owner decision, 2026-10-10). `GITHUB_TOKEN` cannot write another repository's
+# releases, so the publish uses `GENIE_RELEASE_TOKEN`: a fine-grained token with Contents:
+# read/write on `Renaissance-Analytics/genie`, stored as a secret of THIS repository.
 #
-# Required secrets (configure under repo Settings → Secrets and variables
-# → Actions). Without them the build still runs but produces unsigned
-# installers — fine for testing the pipeline, not for distribution:
-#
-#   GH_TOKEN                — A token with repo:write permission so
-#                             electron-builder can attach release
-#                             artifacts to a GitHub Release. The default
-#                             secrets.GITHUB_TOKEN works for the same-
-#                             repo case.
-#
-#   Windows (NSIS):
-#     WINDOWS_CSC_LINK            — base64-encoded .pfx OR https URL
-#     WINDOWS_CSC_KEY_PASSWORD    — password for the .pfx
-#
-#   macOS (Developer ID + notarisation):
-#     MAC_CSC_LINK                — base64-encoded .p12
-#     MAC_CSC_KEY_PASSWORD        — password for the .p12
-#     APPLE_ID                    — Apple ID for notarisation
-#     APPLE_APP_SPECIFIC_PASSWORD — app-specific password
-#     APPLE_TEAM_ID               — your Developer Team ID
+# The publish target itself (owner, repo) is electron-builder.yml's `publish` block — one place,
+# held by test/upgrade.test.ts. The RELEASE TYPE follows the tag (the owner, 2026-10-12: "stable
+# and dev update channels"): `v2.0.0-beta.20` publishes as a prerelease, which only the dev
+# channel sees; a plain `v2.0.0` publishes as a full release, which stable (and dev) see.
+# test/update-channels.test.ts holds the `case` below to `releaseTypeForTag`.
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: {}
 
-# The default GITHUB_TOKEN is read-only for `contents`. electron-builder
-# needs write to attach installers + latest.yml to the GitHub Release;
-# without this it gets a 403 on the upload step.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # All three platform jobs run in parallel and each one wants to
-  # publish to the same GitHub Release. electron-builder's publish
-  # step creates the Release if it doesn't exist — but with three
-  # parallel POSTs, two of them lose the race and 422 with
-  # "tag_name already_exists" before they get a chance to attach
-  # assets. Create the Release shell up front so everyone can attach
-  # cleanly.
-  prepare-release:
+  guard:
+    name: the tag names the version in package.json
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - name: Ensure GitHub Release exists for tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+      - name: compare
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          NOTES_FILE="docs/releases/${TAG}.md"
-          if [ ! -s "$NOTES_FILE" ]; then
-            # Say what IS there, not only what was wanted. The old message named the path it
-            # looked for and nothing else, so the fix meant a trip to the repo to discover that
-            # the notes exist under a different version and need renaming. `notesVerdict` is the
-            # same helper `npm run release:check` uses before a tag is pushed.
-            node -e "
-              const fs = require('node:fs');
-              import('./scripts/release-notes-policy.mjs').then(({ notesVerdict }) => {
-                const have = fs.existsSync('docs/releases') ? fs.readdirSync('docs/releases') : [];
-                console.error(notesVerdict(process.argv[1], have).message);
-                process.exit(1);
-              });
-            " "$TAG"
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package.json: $pkg  tag: $tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag v$tag does not match package.json $pkg — bump the version in a commit first; a tag is a claim about a version"
             exit 1
           fi
-          # Notes are read in an update POPOVER, not a changelog. Bullets had
-          # grown into 400-character paragraphs stacked five deep. Checked in
-          # `npm test` too, but gated again HERE so a novel cannot reach a user
-          # even if the suite was skipped.
-          node scripts/release-notes-policy.mjs "$NOTES_FILE"
-          # Create the release as a DRAFT (not a visible prerelease). Drafts are
-          # invisible to electron-updater, so the three platform builds can
-          # attach their artifacts over the next ~6 min without any client
-          # seeing a half-built release. finalize-release un-drafts it at the end.
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --draft \
-              --title "$TAG" \
-              --notes-file "$NOTES_FILE"
-          else
-            # A retry must restore the same reviewed notes, not preserve a stale
-            # placeholder left by an interrupted earlier run.
-            gh release edit "$TAG" --notes-file "$NOTES_FILE"
-            echo "Release $TAG already exists; refreshed its curated notes"
+          # No notes, no release: the owner attached the known limitations to the go, and a
+          # release body that says nothing is a version number. docs/releases/v<version>.md.
+          if [ ! -s "docs/releases/v$tag.md" ]; then
+            echo "::error::docs/releases/v$tag.md is missing or empty — write the release notes (what is in, known limitations, how it was verified) before tagging"
+            exit 1
           fi
 
-  release:
-    needs: prepare-release
+  publish:
+    name: build and publish (${{ matrix.os }})
+    needs: guard
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Pinned to windows-2022 (not windows-latest). When Microsoft
-          # rolled `windows-latest` from 2022 → 2025 in mid-2026, the new
-          # image's Visual Studio install layout broke node-gyp's
-          # auto-discovery and node-pty failed to rebuild
-          # ("Could not find any Visual Studio installation to use").
-          # Pin so we control the image rollover ourselves.
-          - os: windows-2022
-            # Glob matches both the NSIS installer (Genie-Setup-*.exe)
-            # and the portable build (Genie-*.exe without the Setup-
-            # prefix) so both get attached to the release.
-            artifact: 'Genie*.exe'
-          - os: ubuntu-latest
-            artifact: 'Genie-*.AppImage'
+        os: [windows-latest, ubuntu-latest]   # no macOS: dropped for now (owner, 2026-10-11)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # electron-builder creates (or reuses) the GitHub release for this tag on the repository
+      # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
+      # marks it a prerelease or a full release by the tag (the publish step). There is no macOS job: macOS support is
+      # dropped for now (owner, 2026-10-11); the `mac` block in electron-builder.yml stays for when it returns.
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
 
-      - name: Set up Go (xcaddy builds the host Caddy for resources/runtime)
-        # The external-browser host Caddy (story #238) is xcaddy-built into
-        # resources/runtime by build:runtime below. Pin Go so that binary is
-        # reproducible, same discipline as the Node pin.
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Set up Python (node-gyp needs distutils)
-        # node-pty / better-sqlite3 native rebuild goes through node-gyp,
-        # which still imports distutils. Python 3.12 dropped it from
-        # stdlib; pin to 3.11 across all runners so the rebuild succeeds
-        # without manual setuptools installs.
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        # CI=true makes electron-builder install-app-deps fail loudly
-        # rather than fall back to prebuilt-only via our postinstall
-        # `|| echo` guard. We want a clean ABI match on release builds.
-        env:
-          CI: true
-        run: npm ci
-
-      - name: Build service runtime (resources/runtime)
-        # Standalone Node + ABI-matched node-pty for THIS os/arch, shipped via
-        # electron-builder extraResources → <resources>/runtime. Without it the
-        # per-user OS-service host can't activate (Genie falls back to the
-        # detached host). Must run BEFORE the renderer/packaging build so it is included.
-        # The script self-verifies node-pty loads under the standalone Node.
-        # REQUIRE_HOST_CADDY makes a missing Go / xcaddy build FAIL the release
-        # (story #238) rather than silently ship without the host Caddy.
-        env:
-          REQUIRE_HOST_CADDY: '1'
-        run: npm run build:runtime
-
-      # The build steps below conditionally export signing env vars only
-      # when the corresponding secrets are present. Setting CSC_LINK="" (the
-      # default when a secret isn't configured) makes electron-builder treat
-      # the empty string as a cert path and bail with "<project-dir> not a
-      # file". Explicit absence vs. "yes I want unsigned" is set via
-      # CSC_IDENTITY_AUTO_DISCOVERY=false instead.
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
+      - name: publish
+        # bash on EVERY runner: the script below is bash, and Windows' default run shell is PowerShell (the 2.0.0-beta.20
+        # release run died there with a ParserError and built no installer). test/release-step-shells.test.ts holds it.
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
+        # electron-builder.yml defaults to `releaseType: prerelease`; a plain tag overrides it to
+        # `release` so the stable channel (allowPrerelease false) is offered it.
         run: |
-          if [ -n "$WINDOWS_CSC_LINK" ]; then
-            export CSC_LINK="$WINDOWS_CSC_LINK"
-            export CSC_KEY_PASSWORD="$WINDOWS_CSC_KEY_PASSWORD"
-          else
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-          fi
-          npm run build:main
-          npm run build:renderer
-          npx electron-builder --win
+          tag="${GITHUB_REF_NAME#v}"
+          case "$tag" in *-*) type=prerelease ;; *) type=release ;; esac
+          echo "publishing v$tag as a $type"
+          npx electron-builder --publish always --config.publish.releaseType=$type
 
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ -n "$MAC_CSC_LINK" ]; then
-            export CSC_LINK="$MAC_CSC_LINK"
-            export CSC_KEY_PASSWORD="$MAC_CSC_KEY_PASSWORD"
-            export APPLE_ID="$APPLE_ID_SECRET"
-          else
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-          fi
-          npm run build:main
-          npm run build:renderer
-          npx electron-builder --mac
-
-      # Say whether the app is ACTUALLY signed. electron-builder prints one
-      # `skipped macOS application code signing` line among thousands and the
-      # job still goes green, so every release so far has shipped an unsigned
-      # mac build and reported success. Fails only when secrets were provided
-      # and signing did not happen -- an unsigned build with no certificate is
-      # expected and must still ship.
-      - name: Verify macOS signing
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-        run: node scripts/verify-mac-signing.mjs dist
-
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-        run: npm run build:main && npm run build:renderer && npx electron-builder --linux
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.os }}-installer
-          path: |
-            dist/${{ matrix.artifact }}
-            dist/*.yml
-            dist/*.blockmap
-          if-no-files-found: warn
-          retention-days: 14
-
-  # Publish the release: flip draft → prerelease ONLY after every platform leg
-  # (needs: release) has attached its artifacts — including the Windows
-  # latest.yml that electron-updater fetches (it uploads last). Drafts are
-  # invisible to the updater, so this makes the release appear atomically and
-  # complete, closing the race where a client saw the tag before latest.yml
-  # existed and 404'd on "Check for updates".
-  finalize-release:
-    needs: release
+  notes:
+    name: write the release notes into the GitHub release
+    needs: publish
     runs-on: ubuntu-latest
     steps:
-      - name: Publish the release (un-draft)
+      - uses: actions/checkout@v4
+      # electron-builder created the release on the OLD repo (electron-builder.yml publish block);
+      # the body comes from docs/releases/v<version>.md, with the same cross-repo token. The
+      # release keeps the type the publish step gave it (prerelease or full release, by the tag);
+      # whether it is a draft is the owner's call after this runs.
+      - name: set the body
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release edit "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --draft=false \
-            --prerelease=true
+          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo Renaissance-Analytics/genie --notes-file "docs/releases/${{ github.ref_name }}.md"

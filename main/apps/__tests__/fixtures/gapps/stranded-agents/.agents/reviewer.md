@@ -1,3 +1,0 @@
-# Reviewer
-
-Reviews the work.
