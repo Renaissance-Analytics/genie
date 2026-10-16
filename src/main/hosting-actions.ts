@@ -72,10 +72,9 @@ export type CreateSiteOutcome = { readonly kind: 'problems'; readonly problems: 
 /** A validated form as what the site manager declares (the name as Genie keeps it — lower-case, no `.gen`). */
 function siteInputOf(s: HostingServices, input: { workspaceId: string; repoPath: string; form: SiteForm }): CreateSiteInput {
     const f = input.form;
-    // The workspace's service env (its engines + the shared ones) reaches every process of the site.
-    const env = s.engines.envFor(input.workspaceId);
+    // The workspace's service env (its engines + the shared ones) is read at every start (site-manager.ts `serviceEnv`),
+    // never captured here: a site added before its engine would keep no DB_PORT.
     return {
-        ...(Object.keys(env).length > 0 ? { env } : {}),
         name: normalizeSiteName(f.name),
         workspaceId: input.workspaceId,
         repoPath: input.repoPath,

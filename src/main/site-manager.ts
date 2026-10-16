@@ -40,7 +40,10 @@ export interface CreateSiteInput {
     readonly devServer?: DevServer;
     /** proxy: a server the user already runs; no process is started. */
     readonly hostPort?: number;
-    /** The service env every process of the site gets. */
+    /**
+     * The site's OWN env (its declared port variables), on top of the workspace's service env — which is never captured
+     * here: it is read at every start ({@link SiteManagerDeps.serviceEnv}), so a site declared before its engine sees it.
+     */
     readonly env?: Readonly<Record<string, string>>;
 }
 
@@ -97,6 +100,12 @@ export interface SiteManagerDeps {
      * managed PHP in this Genie: an unpinned site runs `php-cgi`, a pinned one is refused — never served on another PHP.
      */
     readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
+    /**
+     * The workspace's service env NOW (its engines' DB_*, REDIS_URL…), read at every start and by
+     * {@link SiteManager.serviceEnvChanged}. Never captured at declare time: a site declared before its engine existed
+     * kept no DB_PORT through every restart (moic, 2026-10-15). Absent = none. The site's own env wins over it.
+     */
+    readonly serviceEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
 }
 
 interface SiteRecord {
@@ -109,6 +118,13 @@ interface SiteRecord {
     external: boolean;
     stopped: boolean;
     problem: string | null;
+    /** The env its processes were last started with (canonical JSON) — what an engine change is compared against. */
+    startedEnv?: string;
+}
+
+/** An env as one comparable string: keys sorted, so the same variables in another order are the same env. */
+function canonicalEnv(env: Readonly<Record<string, string>>): string {
+    return JSON.stringify(Object.keys(env).sort().map((k) => [k, env[k]]));
 }
 
 export class SiteManager {
@@ -262,7 +278,9 @@ export class SiteManager {
         const { id, host } = record;
         const proc = (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined) =>
             this.#deps.supervisor.start({ id: procId, workspaceId: input.workspaceId, name, command, cwd: input.repoPath, restart: 'on-failure', ...(env ? { env } : {}) });
-        const baseEnv = input.env ? { ...input.env } : undefined;
+        const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
+        const baseEnv = Object.keys(merged).length > 0 ? merged : undefined;
+        const startedEnv = canonicalEnv(merged);
 
         if (input.serve.mode === 'proxy') {
             if (input.hostPort !== undefined) {
@@ -313,6 +331,34 @@ export class SiteManager {
         }
         record.stopped = false;
         record.problem = null;
+        record.startedEnv = startedEnv;
+    }
+
+    /**
+     * The workspace's service env changed (an engine added, removed, chosen or detached): its RUNNING sites whose env is
+     * no longer what they were started with are restarted, so the new env reaches them without anyone asking — config is
+     * always hot-swappable. A variable in the process env wins over the repo's `.env`, so a worker left on the old env
+     * would keep the old database even with the right `.env`. Stopped sites stay stopped (their next start reads it).
+     * `workspaceId` absent = every workspace. Answers the sites restarted; a refused restart keeps its reason on the site.
+     */
+    serviceEnvChanged(workspaceId?: string): string[] {
+        const restarted: string[] = [];
+        for (const record of this.#sites.values()) {
+            const input = record.input;
+            if (!input || record.stopped || record.external || record.processIds.length === 0) continue;
+            if (workspaceId !== undefined && input.workspaceId !== workspaceId) continue;
+            const now = canonicalEnv({ ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) });
+            if (now === record.startedEnv) continue;
+            this.#stopProcesses(record);
+            try {
+                this.#start(record);
+            } catch (error) {
+                record.problem = error instanceof Error ? error.message : String(error);
+            }
+            restarted.push(record.id);
+        }
+        if (restarted.length > 0) this.#changed();
+        return restarted;
     }
 
     #runCaddy(record: SiteRecord, caddy: string, caddyfile: string, env: Readonly<Record<string, string>> | undefined, proc: (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined) => unknown): void {

@@ -659,7 +659,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         },
         ...(input.phpWorkerEnv ? { phpWorkerEnv: input.phpWorkerEnv } : {}),
         ...(input.resolvePhpCgi ? { resolvePhpCgi: input.resolvePhpCgi } : {}),
+        serviceEnv: (workspaceId) => engines.envFor(workspaceId),
     });
+    // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
+    engines.onChange(() => { sites.serviceEnvChanged(); });
     const routes = () => sites.routes();
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
     const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
