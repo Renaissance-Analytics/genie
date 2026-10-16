@@ -86,7 +86,9 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-inbox-push-'));
     roster = [];
     fakes.clear();
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
+    // No Docker and no real port probes: this test is about the inbox, and the real ones made its setup the first thing
+    // to time out on a loaded Windows machine (beta.28's Windows verify), as every other composeServices test avoids.
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true });
     host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree });
     unwire = wireInboxPush({
         inbox: services.inbox,

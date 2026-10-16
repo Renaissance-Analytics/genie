@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { AgentSession, type DriverEvents, type SessionDriver, type SessionDriverFactory } from '../src/core/session.js';
@@ -138,12 +138,14 @@ describe('a streamed thought is ONE row, not one row per chunk', () => {
     });
 
     it('is written to the thread ONCE, when it closes', async () => {
-        const { d, thread } = open();
+        const { d, session, thread } = open();
         d.emit(thought('a'));
         d.emit(thought('b'));
         d.emit(thought('c'));
         d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash', status: 'completed' });
-        await vi.waitFor(async () => expect(await thread.count()).toBe(2));
+        // Every row written, then counted — not polled against a 1 s clock a loaded Windows disk missed (beta.28 verify).
+        await session.settled();
+        expect(await thread.count()).toBe(2);
         const kinds = (await thread.messages()).map((m) => (m.message as { kind: string }).kind);
         expect(kinds).toEqual(['think', 'tool']);
     });
