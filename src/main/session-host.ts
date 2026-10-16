@@ -81,7 +81,19 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[] }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+
+/**
+ * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
+ * service. DO NOT EXPOSE KEYS"). The workspace's managed-service env over Genie's own, and an allow-list of exactly
+ * its names: prism-acp builds the child's env allow-list-first (`childEnv`), so these names — and its own base set —
+ * reach the agent, and nothing else Genie's environment holds does. None = no options, the provider's default.
+ */
+export function serviceEnvDriverOptions(serviceEnv: Readonly<Record<string, string>>): { parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
+    const names = Object.keys(serviceEnv);
+    if (names.length === 0) return {};
+    return { parentEnv: { ...process.env, ...serviceEnv }, allowEnv: names };
+}
 
 /**
  * The real factory: one driver per provider, and `null` for anything else.
@@ -182,16 +194,18 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
+    // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
+    const env = serviceEnvDriverOptions(extras?.serviceEnv ?? {});
     const configured = providerBinary(record.provider);
     const binary = configured ? { binary: configured } : {};
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp, ...env }, driverEvents(options.events));
 
         case 'codex':
             // The chosen model goes on thread/start and thread/resume; none = no key, Codex's own default.
-            return (options) => new CodexDriver({ cwd, ...resume, ...(record.model ? { model: record.model } : {}), ...binary, ...mcp }, driverEvents(options.events));
+            return (options) => new CodexDriver({ cwd, ...resume, ...(record.model ? { model: record.model } : {}), ...binary, ...mcp, ...env }, driverEvents(options.events));
 
         default:
             return null;
@@ -221,6 +235,8 @@ export class SessionHost {
     readonly #userData: string;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
+    /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
+    readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
     readonly #clock: () => number;
     readonly #running = new Map<AgentId, Running>();
     /** Sessions stopped whose writes may still be in flight — what `settled()` waits for besides the running ones. */
@@ -281,6 +297,7 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
         /**
          * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
          * cell and the collaborator reveal (core/comms.ts). Late-bound: the inbox exists after the host. Absent or
@@ -296,6 +313,7 @@ export class SessionHost {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
+        this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
         this.#onThreadId = options.onThreadId;
@@ -334,7 +352,8 @@ export class SessionHost {
         if (held !== null) return { ok: false, reason: held };
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
-        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers });
+        const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
+        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
