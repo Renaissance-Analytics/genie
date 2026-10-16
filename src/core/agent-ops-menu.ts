@@ -12,9 +12,15 @@ export interface AgentOpsItem {
     readonly danger?: true;
 }
 
-export function agentOpsMenu(agent: { provider: string; fidelity: string }, providers: readonly string[] = ACP_PROVIDERS): AgentOpsItem[] {
+/**
+ * `state.running` = the agent has a live session. Then the menu leads with **Stop agent**: END the session (§6.2 stop —
+ * identity, persona, inbox and history kept). Separate from `Stop this turn` beside the running turn, which ends the
+ * TURN and keeps the agent: the two were one button, so interrupting a turn killed the agent (the owner, 2026-10-15).
+ */
+export function agentOpsMenu(agent: { provider: string; fidelity: string }, providers: readonly string[] = ACP_PROVIDERS, state: { running: boolean } = { running: false }): AgentOpsItem[] {
     if (agent.fidelity !== 'declared') return [];
     return [
+        ...(state.running ? [{ id: 'stop-agent', label: 'Stop agent', hint: 'ends its session; identity, inbox and history kept' }] : []),
         { id: 'restart-graceful', label: 'Restart gracefully', hint: 'same conversation; refuses if it cannot resume' },
         { id: 'restart-fresh', label: 'Restart fresh', hint: 'discards the conversation on purpose' },
         ...providers.filter((p) => p !== agent.provider).map((p) => ({ id: `switch:${p}`, label: `Switch driver to ${p}`, hint: 'identity, inbox, history and prompt carry across' })),

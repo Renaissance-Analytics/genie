@@ -17,7 +17,7 @@ import type { Attachment } from './prompt-content.js';
  *    that never started reads `Not started`, which is not "Idle" (that would claim a session exists);
  *  - **message shapes**: you (right-aligned), the agent BY NAME (violet), a peer as `wren → atlas`. Rendering `role`
  *    alone once labelled a sibling agent's message `user` — the same word as the owner's;
- *  - **no thought ever appears in chat**: only `message` events become rows;
+ *  - **no thought ever appears in chat**: only `message` events become rows — and a stopped turn's one line;
  *  - **thread chips**: the agents sharing the subject's workspace, the subject marked active, each with its state.
  *    `unread` is `null` — nothing reads it yet, and `0` would claim you are up to date (§5).
  *
@@ -25,8 +25,12 @@ import type { Attachment } from './prompt-content.js';
  * marks its OWN undelivered drafts separately (that is the next row).
  */
 
-/** `system`: the agent's AgentInbox mail with another agent — one line in its thread, `atlas → wren · <subject>`. */
-export type ChatWho = 'you' | 'agent' | 'peer' | 'system';
+/**
+ * `system`: the agent's AgentInbox mail with another agent — one line in its thread, `atlas → wren · <subject>`.
+ * `stopped`: a turn that was stopped — one line where its reply ends, `Stopped by you`, so a reply cut short reads as
+ * stopped and not as the agent's last word.
+ */
+export type ChatWho = 'you' | 'agent' | 'peer' | 'system' | 'stopped';
 
 export interface ChatMessage {
     id: string;
@@ -99,6 +103,11 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
     const out: ChatMessage[] = [];
     for (const row of detail.rows) {
         const e = row.event;
+        if (e.kind === 'stopped') {
+            const text = e.by === null ? 'Stopped' : `Stopped by ${e.by}`;
+            out.push({ id: row.id, who: 'stopped', from: e.by ?? '', text, delivered: true, at: row.at });
+            continue;
+        }
         if (e.kind !== 'message') continue;
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;

@@ -105,6 +105,12 @@ export type StreamEvent =
      * (`you`, `genie`, a peer's name) and `null` when nobody reported who — never guessed to be "you".
      */
     | { kind: 'turn'; n: number; by: string | null }
+    /**
+     * A TURN WAS STOPPED — written by the session when the provider ends a turn `cancelled` (ACP's stop reason), not read
+     * off the wire as a row. `n` is the turn that stopped; `by` is who asked for the stop (`you` from the composer's
+     * `Stop this turn`) and `null` when nobody here asked — never guessed to be "you".
+     */
+    | { kind: 'stopped'; n: number; by: string | null }
     | {
           kind: 'notice';
           level: string;

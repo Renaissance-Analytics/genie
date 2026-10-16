@@ -681,6 +681,14 @@ async function boot(): Promise<void> {
         return { ok: host.stop(record.id) };
     });
 
+    // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
+    // running. Ending the agent is `genie:stop-agent` above — a separate action, never reached from here.
+    ipcMain.handle('genie:cancel-turn', (_event, raw: unknown) => {
+        const record = agentFromRenderer(raw);
+        if (!record || !host) return { ok: false, reason: 'not-running' };
+        return host.cancel(record.id);
+    });
+
     ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown, files: unknown) => {
         const record = agentFromRenderer(raw);
         const attachments = attachmentsFromRenderer(files);
@@ -1109,6 +1117,7 @@ async function boot(): Promise<void> {
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
+                cancel: (id) => host!.cancel(id),
                 prompt: (id, text) => host!.prompt(id, text),
                 answerApproval: (id, optionId) => host!.answerApproval(id, optionId),
                 subscribe: (cb) => host!.subscribe(cb),

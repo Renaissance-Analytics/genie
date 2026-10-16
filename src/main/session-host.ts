@@ -19,6 +19,18 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
     return { image: blocks.includes('image'), textResource: blocks.includes('resource-text') };
 }
 
+/**
+ * Whether an agent's driver can END A TURN and keep the session, from its driver's DECLARED `cancel` (prism-acp
+ * `DriverCapabilities.cancel`, 0.14.0: `true` for Claude and Codex). `null` when the driver declares nothing (an older
+ * prism-acp) or Genie has no driver for the provider: unknown is not "yes", and no turn Stop is offered on it.
+ * Read through a record because the field is newer than the types an older prism-acp ships.
+ */
+export function turnCancelFor(provider: string): boolean | null {
+    const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
+    const declared = caps === null ? undefined : (caps as Readonly<Record<string, unknown>>)['cancel'];
+    return typeof declared === 'boolean' ? declared : null;
+}
+
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
 
@@ -35,6 +47,7 @@ import {
     AgentSession,
     type DriverEvents,
     type PermissionOutcomeLike,
+    type CancelOutcome,
     type PermissionRequestLike,
     type SessionDriverFactory,
     type TurnOutcomeLike,
@@ -198,6 +211,8 @@ interface Running {
     accepts: PromptAccepts;
     /** Whether this run resumed a conversation (the record's thread id) — what its run marker says. */
     resumed: boolean;
+    /** Whether its driver DECLARES a turn cancel (`turnCancelFor`); the session's own driver must also have one. */
+    cancelDeclared: boolean;
     /** Which run this is, unique in this host — what tells a restarted agent's session from the one before it. */
     run: number;
 }
@@ -382,7 +397,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), run: ++this.#runs };
+        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
 
         const session = new AgentSession({
             agentId: record.id,
@@ -562,6 +577,20 @@ export class SessionHost {
     }
 
     /**
+     * STOP THE TURN, keep the agent: `Stop this turn` in the chat and the Agent view. The session stays in the map — its
+     * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
+     * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
+     */
+    cancel(agentId: AgentId, by: string | null = 'you'): CancelOutcome {
+        const entry = this.#running.get(agentId);
+        if (!entry) return { ok: false, reason: 'not-running' };
+
+        const outcome = entry.session.cancel(by);
+        this.#emit(agentId);
+        return outcome;
+    }
+
+    /**
      * Stop means stop.
      *
      * The session kills the driver and reaps its own subtree. The slot frees here, which is
@@ -704,6 +733,8 @@ export class SessionHost {
             plan: planFrom(rows),
             model: modelFrom(rows),
             extensions: session.extensions,
+            // Both, because each alone is a claim: the driver's declaration, and the driver this session actually holds.
+            cancelTurn: entry.cancelDeclared && session.canCancelTurn,
         };
     }
 

@@ -5,8 +5,8 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
 
 /**
  * THE CHAT FLYOUT'S REMAINING BOARD RULES (`Chat Flyout.dc.html`): an approval parked in the chat is answered with
- * `A` / `D` there too (the letters follow the composer — one actionable rendering); `[Stop]` sits beside Send while a
- * turn runs; a broken session ends the transcript with the red error rule (`stream closed · exit 137 · 14:31`).
+ * `A` / `D` there too (the letters follow the composer — one actionable rendering); `Stop this turn` sits on the context
+ * line while a turn runs that can be stopped (it used to sit under Send and end the agent); a broken session ends the transcript with the red error rule (`stream closed · exit 137 · 14:31`).
  */
 const base: ChatThread = { agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Working', tone: 'ok' }, chips: [], messages: [] };
 const render = (t: ChatThread, extra: Partial<Parameters<typeof ChatFlyout>[0]> = {}) =>
@@ -24,9 +24,16 @@ describe('A / D in the chat', () => {
 });
 
 describe('Stop and the error rule', () => {
-    it('[Stop] beside Send while a turn runs; absent otherwise', () => {
-        expect(render(base, { running: true, onStop: () => {} })).toMatch(/<button[^>]*data-action="chat-stop"[^>]*>[^<]*(<[^>]*>[^<]*)*Stop/);
-        expect(render(base, { running: false, onStop: () => {} })).not.toContain('chat-stop');
+    it('`Stop this turn` sits on the context line, with the turn — never under Send; absent when the turn cannot be stopped', () => {
+        const html = render(base, { onStopTurn: () => {} });
+        // The context line runs from its own element to the thread's scroller, the next thing in the panel.
+        expect(html.indexOf('data-chat-context="ok"')).toBeGreaterThan(-1);
+        const line = html.slice(html.indexOf('data-chat-context="ok"'), html.indexOf('data-chat-scroll'));
+        expect(line.split('data-action="stop-turn"').length - 1).toBe(1);
+        expect(line).toContain('Stop this turn');
+        expect(html.split('data-action="stop-turn"').length - 1).toBe(1);
+        expect(html).not.toContain('chat-stop');
+        expect(render(base)).not.toContain('stop-turn');
     });
 
     it('a broken session ends the transcript with the red rule naming the failure; a working one has none', () => {

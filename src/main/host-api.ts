@@ -1,5 +1,6 @@
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
+import type { CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import type { RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
@@ -27,6 +28,8 @@ export interface HostApiDeps {
     cwdFor(record: AgentRecord): string;
     host: RestartPorts & {
         answerApproval(agentId: AgentRecord['id'], optionId: string): boolean;
+        /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
+        cancel(agentId: AgentRecord['id']): CancelOutcome;
         subscribe(listener: (agentId: string) => void): () => void;
     };
     registerAgent(workspaceId: string): Promise<{ id: string }>;
@@ -111,6 +114,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'stopAgent': {
                 const r = agent(args[0]);
                 return { ok: r ? deps.host.stop(r.id) : false };
+            }
+            case 'cancelTurn': {
+                const r = agent(args[0]);
+                return r ? deps.host.cancel(r.id) : { ok: false, reason: 'unknown agent' };
             }
             case 'prompt': {
                 const r = agent(args[0]);

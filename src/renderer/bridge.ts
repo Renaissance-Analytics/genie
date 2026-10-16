@@ -134,8 +134,14 @@ export interface GenieBridge {
 
     /** Start or REATTACH a session. Never creates a second for the same agent. */
     openAgent(agentId: string): void;
-    /** Stop means stop: the provider tree goes, and the capacity slot frees. */
+    /** "Stop agent" — END the session: the provider tree goes, and the capacity slot frees. Not the turn's Stop. */
     stopAgent(agentId: string): void;
+    /**
+     * `Stop this turn` (the chat's context line, the Agent view's header): the CURRENT TURN ends, the agent keeps
+     * running (prism-acp's turn cancel). `ok: true` = the provider was asked; `reason` names why nothing was stopped —
+     * `no-turn`, `not-running`, `unsupported` (this agent cannot stop a turn; it was not killed instead) or `refused`.
+     */
+    cancelTurn(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.

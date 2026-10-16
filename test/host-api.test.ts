@@ -28,6 +28,7 @@ function fakes() {
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
+            cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
             answerApproval: (id, opt) => { calls.push(`approve:${id}:${opt}`); return true; },
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
@@ -106,6 +107,17 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'register:tynn', 'stop:agent_a', 'start:agent_a:/w/tynn', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
+    });
+
+    it('cancelTurn is `Stop this turn`: it reaches host.cancel ONCE and never host.stop; stopAgent still stops (control); an unknown agent is refused', async () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        expect(await api.invoke('cancelTurn', ['agent_a'])).toEqual({ ok: true });
+        expect(f.calls).toEqual(['cancel:agent_a']);
+        expect(await api.invoke('stopAgent', ['agent_a'])).toEqual({ ok: true });
+        expect(f.calls).toEqual(['cancel:agent_a', 'stop:agent_a']);
+        expect(await api.invoke('cancelTurn', ['nope'])).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(f.calls).toHaveLength(2);
     });
 
     it('agent operations pass through with their arguments narrowed', async () => {

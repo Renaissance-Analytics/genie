@@ -14,6 +14,7 @@ import { ShellsPanel } from './ShellsPanel.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
+import { TurnStop } from './TurnStop.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
@@ -187,8 +188,13 @@ export interface AgentViewProps {
     takeOver?: TakeOverProbe | null | undefined;
     /** The terminal host, for the Terminal tab's second attach to the TUI's pty; absent = this window has none. */
     terminals?: GenieBridge['terminals'] | undefined;
-    /** `Stop` while a turn runs (the board): stop the agent's work — §6.2 stop, everything about it kept. */
+    /** "Stop agent" in the operations menu while the agent runs: END its session (§6.2 stop, everything about it kept). */
     onStop?: ((agentId: string) => void) | undefined;
+    /**
+     * `Stop this turn` beside the state pill while a turn runs that can be stopped (`turnStopOffered`): the TURN ends,
+     * the agent keeps running. Ending the session is `onStop`, a separate and explicit action.
+     */
+    onCancelTurn?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
 }
@@ -227,7 +233,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -273,10 +279,12 @@ export function AgentView({
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
     const actions = headerActions(session, agent.fidelity);
-    const menu = ops ? agentOpsMenu(agent) : [];
+    // "Stop agent" is offered while the session is up and there is something to end it with.
+    const menu = ops ? agentOpsMenu(agent, undefined, { running: session?.running === true && onStop !== undefined }) : [];
     const act = (id: string) => {
         if (!ops) return;
-        if (id === 'restart-graceful') ops.onRestart('graceful');
+        if (id === 'stop-agent') onStop?.(agent.id);
+        else if (id === 'restart-graceful') ops.onRestart('graceful');
         else if (id === 'restart-fresh') ops.onRestart('fresh');
         else if (id.startsWith('switch:')) ops.onSwitchDriver(id.slice('switch:'.length));
         else if (id === 'diagnose') ops.onDiagnose();
@@ -509,13 +517,9 @@ export function AgentView({
                             Start
                         </button>
                     ) : null}
-                    {/* STOP, while a turn runs (the board). Stop means stop (§6.2): identity, persona, inbox and history kept. */}
-                    {actions.stop ? (
-                        <button type="button" data-action="stop" title="Stop — the agent's work ends; everything about it is kept" onClick={() => onStop?.(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
-                            <Icon name="square" size="xs" />
-                            Stop
-                        </button>
-                    ) : null}
+                    {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
+                        session is "Stop agent" in the operations menu. */}
+                    {actions.stop && onCancelTurn ? <TurnStop onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : null}
                     {/*
                      * The way to TALK to this agent.
                      *

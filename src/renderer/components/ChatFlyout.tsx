@@ -11,6 +11,7 @@ import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
 import { FidelityDot } from './Dashboard.js';
+import { TurnStop } from './TurnStop.js';
 
 /**
  * THE CHAT FLYOUT — the only place a human types to an agent.
@@ -97,9 +98,11 @@ export interface ChatFlyoutProps {
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
     onPickThread?: ((agentId: string) => void) | undefined;
-    /** A turn is running: `[Stop]` sits beside Send (§6.2 stop — everything about the agent kept). */
-    running?: boolean | undefined;
-    onStop?: (() => void) | undefined;
+    /**
+     * Present = a turn is running AND it can be stopped with the agent kept (`turnStopOffered`): `Stop this turn` sits on
+     * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
+     */
+    onStopTurn?: (() => void) | undefined;
     /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /**
@@ -125,7 +128,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, pinned, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, running = false, onStop, widthStorage, scope,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, widthStorage, scope,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
@@ -286,9 +289,13 @@ export function ChatFlyout({
                     ))}
                 </div>
             ) : null}
-            {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess. */}
-            {thread?.context ? (
-                <div data-chat-context={thread.context.tone} className={`shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread.context.tone]}`}>{thread.context.text}</div>
+            {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
+                While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
+            {thread?.context || onStopTurn ? (
+                <div data-chat-context={thread?.context?.tone ?? 'ok'} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
+                    {thread?.context?.text ?? 'Working'}
+                    {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
+                </div>
             ) : null}
 
             {/*
@@ -332,6 +339,16 @@ export function ChatFlyout({
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                     const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
                     // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
+                    // A STOPPED TURN (the composer's `Stop this turn`): one plain line where the reply ends.
+                    if (who === 'stopped') {
+                        return (
+                            <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                                <Icon name="square" size="xs" />
+                                <span>{m.text}</span>
+                                {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                            </div>
+                        );
+                    }
                     if (who === 'system') {
                         return (
                             <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
@@ -448,15 +465,6 @@ export function ChatFlyout({
                     />
                 </div>
                 )}
-                {/* `[Stop]` beside Send while a turn runs (the board): stop means stop (§6.2) — everything about the agent kept. */}
-                {running ? (
-                    <div className="mt-1.5 flex justify-end">
-                        <button type="button" data-action="chat-stop" onClick={() => onStop?.()} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
-                            <span className="size-2 rounded-[2px] bg-[var(--fg-2)]" />
-                            Stop
-                        </button>
-                    </div>
-                ) : null}
             </div>
         </aside>
     );
