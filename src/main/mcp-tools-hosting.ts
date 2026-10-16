@@ -1,3 +1,4 @@
+import { isAbsolute as isAbsolutePath, relative as relativePath, resolve as resolvePath } from 'node:path';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { EngineStatusView } from '../core/engine-reconcile.js';
@@ -42,7 +43,17 @@ import type { SiteInfo } from './site-manager.js';
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
-export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'sites.update' | 'sites.remove';
+export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'services.exec' | 'sites.update' | 'sites.remove';
+
+/**
+ * Runs ONE command line through the platform's shell (core/shell-launch.ts) in `cwd`, with `env` over Genie's own
+ * environment, and answers its exit code and its output (the tail, stdout and stderr together). `timedOut` = it was
+ * stopped at `timeoutMs`. main/service-exec.ts is the real one; tests give their own.
+ */
+export type ServiceExec = (input: { command: string; cwd: string; env: Readonly<Record<string, string>>; timeoutMs: number }) => Promise<{ exitCode: number | null; output: string; timedOut: boolean }>;
+
+/** How long a `services exec` may run before it is stopped (a migration and seed take minutes, not hours). */
+export const SERVICE_EXEC_TIMEOUT_MS = 15 * 60_000;
 
 export interface HostingToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
@@ -51,6 +62,8 @@ export interface HostingToolsDeps {
     readonly services: HostingServices | null;
     /** Genie's browser, for `sites open` — the same one the Hosting tab's Open uses. Absent = none here (doctor mode). */
     readonly openInBrowser?: OpenInBrowser;
+    /** Runs a `services exec` command (main/service-exec.ts). Absent = this Genie cannot (doctor mode), and it says so. */
+    readonly exec?: ServiceExec;
 }
 
 /** How much of each of a site's processes' output `sites logs` reads by default — as `processes logs` does. */
@@ -192,6 +205,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox); `inUse` marks the one of each kind the env comes from. '
                 + '`env` — the variables a process here gets: names and values, secrets masked. '
                 + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
+                + '`exec` {command, cwd? (a folder in this workspace; default its root)} — run ONE command line (a migration, a seed, a database client) through the shell WITH this workspace’s current service variables; the person approves the command first; answers its exit code and output, every credential masked. Use it rather than reading Genie’s files for a password. '
                 + '`add` {engine, version, variant?, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. A workspace’s own engine is the one its env comes from, before any shared one. '
                 + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
                 + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
@@ -203,7 +217,9 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'add', 'use', 'detach', 'start', 'stop', 'remove'] },
+                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'use', 'detach', 'start', 'stop', 'remove'] },
+                    command: { type: 'string', description: 'exec: the command line to run, as you would type it (&&, pipes and quoting work).' },
+                    cwd: { type: 'string', description: 'exec: the folder to run it in, inside this workspace (default the workspace root).' },
                     engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
                     version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
                     variant: { type: 'string', description: 'add: a variant `catalog` lists for that engine — postgres: "pgvector" (pgvector/pgvector:pg<version>).' },
@@ -252,6 +268,29 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 case 'env': {
                     const { variables, masked } = maskEnv(s.engines.envFor(caller.workspaceId));
                     return ok({ ok: true, variables, masked, note: ENV_NOTE });
+                }
+                case 'exec': {
+                    // The owner, 2026-10-16: only Genie-managed services' variables go through, and no key comes back.
+                    const command = str(args.command);
+                    if (!command) return err('exec needs `command`: the command line to run');
+                    if (!deps.exec) return err('this Genie cannot run commands (doctor mode); nothing was run');
+                    const root = resolvePath(caller.workspacePath);
+                    const cwd = resolvePath(root, str(args.cwd) ?? '.');
+                    const rel = relativePath(root, cwd);
+                    if (rel.startsWith('..') || isAbsolutePath(rel)) return err(`${cwd} is outside this workspace (${root}); nothing was run`);
+                    const verdict = await deps.approve(caller, 'services.exec', command);
+                    if (verdict !== 'allowed') return err('the person did not allow this command; nothing was run');
+                    const env = s.engines.envFor(caller.workspaceId);
+                    const r = await deps.exec({ command, cwd, env, timeoutMs: SERVICE_EXEC_TIMEOUT_MS });
+                    // Every credential the env carries, and every one Genie holds for this workspace's engines: masked in
+                    // the output, even one the command printed.
+                    const { variables } = maskEnv(env);
+                    const secrets = [
+                        ...Object.entries(env).filter(([k, v]) => variables[k] === MASK && v !== '').map(([, v]) => v),
+                        ...Object.values(env).flatMap((v) => [...v.matchAll(/\/\/[^:/@\s]*:([^@\s]+)@/g)].map((m) => m[1]!)),
+                        ...s.engines.list().filter((i) => visibleTo(i, caller.workspaceId)).flatMap(secretsOf),
+                    ].filter((v) => v.length >= 4);
+                    return ok({ ok: true, exitCode: r.exitCode, timedOut: r.timedOut, output: maskSecrets(r.output, secrets) });
                 }
                 case 'logs': {
                     const i = own(str(args.id));
