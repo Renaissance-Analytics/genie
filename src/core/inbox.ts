@@ -58,6 +58,10 @@ export type Resolution =
  */
 export function resolveAddress(text: string, roster: readonly AgentRecord[]): Resolution {
     if (text === HUMAN || text === 'you') return { kind: 'human' };
+    // The `from` on mail is the sender's id, so the id is an address too: an answer goes back to
+    // exactly who wrote, with no name to look up. Resolving is not permission — `reachable` still decides.
+    const byId = roster.find((r) => r.id === text);
+    if (byId) return { kind: 'one', id: byId.id };
     const address = parseAddress(text);
     if (address === null) return { kind: 'none' };
 
@@ -96,6 +100,8 @@ export interface ReachableOptions {
     readonly agentWorkspaces?: readonly string[];
     /** Ops projects (§6.1): true when `fromWorkspace` governs `toWorkspace` — the governor then counts as the child's own workspace in both tiers. */
     readonly governs?: (fromWorkspace: string, toWorkspace: string) => boolean;
+    /** Whether `writer` has ever messaged `reader` (the durable mail, never a cache). An agent that wrote to you can be answered. */
+    readonly wroteTo?: (writer: AgentId, reader: AgentId) => boolean;
 }
 
 function tierAllows(
@@ -123,6 +129,12 @@ function tierAllows(
  * Two tiers, both of which must allow it: the TARGET workspace's setting, and the target
  * agent's own `accessScope`. The human reaches everyone and everyone reaches the human — DND
  * is a reply, not a wall.
+ *
+ * **An agent that wrote to you can always be answered** (Genie 1's contract: "when one messages
+ * you first, you may reply in that durable thread"; the owner: an agent "is visible to any agents
+ * that it talks to"). The tiers guard who may OPEN a conversation with an agent; the agent that
+ * opened one gave its permission by sending. Direction is the rule — writing to someone earns the
+ * writer nothing — and it lets nobody else in: the tiers still decide for every other sender.
  */
 export function reachable(
     from: AgentRecord | typeof HUMAN,
@@ -131,6 +143,7 @@ export function reachable(
     options: ReachableOptions = {},
 ): boolean {
     if (from === HUMAN || to === HUMAN) return true;
+    if (options.wroteTo?.(to.id, from.id) === true) return true;
     if (to.accessScope === 'none') return false;
 
     // A governor (§6.1) stands where the child's own workspace stands — in both tiers; the reverse is not implied.

@@ -158,6 +158,11 @@ export class InboxStore {
         return this.#mail.messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
     }
 
+    /** Whether `from` has ever sent `to` a message — read from the durable mail, so it survives a restart. What makes a reply allowed. */
+    hasWritten(from: Participant, to: Participant): boolean {
+        return this.#mail.messages.some((m) => m.from === from && m.to === to);
+    }
+
     async send(input: SendInput): Promise<InboxMessage> {
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
