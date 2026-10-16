@@ -6,12 +6,11 @@ name: release
 # nothing; a tag is the owner's deliberate, approved act, and this workflow is what that act
 # triggers. `test/release-workflow.test.ts` holds every rule below.
 #
-# WHERE IT PUBLISHES: `Renaissance-Analytics/genie` — the OLD repository — because that is the
-# owner/repo inside every installed Genie's `app-update.yml` (0.7.0-beta.342 and 2.0.0-beta.4
-# alike), and an installed copy looks nowhere else. The code lives here; the releases live
-# there (owner decision, 2026-10-10). `GITHUB_TOKEN` cannot write another repository's
-# releases, so the publish uses `GENIE_RELEASE_TOKEN`: a fine-grained token with Contents:
-# read/write on `Renaissance-Analytics/genie`, stored as a secret of THIS repository.
+# WHERE IT PUBLISHES: THIS repository, `Renaissance-Analytics/genie` — the owner/repo inside every
+# installed Genie's `app-update.yml` (0.7.0-beta.342 and 2.0.0-beta.4 alike), where an installed
+# copy looks and nowhere else. Genie 2's code moved here from genie2 (the owner, 2026-10-16), so
+# the publish uses this repository's own `GITHUB_TOKEN`, with `contents: write` on the jobs that
+# publish. There is no cross-repo token.
 #
 # The publish target itself (owner, repo) is electron-builder.yml's `publish` block — one place,
 # held by test/upgrade.test.ts. The RELEASE TYPE follows the tag (the owner, 2026-10-12: "stable
@@ -52,6 +51,8 @@ jobs:
   publish:
     name: build and publish (${{ matrix.os }})
     needs: guard
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +80,7 @@ jobs:
         # release run died there with a ParserError and built no installer). test/release-step-shells.test.ts holds it.
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # electron-builder.yml defaults to `releaseType: prerelease`; a plain tag overrides it to
         # `release` so the stable channel (allowPrerelease false) is offered it.
         run: |
@@ -91,14 +92,16 @@ jobs:
   notes:
     name: write the release notes into the GitHub release
     needs: publish
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # electron-builder created the release on the OLD repo (electron-builder.yml publish block);
-      # the body comes from docs/releases/v<version>.md, with the same cross-repo token. The
+      # electron-builder created the release on this repository (electron-builder.yml publish block);
+      # the body comes from docs/releases/v<version>.md, with the same token. The
       # release keeps the type the publish step gave it (prerelease or full release, by the tag);
       # whether it is a draft is the owner's call after this runs.
       - name: set the body
         env:
-          GH_TOKEN: ${{ secrets.GENIE_RELEASE_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --repo Renaissance-Analytics/genie --notes-file "docs/releases/${{ github.ref_name }}.md"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --notes-file "docs/releases/${{ github.ref_name }}.md"

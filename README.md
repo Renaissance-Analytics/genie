@@ -1,4 +1,4 @@
-# genie2
+# Genie
 
 A rebuild of Genie. **An agent is a session. A session is not a terminal.**
 

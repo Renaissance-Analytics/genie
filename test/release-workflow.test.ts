@@ -8,9 +8,10 @@ import { describe, expect, it } from 'vitest';
  * - It runs ONLY for a `v*` tag. A push to `main` must build (ci.yml) and never publish: four
  *   betas of the previous build shipped on green suites, and the owner's rule is that a tag is
  *   a deliberate, approved act — "merge passing work; tags need a nod".
- * - It publishes with a token that can write the OLD repo's releases (`GENIE_RELEASE_TOKEN`),
- *   because `GITHUB_TOKEN` is scoped to this repository and the feed every installed Genie
- *   carries points at `Renaissance-Analytics/genie` (test/upgrade.test.ts holds that half).
+ * - It publishes with THIS repository's own `GITHUB_TOKEN` (contents: write on the jobs that
+ *   publish) to THIS repository: Genie 2's code moved into `Renaissance-Analytics/genie`, the
+ *   repository every installed Genie's feed points at (the owner, 2026-10-16; test/upgrade.test.ts
+ *   holds the feed half). No cross-repo token exists any more, and none may come back.
  * - It publishes as a prerelease, which is what `allowPrerelease` on the updater side expects.
  *
  * Read as text on purpose: a workflow is configuration with no runtime short of GitHub, and the
@@ -32,10 +33,20 @@ describe('the release workflow', () => {
         expect(on).not.toMatch(/pull_request/);
     });
 
-    it('publishes to GitHub with the cross-repo token, as a real publish', () => {
-        expect(workflow()).toMatch(/GH_TOKEN:\s*\$\{\{\s*secrets\.GENIE_RELEASE_TOKEN\s*\}\}/);
-        expect(workflow()).toMatch(/--publish always/);
-        expect(workflow()).not.toMatch(/--publish never/);
+    it('publishes to THIS repository with its own token, as a real publish', () => {
+        const wf = workflow();
+        // Every token the workflow hands a step is the repository's own — counted, so one stray cross-repo token fails.
+        const tokens = [...wf.matchAll(/GH_TOKEN:\s*\$\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1]);
+        expect(tokens.length).toBeGreaterThanOrEqual(2); // the publish and the notes
+        expect(new Set(tokens)).toEqual(new Set(['secrets.GITHUB_TOKEN']));
+        expect(wf).not.toMatch(/GENIE_RELEASE_TOKEN/);
+        // GITHUB_TOKEN writes releases only with contents: write on the job that uses it.
+        expect(wf.match(/contents:\s*write/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+        // The notes go to the repository the workflow runs in, never a named other one.
+        expect(wf).toMatch(/gh release edit[^\n]*--repo "?\$\{\{\s*github\.repository\s*\}\}"?/);
+        expect(wf).not.toMatch(/--repo Renaissance-Analytics\//);
+        expect(wf).toMatch(/--publish always/);
+        expect(wf).not.toMatch(/--publish never/);
     });
 
     it('refuses to run when the tag does not match package.json — a tag is a claim about a version', () => {
