@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseDotEnv } from '../src/core/dotenv.js';
 import { mintAgentId } from '../src/core/identity.js';
 import { deleteDataVerdict, soleHolderOf } from '../src/core/service-tenancy.js';
+import { websocketBrowserHost } from '../src/main/websocket-front-door.js';
 import { DotEnvSync } from '../src/main/dotenv-sync.js';
 import type { HostingServices } from '../src/main/hosting-actions.js';
 import { hostingTools } from '../src/main/mcp-tools-hosting.js';
@@ -157,7 +158,7 @@ describe('two workspaces get different apps on ONE engine', () => {
 });
 
 describe('the env a workspace gets — Genie 1’s keys, exactly', () => {
-    it('21 keys, host form: the backend and the browser both at 127.0.0.1:<published port>; the secret under the two SECRET names only', async () => {
+    it('21 keys, host form: the backend at 127.0.0.1:<published port>, the browser at the front door over https (websockets-front-door.test.ts); the secret under the two SECRET names only', async () => {
         await registry.add({ engine: 'websockets', major: '4.7.0', scope: SHARED, consent: true, workspaceId: A });
         const env = registry.envFor(A);
         const secret = ws().slices![A]!.password;
@@ -168,7 +169,8 @@ describe('the env a workspace gets — Genie 1’s keys, exactly', () => {
             REVERB_APP_ID: 'ws_example_a', REVERB_APP_KEY: 'ws_example_a', REVERB_APP_SECRET: secret,
             REVERB_HOST: '127.0.0.1', REVERB_PORT: '4101', REVERB_SCHEME: 'http',
             GENIE_WS_APP_ID: 'ws_example_a', GENIE_WS_APP_KEY: 'ws_example_a', GENIE_WS_APP_SECRET: secret,
-            VITE_REVERB_APP_KEY: 'ws_example_a', VITE_REVERB_HOST: '127.0.0.1', VITE_REVERB_PORT: '4101', VITE_REVERB_SCHEME: 'http',
+            // The browser cannot use loopback from an https page (pusher-js forces TLS there): it gets Genie 1's front-door name.
+            VITE_REVERB_APP_KEY: 'ws_example_a', VITE_REVERB_HOST: websocketBrowserHost(A), VITE_REVERB_PORT: '443', VITE_REVERB_SCHEME: 'https',
         });
         // A VITE_ value is shipped to every browser: the secret is never one — counted, against the two that DO carry it.
         expect(Object.entries(env).filter(([, v]) => v === secret).map(([k]) => k).sort()).toEqual(['GENIE_WS_APP_SECRET', 'REVERB_APP_SECRET']);
