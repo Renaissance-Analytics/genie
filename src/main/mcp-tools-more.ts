@@ -23,7 +23,9 @@ export type ApprovalGate = (caller: Caller, action: 'create' | 'write', detail: 
 
 export interface TerminalsPort {
     list(): ReadonlyArray<{ id: string; workspaceId: string; cwd?: string; pid: number; shell: string }>;
-    open(options: { workspaceId: string; cwd: string; command?: string; env?: Readonly<Record<string, string>> }): { id: string; pid: number; shell: string; scrollback: string };
+    open(options: { workspaceId: string; cwd: string; command?: string; shell?: boolean; env?: Readonly<Record<string, string>> }): { id: string; pid: number; shell: string; scrollback: string };
+    /** A terminal that ENDED (its output stays readable): whose it was and its exit code. Absent = nothing kept. */
+    finished?(id: string): { workspaceId: string; exitCode: number } | null;
     write(id: string, data: string): boolean;
     scrollback(id: string): string | undefined;
     /** The engine's scrollback cap in characters; a buffer at the cap has been cut. */
@@ -167,7 +169,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     // The workspace's service env and Genie's endpoint, as the person's own shells get them: a shell an agent
                     // opened once had neither, and could not reach the database the person's could.
                     const env = deps.envFor?.(caller.workspaceId) ?? {};
-                    const opened = deps.terminals.open({ workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) });
+                    const opened = deps.terminals.open({ workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command, shell: true } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) });
                     return ok({ ok: true, terminal: { id: opened.id, pid: opened.pid, shell: opened.shell } });
                 }
                 case 'write': {
@@ -185,9 +187,11 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                 case 'read': {
                     const id = str(args.id);
                     if (!id) return err('read needs `id`');
-                    if (!own(id)) return err(`terminal ${id} is not one of ${caller.agentName}’s workspace terminals`);
+                    // A terminal that ended is still this workspace's to read: its output and how it ended.
+                    const ended = deps.terminals.finished?.(id) ?? null;
+                    if (!own(id) && ended?.workspaceId !== caller.workspaceId) return err(`terminal ${id} is not one of ${caller.agentName}’s workspace terminals`);
                     const text = deps.terminals.scrollback(id) ?? '';
-                    return ok({ ok: true, id, text, dropped: text.length >= deps.terminals.scrollbackCap });
+                    return ok({ ok: true, id, text, dropped: text.length >= deps.terminals.scrollbackCap, ...(ended ? { exited: true, exitCode: ended.exitCode } : {}) });
                 }
                 default:
                     return err(`unknown action ${JSON.stringify(action)}; the actions are list, create, write, read`);

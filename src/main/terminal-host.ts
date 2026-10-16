@@ -36,6 +36,8 @@ export interface PtySpawnOptions {
      * shell is fish.
      */
     command?: string | undefined;
+    /** Run `command` through the platform's shell (core/shell-launch.ts) rather than split into argv. */
+    shell?: boolean | undefined;
     cols?: number | undefined;
     rows?: number | undefined;
     /**
@@ -97,6 +99,8 @@ export interface TerminalOptions {
     rows?: number | undefined;
     /** Extra environment: the Take Over contract (GENIE_MCP_URL / GENIE_TERMINAL_ID / GENIE_MCP_TOKEN) or a site's service env. */
     env?: Readonly<Record<string, string>> | undefined;
+    /** Run `command` through the platform's shell (an agent's `manageTerminals create`). */
+    shell?: boolean | undefined;
 }
 
 export interface Terminal {
@@ -110,17 +114,28 @@ export interface Terminal {
     cwdAt?: number;
 }
 
+/** A terminal's own copy of its latest output, in characters (an ended one's `read`). */
+const TAIL_MAX = 262_144; // 256 KiB
+/** How many ended terminals keep their output for reading. */
+const FINISHED_KEPT = 50;
+
 export class TerminalHost {
     readonly #pty: PtyPort;
     #terminals: Terminal[] = [];
     readonly #dataListeners = new Set<(id: string, data: string) => void>();
     readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
     #cwdClock = 0;
+    /** Each live terminal's latest output (its tail), kept here: the engine forgets a process's scrollback when it ends. */
+    readonly #tails = new Map<string, string>();
+    /** Terminals that ended: their last output and exit code, for a `read` after the fact — the newest FINISHED_KEPT. */
+    readonly #finished = new Map<string, { workspaceId: string; exitCode: number; text: string }>();
 
     constructor(pty: PtyPort) {
         this.#pty = pty;
 
         this.#pty.onData((id, data) => {
+            const tail = (this.#tails.get(id) ?? '') + data;
+            this.#tails.set(id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
             for (const listener of this.#dataListeners) listener(id, data);
         });
 
@@ -139,6 +154,13 @@ export class TerminalHost {
              * listeners run means a listener that asks `list()` sees the truth rather than the
              * state from a moment ago.
              */
+            // Its output and exit code stay readable (an agent's command that finished before it could look).
+            const ended = this.#terminals.find((t) => t.id === id);
+            if (ended) {
+                this.#finished.set(id, { workspaceId: ended.workspaceId, exitCode, text: this.#pty.scrollback(id) || this.#tails.get(id) || '' });
+                while (this.#finished.size > FINISHED_KEPT) this.#finished.delete(this.#finished.keys().next().value!);
+            }
+            this.#tails.delete(id);
             this.#terminals = this.#terminals.filter((t) => t.id !== id);
             for (const listener of this.#exitListeners) listener(id, exitCode);
         });
@@ -164,6 +186,7 @@ export class TerminalHost {
         const opened = this.#pty.open({
             cwd: options.cwd,
             command: options.command,
+            ...(options.shell ? { shell: true } : {}),
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
             ...(options.env === undefined ? {} : { env: options.env }),
@@ -194,8 +217,14 @@ export class TerminalHost {
     }
 
     scrollback(id: string): string | undefined {
-        if (!this.#has(id)) return undefined;
+        if (!this.#has(id)) return this.#finished.get(id)?.text;
         return this.#pty.scrollback(id);
+    }
+
+    /** A terminal that ENDED: whose it was and how it ended. `null` for a live one and for one this host never had. */
+    finished(id: string): { workspaceId: string; exitCode: number } | null {
+        const f = this.#finished.get(id);
+        return f ? { workspaceId: f.workspaceId, exitCode: f.exitCode } : null;
     }
 
     /** JOIN a running terminal (§6.5 multi-attach): what it has shown so far, and whose it is. Null for an id this host does not have. */

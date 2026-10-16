@@ -1242,6 +1242,7 @@ async function boot(): Promise<void> {
                 open: (options) => terminals!.open(options),
                 write: (id, data) => terminals!.write(id, data),
                 scrollback: (id) => terminals!.scrollback(id),
+                finished: (id) => terminals!.finished(id),
                 // fancy-term-host's SCROLLBACK_MAX (1e6 characters): a buffer at the cap has been cut, and `manageTerminals` reads report `dropped`.
                 scrollbackCap: 1_000_000,
             },
