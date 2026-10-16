@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { shellLaunch } from '../core/shell-launch.js';
 import { join } from 'node:path';
 import {
     configureInProcessBackend,
@@ -59,6 +60,8 @@ export interface HostBackend {
 export interface FancyTermPortOptions {
     /** The user's login shell, when a terminal names no command. The engine resolves it. */
     defaultShell: () => { command: string; args: string[] };
+    /** Which shell runs a `shell: true` command line (core/shell-launch.ts). Defaults to this process's platform. */
+    platform?: NodeJS.Platform;
 }
 
 export function fancyTermPort(backend: HostBackend, options: FancyTermPortOptions): PtyPort {
@@ -86,7 +89,10 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             // a renderer-chosen id that collided would JOIN an existing pty (`existing: true`)
             // rather than open a new one, silently.
             const id = `term_${randomUUID()}`;
-            const { command, args } = spawn.command ? parseCommandLine(spawn.command) : options.defaultShell();
+            // A command line asked to run through the shell is (`&&`, pipes, quoting); otherwise it is split as before.
+            const { command, args } = spawn.command
+                ? spawn.shell ? shellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command) : parseCommandLine(spawn.command)
+                : options.defaultShell();
 
             const created = backend.create({
                 id,
