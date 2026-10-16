@@ -127,6 +127,14 @@ function canonicalEnv(env: Readonly<Record<string, string>>): string {
     return JSON.stringify(Object.keys(env).sort().map((k) => [k, env[k]]));
 }
 
+/**
+ * WHAT EVERY PHP WORKER RUNS WITH (Genie 1 #664/#665, measured there on the real binary). `php-cgi` in FastCGI mode
+ * exits ON ITS OWN after PHP_FCGI_MAX_REQUESTS requests, 500 by default, with status 0, and refuses the next: every
+ * PHP site went 502 within minutes of an agent testing it. 0 = no limit. Genie's worker is one `php-cgi -b` with no
+ * parent to replace it, so it must not count requests at all.
+ */
+export const PHP_WORKER_ENV: Readonly<Record<string, string>> = { PHP_FCGI_MAX_REQUESTS: '0' };
+
 export class SiteManager {
     readonly #deps: SiteManagerDeps;
     readonly #sites = new Map<string, SiteRecord>();
@@ -276,8 +284,8 @@ export class SiteManager {
         const input = record.input;
         if (input === null) throw new Error(`${record.host} cannot be served by Genie 2: ${record.problem ?? 'no serve spec'}`);
         const { id, host } = record;
-        const proc = (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined) =>
-            this.#deps.supervisor.start({ id: procId, workspaceId: input.workspaceId, name, command, cwd: input.repoPath, restart: 'on-failure', ...(env ? { env } : {}) });
+        const proc = (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined, restart: 'on-failure' | 'always' = 'on-failure') =>
+            this.#deps.supervisor.start({ id: procId, workspaceId: input.workspaceId, name, command, cwd: input.repoPath, restart, ...(env ? { env } : {}) });
         const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
         const baseEnv = Object.keys(merged).length > 0 ? merged : undefined;
         const startedEnv = canonicalEnv(merged);
@@ -317,8 +325,11 @@ export class SiteManager {
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
                 const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
                 const phpEnv = this.#deps.phpWorkerEnv?.() ?? {};
-                const fcgiEnv = Object.keys(phpEnv).length > 0 ? { ...phpEnv, ...(baseEnv ?? {}) } : baseEnv;
-                proc(`${id}-fcgi`, `${host} php worker`, `${cgiCommand} -b 127.0.0.1:${fcgiPort}`, fcgiEnv);
+                // PHP_WORKER_ENV last: no workspace variable brings the request limit back.
+                const fcgiEnv = { ...phpEnv, ...(baseEnv ?? {}), ...PHP_WORKER_ENV };
+                // ALWAYS back, a clean exit included: php-cgi's own exits are clean (status 0). A site the person stops
+                // stays stopped (the supervisor checks that first).
+                proc(`${id}-fcgi`, `${host} php worker`, `${cgiCommand} -b 127.0.0.1:${fcgiPort}`, fcgiEnv, 'always');
                 processIds.push(`${id}-fcgi`);
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {

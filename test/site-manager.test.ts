@@ -121,22 +121,23 @@ describe('a php site — a FastCGI worker, then Caddy', () => {
     it('the php-cgi worker — and only it — is given Genie’s CA ini directory, read at each start; the site’s own env wins', () => {
         let scan: Record<string, string> = {};
         const { pty, sites } = make({ phpWorkerEnv: () => scan });
-        // Control: before any repair there is nothing to add, and the worker gets exactly the site's env.
+        // Control: before any repair there is nothing to add, and the worker gets exactly the site's env — plus the
+        // no-request-limit every PHP worker runs with (PHP_WORKER_ENV, php-worker-durable.test.ts).
         sites.create({ name: 'app', workspaceId: 'tynn', repoPath: '/repos/app', serve: { mode: 'php', root: 'public' }, env: { APP_ENV: 'local' } });
-        expect(pty.opened[0]!.env).toEqual({ APP_ENV: 'local' });
+        expect(pty.opened[0]!.env).toEqual({ APP_ENV: 'local', PHP_FCGI_MAX_REQUESTS: '0' });
         // After a repair, the NEXT start carries it (no relaunch), on the worker and not on Caddy.
         scan = { PHP_INI_SCAN_DIR: ':/data/genie2-toolchain/php/conf.d' };
         sites.stop('site_app');
         sites.start('site_app');
         const fcgi = pty.opened.filter((o) => o.command?.startsWith('php-cgi'));
         expect(fcgi).toHaveLength(2);
-        expect(fcgi[1]!.env).toEqual({ PHP_INI_SCAN_DIR: ':/data/genie2-toolchain/php/conf.d', APP_ENV: 'local' });
+        expect(fcgi[1]!.env).toEqual({ PHP_INI_SCAN_DIR: ':/data/genie2-toolchain/php/conf.d', APP_ENV: 'local', PHP_FCGI_MAX_REQUESTS: '0' });
         const caddy = pty.opened.filter((o) => o.command?.includes('caddy'));
         expect(caddy[1]!.env).toEqual({ APP_ENV: 'local' });
         // The site's own env wins over Genie's.
         const own = make({ phpWorkerEnv: () => ({ PHP_INI_SCAN_DIR: '/genie' }) });
         own.sites.create({ name: 'mine', workspaceId: 'tynn', repoPath: '/repos/mine', serve: { mode: 'php', root: 'public' }, env: { PHP_INI_SCAN_DIR: '/mine' } });
-        expect(own.pty.opened[0]!.env).toEqual({ PHP_INI_SCAN_DIR: '/mine' });
+        expect(own.pty.opened[0]!.env).toEqual({ PHP_INI_SCAN_DIR: '/mine', PHP_FCGI_MAX_REQUESTS: '0' });
     });
 });
 
