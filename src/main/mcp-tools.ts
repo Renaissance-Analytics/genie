@@ -211,7 +211,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
     const agentinbox: Registration = {
         definition: new ToolDefinition(
             'agentinbox',
-            'Durable 1:1 messaging with other agents and the user. list → peers, whether you may reach them (`reachable`: permission) and whether each is running (`state`: working, idle, failed or stopped, with `lastSeen`; read-only, it never starts anyone); send → to an address ({provider}:{name}, {workspace}:{provider}:{name}, or human) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
+            'Durable 1:1 messaging with other agents and the user. list → peers, whether you may reach them (`reachable`: permission) and whether each is running (`state`: working, idle, failed or stopped, with `lastSeen`; read-only, it never starts anyone); send → to an address ({provider}:{name}, {workspace}:{provider}:{name}, human, or the `from` of mail you received — an agent that wrote to you can always be answered) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
             {
                 type: 'object',
                 properties: {
@@ -235,6 +235,9 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
         ),
         handler: withCaller(async (caller, args) => {
             const me = deps.roster().find((r) => r.id === caller.agentId);
+            // One verdict for `list` and `send`: the two tiers, or the target wrote to the caller first.
+            const mayReach = (target: AgentRecord): boolean =>
+                me !== undefined && reachable(me, target, deps.workspaceSetting, { wroteTo: (writer, reader) => deps.inbox.hasWritten(writer, reader) });
             const action = str(args.action) ?? '';
             switch (action) {
                 case 'list': {
@@ -246,7 +249,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                             name: r.name,
                             provider: r.provider,
                             workspaceId: r.workspaceId,
-                            reachable: me ? reachable(me, r, deps.workspaceSetting) : false,
+                            reachable: mayReach(r),
                             // Liveness beside permission: whether it is running, read-only — never started by asking.
                             ...(deps.liveness ? deps.liveness(r.id) : {}),
                         };
@@ -265,7 +268,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     else if (target.kind === 'ambiguous') return err(`${to} names more than one agent — use one of: ${target.forms.join(', ')}`);
                     else {
                         const record = deps.roster().find((r) => r.id === target.id)!;
-                        if (!me || !reachable(me, record, deps.workspaceSetting)) {
+                        if (!mayReach(record)) {
                             return err(`${to} is not reachable from ${caller.agentName}: the target's workspace setting or agent scope does not allow it (permission, not liveness)`);
                         }
                         recipient = target.id;
