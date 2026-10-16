@@ -161,9 +161,11 @@ export const WEBSOCKET_ENV_KEYS: readonly string[] = [
  * The secret appears under the two `*_APP_SECRET` names only — never under a `VITE_` name, which a bundler ships to
  * every browser.
  */
-export function websocketHostEnv(host: string, port: number, slice: Pick<AdoptedSlice, 'identifier' | 'password'>): Record<string, string> {
+export function websocketHostEnv(host: string, port: number, slice: Pick<AdoptedSlice, 'identifier' | 'password'>, browserHost?: string): Record<string, string> {
     const app = websocketAppOf(slice);
     const p = String(port);
+    // The BROWSER keys: the front door's https name when there is one (websocketBrowserHost), else loopback as before.
+    const browser = browserHost === undefined ? { host, port: p, scheme: 'http' } : { host: browserHost, port: '443', scheme: 'https' };
     return {
         GENIE_WS_APP_ID: app.id,
         GENIE_WS_APP_KEY: app.key,
@@ -179,12 +181,12 @@ export function websocketHostEnv(host: string, port: number, slice: Pick<Adopted
         REVERB_PORT: p,
         REVERB_SCHEME: 'http',
         VITE_GENIE_WS_APP_KEY: app.key,
-        VITE_GENIE_WS_HOST: host,
-        VITE_GENIE_WS_PORT: p,
-        VITE_GENIE_WS_SCHEME: 'http',
+        VITE_GENIE_WS_HOST: browser.host,
+        VITE_GENIE_WS_PORT: browser.port,
+        VITE_GENIE_WS_SCHEME: browser.scheme,
         VITE_REVERB_APP_KEY: app.key,
-        VITE_REVERB_HOST: host,
-        VITE_REVERB_PORT: p,
-        VITE_REVERB_SCHEME: 'http',
+        VITE_REVERB_HOST: browser.host,
+        VITE_REVERB_PORT: browser.port,
+        VITE_REVERB_SCHEME: browser.scheme,
     };
 }

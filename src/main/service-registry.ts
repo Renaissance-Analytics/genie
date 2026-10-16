@@ -7,6 +7,7 @@ import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindO
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
+import { websocketBrowserHost } from './websocket-front-door.js';
 import type { ServiceDriver } from './service-driver.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -176,7 +177,7 @@ export class ServiceRegistry {
     /** A workspace's own engines plus the shared ones — what its processes and terminals get. */
     envFor(workspaceId: string): Record<string, string> {
         // The namespace engines' tag and prefix are the workspace's derived name — the same `ws_<slug>` its slices use.
-        return serviceEnvFor(this.#visibleTo(workspaceId), workspaceId, { namespace: workspaceSqlIdentifier(workspaceId) });
+        return serviceEnvFor(this.#visibleTo(workspaceId), workspaceId, { namespace: workspaceSqlIdentifier(workspaceId), websocketBrowserHost });
     }
 
     /** Per kind: the engines this workspace could use and the one it does — what `envFor` emits from (core/services.ts `chooseEngines`). */

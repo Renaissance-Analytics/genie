@@ -8,6 +8,7 @@ import { folderName } from '../core/workspace-name.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
 import type { ServiceInstance } from '../core/services.js';
+import { websocketRoutes } from './websocket-front-door.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
@@ -346,6 +347,10 @@ function startExternalFrontDoor(input: {
     platform: NodeJS.Platform;
     now: () => number;
     sites: SiteManager;
+    /** Every route the door serves: the sites' and the shared engines' browser-facing ones (websocketRoutes). */
+    routes: () => GenRoute[];
+    /** Called when routes other than the sites' change (an engine attached or detached). */
+    onRoutesChange: (listener: () => void) => void;
     /** The names the hosts file carries — configured, not running (ComposedServices.configuredHosts). */
     configuredHosts: () => readonly string[];
     supervisor: ProcessSupervisor;
@@ -389,7 +394,7 @@ function startExternalFrontDoor(input: {
     let blocked: FrontDoorBlocked | null = null;
     let closed = false;
     const render = () => {
-        const routes = sites.routes();
+        const routes = input.routes();
         let tls: FrontDoorTls | null = null;
         if (routes.length > 0) {
             try {
@@ -431,6 +436,7 @@ function startExternalFrontDoor(input: {
     });
     render();
     sites.onChange(() => { render(); hosts.changed(); });
+    input.onRoutesChange(() => { render(); hosts.changed(); });
     supervisor.onChange((status) => {
         render();
         // Started again (by the person's Restart in Processes, or by Try again): whatever held the port is asked anew —
@@ -663,7 +669,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     });
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
     engines.onChange(() => { sites.serviceEnvChanged(); });
-    const routes = () => sites.routes();
+    // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
+    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list())];
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
     const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
     const envelopeSites = new EnvelopeSites(sites, {
@@ -684,7 +691,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const configuredHosts = (): string[] => [
         ...new Set([
             ...sites.list().filter((s) => s.state !== 'unservable' && !envelopeSites.disabled(s.id)).map((s) => s.host),
-            ...sites.routes().map((r) => r.host),
+            ...routes().map((r) => r.host),
         ]),
     ];
     // S7: the in-app browser opens https://<name>.gen through this door's CONNECT tunnel, terminated with Genie's leaf.
@@ -732,6 +739,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         now,
         sites,
         supervisor,
+        routes,
+        onRoutesChange: (listener) => { engines.onChange(listener); },
         configuredHosts,
         hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData) }),
         hostsPath: hostsFilePath(process.platform),
