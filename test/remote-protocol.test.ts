@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, type WireMessage } from '../src/core/remote-protocol.js';
+import { AGENT_SCOPED_METHODS, capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, type WireMessage } from '../src/core/remote-protocol.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie. One message shape both
@@ -49,7 +49,10 @@ describe('the capability table', () => {
         // 51 since `updates.cancel` left with the upgrade drain (no agent is asked for a handoff any more).
         // 52 since `agents.setPermissions` (a Claude agent's tools, chosen on its Agent view): a write, agent-scoped.
         // 53 since `agents.setModel` (an agent's model, chosen on its Agent view): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(53);
+        // 54 since `cancelTurn` (`Stop this turn` — the current turn ends, the agent keeps running): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(54);
+        expect(capabilityOf('cancelTurn')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');

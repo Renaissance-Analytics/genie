@@ -25,4 +25,15 @@ describe('agentOpsMenu', () => {
         expect(agentOpsMenu({ provider: 'codex', fidelity: 'declared' }).map((i) => i.id)).not.toContain('switch:codex');
         expect(agentOpsMenu({ provider: 'claude', fidelity: 'observed' })).toEqual([]);
     });
+
+    it('a RUNNING agent leads with Stop agent (it ends the session; the turn’s Stop only stops the turn) — once; a stopped one has none', () => {
+        const running = agentOpsMenu({ provider: 'claude', fidelity: 'declared' }, undefined, { running: true });
+        expect(running[0]).toEqual({ id: 'stop-agent', label: 'Stop agent', hint: 'ends its session; identity, inbox and history kept' });
+        expect(running.filter((i) => i.id === 'stop-agent')).toHaveLength(1);
+        // Control: the same agent not running is offered no Stop agent — nothing to end; the rest of the menu is unchanged.
+        const idle = agentOpsMenu({ provider: 'claude', fidelity: 'declared' }, undefined, { running: false });
+        expect(idle.map((i) => i.id)).not.toContain('stop-agent');
+        expect(running.slice(1)).toEqual(idle);
+        expect(agentOpsMenu({ provider: 'claude', fidelity: 'observed' }, undefined, { running: true })).toEqual([]);
+    });
 });

@@ -403,6 +403,10 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             return { ...base, icon: 'play', tone: 'muted', kind: 'turn', main, lane: null };
         }
 
+        case 'stopped':
+            // The turn's end, when it was stopped: plainly `Stopped by you` — not a failure, not a finish.
+            return { ...base, icon: 'square', tone: 'muted', kind: 'stopped', main: row.event.by === null ? 'Stopped' : `Stopped by ${row.event.by}`, lane: null };
+
         case 'notice':
             // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.
             return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null };

@@ -27,6 +27,17 @@ export interface SessionDriver {
     prompt(content: string | readonly PromptBlock[]): void;
     kill(signal?: NodeJS.Signals): void;
     /**
+     * END THE CURRENT TURN AND KEEP THE SESSION — prism-acp's `AgentDriver.cancel?()` (0.14.0, prism-acp-ts#16/#17).
+     * The provider is asked to interrupt; the turn then ends through `onTurnEnd` with `stopReason: 'cancelled'`, and the
+     * process, its session and its conversation stay. With no turn running the driver does nothing. A rejection is the
+     * provider refusing the interrupt (Codex answering `turn/interrupt` with an error, a closed stdin for Claude).
+     *
+     * OPTIONAL because it is: prism-acp declares it optional, and before 0.14.0 neither driver had it. A driver without
+     * it cannot stop a turn, and `AgentSession.cancel` says so rather than killing the agent in its place — killing it
+     * was the bug (the owner, 2026-10-15: "it killed the agent, not stopping the chat").
+     */
+    cancel?(): Promise<void> | void;
+    /**
      * OPTIONAL, and that is a measurement rather than a guess.
      *
      * In `prism-acp` 0.6.1 `ClaudeDriver` has a `running` getter and **`CodexDriver` does
@@ -132,6 +143,17 @@ export type SessionDriverFactory = (options: {
  */
 export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 
+/**
+ * What a turn's Stop got (`AgentSession.cancel`). `ok: true` means the provider was ASKED; the turn is over when it
+ * reports a cancelled turn end, not before.
+ * - `not-running`: no session (never started, stopped, or exited) — nothing to stop.
+ * - `no-turn`: the session is up and between turns — nothing to stop, and nothing was sent.
+ * - `unsupported`: this driver cannot end a turn on its own; the turn runs on, and the agent was NOT killed instead.
+ * - `refused`: the driver threw on the ask; the turn runs on, said in the stream. (A refusal that arrives LATER — the
+ *   provider rejecting the interrupt — is said in the stream the same way; the call had already answered `ok`.)
+ */
+export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: 'not-running' | 'no-turn' | 'unsupported' | 'refused' };
+
 /** How many lines of provider output to keep. Enough to explain a failure, bounded. */
 const STDERR_KEPT = 50;
 
@@ -211,6 +233,11 @@ export class AgentSession {
     #inTurn = false;
     /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
     #queued: (string | null)[] = [];
+    /**
+     * Who asked to stop the running turn (`cancel`'s `by`), until that turn ends. The cancelled turn's end is then
+     * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
+     */
+    #stopAskedBy: string | null = null;
     /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
     #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
@@ -524,6 +551,13 @@ export class AgentSession {
                         this.#failure = null;
                         this.#failedAt = null;
                     }
+                    // A STOPPED TURN SAYS SO, in the ledger and the chat: `Stopped by you`. ACP reports a cancelled turn
+                    // and nothing more, so without this row a stopped turn read exactly like one that finished — the
+                    // reply simply ending mid-way. Who stopped it is whoever asked (`cancel`), and nobody when no one
+                    // here did.
+                    const stopper = this.#stopAskedBy;
+                    this.#stopAskedBy = null;
+                    if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: this.#turns, by: stopper });
                     // The next queued prompt's turn starts now: its marker, and `working` again. After a crashed turn
                     // nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
@@ -547,6 +581,7 @@ export class AgentSession {
                     this.#exited = true;
                     this.#inTurn = false;
                     this.#queued = [];
+                    this.#stopAskedBy = null;
                     // Kept as node reported it — the one fact about the END of the process Genie actually has.
                     this.#exit = { code, signal };
 
@@ -688,6 +723,62 @@ export class AgentSession {
         this.#turnState = 'stopped';
         this.#inTurn = false;
         this.#queued = [];
+        this.#stopAskedBy = null;
+    }
+
+    /** Whether this session's driver can end a turn and keep the session (it has prism-acp's `cancel`). */
+    get canCancelTurn(): boolean {
+        return typeof this.#driver?.cancel === 'function';
+    }
+
+    /**
+     * STOP THE CURRENT TURN; KEEP THE AGENT (prism-acp's `cancel`: Claude's interrupt control request, Codex's
+     * `turn/interrupt`). The composer's and the Agent view's `Stop this turn` land here. Ending the whole session is
+     * `stop()`, a separate and explicit action ("Stop agent") — the turn's Stop used to be that, so interrupting the
+     * agent killed it (the owner, 2026-10-15).
+     *
+     * - **The state is NOT set here.** The turn is over when the provider says so: `onTurnEnd` with `cancelled`, which
+     *   is idle — never failed — and records `Stopped by <by>`. Painting idle on the ask would claim what the protocol
+     *   has not reported.
+     * - **Queued prompts are KEPT.** Measured on Claude Code (prism-acp-ts#17, 2026-10-15): a message queued at the
+     *   interrupt still runs afterwards. So the next queued prompt's turn starts when the cancelled one ends, numbered
+     *   and attributed as ever. Codex queues nothing (one prompt in flight).
+     * - **A parked approval is answered `cancelled`**, ACP's rule for a cancelled turn: an unanswered request would
+     *   outlive the turn and park the provider.
+     * - **A driver that cannot cancel is never killed instead**, and neither is one that refuses the interrupt: the
+     *   stream says so, the turn runs on, and Stop agent remains the way to end it.
+     */
+    cancel(by: string | null = 'you'): CancelOutcome {
+        const driver = this.#driver;
+        if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
+        if (!this.#inTurn) return { ok: false, reason: 'no-turn' };
+        if (typeof driver.cancel !== 'function') {
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: 'This agent cannot stop a turn on its own. The turn is still running; Stop agent ends the session.' });
+            this.#changed();
+            return { ok: false, reason: 'unsupported' };
+        }
+
+        this.#stopAskedBy = by;
+        const refused = (cause: unknown): void => {
+            this.#stopAskedBy = null;
+            const why = cause instanceof Error ? cause.message : String(cause);
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
+            this.#changed();
+        };
+        try {
+            void Promise.resolve(driver.cancel()).catch(refused);
+        } catch (cause) {
+            refused(cause);
+            return { ok: false, reason: 'refused' };
+        }
+
+        const abandoned = this.#approval;
+        if (abandoned) void this.#emitRow({ kind: 'approval', question: abandoned.approval.question, tool: abandoned.approval.tool ?? null, outcome: 'cancelled', optionId: null });
+        abandoned?.resolve({ outcome: 'cancelled' });
+        this.#approval = null;
+        this.#parkedAt = null;
+        this.#changed();
+        return { ok: true };
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */

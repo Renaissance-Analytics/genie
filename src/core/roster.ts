@@ -77,6 +77,12 @@ export interface LiveSession {
     extensions?: ProviderExtensions | null;
     /** The MCP servers the session was started with, by name (`genie` = Genie's own); absent from an older host. */
     mcpServers?: readonly string[] | undefined;
+    /**
+     * Whether a running turn can be STOPPED with the agent kept: its driver declares a turn cancel (prism-acp's
+     * `DriverCapabilities.cancel`) AND has one. `false` or absent (unknown, or an older host) = no turn Stop is offered;
+     * ending the agent stays "Stop agent".
+     */
+    cancelTurn?: boolean | undefined;
 }
 
 /**

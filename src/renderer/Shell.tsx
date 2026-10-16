@@ -12,6 +12,7 @@ import { Deck } from './components/Deck.js';
 import { ApprovalToasts } from './components/ApprovalToasts.js';
 import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
+import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
@@ -146,8 +147,10 @@ export interface ShellProps {
     onTakeOver?: ((agentId: string) => void) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
     onRestartAgent?: ((agentId: string) => void) | undefined;
-    /** `Stop` in the Agent view's header while a turn runs (§6.2 stop). */
+    /** "Stop agent" — END the agent's session (§6.2 stop): the Agent view's operations menu. Not the turn's Stop. */
     onStopAgent?: ((agentId: string) => void) | undefined;
+    /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
+    onCancelTurn?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
@@ -230,6 +233,7 @@ export function Shell({
     onTakeOver,
     onRestartAgent,
     onStopAgent,
+    onCancelTurn,
     onStartAgent,
     onOpenPalette,
     onSelectRow,
@@ -325,7 +329,9 @@ export function Shell({
     const chatApproval = chatThread ? chatSession?.pendingApproval ?? (agentDetail?.agent.id === chatThread.agentId ? agentDetail.session?.pendingApproval ?? null : null) : null;
     // The tabs, with the open conversation marked: the strip and the flyout show the same ones.
     const tabs = (chatThreads ?? threadsFor(snapshot.agents, [], parsed.chat)).map((t) => (chatThread ? { ...t, active: t.agentId === chatThread.agentId } : t));
-    const chatRunning = chatThread !== null && chatSession !== null && chatSession !== undefined && chatSession.running && chatSession.turnState === 'working';
+    // `Stop this turn` in the chat: only while its agent's turn runs AND can be stopped with the agent kept — the same
+    // rule as the Agent view's header (`turnStopOffered`). Never the session's stop (the owner, 2026-10-15).
+    const chatTurnStop = chatThread !== null && onCancelTurn !== undefined && turnStopOffered(chatSession);
     // Which workspace the chat talks to, against the one on screen (core/chat-scope.ts; the owner's beta.26 report): another
     // workspace's agent is NAMED in the composer, and a workspace with no agent to message has no composer at all.
     const scope = chatScope({ ...parsed, chat: chatThread?.agentId ?? parsed.chat }, snapshot.agents, snapshot.workspaces);
@@ -499,6 +505,7 @@ export function Shell({
                             takeOver={agentDetail.takeOver ?? null}
                             log={agentDetail.log ?? []}
                             onStop={onStopAgent}
+                            onCancelTurn={onCancelTurn}
                             onStart={onStartAgent}
                             terminals={terminals}
                         />
@@ -675,8 +682,7 @@ export function Shell({
                         onClose={onCloseChat}
                         onPickThread={(id) => onNavigate(pickThreadRoute(parsed, id, pinned === 'chat'))}
                         onRestartAndSend={onRestartAndSend}
-                        running={chatRunning}
-                        onStop={() => { if (chatThread) onStopAgent?.(chatThread.agentId); }}
+                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                     />
                     </DockFrame>
                 ) : null}

@@ -7,7 +7,7 @@ import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentV
 /**
  * THE AGENT VIEW'S HEADER AND RIGHT COLUMN PER THE BOARD. Header: `{workspace} /` breadcrumb, the fidelity dot, the
  * name, a provider chip (`claude · ACP` / `aider · pty`), the pill in the board's words, then the actions with their
- * chords (`Take over ⌘⇧T`, `Chat ⌘J`), `Stop` while a turn runs, `Restart` only when broken. Right column: ONE 380px
+ * chords (`Take over ⌘⇧T`, `Chat ⌘J`), `Stop this turn` while a turn runs that can be stopped, `Restart` only when broken. Right column: ONE 380px
  * panel holding the Inspector (when a row is selected) above Plan / Context / Cost — not a 420px Inspector beside a
  * 260px rail.
  */
@@ -32,9 +32,9 @@ describe('the header', () => {
         expect(observed).toContain('data-pill="Active · last output 10s ago"');
     });
 
-    it('actions by state: Stop while running, Restart only when broken, chords on Take over and Chat; the kebab keeps the other verbs', () => {
-        const live = render({ ops });
-        expect(live).toContain('data-action="stop"');
+    it('actions by state: Stop this turn while running, Restart only when broken, chords on Take over and Chat; the kebab keeps the other verbs', () => {
+        const live = render({ ops, session: { ...running, cancelTurn: true }, onCancelTurn: () => {} });
+        expect(live.split('data-action="stop-turn"').length - 1).toBe(1);
         expect(live).not.toContain('data-action="restart-graceful"');
         expect(live).toMatch(/data-action="take-over"[^>]*>[^<]*(<[^>]*>[^<]*)*⌘⇧T/);
         expect(live).toMatch(/data-action="chat"[^>]*>[^<]*(<[^>]*>[^<]*)*⌘J/);
@@ -42,7 +42,7 @@ describe('the header', () => {
         const dead = render({ ops, session: broken });
         expect(dead).toContain('data-action="restart-graceful"');
         expect(dead).toContain('data-action="open-terminal"');
-        expect(dead).not.toContain('data-action="stop"');
+        expect(dead).not.toContain('data-action="stop-turn"');
         expect(dead).toContain('data-pill="Broken · ACP stream closed · exit 137"');
     });
 });

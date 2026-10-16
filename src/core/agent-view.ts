@@ -121,8 +121,19 @@ export function parkedDivider(session: LiveSession | null, now: () => number): s
     return session.parkedAt == null ? 'turn parked · waiting on you' : `turn parked · waiting on you ${clock(session.parkedAt, now())}`;
 }
 
+/**
+ * WHETHER `Stop this turn` IS OFFERED — the Agent view's header and the chat's context line, one rule for both: a turn
+ * is running on a session that is up and not broken, and its driver can end a turn with the agent kept
+ * (`LiveSession.cancelTurn`). A driver that cannot (or an unknown one) gets no turn Stop: a Stop that killed the agent
+ * instead was the bug (the owner, 2026-10-15). Ending the agent is "Stop agent" in its operations menu.
+ */
+export function turnStopOffered(session: LiveSession | null | undefined): boolean {
+    if (!session) return false;
+    return session.failure === null && session.running && session.turnState === 'working' && session.cancelTurn === true;
+}
+
 export interface HeaderActions {
-    /** While a turn runs: stop the agent's work (§6.2 stop — identity, persona, inbox and history kept). */
+    /** `Stop this turn` (see `turnStopOffered`): the turn ends, the agent keeps running. Never ends the session. */
     stop: boolean;
     /** Only when broken (the board): the graceful restart that resumes the same thread. */
     restart: boolean;
@@ -138,9 +149,8 @@ export interface HeaderActions {
 export function headerActions(session: LiveSession | null, fidelity: Fidelity): HeaderActions {
     const managed = fidelity === 'declared' && session !== null;
     const broken = managed && session.failure !== null;
-    const running = managed && !broken && session.running && session.turnState === 'working';
     const start = fidelity === 'declared' && !broken && (session === null || !session.running);
-    return { stop: running, restart: broken, openTerminal: broken, start, takeOver: true, chat: true };
+    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

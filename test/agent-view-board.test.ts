@@ -9,7 +9,7 @@ import { headerActions, statePill, tabsFor } from '../src/core/agent-view.js';
  *  - The state pill speaks in turns: `Turn 14 · running 2m 35s`, `Turn 15 · parked · waiting on you`, `No turns yet`,
  *    `Broken · <reason>`; an observed agent: `Active · last output 40s ago` / `Quiet · last output 5m ago` / `Quiet · no
  *    output yet`. A clock only while a turn runs.
- *  - The header's actions depend on the state: `Stop` while a turn runs; `Restart` only when broken; `Open terminal`
+ *  - The header's actions depend on the state: `Stop this turn` while a turn runs that can be stopped; `Restart` only when broken; `Open terminal`
  *    (the Take Over window) in the error state; `Take over` and `Chat` always.
  *  - An observed agent opens on Activity (the board), then Terminal, Files, Changes.
  */
@@ -51,9 +51,12 @@ describe('statePill — the board’s words', () => {
 });
 
 describe('headerActions — the board’s action set by state', () => {
-    it('Stop while a turn runs; Restart only when broken; Open terminal only when broken; Take over and Chat always', () => {
-        expect(headerActions(session(), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, start: false, takeOver: true, chat: true });
-        expect(headerActions(session({ failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, start: false, takeOver: true, chat: true });
+    it('Stop this turn while a turn runs that can be stopped; Restart only when broken; Open terminal only when broken; Take over and Chat always', () => {
+        expect(headerActions(session({ cancelTurn: true }), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, start: false, takeOver: true, chat: true });
+        // A driver that cannot stop a turn (or an unknown one) gets NO turn Stop: the old one ended the agent instead.
+        expect(headerActions(session({ cancelTurn: false }), 'declared').stop).toBe(false);
+        expect(headerActions(session(), 'declared').stop).toBe(false);
+        expect(headerActions(session({ cancelTurn: true, failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, start: false, takeOver: true, chat: true });
         // Not running and not broken: Start (the owner: there was no way to start the genie agent).
         expect(headerActions(session({ running: false, turnState: 'idle' }), 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, start: true, takeOver: true, chat: true });
         expect(headerActions(null, 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, start: true, takeOver: true, chat: true });
