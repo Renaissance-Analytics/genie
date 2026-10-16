@@ -165,7 +165,8 @@ export class EnvelopeSites {
             if (!site.ok) { unservable(site.host, site.reason); continue; }
             const host = `${site.name}.gen`;
             if (site.repoDir !== '.' && !(await this.#ports.fs.exists(repoPath))) { unservable(host, `its folder ${site.repoDir} does not exist in the workspace`); continue; }
-            const env = { ...this.#ports.envFor(w.id), ...(site.portEnv ?? {}) };
+            // The site's own port variables only: the workspace's service env is read at every start (site-manager.ts).
+            const env = { ...(site.portEnv ?? {}) };
             const input: CreateSiteInput = {
                 name: site.name,
                 workspaceId: w.id,
