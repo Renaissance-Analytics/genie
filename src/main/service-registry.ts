@@ -128,6 +128,19 @@ interface RegistryFile {
     v1Import?: V1ServicesImportRecord;
     /** By container name: the ports a removed engine had, handed back when one of that name is added again. */
     ports?: Record<string, RememberedPorts>;
+    /**
+     * By container name: the credentials a removed engine's KEPT data holds (its own, a shared one's superuser and its
+     * workspaces' slices) — an engine added again under that name is created with them, since the data sets a password
+     * only when it is first made. Forgotten when the data is deleted, and once handed back.
+     */
+    kept?: Record<string, KeptCredentials>;
+}
+
+/** What a kept data volume was made with: what the engine must be created with again to open it. */
+export interface KeptCredentials {
+    readonly credentials: Credentials;
+    readonly admin?: EngineAdmin;
+    readonly slices?: Readonly<Record<string, AdoptedSlice>>;
 }
 
 export type AddResult =
@@ -238,8 +251,11 @@ export class ServiceRegistry {
         const database = input.scope.kind === 'dedicated' ? input.scope.workspaceId : 'app';
         // A shared Postgres/MySQL/MariaDB/Redis/SeaweedFS holds only its superuser; every workspace's credential is a slice.
         const tenancy = input.scope.kind === 'shared' && SLICED_ENGINES.has(def.engine) ? SHARED_TENANCY[def.engine] : undefined;
-        const admin: EngineAdmin | undefined = tenancy ? { user: tenancy.adminUser, password: this.#deps.randomPassword() } : undefined;
-        const credentials: Credentials = admin || def.config || def.custom
+        // Its data was KEPT when it was removed: the credentials that data holds, whatever became of its port (moic,
+        // 2026-10-16 — a new random password could not open the kept volume: "password authentication failed").
+        const kept = def.custom ? undefined : this.#data.kept?.[name];
+        const admin: EngineAdmin | undefined = tenancy ? (kept?.admin ?? { user: tenancy.adminUser, password: this.#deps.randomPassword() }) : undefined;
+        const credentials: Credentials = kept && !admin ? { ...kept.credentials } : admin || def.config || def.custom
             ? {}
             // Redis's `--requirepass`; Meilisearch's master key (its only credential — namespace isolation, as Genie 1's).
             : def.engine === 'redis' || def.engine === 'meilisearch'
@@ -277,7 +293,8 @@ export class ServiceRegistry {
             credentials,
             active: siblings.length === 0,
             ...(input.variant ? { variant: input.variant } : {}),
-            ...(admin ? { admin, slices: {} } : {}),
+            // A kept shared engine's slices are roles in that same data: back with it, never made a second time.
+            ...(admin ? { admin, slices: kept?.slices ? { ...kept.slices } : {} } : {}),
             ...(appSlices ? { slices: appSlices } : {}),
             ...(def.surfaces ? { publishedPorts: surfacePorts } : {}),
             ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env }, ...(input.custom.kind !== undefined ? { kind: input.custom.kind } : {}) } : {}),
@@ -285,6 +302,7 @@ export class ServiceRegistry {
         this.#data.instances.push(instance);
         // Handed back: no longer remembered (the instance itself now records them).
         if (this.#data.ports?.[name]) this.#data = { ...this.#data, ports: Object.fromEntries(Object.entries(this.#data.ports).filter(([k]) => k !== name)) };
+        if (this.#data.kept?.[name]) this.#data = { ...this.#data, kept: Object.fromEntries(Object.entries(this.#data.kept).filter(([k]) => k !== name)) };
         await this.#flush();
         if (admin && input.workspaceId !== undefined) return { kind: 'added', instance: await this.#useSlice(instance.id, input.workspaceId) };
         return { kind: 'added', instance };
@@ -571,6 +589,16 @@ export class ServiceRegistry {
         if (!i.adopted) {
             this.#data = { ...this.#data, ports: { ...(this.#data.ports ?? {}), [name]: { port: i.publishedPort, ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}) } } };
         }
+        // Its credentials, kept with its data (and only while that data is): an engine added again by this name must be
+        // made with what the data holds. A custom image's are its own env, given again by whoever adds it.
+        const keeps = !options.deleteData && !i.adopted && i.engine !== 'custom' && dataVolumeOf(i) !== null;
+        const others = Object.fromEntries(Object.entries(this.#data.kept ?? {}).filter(([k]) => k !== name));
+        this.#data = {
+            ...this.#data,
+            kept: keeps
+                ? { ...others, [name]: { credentials: { ...i.credentials }, ...(i.admin ? { admin: i.admin } : {}), ...(i.slices && i.admin ? { slices: { ...i.slices } } : {}) } }
+                : others,
+        };
         await this.#flush();
     }
 
