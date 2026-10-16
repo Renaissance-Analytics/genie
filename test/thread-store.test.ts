@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Thread } from '@particle-academy/prism-harness';
 import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId, threadKeyFor } from '../src/core/identity.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
@@ -56,17 +57,20 @@ describe('agent thread durability', () => {
          * another; nothing threw and the UI rendered a correct, empty session forever.
          *
          * Asserted here by going around the front door: write through the agent helper, then
-         * read straight from the raw store using `threadKeyFor` — the one key function — and
-         * require the payload to be there. If a second key shape is ever introduced, the
-         * writer and this reader stop agreeing and this fails.
+         * read through prism-harness's own `Thread` at `threadKeyFor` — the one key function —
+         * and require the row to be there. If a second key shape is ever introduced, the writer
+         * and this reader stop agreeing and this fails. (prism-harness 0.7.0 keeps a thread's
+         * rows in an append-only log beside the payload, so the raw `get` of the key is no longer
+         * where the rows are; the Thread at that key is.)
          */
         const dir = tempDir();
         const id = mintAgentId();
 
         await openAgentThread(openDurableStore(dir), id).record([{ role: 'user', text: 'hello' }]);
 
-        const raw = await openDurableStore(dir).get(threadKeyFor(id));
-        expect(raw).not.toBeNull();
+        const read = new Thread(openDurableStore(dir), threadKeyFor(id));
+        expect(await read.count()).toBe(1);
+        expect((await read.messages()).map((m) => m.message)).toEqual([{ role: 'user', text: 'hello' }]);
     });
 
     it('POSITIVE CONTROL: a different agent reads nothing — threads do not bleed', async () => {
