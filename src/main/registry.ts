@@ -461,6 +461,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, dailyBudgetUsd }));
     }
 
+    /** The agent's last turn number (identity.ts `lastTurn`): what its next session numbers on from. */
+    async setLastTurn(agentId: AgentId, lastTurn: number): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => (a.lastTurn === lastTurn ? a : { ...a, lastTurn }));
+    }
+
     /**
      * By id — or by the OS agent's NAME. The rail links to `genie://agent/genie` because the OS
      * agent's id is minted on first boot and the rail cannot know it; OS_AGENT_NAME is an alias for

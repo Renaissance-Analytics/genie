@@ -235,6 +235,7 @@ export class SessionHost {
     readonly #userData: string;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
+    readonly #onTurnEnded: ((agentId: AgentId, turns: number) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
     readonly #clock: () => number;
@@ -297,6 +298,8 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        /** A turn ended: the agent's turn count now — main writes it to the record (`lastTurn`) for the next start. */
+        onTurnEnded?: (agentId: AgentId, turns: number) => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
         /**
          * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
@@ -313,6 +316,7 @@ export class SessionHost {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
+        this.#onTurnEnded = options.onTurnEnded;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
@@ -418,7 +422,8 @@ export class SessionHost {
         const rows: TimedEvent[] = [];
         const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
 
-        const session = new AgentSession({
+        let reportedTurns = record.lastTurn ?? 0;
+        const session: AgentSession = new AgentSession({
             agentId: record.id,
             cwd,
             store: openDurableStore(sessionsDir(this.#userData)),
@@ -426,13 +431,20 @@ export class SessionHost {
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
+            // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
+            ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
              * Without this the renderer learned about an approval only when the NEXT ledger row
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
-            onStateChange: () => this.#emit(record.id),
+            onStateChange: () => {
+                // A turn that ended moves the count on: reported once per turn, for the record.
+                const turns = session.turns;
+                if (turns > reportedTurns) { reportedTurns = turns; this.#onTurnEnded?.(record.id, turns); }
+                this.#emit(record.id);
+            },
             /*
              * The provider's own id, guarded at the EARLIEST point Genie controls it.
              *

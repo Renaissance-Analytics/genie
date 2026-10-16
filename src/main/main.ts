@@ -481,6 +481,8 @@ async function boot(): Promise<void> {
     theRegistry.setWorkspaceNamer(workspaceNameFor);
     host = new SessionHost({
         userData: genieHome(),
+        // Each turn's number is kept on the agent's record, so its next session numbers on at once (no "Turn 1").
+        onTurnEnded: (agentId, turns) => { void registry?.setLastTurn(agentId, turns); },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
         // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
