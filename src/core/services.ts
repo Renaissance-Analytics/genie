@@ -503,12 +503,16 @@ export function customEnvToken(value: string): string {
 export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string } = {}): Record<string, string> {
     const env: Record<string, string> = {};
     // Every custom engine emits its own names (each is namespaced by its own name) and its env, as Genie 1's did —
-    // whether or not it is the workspace's engine of its kind.
+    // whether or not it is the workspace's engine of its kind. Its env is applied LAST (below): what was set by hand on
+    // an engine wins over what Genie derives — a kind-less custom engine's DB_* were overwritten by a shared Postgres's
+    // after #309, and its site would silently have moved to Genie's own database (moic, 2026-10-16).
+    const custom: Record<string, string> = {};
     for (const i of instances) {
         if (i.engine !== 'custom') continue;
         if (i.scope.kind === 'dedicated' && workspaceId !== undefined && i.scope.workspaceId !== workspaceId) continue;
         const token = customEnvToken(`custom-${i.version}`);
-        Object.assign(env, { [`GENIE_SERVICE_${token}_HOST`]: HOST, [`GENIE_SERVICE_${token}_PORT`]: String(i.publishedPort) }, i.env ?? {});
+        Object.assign(env, { [`GENIE_SERVICE_${token}_HOST`]: HOST, [`GENIE_SERVICE_${token}_PORT`]: String(i.publishedPort) });
+        Object.assign(custom, i.env ?? {});
     }
     const chosen = new Map<string, ServiceInstance>();
     for (const c of chooseEngines(instances, workspaceId)) if (c.chosen) chosen.set(c.kind, c.chosen);
@@ -529,6 +533,7 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
         }
         Object.assign(env, def.hostEnv(HOST, one.publishedPort, one.credentials, options.namespace));
     }
+    Object.assign(env, custom);
     return env;
 }
 
