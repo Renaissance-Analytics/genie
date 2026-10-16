@@ -1,4 +1,4 @@
-import { chatSubscriptionId } from './agent-detail.js';
+import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
@@ -116,6 +116,9 @@ function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
     return snapshot;
 }
 
+/** Every agent's last detail, for the first frame of a switch (agent-detail.ts). One per window. */
+const detailCache = new AgentDetailCache<AgentDetail>();
+
 /**
  * One agent's detail, with `resolved` reported separately.
  *
@@ -141,9 +144,9 @@ function useAgentDetail(
         }
 
         let live = true;
-        // Reset on the way in, so navigating between agents cannot show the previous one's
-        // ledger under the new one's name for a frame.
-        setState({ detail: null, resolved: false });
+        // A switch opens with THIS agent's last detail (none if not seen yet) — never the previous agent's ledger under
+        // the new one's name, and never an empty frame for an agent already seen (the flash, 2026-10-16).
+        setState(detailCache.show(agentId));
 
         let off: (() => void) | null = null;
         void bridge.agentDetail(agentId).then((detail) => {
@@ -151,11 +154,12 @@ function useAgentDetail(
             // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
             // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
             const id = chatSubscriptionId(agentId, detail);
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (live) setState({ detail: next, resolved: true }); });
+            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); setState({ detail: next, resolved: true }); });
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
             const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
             if (canonical) { window.location.replace(`#${canonical}`); return; }
+            detailCache.remember(agentId, detail);
             setState({ detail, resolved: true });
         });
         return () => { live = false; off?.(); };
