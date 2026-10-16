@@ -125,6 +125,12 @@ export interface AgentRecord {
      */
     readonly dailyBudgetUsd?: number | null;
     /**
+     * The number of this agent's last turn, written as each turn ends (main, SessionHost `onTurnEnded`), so a session
+     * started after a relaunch numbers on at once — the recorded history is read asynchronously, and a prompt that came
+     * first was numbered 1 (the owner's rail, 2026-10-16). OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
+     */
+    readonly lastTurn?: number;
+    /**
      * The agent this one is the SIDECAR of (§6.2): `<agent>-slave`, registered by that agent as its own
      * review partner. OPTIONAL and not in AGENT_RECORD_FIELDS for the same reason as the budget. Genie
      * never stops a sidecar for you: nothing links the parent's stop to this record.

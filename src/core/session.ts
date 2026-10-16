@@ -174,6 +174,11 @@ export interface AgentSessionOptions {
      */
     onEvent?: (event: StreamEvent, meta?: { replacesLast: boolean }) => void;
     /**
+     * The agent's turns so far, when KNOWN at start (its record's `lastTurn`): the first turn is numbered on from it at
+     * once. Absent = counted from the recorded history, which is read asynchronously.
+     */
+    turnsBefore?: number | undefined;
+    /**
      * Something a SURFACE renders has changed — a parked approval, an answered one, a turn
      * ending, a provider failing.
      *
@@ -326,6 +331,7 @@ export class AgentSession {
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
+        if (options.turnsBefore !== undefined && options.turnsBefore >= 0) this.#turns = options.turnsBefore;
     }
 
     get turnState(): TurnState {
@@ -637,10 +643,13 @@ export class AgentSession {
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.
-        const startedAt = Date.now();
-        void readHistory(this.#options.store, this.agentId, { before: startedAt })
-            .then((h) => { this.#turns += lastTurnOf(h.rows); })
-            .catch(() => { /* no record yet: turns start at 1 */ });
+        // Known at start (the record's last turn): nothing to count. Otherwise counted from the record, asynchronously.
+        if (this.#options.turnsBefore === undefined) {
+            const startedAt = Date.now();
+            void readHistory(this.#options.store, this.agentId, { before: startedAt })
+                .then((h) => { this.#turns += lastTurnOf(h.rows); })
+                .catch(() => { /* no record yet: turns start at 1 */ });
+        }
         this.#turnState = 'working';
     }
 
@@ -650,6 +659,11 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null): void {
         if (!this.#driver) throw new Error('session is not started');
+        // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
+        // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
+        // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
+        // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
+        this.#driver.prompt(sent ? sent.content : text);
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
@@ -664,7 +678,6 @@ export class AgentSession {
         // A provider that DOES echo it is not recorded twice (see `#handle`).
         this.#echo = text;
         this.#echoSeen = '';
-        this.#driver.prompt(sent ? sent.content : text);
         this.#turnState = 'working';
     }
 
