@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
@@ -63,8 +63,10 @@ describe('a prompt opens a TURN in the ledger', () => {
         expect(rows.slice(-2)).toEqual([{ kind: 'turn', n: 2, by: null }, { kind: 'message', speaker: 'you', peerName: null, text: 'again' }]);
         expect(rows.filter((r) => r.kind === 'turn')).toHaveLength(2);
 
-        // The thread keeps the structure a resumed session is drawn from.
-        await vi.waitFor(async () => expect(await openAgentThread(store, id).count()).toBe(4));
+        // The thread keeps the structure a resumed session is drawn from. Every row written, then counted (not polled
+        // against a 1 s clock: prism-harness 0.7.0 writes asynchronously, and a loaded machine missed it).
+        await session.settled();
+        expect(await openAgentThread(store, id).count()).toBe(4);
         const persisted = await openAgentThread(store, id).messages();
         expect(persisted.map((r) => (r.message as { kind: string }).kind)).toEqual(['turn', 'message', 'turn', 'message']);
     });
