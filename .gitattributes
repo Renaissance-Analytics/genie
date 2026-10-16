@@ -1,0 +1,10 @@
+# Shell scripts MUST check out with LF, on every platform.
+#
+# `scripts/verify-linux*.sh` run inside a Linux container. A CRLF checkout — which is what
+# this repository gets on Windows, where `core.autocrlf` is true — makes bash read every line
+# as ending in a literal carriage return: `$'\r': command not found`, on the first line.
+#
+# It worked when written only because the file was created with LF and never round-tripped
+# through a checkout. A fresh clone would have broken it, which is the kind of failure that
+# shows up for the next person and not for the author.
+*.sh text eol=lf

@@ -1,0 +1,137 @@
+@import "tailwindcss";
+/* Fancy's theme sets the `dark` class on <html>; Tailwind v4's `dark:` variant follows the OS by default. One class for
+   Genie's tokens AND Fancy's components, or a light desktop gets a dark Genie with white Fancy components inside it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Tailwind v4 must scan the component library, or every class Fancy ships gets tree-shaken
+ * out of the stylesheet and the app renders unstyled. Straight from react-fancy's README.
+ */
+@source "../../node_modules/@particle-academy/react-fancy/dist/**/*.js";
+
+@import "./tokens.css";
+
+/* The design contract's faces, shipped with the app (src/renderer/fonts/README.md). Variable weight. */
+@font-face {
+    font-family: Geist;
+    src: url("./fonts/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: Geist;
+    src: url("./fonts/Geist-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+}
+
+/*
+ * FONTS — the design contract's faces, shipped with the app.
+ *
+ * The design contract is Geist and Geist Mono. The token file as published fetches them from
+ * Google Fonts with an `@import url(...)`, which was stripped on the way in: a desktop app
+ * must not render in a fallback face because the machine is offline, and a renderer reaching
+ * out to a third-party CDN on boot is a dependency nobody declared.
+ *
+ * The woff2 files are vendored under `src/renderer/fonts/` (variable weight, upright and
+ * italic, OFL 1.1) and declared by the @font-face rules above; the system faces that follow in
+ * each stack are the offline-safe fallback if a file ever fails to load.
+ */
+/*
+ * Declared in `@theme`, with LITERAL stacks, and that is the fix for a real bug.
+ *
+ * This was `@theme inline { --font-sans: var(--font-sans) }` — which is **circular**. A custom
+ * property that references itself is invalid at computed-value time, so `--font-sans` and
+ * `--font-mono` both resolved to nothing, `font-family: var(--font-sans)` fell back to the
+ * browser default, and every `font-mono` utility did too.
+ *
+ * The result: the ENTIRE application rendered in one font. Every unit test passed, the
+ * stylesheet contained both stacks, and the bug was invisible until somebody looked at a
+ * screenshot of the running window — the heading, the body text and the rail were all
+ * monospace, which is what sent me looking.
+ *
+ * `@theme` (not `@theme inline`) emits these into `:root` AND registers them as Tailwind's
+ * font theme, so `font-mono` and `font-sans` resolve from the same place.
+ */
+@theme {
+    /*
+     * Named platform faces BEFORE the generic `system-ui`, which is deliberate and was learned
+     * by measuring.
+     *
+     * `system-ui` is whatever the OS declares, and on a machine whose fontconfig has no alias
+     * for it that is **whatever font happens to be first** — measured in the smoke container:
+     * `system-ui` resolved to Liberation MONO while `sans-serif` resolved proportional. With
+     * `system-ui` early in the stack it wins, and the entire application renders monospaced.
+     *
+     * Putting `"Segoe UI"` and `-apple-system` ahead of it costs nothing on the platforms that
+     * have them — they ARE what `system-ui` would have resolved to — and means a broken alias
+     * can no longer hijack the stack. `sans-serif` is the final backstop because it is the one
+     * generic every engine resolves sensibly.
+     */
+    --font-sans: Geist, "Segoe UI", -apple-system, ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "Geist Mono", "Cascadia Code", Consolas, Menlo, ui-monospace, monospace;
+    /* Same family, heavier weights. tokens.css's heading rules read it. */
+    --font-display: Geist, "Segoe UI", -apple-system, ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg-0);
+    color: var(--fg-1);
+    font-family: var(--font-sans);
+    /* No snapping or jarring changes — every state change rides an ease. */
+    -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The chrome is not text. A drag-select across the title bar or the rail is never what
+ * somebody meant, and in a frameless window it is how a drag-to-move turns into a
+ * highlight.
+ */
+nav,
+[data-brand-mark],
+[data-route] {
+    user-select: none;
+}
+
+/*
+ * THE DOCK GUTTER STARTS BELOW THE VIEW HEADER (§4.4). A pinned panel's width arrives as `--dock-reserve` on the
+ * shell's content row; every child of a surface takes it as a right margin EXCEPT the surface's own header, which
+ * keeps its width and position while the body reflows. A margin, not padding (borders would run under the panel).
+ * Outside the shell (a popped-out file window) the variable is unset and the margin is 0.
+ */
+[data-surface] > :not([data-view-header]) {
+    margin-right: var(--dock-reserve, 0px);
+}
+
+/*
+ * THIN SCROLLBARS, everywhere (the owner, 2026-10-14: "We should be using thin scroll bars"). One rule for the whole
+ * app rather than per-scroller classes, so a scroller added later is thin too. The thumb is a token, the track is
+ * transparent: the bar is there to be found, not to be looked at.
+ */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-2, var(--border-1)) transparent;
+}

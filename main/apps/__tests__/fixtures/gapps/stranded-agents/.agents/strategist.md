@@ -1,3 +1,0 @@
-# Strategist
-
-Designs the work.

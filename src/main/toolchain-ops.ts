@@ -1,0 +1,346 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { HOST_TOOLS, PREREQUISITES, parseVersionOutput, planInstall, vcRuntimeFiles, type PackageManager, type Platform } from '../core/toolchain.js';
+import {
+    PRECEDENCE_TOOLS,
+    caExportArgv,
+    caIniContents,
+    countCertificates,
+    dirOf,
+    findShadow,
+    mergePersistedPath,
+    missingVcRuntime,
+    parseLocate,
+    parsePhpTls,
+    pathWithFirst,
+    phpIniScanDir,
+    phpTlsProblem,
+    type FindingResult,
+    type PhpTlsConfig,
+    type RepairFinding,
+    type RepairReport,
+    type ToolCopy,
+} from '../core/toolchain-repair.js';
+import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
+
+/**
+ * THE TOOLCHAIN'S ACTIONS (§6.6) — install a missing tool, check and repair — with every effect INJECTED: the runner
+ * (`execFile`, never a shell), the environment Genie's own children inherit, and the filesystem. The tests drive the
+ * same functions with fakes and count what ran.
+ *
+ * Consent is checked HERE as well as at the surface: a caller that forgot to ask cannot install anything. Results are
+ * measured, never reported from a command's exit code (the core's honest-repair rule): an install is judged by the
+ * re-probe after it, a repair by the tool re-resolved and the ini re-read through php-cgi itself.
+ */
+
+export interface ToolchainFs {
+    exists(path: string): boolean;
+    /** The file's text, or `null` when it cannot be read. */
+    readText(path: string): string | null;
+    writeText(path: string, content: string): void;
+    mkdirp(dir: string): void;
+    remove(path: string): void;
+}
+
+/** The environment Genie's own children inherit (`process.env` in the app). */
+export interface EnvPort {
+    get(name: string): string | undefined;
+    set(name: string, value: string): void;
+}
+
+export interface ToolchainOpsPorts {
+    readonly platform: Platform;
+    /** Long-running: an install takes minutes. */
+    readonly run: CommandRunner;
+    readonly env: EnvPort;
+    readonly fs: ToolchainFs;
+    /** Genie's own toolchain data (the CA bundle, its ini, the remembered PATH order). */
+    readonly dataDir: string;
+    /** `%SystemRoot%` on Windows. */
+    readonly systemRoot: string;
+    readonly packageManager: () => Promise<PackageManager | null>;
+    /** What is happening now (`null` = done) — the surface's progress line. */
+    readonly progress?: (step: string | null) => void;
+    readonly now?: () => number;
+}
+
+export type InstallOutcome =
+    | { readonly kind: 'refused'; readonly reason: string }
+    | { readonly kind: 'already-installed'; readonly version: string | null }
+    | { readonly kind: 'installed'; readonly version: string | null; readonly note?: string }
+    | { readonly kind: 'not-installed'; readonly reason: string };
+
+/** Where Genie keeps what the repair writes. */
+export function toolchainPaths(dataDir: string) {
+    const php = join(dataDir, 'php');
+    const confDir = join(php, 'conf.d');
+    return { bundle: join(php, 'cacert.pem'), confDir, ini: join(confDir, 'zz-genie-ca.ini'), state: join(dataDir, 'toolchain-env.json') };
+}
+
+const PM_CANDIDATES: Record<Platform, readonly { pm: PackageManager; bin: string }[]> = {
+    win32: [{ pm: 'winget', bin: 'winget' }],
+    darwin: [{ pm: 'brew', bin: 'brew' }],
+    // apt first: on the improbable box with both, Debian's is the one a person expects, and the choice is deterministic.
+    linux: [{ pm: 'apt', bin: 'apt-get' }, { pm: 'dnf', bin: 'dnf' }],
+};
+
+/** The platform's package manager that actually ANSWERS here, or `null`. Never throws. */
+export async function detectPackageManager(platform: Platform, run: CommandRunner): Promise<PackageManager | null> {
+    for (const { pm, bin } of PM_CANDIDATES[platform] ?? []) {
+        try {
+            const r = await run(bin, ['--version']);
+            if (r.exitCode === 0 && r.stdout.trim().length > 0) return pm;
+        } catch {
+            // absent: the next candidate
+        }
+    }
+    return null;
+}
+
+/**
+ * Pick up PATH entries a winget install just persisted (Machine, then User), appended to Genie's own PATH — otherwise
+ * the re-probe runs against the PATH Genie started with and calls a tool it just installed `not-installed`.
+ */
+export async function refreshPersistedPath(ports: Pick<ToolchainOpsPorts, 'platform' | 'run' | 'env'>): Promise<void> {
+    if (ports.platform !== 'win32') return;
+    try {
+        const r = await ports.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "[Environment]::GetEnvironmentVariable('Path','Machine'); [Environment]::GetEnvironmentVariable('Path','User')"]);
+        if (r.exitCode !== 0) return;
+        const persisted = r.stdout.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        ports.env.set('PATH', mergePersistedPath(ports.env.get('PATH') ?? '', persisted, ports.platform));
+    } catch {
+        // the re-probe still runs; it simply cannot see a PATH entry this process was never given
+    }
+}
+
+function vcPresent(ports: Pick<ToolchainOpsPorts, 'platform' | 'fs' | 'systemRoot'>): boolean {
+    return missingVcRuntime(ports.platform, vcRuntimeFiles(ports.systemRoot), (p) => ports.fs.exists(p)).length === 0;
+}
+
+const tail = (text: string): string => {
+    const line = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop();
+    return line ? ` (“${line.slice(0, 200)}”)` : '';
+};
+
+/** T1: install ONE missing tool through this platform's package manager — only with the person's consent. */
+export async function installTool(tool: string, consent: boolean, ports: ToolchainOpsPorts): Promise<InstallOutcome> {
+    if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; ${tool} was not installed` };
+    const def = HOST_TOOLS.find((t) => t.name === tool);
+    const prereq = PREREQUISITES.find((p) => p.name === tool);
+    if (!def && !prereq) return { kind: 'refused', reason: `${tool} is not a tool Genie manages` };
+    const measure = async (): Promise<string | null> => (def ? probeInstalled(def, ports.run, ports.platform) : vcPresent(ports) ? 'present' : null);
+
+    const before = await measure();
+    if (before !== null) return { kind: 'already-installed', version: def ? before : null };
+    const plan = planInstall({ tool, platform: ports.platform, packageManager: await ports.packageManager() });
+    if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
+
+    try {
+        ports.progress?.(`Installing ${tool}: ${plan.label}${plan.elevated ? ' — your system will ask for permission' : ''}`);
+        let exitCode: number;
+        let output = '';
+        try {
+            const r = await ports.run(plan.argv[0]!, plan.argv.slice(1));
+            exitCode = r.exitCode;
+            output = r.stdout;
+        } catch (error) {
+            exitCode = -1;
+            output = error instanceof Error ? error.message : String(error);
+        }
+        ports.progress?.(`Checking that ${tool} answers`);
+        await refreshPersistedPath(ports);
+        const after = await measure();
+        if (after === null) return { kind: 'not-installed', reason: `${plan.label} exited ${exitCode}${tail(output)}, and ${tool} still does not answer; nothing Genie can find was installed` };
+        const version = def ? after : null;
+        return exitCode === 0 ? { kind: 'installed', version } : { kind: 'installed', version, note: `the command exited ${exitCode}, but ${tool} now answers` };
+    } finally {
+        ports.progress?.(null);
+    }
+}
+
+// --- check and repair ------------------------------------------------------------------------------------------------
+
+async function locate(binary: string, ports: ToolchainOpsPorts): Promise<string[]> {
+    try {
+        const r = ports.platform === 'win32' ? await ports.run('where', [binary]) : await ports.run('which', ['-a', binary]);
+        return parseLocate(r.stdout, ports.platform);
+    } catch {
+        return [];
+    }
+}
+
+async function copiesOf(t: (typeof PRECEDENCE_TOOLS)[number], ports: ToolchainOpsPorts): Promise<ToolCopy[]> {
+    const paths = await locate(t.binary, ports);
+    if (paths.length < 2) return paths.map((path) => ({ path, version: null }));
+    return Promise.all(
+        paths.map(async (path) => {
+            try {
+                return { path, version: parseVersionOutput(t.tool, (await ports.run(path, t.args)).stdout) };
+            } catch {
+                return { path, version: null };
+            }
+        }),
+    );
+}
+
+const samePath = (a: string, b: string, platform: Platform) => (platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** php-cgi's own view of its config (what a site gets), else the CLI's; `null` when neither answers. */
+async function readPhpTls(ports: ToolchainOpsPorts): Promise<PhpTlsConfig | null> {
+    for (const bin of ['php-cgi', 'php']) {
+        try {
+            const r = await ports.run(bin, ['-i']);
+            if (r.stdout.trim().length > 0) return parsePhpTls(r.stdout);
+        } catch {
+            // the next one
+        }
+    }
+    return null;
+}
+
+async function repairPhpCa(ports: ToolchainOpsPorts): Promise<FindingResult> {
+    const { bundle, confDir, ini } = toolchainPaths(ports.dataDir);
+    ports.fs.mkdirp(confDir);
+    const [bin, args] = caExportArgv(bundle);
+    try {
+        const r = await ports.run(bin, args);
+        if (r.exitCode !== 0) return { kind: 'unchanged', reason: `exporting this machine's root certificates failed (exit ${r.exitCode})${tail(r.stdout)}; nothing was configured` };
+    } catch (error) {
+        return { kind: 'unchanged', reason: `exporting this machine's root certificates failed: ${error instanceof Error ? error.message : String(error)}; nothing was configured` };
+    }
+    // Verify what LANDED, not what the command said: a truncated or empty bundle that exists reads as "trust is solved".
+    const count = countCertificates(ports.fs.readText(bundle) ?? '');
+    if (count === 0) {
+        ports.fs.remove(bundle);
+        return { kind: 'unchanged', reason: 'the export produced no certificates, so PHP was not pointed at it (a bundle with nothing in it fixes nothing)' };
+    }
+    ports.fs.writeText(ini, caIniContents(bundle));
+    ports.env.set('PHP_INI_SCAN_DIR', phpIniScanDir(ports.env.get('PHP_INI_SCAN_DIR'), confDir, ports.platform));
+    const after = await readPhpTls(ports);
+    const still = after === null ? 'PHP did not answer after the change' : phpTlsProblem(after, ports.platform, (p) => ports.fs.exists(p));
+    if (still !== null) return { kind: 'unchanged', reason: `wrote ${ini}, but ${still}` };
+    return { kind: 'repaired', detail: `${count} root certificates from this machine are in ${bundle}; the PHP Genie runs — sites' php-cgi included — reads it through ${ini}. Your php.ini is unchanged.` };
+}
+
+function remember(ports: ToolchainOpsPorts, dirs: readonly string[]): void {
+    if (dirs.length === 0) return;
+    const { state } = toolchainPaths(ports.dataDir);
+    let prior: string[] = [];
+    try {
+        const parsed = JSON.parse(ports.fs.readText(state) ?? '{}') as { pathFirst?: unknown };
+        if (Array.isArray(parsed.pathFirst)) prior = parsed.pathFirst.filter((d): d is string => typeof d === 'string');
+    } catch {
+        prior = [];
+    }
+    // Replayed in order at the next launch: a directory repaired again moves to the end, so it ends up in front.
+    const pathFirst = [...prior.filter((d) => !dirs.some((n) => samePath(n, d, ports.platform))), ...dirs];
+    ports.fs.mkdirp(ports.dataDir);
+    ports.fs.writeText(state, `${JSON.stringify({ pathFirst }, null, 2)}\n`);
+}
+
+/** T2: one "Check and repair". Only problems are findings; each carries its own measured result. */
+export async function checkAndRepair(ports: ToolchainOpsPorts): Promise<RepairReport> {
+    const findings: RepairFinding[] = [];
+    try {
+        ports.progress?.('Checking which copy of each tool runs');
+        const moved: string[] = [];
+        for (const t of PRECEDENCE_TOOLS) {
+            const shadow = findShadow(await copiesOf(t, ports));
+            if (!shadow) continue;
+            const dir = dirOf(shadow.newer.path);
+            ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
+            const nowFirst = (await locate(t.binary, ports))[0] ?? null;
+            let result: FindingResult;
+            if (nowFirst !== null && samePath(nowFirst, shadow.newer.path, ports.platform)) {
+                moved.push(dir);
+                result = { kind: 'repaired', detail: `Genie now runs ${t.tool} ${shadow.newer.version} from ${shadow.newer.path}, ahead of ${shadow.first.version} at ${shadow.first.path}. Your own PATH is unchanged; terminals and sites pick this up when Genie next starts.` };
+            } else {
+                result = { kind: 'unchanged', reason: `moved ${dir} to the front, but ${t.binary} still resolves to ${nowFirst ?? 'nothing'}` };
+            }
+            findings.push({ kind: 'path-shadow', tool: t.tool, first: shadow.first, newer: shadow.newer, result });
+        }
+        remember(ports, moved);
+
+        ports.progress?.("Checking PHP's CA bundle");
+        const tls = await readPhpTls(ports);
+        const problem = tls === null ? null : phpTlsProblem(tls, ports.platform, (p) => ports.fs.exists(p));
+        if (problem !== null) {
+            ports.progress?.("Exporting this machine's root certificates for PHP");
+            findings.push({ kind: 'php-ca', problem, result: await repairPhpCa(ports) });
+        }
+
+        const missing = missingVcRuntime(ports.platform, vcRuntimeFiles(ports.systemRoot), (p) => ports.fs.exists(p));
+        if (missing.length > 0) {
+            findings.push({
+                kind: 'vc-runtime',
+                missing,
+                result: { kind: 'needs-install', tool: 'vcredist', reason: `PHP cannot start without ${missing.join(', ')}. Install the Microsoft Visual C++ runtime — Genie runs it through winget when you say so.` },
+            });
+        }
+    } finally {
+        ports.progress?.(null);
+    }
+    return { findings, checkedAt: (ports.now ?? Date.now)() };
+}
+
+/**
+ * At launch, BEFORE anything is spawned: re-apply the PATH order a repair chose and point PHP at Genie's CA ini — so the
+ * pty host, terminals, sites and agent sessions all start with them. Reads two files; runs nothing. A remembered
+ * directory that no longer exists is skipped (the tool was uninstalled; its order is nothing to restore).
+ */
+export function restoreToolchainEnv(ports: Pick<ToolchainOpsPorts, 'platform' | 'env' | 'fs' | 'dataDir'>): { pathFirst: string[]; phpIni: boolean } {
+    const { state, ini, bundle, confDir } = toolchainPaths(ports.dataDir);
+    const applied: string[] = [];
+    try {
+        const parsed = JSON.parse(ports.fs.readText(state) ?? '{}') as { pathFirst?: unknown };
+        for (const dir of Array.isArray(parsed.pathFirst) ? parsed.pathFirst : []) {
+            if (typeof dir !== 'string' || !ports.fs.exists(dir)) continue;
+            ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
+            applied.push(dir);
+        }
+    } catch {
+        // an unreadable state file restores nothing
+    }
+    const phpIni = ports.fs.exists(ini) && ports.fs.exists(bundle);
+    if (phpIni) ports.env.set('PHP_INI_SCAN_DIR', phpIniScanDir(ports.env.get('PHP_INI_SCAN_DIR'), confDir, ports.platform));
+    return { pathFirst: applied, phpIni };
+}
+
+/** What a site's php-cgi worker is given on top of the pty host's environment: Genie's ini directory, when there is one. */
+export function phpWorkerEnv(env: EnvPort): Record<string, string> {
+    const dir = env.get('PHP_INI_SCAN_DIR');
+    return dir ? { PHP_INI_SCAN_DIR: dir } : {};
+}
+
+/** The real filesystem. */
+export function nodeToolchainFs(): ToolchainFs {
+    return {
+        exists: (p) => {
+            try {
+                return existsSync(p);
+            } catch {
+                return false;
+            }
+        },
+        readText: (p) => {
+            try {
+                return readFileSync(p, 'utf8');
+            } catch {
+                return null;
+            }
+        },
+        writeText: (p, c) => writeFileSync(p, c, 'utf8'),
+        mkdirp: (d) => {
+            mkdirSync(d, { recursive: true });
+        },
+        remove: (p) => rmSync(p, { force: true }),
+    };
+}
+
+/** `process.env` as a port. On Windows its keys are case-insensitive, so `PATH` is `Path`. */
+export const processEnv: EnvPort = {
+    get: (name) => process.env[name],
+    set: (name, value) => {
+        process.env[name] = value;
+    },
+};

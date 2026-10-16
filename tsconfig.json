@@ -1,21 +1,29 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "commonjs",
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "esModuleInterop": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM"],
-    "paths": {
-      "@main/*": ["./main/*"],
-      "@renderer/*": ["./renderer/*"]
-    }
+    "noEmit": true,
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "jsx": "react-jsx"
   },
-  "include": ["main/**/*", "renderer/**/*"],
-  "exclude": ["node_modules", "app", ".next", "dist"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx"
+  ]
 }
