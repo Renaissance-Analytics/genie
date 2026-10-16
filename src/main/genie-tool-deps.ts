@@ -4,7 +4,7 @@ import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { FeedbackStore } from './feedback-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
-import type { HostingApproval } from './mcp-tools-hosting.js';
+import type { HostingApproval, ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
 import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
@@ -50,6 +50,8 @@ export interface GenieToolParts {
     readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
     readonly processes?: ProcessesPort;
+    /** Runs `services exec` commands (main/service-exec.ts). Absent = none (doctor mode), and the tool says so. */
+    readonly serviceExec?: ServiceExec;
     readonly sidecar: Pick<SidecarToolsDeps, 'register' | 'start' | 'running'>;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
 }
@@ -81,6 +83,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             services: p.hosting ?? null,
             ...(p.openInBrowser ? { openInBrowser: p.openInBrowser } : {}),
+            ...(p.serviceExec ? { exec: p.serviceExec } : {}),
         },
         processes: {
             resolveCaller: p.resolveCaller,

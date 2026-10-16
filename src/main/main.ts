@@ -1,3 +1,4 @@
+import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
@@ -1254,6 +1255,8 @@ async function boot(): Promise<void> {
             openInBrowser,
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
+            // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
+            serviceExec: runServiceExec,
             sidecar: {
                 register: (input) => registry!.register(input),
                 start: (record, cwd) => host!.start(record, cwd),

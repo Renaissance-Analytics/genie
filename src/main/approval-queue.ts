@@ -31,6 +31,8 @@ const VERBS: Record<string, string> = {
     'services.remove': 'remove a service',
     // `use` and `detach`: the detail names the engine, and what the workspace uses for that kind before and after.
     'services.use': 'change which service this workspace uses',
+    // `services exec`: the detail is the command line, run with the workspace's service variables.
+    'services.exec': 'run a command with this workspace’s service variables',
     'sites.update': 'change a site',
     'sites.remove': 'remove a site',
     // An agent's `processes` tool (mcp-tools-processes.ts): the detail names the command, the folder and the policy.
