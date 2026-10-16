@@ -48,7 +48,7 @@ describe('a php site starts the php-cgi its pin names', () => {
         sites.create({ name: 'shop', workspaceId: 'acme', repoPath: '/repos/shop', serve: { mode: 'php', root: 'public', version: '8.4' } });
         expect(asked).toEqual(['8.4']);
         expect(workers(opened).map((o) => o.command)).toEqual([`${MANAGED} -b 127.0.0.1:4302`]);
-        expect(workers(opened)[0]!.env).toEqual({ PHP_INI_SCAN_DIR: ';C:\\genie2-toolchain\\php\\conf.d' });
+        expect(workers(opened)[0]!.env).toEqual({ PHP_INI_SCAN_DIR: ';C:\\genie2-toolchain\\php\\conf.d', PHP_FCGI_MAX_REQUESTS: '0' });
     });
 
     it('control — unpinned: `php-cgi` from PATH, exactly as before', () => {
