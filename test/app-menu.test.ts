@@ -29,11 +29,15 @@ describe('the menu', () => {
         expect(h.onCloseWindow).toHaveBeenCalledTimes(1);
     });
 
-    it.each(PLATFORMS)('%s: Settings… on CmdOrCtrl+, opens Settings', (platform) => {
+    // CI's real window (#911, Linux): a menu accelerator never fired in Genie's window with its hidden title bar, while it
+    // did on Windows. So the menu SHOWS Ctrl+, but does not register it; the page's own chord (core/keys.ts) opens
+    // Settings on every platform, once.
+    it.each(PLATFORMS)('%s: Settings… shows CmdOrCtrl+, without registering it, and opens Settings', (platform) => {
         const h = handlers();
         const settings = walk(appMenuTemplate(platform, '2.0.0-beta.30', h)).filter((i) => i.label === 'Settings…');
         expect(settings).toHaveLength(1);
         expect(settings[0]!.accelerator).toBe('CmdOrCtrl+,');
+        expect(settings[0]!.registerAccelerator).toBe(false);
         (settings[0]!.click as () => void)();
         expect(h.onSettings).toHaveBeenCalledTimes(1);
     });

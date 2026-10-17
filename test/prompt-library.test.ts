@@ -95,6 +95,7 @@ describe('a prompt’s hotkey', () => {
         expect(hotkeyProblem('CommandOrControl+J', library, 'p2', 'win32')).toMatch(/chat/);
         expect(hotkeyProblem('CommandOrControl+B', library, 'p2', 'win32')).toMatch(/file/);
         expect(hotkeyProblem('CommandOrControl+Shift+T', library, 'p2', 'win32')).toMatch(/Take Over/);
+        expect(hotkeyProblem('CommandOrControl+,', library, 'p2', 'win32')).toMatch(/Settings/);
         expect(hotkeyProblem('Ctrl+Alt+R', library, 'p2', 'win32')).toMatch(/Review the diff/);
         // Its own hotkey is not a clash with itself.
         expect(hotkeyProblem('CommandOrControl+Alt+R', library, 'p1', 'win32')).toBeNull();

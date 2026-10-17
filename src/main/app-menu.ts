@@ -22,7 +22,9 @@ export interface AppMenuHandlers {
 
 export function appMenuTemplate(platform: string, version: string, h: AppMenuHandlers): MenuItemConstructorOptions[] {
     const mac = platform === 'darwin';
-    const settings: MenuItemConstructorOptions = { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => h.onSettings() };
+    // SHOWN, not registered: a menu accelerator never fired in Genie's window on Linux (CI's real window, #911), so the
+    // page's own chord opens Settings on every platform (core/keys.ts) — once, not twice where the menu would also fire.
+    const settings: MenuItemConstructorOptions = { label: 'Settings…', accelerator: 'CmdOrCtrl+,', registerAccelerator: false, click: () => h.onSettings() };
     const updates: MenuItemConstructorOptions = { label: 'Check for updates', click: () => h.onCheckUpdates() };
     return [
         mac

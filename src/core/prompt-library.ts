@@ -181,6 +181,7 @@ export function hotkeyProblem(accelerator: string, prompts: readonly SavedPrompt
     if (genie === 'open-palette') return 'Genie uses that key for the Command Window.';
     if (genie === 'toggle-chat') return 'Genie uses that key to open and close the chat.';
     if (genie === 'toggle-files') return 'Genie uses that key for the file panel.';
+    if (genie === 'open-settings') return 'Genie uses that key for Settings.';
     if (agentViewAction(press) === 'take-over') return 'Genie uses that key for Take Over.';
     const other = prompts.find((p) => p.id !== selfId && p.hotkey && (() => {
         const theirs = parseAccelerator(p.hotkey, platform);
