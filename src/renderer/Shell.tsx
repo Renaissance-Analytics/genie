@@ -23,6 +23,8 @@ import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
+import { WorkspaceTabs } from './components/WorkspaceTabs.js';
+import { addTab, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
@@ -117,6 +119,8 @@ export interface ShellProps {
     /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     onOpenAgent: (agentId: string) => void;
+    /** The agents open as tabs in the workspace on screen, and closing one (Tynn #805). */
+    openAgentTabs?: { workspaceId: string; agents: ReadonlyArray<{ id: string; name: string; state: string }>; onClose: (agentId: string) => void } | null | undefined;
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
@@ -217,6 +221,7 @@ export function Shell({
     pinned,
     onNavigate,
     onOpenAgent,
+    openAgentTabs,
     onAddAgent,
     onAddWorkspace,
     terminals = NO_TERMINALS,
@@ -283,6 +288,8 @@ export function Shell({
         : undefined;
     /** The workspace a route names, from the snapshot — `null` both for unknown and not-yet-loaded; the caller tells them apart. */
     const workspaceFor = (id: string) => snapshot.workspaces?.find((w) => w.id === id) ?? null;
+    // The workspace an agent's page belongs to (Tynn #805): its strip is drawn over the page.
+    const agentWorkspace = parsed.surface === 'agent' ? workspaceFor(snapshot.agents.find((a) => a.id === parsed.agentId)?.workspaceId ?? '') : null;
     const canServe = servable.includes(parsed.surface);
 
     /**
@@ -486,42 +493,66 @@ export function Shell({
                     ) : null}
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
-                        <AgentView
-                            agent={agentDetail.agent}
-                            session={agentDetail.session}
-                            rows={agentDetail.rows}
-                            tab={parsed.tab}
-                            lanes={parseLanes(parsed.lane)}
-                            readCommits={readCommits}
-                            at={parsed.at}
-                            layout={parsed.layout}
-                            selectedId={selectedRowId}
-                            turns={agentDetail.turns}
-                            cost={agentDetail.cost}
-                            onNavigate={onNavigate}
-                            onSelect={onSelectRow}
-                            chatSubject={parsed.chat}
-                            onLanes={(next) => {
-                                const value = formatLanes(next);
-                                const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
-                                onNavigate(value === null ? base : `${base}&lane=${value}`);
-                            }}
-                            range={parsed.range}
-                            onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
-                            onTakeOver={onTakeOver}
-                            answeringApproval={answeringApproval}
-                            onAnswerApproval={onAnswerApproval}
-                            ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
-                            files={files}
-                            workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
-                            takeOver={agentDetail.takeOver ?? null}
-                            log={agentDetail.log ?? []}
-                            onStop={onStopAgent}
-                            onCancelTurn={onCancelTurn}
-                            onResumeLimit={onResumeLimit}
-                            onStart={onStartAgent}
-                            terminals={terminals}
-                        />
+                        // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page sits under
+                        // its workspace's strip — Agents, the agents you opened, your tabs, +, Settings — one click from each.
+                        <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
+                            {agentWorkspace ? (
+                                <WorkspaceTabs
+                                    designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
+                                    openAgents={openAgentTabs?.workspaceId === agentWorkspace.id ? openAgentTabs.agents : []}
+                                    current={{ kind: 'agent', id: parsed.agentId }}
+                                    canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
+                                    hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                    onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
+                                    onAdd={() => {
+                                        const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
+                                        const made = addTab(parseTabs(typeof raw === 'string' ? raw : '{"tabs":[]}'));
+                                        workspaceOps?.settings?.onSet('workspace_tabs', serializeTabs(made.state));
+                                        onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
+                                    }}
+                                    onOpenAgent={onOpenAgent}
+                                    onCloseAgent={(id) => openAgentTabs?.onClose(id)}
+                                />
+                            ) : null}
+                            <div className="min-h-0 flex-1">
+                            <AgentView
+                                agent={agentDetail.agent}
+                                session={agentDetail.session}
+                                rows={agentDetail.rows}
+                                tab={parsed.tab}
+                                lanes={parseLanes(parsed.lane)}
+                                readCommits={readCommits}
+                                at={parsed.at}
+                                layout={parsed.layout}
+                                selectedId={selectedRowId}
+                                turns={agentDetail.turns}
+                                cost={agentDetail.cost}
+                                onNavigate={onNavigate}
+                                onSelect={onSelectRow}
+                                chatSubject={parsed.chat}
+                                onLanes={(next) => {
+                                    const value = formatLanes(next);
+                                    const base = `genie://agent/${agentDetail.agent.id}?tab=${parsed.tab}`;
+                                    onNavigate(value === null ? base : `${base}&lane=${value}`);
+                                }}
+                                range={parsed.range}
+                                onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
+                                onTakeOver={onTakeOver}
+                                answeringApproval={answeringApproval}
+                                onAnswerApproval={onAnswerApproval}
+                                ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
+                                files={files}
+                                workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
+                                takeOver={agentDetail.takeOver ?? null}
+                                log={agentDetail.log ?? []}
+                                onStop={onStopAgent}
+                                onCancelTurn={onCancelTurn}
+                                onResumeLimit={onResumeLimit}
+                                onStart={onStartAgent}
+                                terminals={terminals}
+                            />
+                            </div>
+                        </div>
                     ) : null}
 
                     {/*
@@ -539,6 +570,8 @@ export function Shell({
                             view={parsed.view}
                             rows={snapshot.agents}
                             onOpenAgent={onOpenAgent}
+                            openAgents={openAgentTabs?.workspaceId === parsed.workspaceId ? openAgentTabs.agents : []}
+                            onCloseAgent={(id) => openAgentTabs?.onClose(id)}
                             onAddAgent={() => onAddAgent(parsed.workspaceId)}
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}

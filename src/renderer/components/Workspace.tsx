@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
+import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
-import { addTab, clearCell, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, tabStrip, type TabsState } from '../../core/workspace-tabs.js';
+import { addTab, clearCell, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
     emptyWorkspace,
@@ -135,6 +136,9 @@ export interface WorkspaceProps {
     /** Every agent Genie knows of; the home view keeps this workspace's. Absent = none known. */
     rows?: readonly AgentRow[] | undefined;
     onOpenAgent?: ((agentId: string) => void) | undefined;
+    /** The agents open as tabs in this workspace's strip (Tynn #805), and closing one. */
+    openAgents?: ReadonlyArray<{ id: string; name: string; state: string }> | undefined;
+    onCloseAgent?: ((agentId: string) => void) | undefined;
     onAddAgent?: (() => void) | undefined;
     /** The tabs ask for a view; the shell writes it into the route. */
     onViewChange?: ((view: WorkspaceView) => void) | undefined;
@@ -146,7 +150,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -524,24 +528,17 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
               * without the workspace's settings there is none, and a + that could not keep anything is not offered.
               */}
-            <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
-                {tabStrip(designed).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? Boolean(ops?.settings || ops?.governs || ops?.repos) : true)).map((t) => {
-                    const v: WorkspaceView | null = t.kind === 'agents' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'designed' ? `tab:${t.id}` : null;
-                    const current = v !== null && v === view;
-                    if (t.kind === 'add') {
-                        return (
-                            <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
-                                <Icon name="plus" size="xs" />
-                            </button>
-                        );
-                    }
-                    return (
-                        <button key={v!} type="button" data-workspace-tab={v!} {...(current ? { 'data-current': 'true' } : {})} onClick={() => onViewChange?.(v!)} className={`border-b-2 px-3 text-[12px] ${current ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}>
-                            {t.kind === 'designed' ? t.name : t.kind === 'agents' ? 'Agents' : 'Settings'}
-                        </button>
-                    );
-                })}
-            </nav>
+            <WorkspaceTabs
+                designed={designed}
+                openAgents={openAgents}
+                current={{ kind: 'view', view }}
+                canDesign={canDesign}
+                hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
+                onView={(v) => onViewChange?.(v as WorkspaceView)}
+                onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
+                onOpenAgent={(id) => onOpenAgent?.(id)}
+                onCloseAgent={(id) => onCloseAgent?.(id)}
+            />
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
