@@ -1,3 +1,4 @@
+import { HUMAN, type Participant } from './inbox.js';
 import type { StreamEvent } from './stream-event.js';
 
 /**
@@ -36,4 +37,12 @@ export function agentActionOf(event: StreamEvent): AgentAction | null {
         default:
             return null;
     }
+}
+
+/**
+ * Mail one agent sends another is the SENDER's action (Tynn #766 row C2a). Mail to you sounds on its own row (the Deck's
+ * `msg_` item), and mail you send is not an agent's action: neither is one here.
+ */
+export function mailAction(message: { readonly from: Participant; readonly to: Participant }): { agentId: string; kind: 'agentmail' } | null {
+    return message.from === HUMAN || message.to === HUMAN ? null : { agentId: message.from, kind: 'agentmail' };
 }

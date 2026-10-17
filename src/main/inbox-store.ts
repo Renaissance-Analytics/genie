@@ -117,7 +117,7 @@ export class InboxStore {
     readonly #dir: string;
     #mail: MailFile;
     readonly #waiters = new Set<Waiter>();
-    readonly #sendListeners = new Set<(to: Participant) => void>();
+    readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
     readonly #readListeners = new Set<(reader: Participant) => void>();
     readonly #now: () => string;
 
@@ -142,7 +142,7 @@ export class InboxStore {
     }
 
     /** A message landed for `to` — the event the reminder wiring keys on, so nothing polls. */
-    onSend(listener: (to: Participant) => void): () => void {
+    onSend(listener: (to: Participant, message: InboxMessage) => void): () => void {
         this.#sendListeners.add(listener);
         return () => { this.#sendListeners.delete(listener); };
     }
@@ -184,7 +184,7 @@ export class InboxStore {
         for (const w of [...this.#waiters]) {
             if (w.participant === input.to) w.wake();
         }
-        for (const l of this.#sendListeners) l(input.to);
+        for (const l of this.#sendListeners) l(input.to, message);
         return message;
     }
 

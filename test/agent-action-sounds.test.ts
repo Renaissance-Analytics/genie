@@ -62,10 +62,10 @@ describe('the registry has a row for each', () => {
     it('each kind belongs to one group the Settings rows are shown under', () => {
         const by = (g: string) => ALERT_KINDS.filter((k) => k.group === g).map((k) => k.kind);
         expect(by('needs-you')).toEqual(['question', 'approval', 'broken', 'limited']);
-        expect(by('turn')).toEqual(['started', 'replied', 'finished', 'stopped', 'resumed']);
+        expect(by('turn')).toEqual(['started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed']);
         expect(by('work')).toEqual(['edits', 'runs', 'reads', 'fetches', 'plans']);
-        expect(by('messages')).toEqual(['mail']);
-        expect(ALERT_KINDS).toHaveLength(15);
+        expect(by('messages')).toEqual(['mail', 'agentmail']);
+        expect(ALERT_KINDS).toHaveLength(17);
     });
 });
 
