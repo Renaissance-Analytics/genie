@@ -161,32 +161,43 @@ export const WEBSOCKET_ENV_KEYS: readonly string[] = [
  * The secret appears under the two `*_APP_SECRET` names only — never under a `VITE_` name, which a bundler ships to
  * every browser.
  */
-export function websocketHostEnv(host: string, port: number, slice: Pick<AdoptedSlice, 'identifier' | 'password'>, browserHost?: string): Record<string, string> {
+export function websocketHostEnv(slice: Pick<AdoptedSlice, 'identifier' | 'password'>): Record<string, string> {
     const app = websocketAppOf(slice);
-    const p = String(port);
-    // The BROWSER keys: the front door's https name when there is one (websocketBrowserHost), else loopback as before.
-    const browser = browserHost === undefined ? { host, port: p, scheme: 'http' } : { host: browserHost, port: '443', scheme: 'https' };
+    // ONE secure address for every key — the browser's and the app's server side alike (WEBSOCKETS_HOST).
+    const host = WEBSOCKETS_HOST;
+    const port = '443';
+    const scheme = 'https';
     return {
         GENIE_WS_APP_ID: app.id,
         GENIE_WS_APP_KEY: app.key,
         GENIE_WS_APP_SECRET: app.secret,
         GENIE_WS_HOST: host,
-        GENIE_WS_PORT: p,
-        GENIE_WS_SCHEME: 'http',
+        GENIE_WS_PORT: port,
+        GENIE_WS_SCHEME: scheme,
         BROADCAST_CONNECTION: 'reverb',
         REVERB_APP_ID: app.id,
         REVERB_APP_KEY: app.key,
         REVERB_APP_SECRET: app.secret,
         REVERB_HOST: host,
-        REVERB_PORT: p,
-        REVERB_SCHEME: 'http',
+        REVERB_PORT: port,
+        REVERB_SCHEME: scheme,
         VITE_GENIE_WS_APP_KEY: app.key,
-        VITE_GENIE_WS_HOST: browser.host,
-        VITE_GENIE_WS_PORT: browser.port,
-        VITE_GENIE_WS_SCHEME: browser.scheme,
+        VITE_GENIE_WS_HOST: host,
+        VITE_GENIE_WS_PORT: port,
+        VITE_GENIE_WS_SCHEME: scheme,
         VITE_REVERB_APP_KEY: app.key,
-        VITE_REVERB_HOST: browser.host,
-        VITE_REVERB_PORT: browser.port,
-        VITE_REVERB_SCHEME: browser.scheme,
+        VITE_REVERB_HOST: host,
+        VITE_REVERB_PORT: port,
+        VITE_REVERB_SCHEME: scheme,
     };
 }
+
+/**
+ * THE SHARED WEBSOCKETS SERVER'S ONE ADDRESS (the owner, 2026-10-17: "We don't need multiple wss servers and yes, always
+ * WSS, not WS. All genie sites should always be secure. each workstation should have its own namespace, not server" —
+ * per workspace, one address). Served by the front door with Genie's certificate; every workspace reaches the one
+ * server here, over wss/https only — the browser and the app's server side alike — and is kept apart by its own APP
+ * (id, key, secret), never by an address. pusher-js on an https page always uses TLS, so a plain address cannot serve
+ * a browser at all (moic, 2026-10-16).
+ */
+export const WEBSOCKETS_HOST = 'websockets.gen';

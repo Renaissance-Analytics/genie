@@ -500,7 +500,7 @@ export function customEnvToken(value: string): string {
  * `namespace` is that workspace's derived name (`ws_<slug>`, core/v1-services.ts — computed by the caller, so this
  * file stays free of node imports for the renderer): the tag and prefix the namespace engines emit.
  */
-export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string; websocketBrowserHost?: (workspaceId: string) => string } = {}): Record<string, string> {
+export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string } = {}): Record<string, string> {
     const env: Record<string, string> = {};
     // Every custom engine emits its own names (each is namespaced by its own name) and its env, as Genie 1's did —
     // whether or not it is the workspace's engine of its kind. Its env is applied LAST (below): what was set by hand on
@@ -528,7 +528,7 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
             const slice = workspaceId === undefined ? undefined : one.slices[workspaceId];
             if (!slice) continue;
             // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
-            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres'), ...(workspaceId !== undefined && options.websocketBrowserHost ? { websocketBrowserHost: options.websocketBrowserHost(workspaceId) } : {}) }));
+            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres') }));
             continue;
         }
         Object.assign(env, def.hostEnv(HOST, one.publishedPort, one.credentials, options.namespace));
@@ -546,7 +546,7 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
  * env that disagrees with the file the app reads, and the exported variable wins (dotenv is
  * immutable) — which is how Genie 1's genie#242 broke apps in the first place.
  */
-export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean; websocketBrowserHost?: string }): Record<string, string> {
+export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean }): Record<string, string> {
     const id = slice.identifier;
     const pw = slice.password;
     const p = String(port);
@@ -575,8 +575,8 @@ export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, opt
             return { MAIL_MAILER: 'smtp', MAIL_HOST: HOST, MAIL_PORT: p, ...mailTagEnv(id) };
         case 'websockets':
             // The workspace's own app on the shared server: Genie 1's env-wiring.ts + hosting.ts names (core/websockets.ts).
-            // The browser keys name the front door's https host for this workspace (main/websocket-front-door.ts); the server's stay on loopback.
-            return websocketHostEnv(HOST, port, slice, options.websocketBrowserHost);
+            // The one secure address, every key (core/websockets.ts WEBSOCKETS_HOST); the workspace is its app.
+            return websocketHostEnv(slice);
         default:
             return {};
     }

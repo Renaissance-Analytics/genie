@@ -1,32 +1,17 @@
 import { chooseEngines, type ServiceInstance } from '../core/services.js';
-import { workspaceDnsName } from '../core/v1-services.js';
+import { WEBSOCKETS_HOST } from '../core/websockets.js';
 
 /**
- * THE SHARED WEBSOCKETS SERVER, FOR AN HTTPS SITE'S BROWSER (moic, 2026-10-16). pusher-js on an https page always uses
- * TLS (useTLS = forceTLS || location.protocol === 'https:'), so a browser handed the loopback address dialled
- * wss://127.0.0.1:<port>, where nothing speaks TLS, and every https site's live updates fell back to polling. Genie 1
- * served the engine through the front door at this name (host-core/hosting.ts), and a `.env` written then names it.
- *
- * Main-process only: the name hashes a long workspace id with node:crypto (v1-services.ts `v1WorkspaceSlug`), which the
- * renderer cannot bundle — core/services.ts is given the namer, never imports it.
- */
-export function websocketBrowserHost(workspaceId: string): string {
-    return `websockets.${workspaceDnsName(workspaceId)}.gen`;
-}
-
-/**
- * The front door's routes for it: one per workspace whose WebSockets engine it is (CHOSEN — a workspace that detached,
- * or uses another, gets none), at that name, to the engine's loopback port. Served with Genie's certificate beside the
- * sites, and in the hosts file's names (main/compose.ts).
+ * THE FRONT DOOR'S ROUTE FOR THE SHARED WEBSOCKETS SERVER: ONE, at its one address (core/websockets.ts WEBSOCKETS_HOST),
+ * to the engine's loopback port — present while any workspace uses that engine (it is the CHOSEN one for some workspace;
+ * a workspace that detached is not counted). Served with Genie's certificate beside the sites, and in the hosts file's
+ * names (main/compose.ts). Workspaces are kept apart on the server by their apps, not by addresses (the owner, 2026-10-17).
  */
 export function websocketRoutes(instances: readonly ServiceInstance[]): { host: string; target: string }[] {
-    const routes: { host: string; target: string }[] = [];
     for (const i of instances) {
         if (i.engine !== 'websockets' || i.scope.kind !== 'shared' || i.slices === undefined) continue;
-        for (const workspaceId of Object.keys(i.slices)) {
-            const chosen = chooseEngines(instances, workspaceId).find((c) => c.kind === 'websockets')?.chosen;
-            if (chosen?.id === i.id) routes.push({ host: websocketBrowserHost(workspaceId), target: `127.0.0.1:${i.publishedPort}` });
-        }
+        const used = Object.keys(i.slices).some((workspaceId) => chooseEngines(instances, workspaceId).find((c) => c.kind === 'websockets')?.chosen?.id === i.id);
+        if (used) return [{ host: WEBSOCKETS_HOST, target: `127.0.0.1:${i.publishedPort}` }];
     }
-    return routes;
+    return [];
 }
