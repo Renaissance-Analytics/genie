@@ -1,9 +1,10 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import type { CommandItem } from '../core/command-window.js';
+import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
-import { setThemePreference } from '@particle-academy/react-fancy';
+import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
@@ -699,6 +700,34 @@ function DesktopApp({ bridge }: AppProps) {
         ? null
         : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts);
 
+    // SAVED PROMPTS (Tynn #758): the library from Settings → Agents, sent from the Command Window or by a prompt's own
+    // hotkey to the agent in front of the person — its chat if open, else the agent on screen, else Genie — and that chat
+    // is opened, so a key press is never a send nobody saw.
+    const savedRaw = features.settings.values?.['saved_prompts'];
+    const savedPrompts: SavedPrompt[] = parsePromptLibrary(typeof savedRaw === 'string' ? savedRaw : undefined);
+    const [promptPlatform, setPromptPlatform] = useState('generic');
+    useEffect(() => { setPromptPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
+    const sendSavedPrompt = (prompt: SavedPrompt): void => {
+        const to = promptTarget({ chat: parsed.chat, agentOnScreen: parsed.surface === 'agent' ? parsed.agentId : null });
+        send(to, prompt.text);
+        if (parsed.chat !== to) navigate(formatRoute({ ...parsed, chat: to }));
+    };
+    // CAPTURE, as Genie's own chords are: a prompt's hotkey is a chord or a function key, so it acts while typing too.
+    // Re-bound every render so it always sends with the current route and library.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent): void => {
+            // Not while the Command Window is open, nor in Settings' hotkey recorder — a key pressed there is being assigned.
+            if (paletteOpen || (e.target as Element | null)?.closest?.('[data-prompt-hotkey]')) return;
+            const prompt = promptForPress(savedPrompts, { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) }, promptPlatform);
+            if (!prompt) return;
+            e.preventDefault();
+            e.stopPropagation();
+            sendSavedPrompt(prompt);
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    });
+
     // A route this build cannot serve goes home rather than leaving a blank body under a
     // stale address — the one state a person cannot get out of without knowing a shortcut.
     // It happens in practice: a hash left over from a previous version survives an upgrade.
@@ -727,8 +756,8 @@ function DesktopApp({ bridge }: AppProps) {
         );
     }
 
-    // THE COMMAND WINDOW (Tynn #757): Genie's things on offer, in Genie 1's order of reach — the verbs, every
-    // workspace, every agent (named with its workspace). Saved prompts join with #758.
+    // THE COMMAND WINDOW (Tynn #757): Genie's things on offer, in Genie 1's order of reach — your saved prompts (#758),
+    // the verbs, every workspace, every agent (named with its workspace).
     const paletteActions: Array<{ id: string; label: string; run: () => void }> = [
         { id: 'go-dashboard', label: 'Open the Dashboard', run: () => navigate('genie://dashboard') },
         { id: 'go-deck', label: 'Open the Deck', run: () => navigate('genie://deck') },
@@ -737,6 +766,7 @@ function DesktopApp({ bridge }: AppProps) {
         { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },
     ];
     const paletteItems: CommandItem[] = [
+        ...promptPaletteItems(savedPrompts, promptPlatform),
         ...paletteActions.map((a) => ({ id: a.id, category: 'action' as const, label: a.label })),
         ...(snapshot.workspaces ?? []).map((w) => ({ id: w.id, category: 'workspace' as const, label: w.name ?? w.id, hint: w.path })),
         ...snapshot.agents.map((a) => {
@@ -911,6 +941,7 @@ function DesktopApp({ bridge }: AppProps) {
                 if (item.category === 'workspace') navigate(`genie://workspace/${item.id}`);
                 else if (item.category === 'agent') navigate(`genie://agent/${item.id}`);
                 else if (item.category === 'action') paletteActions.find((a) => a.id === item.id)?.run();
+                else if (item.category === 'prompt') { const prompt = savedPrompts.find((p) => p.id === item.id); if (prompt) sendSavedPrompt(prompt); }
             }}
         />
         </>

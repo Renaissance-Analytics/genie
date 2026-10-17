@@ -36,6 +36,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'launch_at_login', group: 'general', scope: 'host', label: 'Launch at sign-in', description: 'Start Genie when you sign in to this computer.', type: 'boolean', default: false },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
+    // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON
+    // (core/prompt-library.ts reads it forgivingly). Hidden: Settings → Agents draws it as a list, not a JSON box.
+    { key: 'saved_prompts', group: 'agents', scope: 'host', label: 'Saved prompts', description: 'Prompts you send from the Command Window or with their own hotkey.', type: 'string', default: '[]', hidden: true },
     { key: 'agent_cap', group: 'agents', scope: 'workspace', label: 'Running agents cap', description: 'How many agents may run at once in a workspace. A start past the cap is refused and says so; nothing queues.', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' },
     { key: 'restore_agents_on_launch', group: 'agents', scope: 'host', label: 'Restore agents on launch', description: 'Start the agents that were running when Genie last closed. Applies to every path that could restart an agent: launch, crash recovery, transport loss, upgrade.', type: 'boolean', default: false },
     { key: 'default_agent', group: 'agents', scope: 'workspace', label: 'Default agent', description: 'The provider a new agent in this workspace uses unless told otherwise.', type: 'enum', options: ['claude', 'codex'], default: 'claude' },
@@ -84,6 +87,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     dnd_reply: 'dnd_reply',
     // Genie 1 stored it as 'on' / 'off' (genie main/db.ts). Its "launch at sign-in" lived in the OS, not here: read from the OS at boot (core/tray-resident.ts).
     start_minimized: 'start_minimized',
+    // Genie 1's prompt library, as written: the reader is forgiving, so a row Genie 2 cannot use is dropped where it is read.
+    saved_prompts: 'saved_prompts',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {
