@@ -855,6 +855,28 @@ if (!approvalEnabled) {
     check(theme.page !== null && (theme.box === null || (theme.page < 0.5) === (theme.box < 0.5)), '47. the chat composer and the page are on the same side of the theme', `page ${theme.page?.toFixed(2)} composer ${theme.box === null ? '(none open)' : theme.box.toFixed(2)}`);
 }
 
+/*
+ * 57. GENIE'S APPLICATION MENU (Tynn #759). With no menu set, Electron's default was in force: its Ctrl+W closes — on
+ * Genie's main window, HIDES to the tray — from any field. Ctrl+, is Genie's menu's Settings…; it reaching Settings is
+ * the POSITIVE CONTROL that a menu accelerator fires on a key sent this way, so the Ctrl+W that follows hiding nothing
+ * is a measurement, not a key that never arrived. Visibility is the page's own (Electron reports a hidden window as
+ * `document.visibilityState === 'hidden'`).
+ */
+{
+    const chord = (key, code, vk, type) => cdp.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: 2 });
+    await cdp.evaluate(`document.activeElement?.blur?.(); window.location.hash = '#genie://dashboard'; true`);
+    await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '') === 'genie://dashboard'`, 'the Dashboard');
+    await chord(',', 'Comma', 188, 'rawKeyDown');
+    await chord(',', 'Comma', 188, 'keyUp');
+    const toSettings = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://settings')`, 'Ctrl+, to open Settings');
+    check(toSettings, '57. Ctrl+, opens Settings — Genie’s menu is installed and its accelerators fire', await cdp.evaluate(`document.querySelector('[data-route]')?.textContent ?? null`));
+    await chord('w', 'KeyW', 87, 'rawKeyDown');
+    await chord('w', 'KeyW', 87, 'keyUp');
+    await new Promise((r) => setTimeout(r, 1500));
+    const after = await cdp.evaluate(`JSON.stringify({ visibility: document.visibilityState, route: document.querySelector('[data-route]')?.textContent ?? null })`);
+    check(JSON.parse(after).visibility === 'visible', '57a. Ctrl+W does not hide Genie (no Close accelerator in Genie’s menu)', after);
+}
+
 // 12. THE HEADER ROW (the owner, 2026-10-13: "content covered and not following color theme"). On Windows and Linux the
 // native minimize / maximize / close buttons are drawn over the bar's right end: the bar must keep that space clear, and
 // the buttons must wear the theme's own bar colours — in BOTH themes.

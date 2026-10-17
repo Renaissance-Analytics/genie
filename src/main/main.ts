@@ -6,7 +6,8 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
@@ -1573,6 +1574,19 @@ async function boot(): Promise<void> {
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
     }, trayIconPath());
+    // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
+    // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
+    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
+        onSettings: () => {
+            revealMainWindow();
+            broadcast('genie:navigate', 'genie://settings');
+        },
+        onCheckUpdates: () => { void updates?.check(); },
+        onQuit: requestQuit,
+        onCloseWindow: () => { (BrowserWindow.getFocusedWindow() ?? window)?.close(); },
+        onOpenRepo: () => { void shell.openExternal('https://github.com/Renaissance-Analytics/genie'); },
+        onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
+    })));
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
     const browserTrust = composed.browserTrust();
