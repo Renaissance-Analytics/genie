@@ -184,3 +184,14 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     if (servable.includes('settings')) rows.push('settings');
     return rows;
 }
+
+
+/**
+ * The workspace rows a filter leaves (Tynn #282, Genie 1's "Search workspaces…"): the name or the path containing the
+ * query, any case; a blank query keeps every row. Order kept.
+ */
+export function filterRail<T extends { readonly name?: string | undefined; readonly path: string }>(items: readonly T[], query: string): T[] {
+    const q = query.trim().toLowerCase();
+    if (q === '') return [...items];
+    return items.filter((w) => (w.name ?? '').toLowerCase().includes(q) || w.path.toLowerCase().includes(q));
+}

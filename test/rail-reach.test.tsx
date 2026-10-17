@@ -65,7 +65,9 @@ describe('hibernated workspaces', () => {
         const html = rail({ workspaces: items });
         expect(html.match(/data-workspace="/g) ?? []).toHaveLength(1);
         expect(html).toContain('data-workspace="awake"');
-        expect(html).toMatch(/data-toggle-asleep="show"[^>]*>[\s\S]*?Show hibernated · 2/);
+        // An eye, no words (Tynn #282): the count is its accessible name and tooltip.
+        expect(html).toMatch(/data-toggle-asleep="show"[^>]*aria-label="Show 2 hibernated workspaces"/);
+        expect(html).not.toContain('Show hibernated');
     });
 
     it('the one you are looking at stays visible even while the rest are hidden', () => {

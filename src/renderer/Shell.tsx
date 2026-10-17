@@ -382,6 +382,8 @@ export function Shell({
                     workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
+                    // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
+                    onAddWorkspace={onAddWorkspace}
                 />
 
                 <main className="min-w-0 flex-1 overflow-auto">
