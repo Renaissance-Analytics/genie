@@ -20,7 +20,8 @@ import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVAB
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
-import { soundFor, toastFor } from '../core/alerts.js';
+import { alertSound, toastFor } from '../core/alerts.js';
+import { playAlertSound } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -234,11 +235,8 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
         const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
         if (snapshot.deckItems !== null) {
             for (const alert of alertsBetween(prev.current, next)) {
-                const sound = soundFor(alert.kind, settings ?? {});
-                if (sound && typeof Audio !== 'undefined') {
-                    const audio = new Audio(new URL(`./sounds/${sound}`, import.meta.url).href);
-                    void audio.play().catch(() => { /* autoplay refused: the toast still says it */ });
-                }
+                // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
+                playAlertSound(alertSound(alert.kind, settings ?? {}));
                 if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
                     const toast = toastFor(alert);
                     try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }

@@ -6,6 +6,8 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
+import { isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
+import { playAlertSound } from '../alert-sound.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
@@ -918,11 +920,22 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
         );
     }
     if (def.type === 'enum') {
-        return (
+        const select = (
             <select value={String(value)} onChange={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
                 {/* By name when the setting has names for its options (a sound is "Wind Down", not `winddown`). */}
                 {def.options.map((o) => <option key={o} value={o}>{def.optionLabels?.[o] ?? o}</option>)}
             </select>
+        );
+        if (!isAlertSoundKey(def.key)) return select;
+        // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
+        const sound = previewSound(def.key.slice('sound_'.length) as AlertKind, value);
+        return (
+            <span className="flex items-center gap-2">
+                {select}
+                <Button type="button" size="sm" variant="ghost" data-sound-preview={def.key} disabled={sound === null} onClick={() => playAlertSound(sound)} title="Preview" aria-label={`Preview: ${def.label}`}>
+                    <Icon name="play" size="xs" />
+                </Button>
+            </span>
         );
     }
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
