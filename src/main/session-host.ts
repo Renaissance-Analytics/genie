@@ -1,4 +1,5 @@
 import type { McpServer } from '@particle-academy/prism-acp';
+import { RateLimitGate, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
@@ -214,6 +215,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
 interface Running {
     session: AgentSession;
+    /** The provider it runs on: whose rate-limit login holds it (Tynn #793). */
+    provider: string;
     /** The ledger, with arrival times. Timestamps are recorded HERE because this is where the
      *  event arrives — the wire carries none, and a time invented later would be a guess. */
     rows: TimedEvent[];
@@ -312,6 +315,12 @@ export class SessionHost {
          * (core/genie-running.ts). Answers the reason, or `null` when it may start. Absent = nothing holds anything.
          */
         heldElsewhere?: (record: AgentRecord) => string | null;
+        /**
+         * THE RATE-LIMIT GATE (Tynn #793): one per provider login, fed every session's readings. When it closes, every
+         * agent on that provider is held; a timer (`schedule`, no polling) wakes the host at the gate's resume time.
+         * Defaults: a 2-minute margin, the real setTimeout.
+         */
+        rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
     }) {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
@@ -323,6 +332,56 @@ export class SessionHost {
         this.#onThreadId = options.onThreadId;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
+        this.#gate = options.rateLimit?.gate ?? new RateLimitGate();
+        this.#schedule = options.rateLimit?.schedule ?? ((ms, fn) => { const t = setTimeout(fn, Math.max(0, ms)); t.unref?.(); return () => clearTimeout(t); });
+    }
+
+    readonly #gate: RateLimitGate;
+    readonly #schedule: (ms: number, fn: () => void) => () => void;
+    #wakeCancel: (() => void) | null = null;
+
+    /** Every Genie agent of a provider runs on the person's one login of it, so the login IS the provider here. */
+    #loginOf(provider: string): { provider: string; account: string } {
+        return { provider, account: 'default' };
+    }
+
+    /** A session's readings: the gate decides; a closed login holds every agent on it, and the wake is (re)scheduled. */
+    #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
+        const view = this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
+        if (view.state !== 'open') {
+            for (const [id, entry] of this.#running) {
+                if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); }
+            }
+        }
+        this.#wake();
+    }
+
+    /** Resume the logins whose hold has ended, and schedule the next wake at the earliest resume still ahead. */
+    #wake(): void {
+        this.#wakeCancel?.();
+        this.#wakeCancel = null;
+        const now = this.#clock();
+        for (const key of this.#gate.due(now)) this.#resumeHeld(key.provider);
+        let next = Infinity;
+        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
+            const v = this.#gate.view(this.#loginOf(provider), now);
+            if (v.state === 'paused') next = Math.min(next, v.resumeAtMs);
+            else if (v.state === 'retrying') next = Math.min(next, v.nextTryAtMs);
+        }
+        if (next !== Infinity) this.#wakeCancel = this.#schedule(next - now, () => this.#wake());
+    }
+
+    #resumeHeld(provider: string): void {
+        for (const [id, entry] of this.#running) {
+            if (entry.provider === provider && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); }
+        }
+    }
+
+    /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
+    resumeLimit(provider: string): void {
+        this.#gate.resumeNow(this.#loginOf(provider));
+        this.#resumeHeld(provider);
+        this.#wake();
     }
 
     /** Live sessions. The ONLY correct source for "how many agents are running". */
@@ -420,7 +479,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
 
         let reportedTurns = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
@@ -433,6 +492,7 @@ export class SessionHost {
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
+            onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -530,6 +590,8 @@ export class SessionHost {
          */
         try {
             session.start();
+            // Its login is at its limit: held from the start, so nothing is sent to a provider that would refuse it.
+            if (this.#gate.view(this.#loginOf(record.provider), this.#clock()).state !== 'open') session.hold();
         } catch (error) {
             this.#running.delete(record.id);
 
@@ -743,6 +805,7 @@ export class SessionHost {
                 : null;
 
         return {
+            limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
             running: session.running,
             turnState: session.turnState,
             startedAt,

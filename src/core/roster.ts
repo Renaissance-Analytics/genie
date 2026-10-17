@@ -1,3 +1,4 @@
+import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
 import type { Approval } from './approval.js';
 import type { AgentRow, Delivery } from './dashboard-view.js';
@@ -33,6 +34,11 @@ import type { ProviderExtensions } from './provider-commands.js';
  * about drivers. Every nullable field means **Genie has not been told**, never zero.
  */
 export interface LiveSession {
+    /**
+     * The provider login's rate-limit gate as this agent sees it (Tynn #793/#794): `open`, or paused until a reset,
+     * retrying on a stated backoff, or waiting for the person. Absent = not reported (an older snapshot).
+     */
+    limit?: GateView | undefined;
     running: boolean;
     turnState: TurnState;
     /** Epoch ms. `null` when the session never recorded a start. */
