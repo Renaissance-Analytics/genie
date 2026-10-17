@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
+import { reloadsOpenFile, routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import { openOrError, settle } from '../../core/files-reads.js';
 import type { GenieBridge } from '../bridge.js';
@@ -97,7 +97,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // A dirty buffer is NEVER auto-reloaded (§4.3); a clean one follows the disk.
     useEffect(() => {
         if (!open || buffer !== null) return;
-        return files.onChange((id) => { if (id === workspace.id) void read(open.path).then(setOpen); });
+        // Only when the open file is among the changes (genie#921): a build elsewhere in the workspace re-reads nothing.
+        return files.onChange((id, paths) => { if (id === workspace.id && reloadsOpenFile(open.path, paths)) void read(open.path).then(setOpen); });
     }, [files, workspace.id, open, buffer, read]);
 
     const openPath = useCallback((path: string) => {

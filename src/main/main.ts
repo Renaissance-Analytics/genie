@@ -576,7 +576,8 @@ async function boot(): Promise<void> {
             return fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name });
         },
     });
-    filesHost.onChange((workspaceId) => broadcast('genie:files-changed', workspaceId));
+    // One broadcast per batch, with the paths that changed (genie#921): the panel re-lists once and re-reads the open file only if it changed.
+    filesHost.onChange((workspaceId, paths) => broadcast('genie:files-changed', workspaceId, paths));
     // The popped-out panels (§4.3): tracked here, pushed as the whole list.
     filesWindows = new FilesWindows({ openWindow: openFilesWindow, closeWindow: closeWindowAt });
     filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));

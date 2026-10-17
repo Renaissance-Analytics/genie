@@ -283,7 +283,8 @@ export interface GenieBridge {
         lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
         state(workspaceId: string): Promise<FilesState | null>;
         watch(workspaceId: string): Promise<void>;
-        onChange(listener: (workspaceId: string) => void): () => void;
+        /** Once per batch of changes on disk (genie#921), with the paths that changed — absent from a host before batching. */
+        onChange(listener: (workspaceId: string, paths?: readonly string[]) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
         /** The popped-out panels (§4.3): host-only windows, so a remote bridge has none of this. */
