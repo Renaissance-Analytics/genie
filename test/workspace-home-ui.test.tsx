@@ -55,12 +55,14 @@ describe('the workspace route opens on its agents', () => {
         expect(html).not.toContain('data-workspace-settings');
     });
 
-    it('the header carries the agents strip — a pill per agent — and the three view tabs with the current one marked', () => {
+    it('the header carries the agents strip — a pill per agent — and the view tabs (Agents … Settings) with the current one marked', () => {
         const html = render({ view: 'home' });
         expect((html.match(/data-agent-pill="/g) ?? []).length).toBe(2);
         expect(html).toContain('data-agent-pill="a1"');
         expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
-        expect(html).toMatch(/data-workspace-tab="terminals"(?![^>]*data-current)/);
+        // No fixed Terminals tab any more (Tynn #282): terminals are a panel you put in a tab you design; the + is there.
+        expect(html).not.toContain('data-workspace-tab="terminals"');
+        expect(html).toContain('data-workspace-tab="add"');
         expect(html).toMatch(/data-workspace-tab="settings"(?![^>]*data-current)/);
     });
 
@@ -73,11 +75,10 @@ describe('the workspace route opens on its agents', () => {
         expect(html).not.toContain('data-terminal-add');
     });
 
-    it('terminals: the strip and the pane (§4.6), and nothing of home or the settings', () => {
+    it('terminals (?view=terminals, kept for old links): the strip and the pane (§4.6), and nothing of home or the settings', () => {
         const html = render({ view: 'terminals' });
         expect(html).toContain('data-terminal-tabs');
         expect(html).toContain('data-terminal-add');
-        expect(html).toMatch(/data-workspace-tab="terminals"[^>]*data-current="true"/);
         expect(html).not.toContain('data-workspace-home');
         expect(html).not.toContain('data-workspace-settings');
     });

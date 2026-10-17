@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
+import { DesignedTab } from './DesignedTab.js';
+import { SitePanel } from './SitePanel.js';
+import { addTab, clearCell, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
     emptyWorkspace,
@@ -137,7 +140,6 @@ export interface WorkspaceProps {
     onViewChange?: ((view: WorkspaceView) => void) | undefined;
 }
 
-const VIEW_LABEL: Record<WorkspaceView, string> = { home: 'Agents', terminals: 'Terminals', settings: 'Settings' };
 
 /** `1.2 kB`, `340 B` — how much output a suspended terminal held back. */
 function formatHeld(bytes: number): string {
@@ -146,6 +148,12 @@ function formatHeld(bytes: number): string {
 
 export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
+    // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
+    const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
+    const designed = parseTabs(typeof tabsRaw === 'string' ? tabsRaw : '{"tabs":[]}');
+    const canDesign = Boolean(ops?.settings && ops.settings.values !== null);
+    const saveTabs = (next: TabsState): void => { ops?.settings?.onSet('workspace_tabs', serializeTabs(next)); };
+    const [designNotice, setDesignNotice] = useState<string | null>(null);
     // The file host's state for "Changes this session" (home view): read on mount and on every change the host
     // reports; `null` until it answers, which the rail renders as an ABSENT section, not an empty one.
     const [filesState, setFilesState] = useState<HomeFilesState | null>(null);
@@ -258,237 +266,8 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
     const handleAxis: 'columns' | 'rows' | null = layout === 'columns' ? 'columns' : layout === 'rows' ? 'rows' : null;
     const handleFractions = handleAxis ? ((handleAxis === 'columns' ? splits.columns : splits.rows) ?? Array.from({ length: shown.length }, () => 1 / shown.length)) : [];
 
-    return (
-        <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
-            {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
-            <header data-view-header="" className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
-                <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
-                <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
-                {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
-                {ops?.repos?.list ? ops.repos.list.map((r) => {
-                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
-                    return (
-                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
-                            <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
-                                <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3" />
-                                {chip.label}
-                            </span>
-                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
-                        </span>
-                    );
-                }) : null}
-                {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
-                {home.agents.length > 0 ? (
-                    <div data-agents-strip="" className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">
-                        {home.agents.map((a) => (
-                            <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                                <FidelityDot fidelity={a.fidelity} state={a.state} />
-                                <span>{a.name}</span>
-                            </button>
-                        ))}
-                    </div>
-                ) : null}
-                {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" />Files<kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
-                ) : null}
-                {ops ? (
-                    <div className={`${files ? '' : 'ml-auto '}flex items-center gap-1`}>
-                        {ops.asleep ? (
-                            <button type="button" data-action="wake" onClick={ops.onWake} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
-                        ) : (
-                            <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
-                        )}
-                        <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
-                    </div>
-                ) : null}
-            </header>
-            {/* The three views of one route. Labelled tabs, never a shortcut-only door (§4.0). */}
-            <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
-                {(['home', 'terminals', 'settings'] as const)
-                    .filter((v) => v !== 'settings' || ops?.settings || ops?.governs || ops?.repos)
-                    .map((v) => (
-                        <button key={v} type="button" data-workspace-tab={v} {...(v === view ? { 'data-current': 'true' } : {})} onClick={() => onViewChange?.(v)} className={`border-b-2 px-3 text-[12px] ${v === view ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}>
-                            {VIEW_LABEL[v]}
-                        </button>
-                    ))}
-            </nav>
-            {ops?.asleep ? (
-                <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
-                    {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
-                </p>
-            ) : null}
-            {ops?.lastOutcome ? <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p> : null}
-            {ops?.removePreview ? (
-                <div data-remove-confirm className="shrink-0 border-b border-[var(--warning)] bg-[var(--bg-1)] px-5 py-3 text-xs">
-                    <p className="font-semibold">Remove {workspace.name ?? workspace.id} from Genie?</p>
-                    <p className="mt-1 text-[var(--fg-2)]">
-                        Genie forgets this workspace and its {ops.agentCount} agents. The folder <span className="font-mono">{workspace.path}</span> is not touched — every file stays where it is.
-                    </p>
-                    <div className="mt-2 flex gap-2">
-                        <button type="button" data-action="confirm-remove" onClick={ops.onConfirmRemove} className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">Remove from Genie</button>
-                        <button type="button" onClick={ops.onCancelRemove} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
-                    </div>
-                </div>
-            ) : null}
-
-            {view === 'settings' && ops?.governs ? (
-                <section data-governs className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Governs</h2>
-                        <span className="text-[var(--fg-4)]">An ops project governs other workspaces: they sit under it in the rail and the Dashboard, and its agents reach theirs as if from inside. Nothing is written into their folders.</span>
-                    </div>
-                    {ops.governs.candidates.length === 0 ? (
-                        <p className="mt-1 text-[var(--fg-3)]">No other workspaces to govern.</p>
-                    ) : (
-                        <ul className="mt-1 flex flex-wrap gap-3">
-                            {ops.governs.candidates.map((c) => {
-                                const on = ops.governs!.children.includes(c.id);
-                                return (
-                                    <li key={c.id}>
-                                        <label className="flex items-center gap-1.5">
-                                            <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
-                                            <span>{c.name ?? c.id}</span>
-                                        </label>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </section>
-            ) : null}
-            {view === 'settings' && ops?.settings ? (
-                <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Workspace settings</h2>
-                        <span className="text-[var(--fg-4)]">these apply to {workspace.name ?? workspace.id} only; an override replaces the workstation value</span>
-                    </div>
-                    {ops.settings.values === null ? (
-                        <div data-ws-settings-skeleton className="mt-2 flex flex-col gap-1">
-                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
-                            <div className="h-3 w-1/4 animate-pulse rounded bg-[var(--bg-2)]" />
-                        </div>
-                    ) : (
-                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                            {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
-                                const values = ops.settings!.values!;
-                                const value = values[def.key] ?? def.default;
-                                const overridden = ops.settings!.overridden.includes(def.key);
-                                return (
-                                    <li key={def.key} data-ws-setting={def.key} {...(overridden ? { 'data-ws-overridden': def.key } : {})} className="flex items-center gap-3 py-1.5">
-                                        <div className="flex-1">
-                                            <div className="font-medium">{def.label}</div>
-                                            <div className="text-[var(--fg-3)]">{def.description}</div>
-                                        </div>
-                                        {def.type === 'boolean' ? (
-                                            <input type="checkbox" checked={value === true} onChange={(e) => ops.settings!.onSet(def.key, e.target.checked)} />
-                                        ) : def.type === 'enum' ? (
-                                            <select value={String(value)} onChange={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                                            </select>
-                                        ) : (
-                                            <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
-                                        )}
-                                        {overridden ? <button type="button" data-action="ws-setting-reset" data-ws-key={def.key} onClick={() => ops.settings!.onReset(def.key)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]" title="Drop this workspace's override; the workstation value applies again">reset</button> : null}
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </section>
-            ) : null}
-            {view === 'settings' && ops?.agentFiles ? (
-                <section data-ws-agent-files="" className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Agent files</h2>
-                        <span className="text-[var(--fg-4)]">Genie’s instructions for agents here, and its MCP endpoint in this workspace’s Claude Code, Cursor and Codex configs; Genie syncs them when it starts</span>
-                        <span className="ml-auto" />
-                        <Button data-action="ws-sync-agent-files" size="sm" onClick={ops.agentFiles.onSync}>Sync now</Button>
-                    </div>
-                    {ops.agentFiles.report === null ? (
-                        <p data-ws-agent-files-state="none" className="mt-1 text-[var(--fg-3)]">Not synced since Genie started.</p>
-                    ) : (() => {
-                        const r = ops.agentFiles.report;
-                        const state = r.failed.length > 0 ? 'failed' : r.changed.length > 0 ? 'upgraded' : 'current';
-                        return (
-                            <p data-ws-agent-files-state={state} className="mt-1 flex flex-wrap items-center gap-2">
-                                <span className={state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-2)]'}>{agentFilesLine(r)}</span>
-                                <span className="text-[var(--fg-4)]">{agentFilesWhen(r)}</span>
-                            </p>
-                        );
-                    })()}
-                    {ops.agentFiles.results ? (
-                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                            {ops.agentFiles.results.map((r) => (
-                                <li key={r.id} data-sync-result={r.id} data-ok={r.ok ? 'true' : 'false'} className="flex items-center gap-3 py-1">
-                                    <span>{r.label}</span>
-                                    <Badge variant="soft" size="sm">{r.ok ? 'written' : 'failed'}</Badge>
-                                    {r.error ? <span className="text-[var(--danger)]">{r.error}</span> : null}
-                                </li>
-                            ))}
-                        </ul>
-                    ) : null}
-                </section>
-            ) : null}
-            {view === 'settings' && ops?.repos ? (
-                <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Repos</h2>
-                        <span className="text-[var(--fg-4)]">the envelope's repositories; the host repo is the envelope itself</span>
-                    </div>
-                    {ops.repos.list === null ? (
-                        <div data-repos-skeleton className="mt-2 flex flex-col gap-1">
-                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
-                            <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--bg-2)]" />
-                        </div>
-                    ) : (
-                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                            {ops.repos.list.map((r) => (
-                                <li key={r.slug} data-repo={r.slug} {...(r.host ? { 'data-repo-host': '' } : {})} className="flex items-center gap-3 py-1">
-                                    <span className="font-medium">{r.slug}</span>
-                                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.path}</span>
-                                    {r.host ? <span className="rounded bg-[var(--bg-2)] px-1 text-[10px] uppercase tracking-wide text-[var(--fg-3)]">host</span> : null}
-                                    <span className="ml-auto" />
-                                    <button type="button" data-action="open-repo" onClick={() => ops.repos!.onOpen(r.path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Open</button>
-                                    {!r.host ? <button type="button" data-action="remove-repo" data-repo-slug={r.slug} onClick={() => ops.repos!.onRemove(r.slug)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Remove</button> : null}
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                    <form data-form="add-repo" className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); ops.repos!.onAdd({ name: String(d.get('name') ?? ''), path: String(d.get('path') ?? '') }); e.currentTarget.reset(); }}>
-                        <input name="name" placeholder="Name" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
-                        <input name="path" placeholder="repos/<folder>" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono" />
-                        <button type="submit" className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Add repo</button>
-                    </form>
-                </section>
-            ) : null}
-            {panel === 'files' && files && !filesPinned && filesPopped ? (
-                <div data-files-popped={workspace.id} className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-3 py-2 text-xs text-[var(--fg-3)]">
-                    {/* THE POPPED-OUT BAR (the board): `external-link` · "<name> files are open in their own window." · the window's route in mono · `Bring back` (primary). */}
-                    <Icon name="external-link" size="xs" />
-                    <span>{workspace.name} files are open in their own window.</span>
-                    <span data-files-window-route="" className="font-mono text-[11px] text-[var(--fg-4)]">{`genie://files/${workspace.id}`}</span>
-                    {/* A second pop-out of a window already open FOCUSES it (`FilesWindows.popOut` re-opens the route): that is the board's `Focus window`. */}
-                    {onPopOutFiles ? <button type="button" data-action="focus-files-window" onClick={() => onPopOutFiles()} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Focus window</button> : null}
-                    <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-0.5 text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]">Bring back</button>
-                </div>
-            ) : null}
-            {/* HOME — the board's workspace surface: the one file panel (when open) beside the agents rail. */}
-            {view === 'home' ? (
-                <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    {filesInline && files ? (
-                        <div className="min-h-0 min-w-0 flex-1">
-                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
-                        </div>
-                    ) : null}
-                    <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide={!filesInline} onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />
-                </div>
-            ) : null}
-            {view === 'terminals' && filesInline && files ? (
-                <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
-                </div>
-            ) : null}
-            {view === 'terminals' ? (<>
+    // THE TERMINALS (§4.6): the workspace's terminal manager — the Terminals view, and a designed tab's terminal panel (Tynn #282).
+    const terminalsBody = (<>
             {/* Tab strip, 32px. One tab per terminal; the add button last. */}
             <div data-terminal-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
                 {ops?.settings ? (
@@ -694,7 +473,285 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </div>
                 )}
             </div>
-            </>) : null}
+    </>);
+
+    return (
+        <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
+            <header data-view-header="" className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+                <h1 className="text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
+                <span className="font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
+                {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
+                {ops?.repos?.list ? ops.repos.list.map((r) => {
+                    const chip = repoChip({ slug: r.slug, branch: r.branch ?? null, lock: r.lock ?? null });
+                    return (
+                        <span key={r.slug} className="flex shrink-0 items-center gap-1.5">
+                            <span data-repo-chip={r.slug} data-tone={chip.tone} className={`flex h-6 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] ${chip.tone === 'bad' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`}>
+                                <Icon name={chip.tone === 'bad' ? 'circle-alert' : 'git-branch'} className="h-3 w-3" />
+                                {chip.label}
+                            </span>
+                            {chip.fix ? <button type="button" data-action="remove-stale-lock" data-repo-slug={r.slug} onClick={() => ops.repos?.onRemoveLock?.(r.slug)} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{chip.fix}</button> : null}
+                        </span>
+                    );
+                }) : null}
+                {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
+                {home.agents.length > 0 ? (
+                    <div data-agents-strip="" className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">
+                        {home.agents.map((a) => (
+                            <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                                <FidelityDot fidelity={a.fidelity} state={a.state} />
+                                <span>{a.name}</span>
+                            </button>
+                        ))}
+                    </div>
+                ) : null}
+                {files ? (
+                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" />Files<kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
+                ) : null}
+                {ops ? (
+                    <div className={`${files ? '' : 'ml-auto '}flex items-center gap-1`}>
+                        {ops.asleep ? (
+                            <button type="button" data-action="wake" onClick={ops.onWake} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
+                        ) : (
+                            <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
+                        )}
+                        <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
+                    </div>
+                ) : null}
+            </header>
+            {/*
+              * THE STRIP (Tynn #282): Agents, the tabs you designed, a small +, Settings — + always just before Settings,
+              * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
+              * without the workspace's settings there is none, and a + that could not keep anything is not offered.
+              */}
+            <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
+                {tabStrip(designed).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? Boolean(ops?.settings || ops?.governs || ops?.repos) : true)).map((t) => {
+                    const v: WorkspaceView | null = t.kind === 'agents' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'designed' ? `tab:${t.id}` : null;
+                    const current = v !== null && v === view;
+                    if (t.kind === 'add') {
+                        return (
+                            <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
+                                <Icon name="plus" size="xs" />
+                            </button>
+                        );
+                    }
+                    return (
+                        <button key={v!} type="button" data-workspace-tab={v!} {...(current ? { 'data-current': 'true' } : {})} onClick={() => onViewChange?.(v!)} className={`border-b-2 px-3 text-[12px] ${current ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}>
+                            {t.kind === 'designed' ? t.name : t.kind === 'agents' ? 'Agents' : 'Settings'}
+                        </button>
+                    );
+                })}
+            </nav>
+            {ops?.asleep ? (
+                <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
+                    {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
+                </p>
+            ) : null}
+            {ops?.lastOutcome ? <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p> : null}
+            {ops?.removePreview ? (
+                <div data-remove-confirm className="shrink-0 border-b border-[var(--warning)] bg-[var(--bg-1)] px-5 py-3 text-xs">
+                    <p className="font-semibold">Remove {workspace.name ?? workspace.id} from Genie?</p>
+                    <p className="mt-1 text-[var(--fg-2)]">
+                        Genie forgets this workspace and its {ops.agentCount} agents. The folder <span className="font-mono">{workspace.path}</span> is not touched — every file stays where it is.
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                        <button type="button" data-action="confirm-remove" onClick={ops.onConfirmRemove} className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">Remove from Genie</button>
+                        <button type="button" onClick={ops.onCancelRemove} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
+                    </div>
+                </div>
+            ) : null}
+
+            {view === 'settings' && ops?.governs ? (
+                <section data-governs className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Governs</h2>
+                        <span className="text-[var(--fg-4)]">An ops project governs other workspaces: they sit under it in the rail and the Dashboard, and its agents reach theirs as if from inside. Nothing is written into their folders.</span>
+                    </div>
+                    {ops.governs.candidates.length === 0 ? (
+                        <p className="mt-1 text-[var(--fg-3)]">No other workspaces to govern.</p>
+                    ) : (
+                        <ul className="mt-1 flex flex-wrap gap-3">
+                            {ops.governs.candidates.map((c) => {
+                                const on = ops.governs!.children.includes(c.id);
+                                return (
+                                    <li key={c.id}>
+                                        <label className="flex items-center gap-1.5">
+                                            <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
+                                            <span>{c.name ?? c.id}</span>
+                                        </label>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.settings ? (
+                <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Workspace settings</h2>
+                        <span className="text-[var(--fg-4)]">these apply to {workspace.name ?? workspace.id} only; an override replaces the workstation value</span>
+                    </div>
+                    {ops.settings.values === null ? (
+                        <div data-ws-settings-skeleton className="mt-2 flex flex-col gap-1">
+                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
+                            <div className="h-3 w-1/4 animate-pulse rounded bg-[var(--bg-2)]" />
+                        </div>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
+                                const values = ops.settings!.values!;
+                                const value = values[def.key] ?? def.default;
+                                const overridden = ops.settings!.overridden.includes(def.key);
+                                return (
+                                    <li key={def.key} data-ws-setting={def.key} {...(overridden ? { 'data-ws-overridden': def.key } : {})} className="flex items-center gap-3 py-1.5">
+                                        <div className="flex-1">
+                                            <div className="font-medium">{def.label}</div>
+                                            <div className="text-[var(--fg-3)]">{def.description}</div>
+                                        </div>
+                                        {def.type === 'boolean' ? (
+                                            <input type="checkbox" checked={value === true} onChange={(e) => ops.settings!.onSet(def.key, e.target.checked)} />
+                                        ) : def.type === 'enum' ? (
+                                            <select value={String(value)} onChange={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                                            </select>
+                                        ) : (
+                                            <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                                        )}
+                                        {overridden ? <button type="button" data-action="ws-setting-reset" data-ws-key={def.key} onClick={() => ops.settings!.onReset(def.key)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]" title="Drop this workspace's override; the workstation value applies again">reset</button> : null}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.agentFiles ? (
+                <section data-ws-agent-files="" className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Agent files</h2>
+                        <span className="text-[var(--fg-4)]">Genie’s instructions for agents here, and its MCP endpoint in this workspace’s Claude Code, Cursor and Codex configs; Genie syncs them when it starts</span>
+                        <span className="ml-auto" />
+                        <Button data-action="ws-sync-agent-files" size="sm" onClick={ops.agentFiles.onSync}>Sync now</Button>
+                    </div>
+                    {ops.agentFiles.report === null ? (
+                        <p data-ws-agent-files-state="none" className="mt-1 text-[var(--fg-3)]">Not synced since Genie started.</p>
+                    ) : (() => {
+                        const r = ops.agentFiles.report;
+                        const state = r.failed.length > 0 ? 'failed' : r.changed.length > 0 ? 'upgraded' : 'current';
+                        return (
+                            <p data-ws-agent-files-state={state} className="mt-1 flex flex-wrap items-center gap-2">
+                                <span className={state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-2)]'}>{agentFilesLine(r)}</span>
+                                <span className="text-[var(--fg-4)]">{agentFilesWhen(r)}</span>
+                            </p>
+                        );
+                    })()}
+                    {ops.agentFiles.results ? (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.agentFiles.results.map((r) => (
+                                <li key={r.id} data-sync-result={r.id} data-ok={r.ok ? 'true' : 'false'} className="flex items-center gap-3 py-1">
+                                    <span>{r.label}</span>
+                                    <Badge variant="soft" size="sm">{r.ok ? 'written' : 'failed'}</Badge>
+                                    {r.error ? <span className="text-[var(--danger)]">{r.error}</span> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : null}
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.repos ? (
+                <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                    <div className="flex items-center gap-3">
+                        <h2 className="font-semibold">Repos</h2>
+                        <span className="text-[var(--fg-4)]">the envelope's repositories; the host repo is the envelope itself</span>
+                    </div>
+                    {ops.repos.list === null ? (
+                        <div data-repos-skeleton className="mt-2 flex flex-col gap-1">
+                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
+                            <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--bg-2)]" />
+                        </div>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.repos.list.map((r) => (
+                                <li key={r.slug} data-repo={r.slug} {...(r.host ? { 'data-repo-host': '' } : {})} className="flex items-center gap-3 py-1">
+                                    <span className="font-medium">{r.slug}</span>
+                                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.path}</span>
+                                    {r.host ? <span className="rounded bg-[var(--bg-2)] px-1 text-[10px] uppercase tracking-wide text-[var(--fg-3)]">host</span> : null}
+                                    <span className="ml-auto" />
+                                    <button type="button" data-action="open-repo" onClick={() => ops.repos!.onOpen(r.path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Open</button>
+                                    {!r.host ? <button type="button" data-action="remove-repo" data-repo-slug={r.slug} onClick={() => ops.repos!.onRemove(r.slug)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Remove</button> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    <form data-form="add-repo" className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); ops.repos!.onAdd({ name: String(d.get('name') ?? ''), path: String(d.get('path') ?? '') }); e.currentTarget.reset(); }}>
+                        <input name="name" placeholder="Name" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                        <input name="path" placeholder="repos/<folder>" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono" />
+                        <button type="submit" className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Add repo</button>
+                    </form>
+                </section>
+            ) : null}
+            {panel === 'files' && files && !filesPinned && filesPopped ? (
+                <div data-files-popped={workspace.id} className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-3 py-2 text-xs text-[var(--fg-3)]">
+                    {/* THE POPPED-OUT BAR (the board): `external-link` · "<name> files are open in their own window." · the window's route in mono · `Bring back` (primary). */}
+                    <Icon name="external-link" size="xs" />
+                    <span>{workspace.name} files are open in their own window.</span>
+                    <span data-files-window-route="" className="font-mono text-[11px] text-[var(--fg-4)]">{`genie://files/${workspace.id}`}</span>
+                    {/* A second pop-out of a window already open FOCUSES it (`FilesWindows.popOut` re-opens the route): that is the board's `Focus window`. */}
+                    {onPopOutFiles ? <button type="button" data-action="focus-files-window" onClick={() => onPopOutFiles()} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Focus window</button> : null}
+                    <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-0.5 text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]">Bring back</button>
+                </div>
+            ) : null}
+            {/* HOME — the board's workspace surface: the one file panel (when open) beside the agents rail. */}
+            {view === 'home' ? (
+                <div data-workspace-body="home" className="flex min-h-0 flex-1">
+                    {filesInline && files ? (
+                        <div className="min-h-0 min-w-0 flex-1">
+                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
+                        </div>
+                    ) : null}
+                    <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide={!filesInline} onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />
+                </div>
+            ) : null}
+            {view === 'terminals' && filesInline && files ? (
+                <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} routeFile={filesFile} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
+                </div>
+            ) : null}
+            {view === 'terminals' ? terminalsBody : null}
+            {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
+            {view.startsWith('tab:') ? (() => {
+                const tab = designed.tabs.find((t) => `tab:${t.id}` === view);
+                if (!tab) {
+                    return (
+                        <div data-designed-tab-missing="" className="flex flex-1 flex-col items-center justify-center gap-2 text-[13px] text-[var(--fg-3)]">
+                            <p>This tab is not in {label} any more.</p>
+                            <button type="button" onClick={() => onViewChange?.('home')} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Back to Agents</button>
+                        </div>
+                    );
+                }
+                return (
+                    <DesignedTab
+                        tab={tab}
+                        notice={designNotice}
+                        onLayout={(l) => { const r = setLayout(designed, tab.id, l); setDesignNotice(r.dropped.length > 0 ? `${r.dropped.length} panel${r.dropped.length === 1 ? '' : 's'} did not fit the new grid and ${r.dropped.length === 1 ? 'was' : 'were'} removed` : null); saveTabs(r.state); }}
+                        onPlace={(cell, p) => saveTabs(placePanel(designed, tab.id, cell, p))}
+                        onClear={(cell) => saveTabs(clearCell(designed, tab.id, cell))}
+                        onRename={(name) => saveTabs(renameTab(designed, tab.id, name))}
+                        onRemove={() => { saveTabs(removeTab(designed, tab.id)); onViewChange?.('home'); }}
+                        renderPanel={(p) => {
+                            if (p.kind === 'terminal') return terminalsBody;
+                            if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={() => onPinFiles?.()} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
+                            if (p.kind === 'widget') return <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />;
+                            if (p.kind === 'artboard') {
+                                const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
+                                return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;
+                            }
+                            return <SitePanel host={p.ref} onPick={(host) => { const at = tab.cells.indexOf(p); if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
+                        }}
+                    />
+                );
+            })() : null}
         </section>
     );
 }
