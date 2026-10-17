@@ -594,6 +594,11 @@ function DesktopApp({ bridge }: AppProps) {
                 setPaletteOpen(true);
                 return;
             }
+            if (action === 'open-settings') {
+                e.preventDefault();
+                navigate('genie://settings');
+                return;
+            }
             if (action === 'toggle-chat') {
                 e.preventDefault();
                 navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: 'genie' }));

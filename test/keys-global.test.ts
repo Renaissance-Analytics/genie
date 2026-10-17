@@ -21,6 +21,16 @@ describe('globalAction', () => {
         expect(globalAction(press({ key: 'x', metaKey: true }))).toBeNull();
     });
 
+    // Tynn #759: Ctrl+, (⌘, on macOS) opens Settings — the page's own chord, because a menu accelerator never fired in
+    // Genie's window on Linux (CI's real window, #911). A bare comma is text.
+    it('Ctrl+, and ⌘, open Settings, even while typing; a bare comma or Alt/Shift with it do nothing', () => {
+        expect(globalAction(press({ key: ',', ctrlKey: true }))).toBe('open-settings');
+        expect(globalAction(press({ key: ',', metaKey: true, typing: true }))).toBe('open-settings');
+        expect(globalAction(press({ key: ',' }))).toBeNull();
+        expect(globalAction(press({ key: ',', ctrlKey: true, altKey: true }))).toBeNull();
+        expect(globalAction(press({ key: ',', ctrlKey: true, shiftKey: true }))).toBeNull();
+    });
+
     it('the agent view ignores the chord, so one press is one action', () => {
         expect(agentViewAction(press({ metaKey: true }))).toBeNull();
     });

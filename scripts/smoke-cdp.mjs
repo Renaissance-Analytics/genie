@@ -855,6 +855,42 @@ if (!approvalEnabled) {
     check(theme.page !== null && (theme.box === null || (theme.page < 0.5) === (theme.box < 0.5)), '47. the chat composer and the page are on the same side of the theme', `page ${theme.page?.toFixed(2)} composer ${theme.box === null ? '(none open)' : theme.box.toFixed(2)}`);
 }
 
+/*
+ * 57. GENIE'S KEYS AND MENU (Tynn #759). Ctrl+, opens Settings — the page's own chord, on every platform.
+ *
+ * 57a. With no menu set, Electron's default was in force: its Ctrl+W closes — on Genie's main window, HIDES to the tray
+ * — from any field. Genie's menu has no Close accelerator. "Still visible after Ctrl+W" is evidence ONLY where a menu
+ * accelerator demonstrably fires on a key sent this way: CI's Linux window delivered none (#911 — Ctrl+, through the
+ * menu never arrived there), so a visible window there would have proved nothing. The POSITIVE CONTROL is F11, the
+ * menu's togglefullscreen role: the window's size changes when it fires. Where it does not, 57a says it could not be
+ * measured, rather than passing. Visibility is the page's own (a hidden window reads `document.visibilityState ===
+ * 'hidden'`).
+ */
+{
+    const key = (k, code, vk, type, modifiers) => cdp.send('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers });
+    const press = async (k, code, vk, modifiers) => { await key(k, code, vk, 'rawKeyDown', modifiers); await key(k, code, vk, 'keyUp', modifiers); };
+    await cdp.evaluate(`document.activeElement?.blur?.(); window.location.hash = '#genie://dashboard'; true`);
+    await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '') === 'genie://dashboard'`, 'the Dashboard');
+    await press(',', 'Comma', 188, 2);
+    const toSettings = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://settings')`, 'Ctrl+, to open Settings');
+    check(toSettings, '57. Ctrl+, opens Settings', await cdp.evaluate(`document.querySelector('[data-route]')?.textContent ?? null`));
+
+    const size = () => cdp.evaluate(`window.innerWidth + 'x' + window.innerHeight`);
+    const before = await size();
+    await press('F11', 'F11', 122, 0);
+    const fired = await waitFor(cdp, `(window.innerWidth + 'x' + window.innerHeight) !== '${before}'`, 'F11 (the menu’s togglefullscreen) to change the window size');
+    if (fired) {
+        await press('F11', 'F11', 122, 0);
+        await waitFor(cdp, `(window.innerWidth + 'x' + window.innerHeight) === '${before}'`, 'F11 again to restore the window size');
+        await press('w', 'KeyW', 87, 2);
+        await new Promise((r) => setTimeout(r, 1500));
+        const after = await cdp.evaluate(`JSON.stringify({ visibility: document.visibilityState, size: window.innerWidth + 'x' + window.innerHeight })`);
+        check(JSON.parse(after).visibility === 'visible', '57a. Ctrl+W does not hide Genie — measured: F11 showed menu accelerators fire in this window', after);
+    } else {
+        console.log(`  NOTE  57a. Ctrl+W NOT MEASURED here: F11 (a menu accelerator) did not fire in this window, so a visible window would prove nothing — ${before}`);
+    }
+}
+
 // 12. THE HEADER ROW (the owner, 2026-10-13: "content covered and not following color theme"). On Windows and Linux the
 // native minimize / maximize / close buttons are drawn over the bar's right end: the bar must keep that space clear, and
 // the buttons must wear the theme's own bar colours — in BOTH themes.
