@@ -20,6 +20,7 @@ import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { mailAction } from '../core/agent-actions.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
@@ -1273,7 +1274,8 @@ async function boot(): Promise<void> {
             resolveCaller,
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
-            thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
+            // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
+            thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             terminals: {
@@ -1417,6 +1419,8 @@ async function boot(): Promise<void> {
     composed.inbox.onRead(() => { pushFeatures(); });
     // Agent-to-agent mail changes the Dashboard's comms cells: rebuild the snapshot on every send.
     composed.inbox.onSend(() => { registry?.touch(); });
+    // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
+    composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
     // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
     composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as

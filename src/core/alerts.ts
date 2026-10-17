@@ -20,9 +20,9 @@ import type { SettingDef } from './settings.js';
  */
 export type AlertKind =
     | 'question' | 'approval' | 'broken' | 'limited'
-    | 'started' | 'replied' | 'finished' | 'stopped' | 'resumed'
+    | 'started' | 'replied' | 'finished' | 'thumbsup' | 'stopped' | 'resumed'
     | 'edits' | 'runs' | 'reads' | 'fetches' | 'plans'
-    | 'mail';
+    | 'mail' | 'agentmail';
 
 /** The headings the sound rows are shown under in Settings. */
 export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages';
@@ -73,7 +73,8 @@ export const ALERT_KINDS: readonly AlertDef[] = [
     { kind: 'limited', group: 'needs-you', label: 'Agents hit a rate limit', sound: 'off', motif: 'attention', verb: 'Paused by a rate limit' },
     { kind: 'started', group: 'turn', label: 'An agent starts', sound: 'off', motif: 'done', verb: 'Started' },
     { kind: 'replied', group: 'turn', label: 'An agent finishes a reply', sound: 'off', motif: 'done', verb: 'Replied' },
-    { kind: 'finished', group: 'turn', label: 'An agent finished with a handoff', sound: 'triumphant', motif: 'done', verb: 'Finished' },
+    { kind: 'finished', group: 'turn', label: 'An agent finishes (imDone)', sound: 'triumphant', motif: 'done', verb: 'Finished' },
+    { kind: 'thumbsup', group: 'turn', label: 'An agent gives a thumbs-up (thumbsUp)', sound: 'off', motif: 'done', verb: 'Ready' },
     { kind: 'stopped', group: 'turn', label: 'An agent is stopped', sound: 'off', motif: 'done', verb: 'Stopped' },
     { kind: 'resumed', group: 'turn', label: 'Agents resume after a rate limit', sound: 'off', motif: 'done', verb: 'Resumed' },
     { kind: 'edits', group: 'work', label: 'An agent edits a file', sound: 'off', motif: 'done', verb: 'Edits' },
@@ -82,6 +83,7 @@ export const ALERT_KINDS: readonly AlertDef[] = [
     { kind: 'fetches', group: 'work', label: 'An agent fetches from the web', sound: 'off', motif: 'done', verb: 'Fetches' },
     { kind: 'plans', group: 'work', label: 'An agent updates its plan', sound: 'off', motif: 'done', verb: 'Plans' },
     { kind: 'mail', group: 'messages', label: 'Mail arrives for you', sound: 'dingdongdoink', motif: 'done', verb: 'Mail' },
+    { kind: 'agentmail', group: 'messages', label: 'An agent writes to another agent', sound: 'off', motif: 'done', verb: 'Writes' },
 ];
 
 const OPTION_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label]));
