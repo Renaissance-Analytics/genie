@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { COMMAND_PREFIXES, filterCommandItems, firstMatch, groupCommandItems, parseCommandQuery, type CommandItem } from '../src/core/command-window.js';
+import { COMMAND_PREFIXES, filterCommandItems, groupCommandItems, parseCommandQuery, type CommandItem } from '../src/core/command-window.js';
 import { globalAction } from '../src/core/keys.js';
 import { DEFAULT_HOTKEYS, hotkeyAction } from '../src/core/hotkeys.js';
 import { CommandWindow } from '../src/renderer/components/CommandWindow.js';
@@ -77,12 +77,17 @@ describe('the chord is caught before anything focused can swallow it', () => {
 });
 
 describe('Enter in the search box', () => {
-    // CI's real window: typing then Enter did nothing — Fancy's Command starts with no row active and handles no Enter;
-    // only a FOCUSED item button takes it. In the box, Enter opens the first match, in the order the groups show.
-    it('the first match, as shown (Prompts before Actions before Workspaces before Agents); none → null', () => {
-        expect(firstMatch(items, 'w>')?.id).toBe('tynn');
-        expect(firstMatch(items, '')?.id).toBe('p1');
-        expect(firstMatch(items, 'mo')?.id).toBe('a1');
-        expect(firstMatch(items, 'zzz')).toBeNull();
+    // Fancy's Command picks the ACTIVE item on Enter, or the FIRST VISIBLE one when none is active (react-fancy 5.42.0,
+    // asked for by Genie, 2026-10-17). Genie's own capture-phase Enter handler (and its firstMatch) are gone: one owner
+    // of the key. In a real window, smoke step 55b proves it.
+    it('Genie pins a react-fancy with Enter in Command, and adds no keydown handler of its own', async () => {
+        const { readFileSync } = await import('node:fs');
+        const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { dependencies: Record<string, string> };
+        const [major, minor] = pkg.dependencies['@particle-academy/react-fancy']!.replace(/^[^0-9]*/, '').split('.').map(Number);
+        expect(major! > 5 || (major === 5 && minor! >= 42)).toBe(true);
+        const source = readFileSync('src/renderer/components/CommandWindow.tsx', 'utf8');
+        expect(source).not.toContain("addEventListener('keydown'");
+        // CONTROL: the component is the one read — it renders Fancy's Command.
+        expect(source).toContain('<Command ');
     });
 });
