@@ -58,3 +58,17 @@ describe('the window', () => {
         expect(renderToStaticMarkup(<CommandWindow open={false} items={items} onClose={() => {}} onActivate={() => {}} />)).toBe('');
     });
 });
+
+describe('the chord is caught before anything focused can swallow it', () => {
+    // CI's real-window smoke (Linux, #908): with the chat composer focused after an approval, Ctrl+K never reached the
+    // window's bubbling listener — a focused component stopped it. Genie 1's rule (hotkeys.ts): Genie's chords are caught
+    // BEFORE the focused surface sees them. The global chords' listener is a CAPTURE listener.
+    it('App registers the global chords (Ctrl+K, Ctrl+J, Ctrl+B) in the capture phase', async () => {
+        const { readFileSync } = await import('node:fs');
+        const app = readFileSync('src/renderer/App.tsx', 'utf8');
+        const at = app.indexOf('const action = globalAction(');
+        const effect = app.slice(at, app.indexOf('});', app.indexOf("removeEventListener('keydown'", at)) + 3);
+        expect(effect).toContain("window.addEventListener('keydown', onKey, true)");
+        expect(effect).toContain("window.removeEventListener('keydown', onKey, true)");
+    });
+});

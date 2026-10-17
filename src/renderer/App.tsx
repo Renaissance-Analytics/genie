@@ -603,8 +603,10 @@ function DesktopApp({ bridge }: AppProps) {
             e.preventDefault();
             navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?files=`);
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
+        // CAPTURE: Genie's chords are caught before whatever has focus can swallow them (Genie 1's hotkeys rule; CI's
+        // real window, 2026-10-17: Ctrl+K never reached a bubbling listener with the chat composer focused).
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
     // The chat flyout's keys (§4.4, `core/keys.ts`): Esc closes an UNPINNED flyout; A / D answer the approval parked in
     // the chat — the letters follow the composer. Never while typing.
