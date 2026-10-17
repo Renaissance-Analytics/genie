@@ -501,7 +501,8 @@ export function AgentView({
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
             {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
             <div data-view-header="" className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
-                {workspace ? <span data-crumb={workspace.id} className="max-w-[12rem] shrink truncate whitespace-nowrap text-[13px] text-[var(--fg-3)]">{workspace.name ?? workspace.id} /</span> : null}
+                {/* Back to its workspace (Tynn #805): the crumb is a link. */}
+                {workspace ? <button data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] hover:underline">{workspace.name ?? workspace.id} /</button> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span className="shrink-0 whitespace-nowrap font-medium">{agent.name}</span>
                 <span data-provider-chip={agent.provider} className="shrink-0 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>

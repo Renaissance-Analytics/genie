@@ -51,6 +51,11 @@ export interface SidebarProps {
     onNavigate: (route: string) => void;
     /** Add a workspace (Tynn #283): the `+` in the rail's tools, any time. Absent = no `+` (a control that does nothing is not offered). */
     onAddWorkspace?: (() => void) | undefined;
+    /**
+     * The workspace the current route is in (core/route.ts `routeWorkspace`): an agent's page keeps ITS workspace the
+     * highlighted row (Tynn #805), so you know where you are. Absent = only the workspace's own route highlights it.
+     */
+    currentWorkspaceId?: string | null | undefined;
     /** Where the collapsed state is remembered; `undefined` = the window's localStorage, `null` = nowhere (tests pass their own). */
     railStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
 }
@@ -115,7 +120,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -178,7 +183,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
                     const route_ = `genie://workspace/${w.id}`;
-                    const active = current === route_;
+                    const active = current === route_ || w.id === currentWorkspaceId;
                     const name = w.name ?? folderName(w.path);
                     return (
                         <button
@@ -292,7 +297,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
             {(has('workspace') ? shown : []).map((w) => {
                 const route_ = `genie://workspace/${w.id}`;
-                const active = route.split('?')[0] === route_;
+                const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
 
                 return (
                     <button
