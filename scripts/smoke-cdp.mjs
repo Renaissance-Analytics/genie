@@ -665,11 +665,15 @@ if (!approvalEnabled) {
  * prefix narrows it (`w> tynn` — workspaces only, and Fancy's own text filter does not hide them), Enter goes there.
  */
 {
-    const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, modifiers: 2 });
-    await ctrlK('keyDown');
+    // A MEASUREMENT beside the check: what keydown actually reached the page (CI Linux failed this step while Windows
+    // passed — the record says whether the chord arrived, and as what).
+    await cdp.evaluate(`window.__genieKeys = []; window.addEventListener('keydown', (e) => window.__genieKeys.push([e.key, e.code, e.ctrlKey, e.metaKey, e.defaultPrevented]), true); true`);
+    const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2 });
+    await ctrlK('rawKeyDown');
     await ctrlK('keyUp');
     const opened = await waitFor(cdp, `Boolean(document.querySelector('[data-command-window] input'))`, 'the Command Window to open');
-    check(opened, '55. Ctrl+K opens the Command Window, its input ready');
+    const arrived = await cdp.evaluate(`JSON.stringify({ keys: window.__genieKeys, focus: document.activeElement?.tagName ?? null, platform: navigator.platform })`);
+    check(opened, '55. Ctrl+K opens the Command Window, its input ready', arrived);
     await cdp.evaluate(`document.querySelector('[data-command-window] input')?.focus(); true`);
     await cdp.send('Input.insertText', { text: 'w> tynn' });
     const listed = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="workspace:"]').length >= 1 && document.querySelectorAll('[data-command-item^="agent:"], [data-command-item^="action:"]').length === 0`, 'only workspaces to be listed for w>');
