@@ -1,3 +1,4 @@
+import { CHAT_DOCK_DEFAULT } from '../src/core/chat-width.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
@@ -67,11 +68,13 @@ describe('the unpinned flyout is resizable and remembers its width; pinned is th
         expect(html).toMatch(/role="separator"[^>]*data-chat-resize=""|data-chat-resize=""[^>]*role="separator"/);
     });
 
-    it('pinned: the designed dock width whatever was remembered, and no handle — the reserve reads the same token', () => {
-        const html = render(true, '520');
-        expect(html).toContain(`style="width:${DOCK_WIDTH}px"`);
-        expect(html).not.toContain('width:520px');
-        expect(html).not.toContain('data-chat-resize');
+    it('pinned: the PINNED width (Tynn #798: its own, remembered apart — never the unpinned one) and a handle to drag', () => {
+        // The owner, 2026-10-17: "expanding the chat panel when pinned. It's too thin now." The pinned chat has its own
+        // remembered width (default CHAT_DOCK_DEFAULT) and its edge drags; the unpinned width does not leak into it.
+        const html = render(true, '700');
+        expect(html).toContain(`style="width:${CHAT_DOCK_DEFAULT}px"`);
+        expect(html).not.toContain('width:700px');
+        expect(html).toContain('data-chat-resize');
     });
 
     it('nothing (or nothing sane) remembered = the designed width', () => {

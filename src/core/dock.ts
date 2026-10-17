@@ -42,9 +42,13 @@ export type DockPanel = 'chat' | 'files' | 'lists';
  * edge with a shadow and **nothing underneath moves**. That is the whole difference between the two states, and the
  * reason a pin is worth having.
  */
-export function dockReserve(pinned: DockPanel | null): number {
-    return pinned === null ? CHAT_STRIP_WIDTH : DOCK_WIDTH;
+export function dockReserve(pinned: DockPanel | null, chatWidth: number = CHAT_DOCK_DEFAULT_WIDTH): number {
+    // A pinned CHAT reserves its own (remembered, draggable) width — the same number the panel is sized by (Tynn #798).
+    return pinned === null ? CHAT_STRIP_WIDTH : pinned === 'chat' ? chatWidth : DOCK_WIDTH;
 }
+
+/** The pinned chat's default width; `core/chat-width.ts` CHAT_DOCK_DEFAULT is this number (kept here so dock imports nothing). */
+export const CHAT_DOCK_DEFAULT_WIDTH = 520;
 
 export interface PinOutcome {
     /** What ends up pinned. */

@@ -3,7 +3,7 @@ import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fanc
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { DOCK_WIDTH } from '../../core/dock.js';
-import { atThreadEnd, clampChatWidth, dragChatWidth, readChatWidth, writeChatWidth } from '../../core/chat-width.js';
+import { atThreadEnd, clampChatDockWidth, clampChatWidth, dragChatWidth, readChatDockWidth, readChatWidth, writeChatDockWidth, writeChatWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
@@ -107,6 +107,10 @@ export interface ChatFlyoutProps {
     onResumeLimit?: (() => void) | undefined;
     /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
+    /** Pinned: the width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered pinned width. */
+    dockWidth?: number | undefined;
+    /** Pinned: the edge was dragged — the new width, live, so the reserve follows; the panel remembers it at the drag's end. */
+    onDockWidth?: ((width: number) => void) | undefined;
     /**
      * The chat's agent against the workspace on screen (`core/chat-scope.ts`). `elsewhere`: the composer and the header
      * NAME the agent's workspace. `blocked`: the workspace on screen has no agent to message — the reason replaces the
@@ -130,11 +134,14 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, pinned, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
-    const width = pinned ? DOCK_WIDTH : overlayWidth;
+    const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
+    const pinnedWidth = dockWidth ?? ownDockWidth;
+    const width = pinned ? pinnedWidth : overlayWidth;
+    const setPinnedWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
 
     /**
      * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive
@@ -143,13 +150,18 @@ export function ChatFlyout({
     const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
         e.preventDefault();
         const startX = e.clientX;
-        const from = overlayWidth;
+        const from = pinned ? pinnedWidth : overlayWidth;
         let last = from;
-        const onMove = (ev: PointerEvent) => { last = dragChatWidth(from, startX, ev.clientX, window.innerWidth); setOverlayWidth(last); };
+        // Pinned, the width is the dock's: clamped so the view keeps its room, and handed up live so the reserve follows.
+        const onMove = (ev: PointerEvent) => {
+            if (pinned) { last = clampChatDockWidth(from + (startX - ev.clientX), window.innerWidth); setPinnedWidth(last); }
+            else { last = dragChatWidth(from, startX, ev.clientX, window.innerWidth); setOverlayWidth(last); }
+        };
         const onUp = () => {
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
-            writeChatWidth(storage, last);
+            if (pinned) writeChatDockWidth(storage, last);
+            else writeChatWidth(storage, last);
         };
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
@@ -159,6 +171,12 @@ export function ChatFlyout({
         const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
         if (step === 0) return;
         e.preventDefault();
+        if (pinned) {
+            const next = clampChatDockWidth(pinnedWidth + step, window.innerWidth);
+            setPinnedWidth(next);
+            writeChatDockWidth(storage, next);
+            return;
+        }
         const next = clampChatWidth(overlayWidth + step, window.innerWidth);
         setOverlayWidth(next);
         writeChatWidth(storage, next);
@@ -206,14 +224,14 @@ export function ChatFlyout({
                 .filter(Boolean)
                 .join(' ')}
         >
-            {/* The left edge, unpinned only: a pinned dock is the designed width, so it has nothing to drag. */}
-            {pinned ? null : (
+            {/* The left edge, pinned or not (Tynn #798): unpinned it sizes the overlay, pinned the dock — each remembered. */}
+            {(
                 <div
                     data-chat-resize=""
                     role="separator"
                     aria-orientation="vertical"
                     aria-label="Resize chat"
-                    aria-valuenow={overlayWidth}
+                    aria-valuenow={width}
                     tabIndex={0}
                     onPointerDown={startResize}
                     onKeyDown={keyResize}

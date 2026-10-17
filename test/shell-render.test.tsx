@@ -1,3 +1,4 @@
+import { CHAT_DOCK_DEFAULT_WIDTH } from '../src/core/dock.js';
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -316,12 +317,13 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
             route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
         });
 
-        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
+        // The pinned CHAT's width is its own (Tynn #798, default CHAT_DOCK_DEFAULT_WIDTH): reserve and panel, one number.
+        expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
         expect(html).toContain('data-chat="pinned"');
-        expect(html).toContain(`width:${DOCK_WIDTH}px`);
+        expect(html).toContain(`width:${CHAT_DOCK_DEFAULT_WIDTH}px`);
         // The reserve is a variable the surface's body reads (styles.css), not a margin on the whole row.
-        expect(html).toContain(`--dock-reserve:${DOCK_WIDTH}px`);
-        expect(html).not.toContain(`margin-right:${DOCK_WIDTH}px`);
+        expect(html).toContain(`--dock-reserve:${CHAT_DOCK_DEFAULT_WIDTH}px`);
+        expect(html).not.toContain(`margin-right:${CHAT_DOCK_DEFAULT_WIDTH}px`);
     });
 
     it('starts the gutter BELOW THE VIEW HEADER \u2014 the surface\u2019s own header keeps its width', () => {

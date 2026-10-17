@@ -1,3 +1,4 @@
+import { CHAT_DOCK_DEFAULT_WIDTH } from '../src/core/dock.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { chatThreads, rememberThread } from '../src/core/chat-view.js';
@@ -47,7 +48,7 @@ describe('the threads', () => {
 describe('the strip', () => {
     it('reserves its own width when nothing is pinned, the dock\'s when something is', () => {
         expect(dockReserve(null)).toBe(CHAT_STRIP_WIDTH);
-        expect(dockReserve('chat')).toBe(DOCK_WIDTH);
+        expect(dockReserve('chat')).toBe(CHAT_DOCK_DEFAULT_WIDTH); // a pinned chat: its own width (Tynn #798)
         expect(dockReserve('files')).toBe(DOCK_WIDTH);
     });
 
@@ -93,7 +94,7 @@ describe('the strip', () => {
     it('gives way to a pinned panel (positive control: the same render, pinned)', () => {
         const html = render({ pinned: 'chat', route: 'genie://dashboard?chat=a_atlas&pin=right', chatThread: { agentId: 'a_atlas', name: 'atlas', fidelity: 'declared', unread: null, messages: [] } });
         expect(html).not.toContain('data-chat-strip');
-        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
+        expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
         // The open flyout heads the conversation with the same tabs, genie last, the subject active.
         expect(html).toMatch(/data-chat-thread-chip="a_atlas" data-active="true"[\s\S]*data-chat-thread-chip="genie"/);
     });
