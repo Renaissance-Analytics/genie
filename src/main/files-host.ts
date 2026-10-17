@@ -35,6 +35,8 @@ export interface FilesHostPorts {
     readonly agentsOf: (workspaceId: string) => ReadonlyArray<{ id: string; name: string }>;
     readonly eventsOf: (agentId: string) => readonly FileEvent[];
     readonly sizeCap?: number;
+    /** How many entries a listing may hold; absent = TREE_BUDGET (genie#921). Injected so a test proves the cap without 5,000 files. */
+    readonly treeBudget?: number;
     /** Genie's clock, for when a disk change was seen; injected so a test can read the stamp. */
     readonly now?: () => number;
     /** A file's git state (`git-ports.ts` `gitFileStatus`); absent = opened files carry none. */
@@ -107,7 +109,7 @@ export class FilesHost {
          * this, the WHOLE workspace was walked on every call — and the panel called it on every change on disk.
          */
         const entries: Entry[] = [];
-        let budget = TREE_BUDGET;
+        let budget = this.#ports.treeBudget ?? TREE_BUDGET;
         const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
         while (queue.length > 0) {
             const { rel, depth } = queue.shift()!;
