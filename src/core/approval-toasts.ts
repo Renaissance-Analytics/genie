@@ -15,7 +15,8 @@ import type { DeckItem } from './deck.js';
  *   either place, the item leaves the snapshot and both. A provider's own permission request (`approval:<agent>`) is
  *   answered where its composer is (ApprovalCard) and is not a toast; a question (`q_`) has the question window.
  * - ORDER: newest in front, the rest behind it. Scrolling or an arrow key brings the next one to the front; the order
- *   is a ring, so scrolling past the oldest comes back to the newest.
+ *   is a ring, so scrolling past the oldest comes back to the newest. The turning itself is Fancy's (Toast.Stack,
+ *   react-fancy 5.41, built at Genie's request): it reports the new front, and that is the `front` event here.
  * - THE FRONT NEVER CHANGES UNDER THE PERSON: while the pointer is over the stack (or focus is in it) a new arrival
  *   joins BEHIND the one they are reading — an Allow pressed a moment after a new toast landed must still answer the
  *   request that was read. At rest, a new arrival comes to the front.
@@ -27,10 +28,8 @@ import type { DeckItem } from './deck.js';
  *   (main/question-window.ts), and Genie 1's (genie main/ask/force-question.ts: under DND "the modal never popped").
  */
 
-/** How many toasts are drawn in the stack; the rest are counted as "+N". */
+/** How many toasts are drawn in the stack (the front one and two behind); Fancy counts the rest as "+N". */
 export const TOAST_DEPTH = 3;
-/** Wheel distance (px) that moves the stack by one request: one notch of a mouse wheel; a trackpad's small deltas add up. */
-export const WHEEL_STEP = 100;
 
 /** An approval the toasts carry: the approval queue's own, answered here by Allow / Deny. */
 export function isApprovalToast(item: DeckItem): boolean {
@@ -50,16 +49,15 @@ export interface ToastState {
     readonly frontId: string | null;
     /** The pointer is over the stack, or focus is in it. */
     readonly engaged: boolean;
-    /** Wheel distance not yet worth a step. */
-    readonly wheel: number;
 }
 
-export const EMPTY_TOASTS: ToastState = { seen: [], held: [], answering: [], order: [], frontId: null, engaged: false, wheel: 0 };
+export const EMPTY_TOASTS: ToastState = { seen: [], held: [], answering: [], order: [], frontId: null, engaged: false };
 
 export type ToastEvent =
     | { kind: 'items'; items: readonly DeckItem[]; dnd: boolean }
     | { kind: 'cycle'; by: number }
-    | { kind: 'wheel'; deltaY: number }
+    /** Fancy's new front: an index into the ring (it wraps both ways). */
+    | { kind: 'front'; index: number }
     | { kind: 'engage'; on: boolean }
     | { kind: 'later'; id: string }
     | { kind: 'answering'; id: string };
@@ -115,16 +113,15 @@ export function toastReducer(state: ToastState, event: ToastEvent): ToastState {
             const frontId = state.order[mod(frontIndex(state) + Math.trunc(event.by), state.order.length)]!;
             return frontId === state.frontId ? state : { ...state, frontId };
         }
-        case 'wheel': {
-            const total = state.wheel + event.deltaY;
-            const steps = Math.trunc(total / WHEEL_STEP);
-            const rest = total - steps * WHEEL_STEP;
-            return toastReducer({ ...state, wheel: rest }, { kind: 'cycle', by: steps });
+        case 'front': {
+            if (state.order.length === 0) return state;
+            const frontId = state.order[mod(Math.trunc(event.index), state.order.length)]!;
+            return frontId === state.frontId ? state : { ...state, frontId };
         }
         case 'engage': {
             if (event.on === state.engaged) return state;
             // Engaging pins what is in front now, so an arrival cannot replace it under the pointer.
-            return event.on ? { ...state, engaged: true, frontId: state.frontId ?? state.order[0] ?? null } : { ...state, engaged: false, wheel: 0 };
+            return event.on ? { ...state, engaged: true, frontId: state.frontId ?? state.order[0] ?? null } : { ...state, engaged: false };
         }
         case 'later': {
             if (state.held.includes(event.id) || !state.order.includes(event.id)) return state;
@@ -138,10 +135,10 @@ export function toastReducer(state: ToastState, event: ToastEvent): ToastState {
 
 /** What the stack draws. */
 export interface ToastStackView {
-    /** Front first, at most `TOAST_DEPTH`: the front one and the ones peeking out behind it. */
-    readonly cards: readonly DeckItem[];
-    /** How many more wait beyond the drawn ones ("+N"). */
-    readonly more: number;
+    /** Every toast, newest first — the ring Fancy's stack turns. */
+    readonly ring: readonly DeckItem[];
+    /** The front one's index in `ring`. */
+    readonly front: number;
     /** How many toasts the stack holds. */
     readonly total: number;
     /** The front one's place in the ring, from 1 (the newest). */
@@ -154,23 +151,8 @@ export function toastView(state: ToastState, items: readonly DeckItem[]): ToastS
     const byId = new Map(items.filter(isApprovalToast).map((i) => [i.id, i]));
     const ring = state.order.filter((id) => byId.has(id));
     const total = ring.length;
-    if (total === 0) return { cards: [], more: 0, total: 0, position: 0, answering: [] };
+    if (total === 0) return { ring: [], front: 0, total: 0, position: 0, answering: [] };
     const front = Math.max(0, ring.indexOf(state.order[frontIndex(state)]!));
-    const drawn = Math.min(TOAST_DEPTH, total);
-    const cards = Array.from({ length: drawn }, (_, d) => byId.get(ring[(front + d) % total]!)!);
-    return { cards, more: total - drawn, total, position: front + 1, answering: state.answering };
+    return { ring: ring.map((id) => byId.get(id)!), front, total, position: front + 1, answering: state.answering };
 }
 
-/** The keys that turn the stack, when focus is in it. */
-export function keyStep(key: string): number {
-    switch (key) {
-        case 'ArrowDown':
-        case 'ArrowRight':
-            return 1;
-        case 'ArrowUp':
-        case 'ArrowLeft':
-            return -1;
-        default:
-            return 0;
-    }
-}

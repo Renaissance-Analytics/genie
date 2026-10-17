@@ -111,13 +111,13 @@ describe('a parked approval is a toast in the main window', () => {
 });
 
 describe('the stack', () => {
-    it('5 parked: ONE stack, 3 cards drawn (the newest in front, two behind) and "+2"', () => {
+    it('5 parked: ONE stack, 3 cards drawn (the newest in front, two behind) and Fancy’s "+2"', () => {
         const items = parked(5);
         const html = render('genie://dashboard', items);
         expect(count(html, STACKS)).toBe(1);
         expect(count(html, FRONT)).toBe(1);
         expect(count(html, BEHIND)).toBe(2);
-        expect(html).toMatch(/data-approval-toast-more=""[^>]*>\+2</);
+        expect(html).toMatch(/data-react-fancy-toast-stack-more=""[^>]*>\+2</);
         expect(html).toContain('data-total="5"');
         // Newest in front: the fifth request parked last.
         const newest = [...items].sort((a, b) => b.at - a.at)[0]!;
@@ -128,7 +128,7 @@ describe('the stack', () => {
     it('CONTROL: 3 parked fit — three cards, no "+N"', () => {
         const html = render('genie://dashboard', parked(3));
         expect(count(html, FRONT) + count(html, BEHIND)).toBe(3);
-        expect(count(html, /data-approval-toast-more=/g)).toBe(0);
+        expect(count(html, /data-react-fancy-toast-stack-more=/g)).toBe(0);
     });
 });
 
