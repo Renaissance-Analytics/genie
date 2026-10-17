@@ -63,7 +63,22 @@ export interface FilesState {
     readonly diskChanges: readonly { path: string; at: number }[];
 }
 
-const SKIP = new Set(['.git', 'node_modules']);
+/**
+ * WHAT THE BROWSER NEVER WALKS OR WATCHES (genie#921; Genie 1's main/workspace/ignore.ts SKIP_NAMES + REGENERABLE_NAMES,
+ * v0.7.0-beta.342): version control and editor metadata, and dependency and build output a toolchain regenerates. An
+ * agent's build writes thousands of files in these; walking or watching them is what bogged the machine down.
+ */
+export const IGNORED_NAMES: ReadonlySet<string> = new Set([
+    '.git', '.DS_Store', 'Thumbs.db', 'node_modules', '.idea', '.vscode',
+    'vendor', 'dist', 'build', 'out', 'target', '.next', '.nuxt', '.turbo', '.cache', '__pycache__', '.venv', 'venv', 'coverage',
+]);
+/** How many entries one listing may hold (Genie 1's DEFAULT_MAX_ENTRIES). */
+export const TREE_BUDGET = 5000;
+/** How deep a listing goes below the workspace (Genie 1's DEFAULT_MAX_DEPTH). */
+export const TREE_MAX_DEPTH = 6;
+/** The window changes are coalesced over before the panel is told (Genie 1's DEBOUNCE_MS). */
+export const WATCH_BATCH_MS = 250;
+const SKIP = IGNORED_NAMES;
 const OUTSIDE = 'that path is outside the workspace; Genie opens nothing there';
 
 export class FilesHost {
@@ -73,7 +88,9 @@ export class FilesHost {
     readonly #changedOnDisk = new Map<string, Map<string, number>>();
     /** Files YOU wrote through the panel, per workspace — yours in Changed, never `?`. */
     readonly #mine = new Map<string, Set<string>>();
-    readonly #listeners = new Set<(workspaceId: string) => void>();
+    readonly #listeners = new Set<(workspaceId: string, paths: readonly string[]) => void>();
+    /** Changes seen since the panel was last told, per workspace, and the timer that tells it (genie#921). */
+    readonly #pending = new Map<string, { paths: Set<string>; timer: ReturnType<typeof setTimeout> }>();
 
     constructor(ports: FilesHostPorts) {
         this.#ports = ports;
@@ -83,17 +100,28 @@ export class FilesHost {
     async tree(workspaceId: string): Promise<TreeNode[] | null> {
         const ws = this.#ports.workspace(workspaceId);
         if (!ws) return null;
+        /*
+         * BREADTH-FIRST, within a budget and a depth (genie#921; Genie 1's walkBreadthFirst). Every direct child of a
+         * folder is listed before any folder's contents, so a huge early folder (a checkout under repos/) cannot starve
+         * the root's other entries; the root always lists all of its own. Symlinks are leaves, never followed. Before
+         * this, the WHOLE workspace was walked on every call — and the panel called it on every change on disk.
+         */
         const entries: Entry[] = [];
-        const walk = async (rel: string): Promise<void> => {
-            const dirents = await readdir(rel ? join(ws.path, rel) : ws.path, { withFileTypes: true });
+        let budget = TREE_BUDGET;
+        const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
+        while (queue.length > 0) {
+            const { rel, depth } = queue.shift()!;
+            if (depth > TREE_MAX_DEPTH || (budget <= 0 && rel !== '')) continue;
+            let dirents;
+            try { dirents = await readdir(rel ? join(ws.path, rel) : ws.path, { withFileTypes: true }); } catch { continue; }
             for (const d of dirents) {
                 if (SKIP.has(d.name)) continue;
+                if (budget <= 0 && rel !== '') break;
                 const path = rel ? `${rel}/${d.name}` : d.name;
-                if (d.isDirectory()) { entries.push({ path, kind: 'dir' }); await walk(path); }
-                else if (d.isFile()) entries.push({ path, kind: 'file' });
+                if (d.isDirectory()) { entries.push({ path, kind: 'dir' }); budget -= 1; queue.push({ rel: path, depth: depth + 1 }); }
+                else if (d.isFile() || d.isSymbolicLink()) { entries.push({ path, kind: 'file' }); budget -= 1; }
             }
-        };
-        await walk('');
+        }
         return buildTree(entries);
     }
 
@@ -195,10 +223,21 @@ export class FilesHost {
         const set = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
         set.set(rel, (this.#ports.now ?? Date.now)());
         this.#changedOnDisk.set(workspaceId, set);
-        for (const l of this.#listeners) l(workspaceId);
+        // COALESCED (genie#921; Genie 1's debounced files:tree-changed): one notification per window carrying every
+        // path that changed in it — a build's thousand writes are one re-list, not a thousand. A fixed window, not a
+        // sliding one, so steady churn still updates the panel every WATCH_BATCH_MS: live, and bounded.
+        const pending = this.#pending.get(workspaceId);
+        if (pending) { pending.paths.add(rel); return; }
+        const paths = new Set([rel]);
+        const timer = setTimeout(() => {
+            this.#pending.delete(workspaceId);
+            for (const l of this.#listeners) l(workspaceId, [...paths]);
+        }, WATCH_BATCH_MS);
+        this.#pending.set(workspaceId, { paths, timer });
     }
 
-    onChange(listener: (workspaceId: string) => void): () => void {
+    /** Told once per batch of changes in a workspace, with the paths that changed (relative, forward-slashed). */
+    onChange(listener: (workspaceId: string, paths: readonly string[]) => void): () => void {
         this.#listeners.add(listener);
         return () => { this.#listeners.delete(listener); };
     }
@@ -206,5 +245,7 @@ export class FilesHost {
     async close(): Promise<void> {
         for (const w of this.#watchers.values()) w.close();
         this.#watchers.clear();
+        for (const p of this.#pending.values()) clearTimeout(p.timer);
+        this.#pending.clear();
     }
 }

@@ -102,6 +102,14 @@ export function confine(root: string, path: string): string | null {
 
 const byName = (a: TreeNode, b: TreeNode) => (a.type === b.type ? a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }) : a.type === 'folder' ? -1 : 1);
 
+/**
+ * Whether the open file is re-read after a batch of changes (genie#921): only when it is one of them — Genie 1 reloaded
+ * EXACTLY the open tabs that changed. A notification without paths (a host from before batching) re-reads it.
+ */
+export function reloadsOpenFile(openPath: string, changed: readonly string[] | undefined): boolean {
+    return changed === undefined || changed.includes(openPath);
+}
+
 export function buildTree(entries: readonly Entry[]): TreeNode[] {
     interface Mutable { id: string; label: string; type: 'file' | 'folder'; ext?: string; children?: Mutable[]; map?: Map<string, Mutable> }
     const rootMap = new Map<string, Mutable>();

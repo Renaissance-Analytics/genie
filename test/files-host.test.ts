@@ -86,7 +86,8 @@ describe('FilesHost', () => {
         const after = await host.state('tynn');
         // ipc.ts was reported by kora; mystery.ts by nobody.
         expect(after!.unreported).toEqual(['mystery.ts']);
-        expect(changes).toContain('tynn');
+        // The panel is told once per batch (genie#921: WATCH_BATCH_MS), after the change is recorded — waited on, not assumed.
+        await vi.waitFor(() => { expect(changes).toContain('tynn'); }, { timeout: 5_000, interval: 50 });
         expect(after!.changed).toEqual([{ who: 'kora', files: ['src/main/ipc.ts'] }, { who: '?', files: ['mystery.ts'] }]);
     });
 
