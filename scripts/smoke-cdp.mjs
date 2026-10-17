@@ -671,17 +671,19 @@ if (!approvalEnabled) {
     const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2 });
     await ctrlK('rawKeyDown');
     await ctrlK('keyUp');
-    const opened = await waitFor(cdp, `Boolean(document.querySelector('[data-command-window] input'))`, 'the Command Window to open');
+    // Fancy's Command draws in a portal on <body>, outside Genie's wrapper: the palette is found by ITS input.
+    const PALETTE_INPUT = `input[placeholder^="Search prompts"]`;
+    const opened = await waitFor(cdp, `Boolean(document.querySelector('${PALETTE_INPUT}'))`, 'the Command Window to open');
     const arrived = await cdp.evaluate(`JSON.stringify({ keys: window.__genieKeys, focus: document.activeElement?.tagName ?? null, platform: navigator.platform })`);
     check(opened, '55. Ctrl+K opens the Command Window, its input ready', arrived);
-    await cdp.evaluate(`document.querySelector('[data-command-window] input')?.focus(); true`);
+    await cdp.evaluate(`document.querySelector('${PALETTE_INPUT}')?.focus(); true`);
     await cdp.send('Input.insertText', { text: 'w> tynn' });
     const listed = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="workspace:"]').length >= 1 && document.querySelectorAll('[data-command-item^="agent:"], [data-command-item^="action:"]').length === 0`, 'only workspaces to be listed for w>');
     const counts = await cdp.evaluate(`JSON.stringify({ workspaces: document.querySelectorAll('[data-command-item^="workspace:"]').length, others: document.querySelectorAll('[data-command-item]:not([data-command-item^="workspace:"])').length })`);
     check(listed, '55a. "w> tynn" lists the workspace and nothing else — the prefix narrows; Fancy’s own filter does not hide it', counts);
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-    const landed = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://workspace/tynn') && !document.querySelector('[data-command-window]')`, 'Enter to open the workspace');
+    const landed = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://workspace/tynn') && !document.querySelector('${PALETTE_INPUT}')`, 'Enter to open the workspace');
     check(landed, '55b. Enter opens the chosen workspace and closes the window');
 }
 
