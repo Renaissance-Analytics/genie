@@ -21,8 +21,16 @@ export type DockerRunner = (args: readonly string[]) => Promise<{ stdout: string
 
 /** How long one `docker` call may take. A pull downloads an image (postgres:17 is ~150 MB): minutes, not seconds. */
 export const DOCKER_PULL_TIMEOUT_MS = 15 * 60_000;
-/** Every other docker call — inspect, create, start, stop, version — answers in seconds or the daemon is wedged. */
-export const DOCKER_CALL_TIMEOUT_MS = 20_000;
+/**
+ * A command that CHANGES a container — create, start, stop (which itself waits 10 s for the engine to shut down), rm,
+ * exec, update — on a loaded machine. Tynn #789: moic's acceptance re-adding pgvector on its kept volume was cut at the
+ * old single 20 s bound and read as a failed add. A cut change is READ BACK (`create`, `start`), never assumed failed.
+ */
+export const DOCKER_CHANGE_TIMEOUT_MS = 2 * 60_000;
+/** An inspection — version, image/container inspect, ps, logs — answers in seconds or the daemon is wedged. */
+export const DOCKER_QUERY_TIMEOUT_MS = 20_000;
+
+const DOCKER_QUERIES: ReadonlySet<string> = new Set(['version', 'image', 'container', 'ps', 'logs', 'info']);
 
 /** The exit code a runner answers when the `docker` binary is not on this machine (the shell's own "command not found"). */
 export const DOCKER_NOT_INSTALLED_EXIT = 127;
@@ -45,7 +53,8 @@ export function registryOf(image: string): string {
 }
 
 export function dockerTimeoutMs(args: readonly string[]): number {
-    return args[0] === 'pull' ? DOCKER_PULL_TIMEOUT_MS : DOCKER_CALL_TIMEOUT_MS;
+    if (args[0] === 'pull') return DOCKER_PULL_TIMEOUT_MS;
+    return DOCKER_QUERIES.has(args[0] ?? '') ? DOCKER_QUERY_TIMEOUT_MS : DOCKER_CHANGE_TIMEOUT_MS;
 }
 
 type Exec = (binary: string, args: readonly string[], options?: { timeoutMs?: number }) => Promise<{ stdout: string; exitCode: number; streams?: { readonly stdout: string; readonly stderr: string } }>;
@@ -61,7 +70,13 @@ export function dockerRunnerOver(exec: Exec): DockerRunner {
         exec('docker', args, { timeoutMs: dockerTimeoutMs(args) }).catch((e: unknown) => {
             const code = (e as { code?: unknown } | null)?.code;
             const message = e instanceof Error ? e.message : String(e);
-            return { stdout: message, exitCode: code === 'ENOENT' ? DOCKER_NOT_INSTALLED_EXIT : code === 'ETIMEDOUT' ? 124 : 1 };
+            if (code === 'ETIMEDOUT') {
+                // WHICH command, and its bound: "docker did not answer" named neither (moic run 12).
+                const sub = args[0] === 'image' || args[0] === 'container' || args[0] === 'volume' ? args.slice(0, 2).join(' ') : (args[0] ?? '');
+                const ms = dockerTimeoutMs(args);
+                return { stdout: `docker ${sub} did not answer within ${ms >= 10 * 60_000 ? `${ms / 60_000} min` : `${ms / 1000} s`}`, exitCode: 124 };
+            }
+            return { stdout: message, exitCode: code === 'ENOENT' ? DOCKER_NOT_INSTALLED_EXIT : 1 };
         });
 }
 
@@ -151,12 +166,16 @@ export class ServiceDriver {
         for (const [k, v] of Object.entries(plan.env)) args.push('-e', `${k}=${v}`);
         args.push(plan.image, ...(plan.command ?? []));
         const r = await this.#run(args);
+        // Cut, not refused: what Docker DID is read back — a container it made is made (Tynn #789).
+        if (r.exitCode === 124 && (await this.#run(['container', 'inspect', plan.name])).exitCode === 0) return { ok: true, name: plan.name };
         if (r.exitCode !== 0) return { ok: false, reason: r.stdout.trim() || `docker create ${plan.name} failed (exit ${r.exitCode})` };
         return { ok: true, name: plan.name };
     }
 
     async start(name: string): Promise<void> {
         const r = await this.#run(['start', name]);
+        // Cut, not refused: a container that is running was started (Tynn #789).
+        if (r.exitCode === 124 && (await this.status(name)).state === 'running') return;
         if (r.exitCode !== 0) throw new Error(r.stdout.trim() || `docker start ${name} failed`);
     }
 
