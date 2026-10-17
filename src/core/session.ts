@@ -5,7 +5,7 @@ import { toStreamEvent, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { systemProcessTree, type ProcessTree } from './process-tree.js';
+import { subtreeOf, systemProcessTree, type ProcessTree } from './process-tree.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -705,8 +705,17 @@ export class AgentSession {
          * everything already exited) is not handed on: `killTree` then walks for itself, as it always did.
          */
         const tree = this.#options.processTree ?? systemProcessTree;
-        const walked = this.#ownedPids.length > 0 ? tree.descendantsOf(process.pid) : [];
+        /*
+         * And the session's tree AS IT IS NOW, from that same walk (Tynn #796, the owner, 2026-10-17: moic's provider
+         * outlived an upgrade and kept writing to its worktree beside the new one, on the same session). `#ownedPids`
+         * is a snapshot taken right after start; a provider its shell launched after that instant — or a re-exec, or a
+         * tool's child — was never in it, and the kill below could not reach it. With parents in the walk, everything
+         * under the session's own pids is the session's, whenever it arrived.
+         */
+        const edges = this.#ownedPids.length > 0 && tree.walk ? tree.walk(process.pid) : null;
+        const walked = edges !== null ? edges.map((e) => e.pid) : this.#ownedPids.length > 0 ? tree.descendantsOf(process.pid) : [];
         const oursBeforeKill = walked.length > 0 ? walked : undefined;
+        const targets = edges !== null && edges.length > 0 ? subtreeOf(edges, this.#ownedPids) : this.#ownedPids;
 
         this.#driver?.kill(signal);
 
@@ -730,7 +739,7 @@ export class AgentSession {
         this.#approval = null;
         this.#parkedAt = null;
 
-        tree.killTree(this.#ownedPids, oursBeforeKill);
+        tree.killTree(targets, oursBeforeKill);
 
         this.#alive = false;
         this.#turnState = 'stopped';
