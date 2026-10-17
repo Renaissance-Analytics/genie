@@ -39,6 +39,11 @@ const bridge: GenieBridge = {
         ipcRenderer.on('genie:navigate', listener);
         return () => ipcRenderer.removeListener('genie:navigate', listener);
     },
+    onAction: (onAction) => {
+        const listener = (_event: unknown, action: { agentId: string; kind: string }): void => onAction(action);
+        ipcRenderer.on('genie:action', listener);
+        return () => ipcRenderer.removeListener('genie:action', listener);
+    },
 
     subscribeAgent: (agentId, onChange) => {
         // Filtered HERE, in the preload, rather than by broadcasting every agent's ledger to

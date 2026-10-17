@@ -243,6 +243,7 @@ export class AgentSession {
     #unpersisted = 0;
     /** Completed turns, failed ones included — a failed turn still happened and still cost. */
     #turns = 0;
+    #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | null = null;
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
      * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
@@ -448,6 +449,11 @@ export class AgentSession {
         return this.#endedThisRun;
     }
 
+    /** How the last turn ended — a reply, stopped by someone, failed, or held by a rate limit — `null` before any has. */
+    get lastTurnEnd(): 'replied' | 'stopped' | 'failed' | 'held' | null {
+        return this.#lastTurnEnd;
+    }
+
     /** Why the last turn failed, in the provider's own words, or `null`. */
     get failure(): string | null {
         return this.#failure;
@@ -591,6 +597,7 @@ export class AgentSession {
                     // stopped.
                     const crashed = outcome.stopReason === null || outcome.isError;
                     const byLimit = crashed && this.#limitThisTurn;
+                    this.#lastTurnEnd = byLimit ? 'held' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is

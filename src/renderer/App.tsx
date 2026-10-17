@@ -20,7 +20,7 @@ import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVAB
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
-import { alertSound, toastFor } from '../core/alerts.js';
+import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
@@ -390,6 +390,12 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
+    // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
+    const soundSettings = useRef(features.settings.values);
+    soundSettings.current = features.settings.values;
+    useEffect(() => resolvedBridge?.onAction?.((action) => {
+        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
+    }), [resolvedBridge]);
     useHostRequests(resolvedBridge, features.settings.values);
 
     const parsed = parseRoute(route);

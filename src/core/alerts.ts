@@ -11,13 +11,35 @@ import type { SettingDef } from './settings.js';
  * settings we had?"): Genie 1's picker — its Default chime, its five wavs, None last — where Genie 2 had an on/off box.
  */
 
-export type AlertKind = 'question' | 'approval' | 'finished' | 'broken' | 'mail';
+/**
+ * EVERY KIND OF ACTION AN AGENT TAKES (Tynn #766 row C; the owner, 2026-10-17: "Every kind of action an agent can take
+ * needs to have a sound setting"). The first five come from the Deck and the board (core/alert-diff.ts); the rest are
+ * what its session reports (core/agent-actions.ts, main/session-host.ts `onAction`). Every new kind starts at None —
+ * the owner's answer for the noisy ones, and Genie 1's rule for every kind it added: an upgrade does not start making
+ * noise nobody agreed to.
+ */
+export type AlertKind =
+    | 'question' | 'approval' | 'broken' | 'limited'
+    | 'started' | 'replied' | 'finished' | 'stopped' | 'resumed'
+    | 'edits' | 'runs' | 'reads' | 'fetches' | 'plans'
+    | 'mail';
+
+/** The headings the sound rows are shown under in Settings. */
+export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages';
+
+export const SOUND_GROUPS: ReadonlyArray<{ group: SoundGroup; label: string }> = [
+    { group: 'needs-you', label: 'Needs you' },
+    { group: 'turn', label: 'Its turn' },
+    { group: 'work', label: 'Its work' },
+    { group: 'messages', label: 'Messages' },
+];
 
 export interface AlertDef {
     readonly kind: AlertKind;
     readonly label: string;
-    /** The sound a row never set plays: one of SOUND_CHOICES. */
-    readonly sound: SoundName;
+    /** The sound a row never set plays: one of SOUND_CHOICES (`off` = None). */
+    readonly sound: SoundChoice;
+    readonly group: SoundGroup;
     /** What the Default chime plays for it (Genie 1's): someone needs you NOW, or something you waited on ended. */
     readonly motif: ChimeMotif;
     readonly verb: string;
@@ -45,11 +67,21 @@ export type SoundChoice = (typeof SOUND_CHOICES)[number]['value'];
 export type SoundName = Exclude<SoundChoice, 'off'>;
 
 export const ALERT_KINDS: readonly AlertDef[] = [
-    { kind: 'question', label: 'An agent asks you something', sound: 'dingdongdoink', motif: 'attention', verb: 'Asks' },
-    { kind: 'approval', label: 'An agent waits for an approval', sound: '3tootpipe', motif: 'attention', verb: 'Waits for approval' },
-    { kind: 'finished', label: 'An agent finished with a handoff', sound: 'triumphant', motif: 'done', verb: 'Finished' },
-    { kind: 'broken', label: 'An agent broke', sound: 'dingdongdoink', motif: 'attention', verb: 'Broken' },
-    { kind: 'mail', label: 'Mail arrives for you', sound: 'dingdongdoink', motif: 'done', verb: 'Mail' },
+    { kind: 'question', group: 'needs-you', label: 'An agent asks you something', sound: 'dingdongdoink', motif: 'attention', verb: 'Asks' },
+    { kind: 'approval', group: 'needs-you', label: 'An agent waits for an approval', sound: '3tootpipe', motif: 'attention', verb: 'Waits for approval' },
+    { kind: 'broken', group: 'needs-you', label: 'An agent broke', sound: 'dingdongdoink', motif: 'attention', verb: 'Broken' },
+    { kind: 'limited', group: 'needs-you', label: 'Agents hit a rate limit', sound: 'off', motif: 'attention', verb: 'Paused by a rate limit' },
+    { kind: 'started', group: 'turn', label: 'An agent starts', sound: 'off', motif: 'done', verb: 'Started' },
+    { kind: 'replied', group: 'turn', label: 'An agent finishes a reply', sound: 'off', motif: 'done', verb: 'Replied' },
+    { kind: 'finished', group: 'turn', label: 'An agent finished with a handoff', sound: 'triumphant', motif: 'done', verb: 'Finished' },
+    { kind: 'stopped', group: 'turn', label: 'An agent is stopped', sound: 'off', motif: 'done', verb: 'Stopped' },
+    { kind: 'resumed', group: 'turn', label: 'Agents resume after a rate limit', sound: 'off', motif: 'done', verb: 'Resumed' },
+    { kind: 'edits', group: 'work', label: 'An agent edits a file', sound: 'off', motif: 'done', verb: 'Edits' },
+    { kind: 'runs', group: 'work', label: 'An agent runs a command', sound: 'off', motif: 'done', verb: 'Runs' },
+    { kind: 'reads', group: 'work', label: 'An agent reads or searches', sound: 'off', motif: 'done', verb: 'Reads' },
+    { kind: 'fetches', group: 'work', label: 'An agent fetches from the web', sound: 'off', motif: 'done', verb: 'Fetches' },
+    { kind: 'plans', group: 'work', label: 'An agent updates its plan', sound: 'off', motif: 'done', verb: 'Plans' },
+    { kind: 'mail', group: 'messages', label: 'Mail arrives for you', sound: 'dingdongdoink', motif: 'done', verb: 'Mail' },
 ];
 
 const OPTION_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label]));
@@ -96,7 +128,8 @@ export function isAlertSoundKey(key: string): boolean {
 
 /** The kind's own sound: what a row never set plays, and what a custom file that cannot be read falls back to. */
 function ownSound(def: AlertDef): AlertSound {
-    return def.sound === 'synth' ? { kind: 'synth', motif: def.motif } : { kind: 'wav', file: `${def.sound}.wav` };
+    // A kind that is None by default still sounds when its chosen file cannot be read: the Default chime, not silence.
+    return def.sound === 'synth' || def.sound === 'off' || def.sound === 'custom' ? { kind: 'synth', motif: def.motif } : { kind: 'wav', file: `${def.sound}.wav` };
 }
 
 /** The sound a choice plays for a kind — what Preview plays, and what the alert plays — or `null` for None. */
