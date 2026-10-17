@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DOCKER_CALL_TIMEOUT_MS, DOCKER_PULL_TIMEOUT_MS, ServiceDriver, dockerRunnerOver, type DockerRunner } from '../src/main/service-driver.js';
+import { DOCKER_CHANGE_TIMEOUT_MS, DOCKER_PULL_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS, ServiceDriver, dockerRunnerOver, type DockerRunner } from '../src/main/service-driver.js';
 
 /**
  * SERVICE ENGINES — the Docker driver (§6.6). Everything goes through an injected runner, so the tests
@@ -107,7 +107,10 @@ describe('the production runner: only a pull gets the long bound', () => {
         return { exec, calls };
     }
 
-    it('a pull runs with the 15-minute bound; inspect, create, start and version keep the short one — COUNTED per command', async () => {
+    // Tynn #789, moic's acceptance run 12 (2026-10-17): re-adding pgvector on its kept volume failed "docker did not
+    // answer within 20000 ms" on a loaded machine. A command that CHANGES a container (create, start, stop - which itself
+    // waits 10 s for the engine to shut down -, rm, exec) is not an inspection: it gets its own, longer bound.
+    it('a pull 15 minutes; a change (create, start) 2 minutes; an inspection (version, image, container) 20 s — COUNTED per command', async () => {
         const f = fakeExec(async (args) => (args[0] === 'image' || args[0] === 'container' ? { stdout: '', exitCode: 1 } : { stdout: '', exitCode: 0 }));
         const d = new ServiceDriver(dockerRunnerOver(f.exec));
         await d.available();
@@ -116,12 +119,16 @@ describe('the production runner: only a pull gets the long bound', () => {
         await d.start('genie-tynn-postgres-17');
         expect(DOCKER_PULL_TIMEOUT_MS).toBe(15 * 60_000);
         expect(f.calls.every((c) => c.binary === 'docker')).toBe(true);
+        expect(DOCKER_CHANGE_TIMEOUT_MS).toBe(2 * 60_000);
+        expect(DOCKER_QUERY_TIMEOUT_MS).toBe(20_000);
         const long = f.calls.filter((c) => c.timeoutMs === DOCKER_PULL_TIMEOUT_MS).map((c) => c.args.join(' '));
-        const short = f.calls.filter((c) => c.timeoutMs === DOCKER_CALL_TIMEOUT_MS).map((c) => c.args[0]);
+        const change = f.calls.filter((c) => c.timeoutMs === DOCKER_CHANGE_TIMEOUT_MS).map((c) => c.args[0]);
+        const query = f.calls.filter((c) => c.timeoutMs === DOCKER_QUERY_TIMEOUT_MS).map((c) => c.args[0]);
         expect(long).toEqual(['pull postgres:17']);
-        expect(short).toEqual(['version', 'image', 'container', 'create', 'start']);
+        expect(change).toEqual(['create', 'start']);
+        expect(query).toEqual(['version', 'image', 'container']);
         // Nothing ran on an unbounded call.
-        expect(long.length + short.length).toBe(f.calls.length);
+        expect(long.length + change.length + query.length).toBe(f.calls.length);
     });
 
     it('a missing docker binary answers exit 127 (never a throw) and availability reads it as NOT INSTALLED; a cut call answers 124 with the runner’s words', async () => {
@@ -130,9 +137,44 @@ describe('the production runner: only a pull gets the long bound', () => {
         expect(await run(['container', 'inspect', 'x'])).toEqual({ stdout: 'spawn docker ENOENT', exitCode: 127 });
         expect(await new ServiceDriver(run).available()).toEqual({ ok: false, reason: 'Docker is not installed on this machine; service engines need it' });
         const hung = fakeExec(async () => { throw Object.assign(new Error('docker did not answer within 20000 ms'), { code: 'ETIMEDOUT' }); });
-        expect(await dockerRunnerOver(hung.exec)(['start', 'x'])).toEqual({ stdout: 'docker did not answer within 20000 ms', exitCode: 124 });
+        // The cut says WHICH docker command and its bound - run 12's "docker did not answer" named neither.
+        expect(await dockerRunnerOver(hung.exec)(['start', 'x'])).toEqual({ stdout: 'docker start did not answer within 120 s', exitCode: 124 });
+        expect(await dockerRunnerOver(hung.exec)(['container', 'inspect', 'x'])).toEqual({ stdout: 'docker container inspect did not answer within 20 s', exitCode: 124 });
         // Positive control: the daemon-down answer is still told apart from not-installed.
         const down = fakeExec(async () => ({ stdout: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock', exitCode: 1 }));
         expect(await new ServiceDriver(dockerRunnerOver(down.exec)).available()).toEqual({ ok: false, reason: 'Docker is installed but its daemon is not running; start Docker Desktop (or dockerd) and try again' });
+    });
+});
+
+describe('a change that ran out of time is READ BACK, never assumed failed (Tynn #789)', () => {
+    const cut = { stdout: 'docker create did not answer within 120 s', exitCode: 124 };
+    it('create cut, but Docker made the container: the add goes on', async () => {
+        const calls: string[] = [];
+        let inspected = 0;
+        const run: DockerRunner = async (args) => {
+            calls.push(args.slice(0, 2).join(' '));
+            if (args[0] === 'container' && args[1] === 'inspect') return (inspected++ === 0) ? { stdout: '', exitCode: 1 } : { stdout: '[{}]', exitCode: 0 };
+            if (args[0] === 'create') return cut;
+            return { stdout: '', exitCode: 0 };
+        };
+        expect(await new ServiceDriver(run).create(pg)).toEqual({ ok: true, name: 'genie-tynn-postgres-17' });
+        expect(calls.filter((c) => c === 'container inspect')).toHaveLength(2); // before, and the read-back
+    });
+
+    it('create cut and NO container: a failed add that says what timed out', async () => {
+        const run: DockerRunner = async (args) => (args[0] === 'create' ? cut : args[0] === 'container' ? { stdout: '', exitCode: 1 } : { stdout: '', exitCode: 0 });
+        expect(await new ServiceDriver(run).create(pg)).toEqual({ ok: false, reason: 'docker create did not answer within 120 s' });
+    });
+
+    it('start cut, but the container is running: started', async () => {
+        const run: DockerRunner = async (args) => (args[0] === 'start' ? { stdout: 'docker start did not answer within 120 s', exitCode: 124 }
+            : args[0] === 'container' ? { stdout: JSON.stringify([{ State: { Status: 'running', StartedAt: 't' } }]), exitCode: 0 } : { stdout: '', exitCode: 0 });
+        await expect(new ServiceDriver(run).start('genie-tynn-postgres-17')).resolves.toBeUndefined();
+    });
+
+    it('CONTROL: start cut and NOT running still fails, in the runner’s words', async () => {
+        const run: DockerRunner = async (args) => (args[0] === 'start' ? { stdout: 'docker start did not answer within 120 s', exitCode: 124 }
+            : args[0] === 'container' ? { stdout: JSON.stringify([{ State: { Status: 'exited' } }]), exitCode: 0 } : { stdout: '', exitCode: 0 });
+        await expect(new ServiceDriver(run).start('genie-tynn-postgres-17')).rejects.toThrow('docker start did not answer within 120 s');
     });
 });
