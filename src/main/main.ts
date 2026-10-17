@@ -1391,7 +1391,20 @@ async function boot(): Promise<void> {
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
-    wireInboxPush({ inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered) });
+    wireInboxPush({
+        inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
+        // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the mail waits.
+        wake: (agentId) => {
+            const record = registry?.find(agentId);
+            if (!record || !host) return false;
+            const refused = startRefusal(workspaceOps, record, {
+                running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
+                cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
+            });
+            if (refused) { console.log(`[genie] mail for ${record.name} waits: ${refused}`); return false; }
+            return host.start(record, cwdFor(record)).ok;
+        },
+    });
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });

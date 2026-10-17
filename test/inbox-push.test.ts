@@ -229,3 +229,68 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         expect(notices(record.id)).toEqual([NOTICE_1, NOTICE_1]);
     });
 });
+
+/**
+ * MAIL WAKES THE AGENT (the owner, 2026-10-17: "it seems agents don't wake up from inbox pushes unless I go to their
+ * screen"; Tynn #275's open decision, answered). Mail for an agent with NO session used to wait until something else
+ * started it — opening its screen did. Now the arrival itself starts it (`wake`, main's open-agent path: a hibernated
+ * workspace or the agent cap refuses by name), and the notice is its first turn once ready. Only MAIL wakes: an agent
+ * the person stopped is not restarted by its own stop event.
+ */
+describe.each(['claude', 'codex'] as const)('mail wakes a %s agent', (provider) => {
+    let wakes: string[];
+    let refuse: string | null;
+    beforeEach(() => {
+        unwire();
+        wakes = [];
+        refuse = null;
+        unwire = wireInboxPush({
+            inbox: services.inbox,
+            host,
+            reminders: (input) => services.inboxReminders(input),
+            settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+            wake: (id) => {
+                wakes.push(id);
+                if (refuse !== null) return false;
+                const record = roster.find((r) => r.id === id);
+                return record ? host.start(record, dir).ok : false;
+            },
+        });
+    });
+    const register = (): AgentRecord => {
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider, name: `${provider}-wake` });
+        roster.push(record);
+        return record;
+    };
+
+    it('mailed while NOT RUNNING: Genie starts it, and the notice is its first turn once ready — nobody opens it', async () => {
+        const record = register();
+        await mail(record.id, 'while you were out');
+        expect(wakes).toEqual([record.id]);
+        expect(host.runOf(record.id)).not.toBeNull();
+        await fakes.get(record.id)!.becomeReady();
+        expect(promptsOf(record.id)).toEqual([NOTICE_1]);
+    });
+
+    it('CONTROL: a refused wake (asleep, at the cap) leaves the mail waiting, untold; started later, it is told once', async () => {
+        const record = register();
+        refuse = 'asleep';
+        await mail(record.id, 'while you were out');
+        expect(wakes).toEqual([record.id]);
+        expect(host.runOf(record.id)).toBeNull();
+        expect(host.start(record, dir)).toEqual({ ok: true });
+        await fakes.get(record.id)!.becomeReady();
+        expect(promptsOf(record.id)).toEqual([NOTICE_1]);
+    });
+
+    it('only MAIL wakes: stopping an agent does not start it again, and mail for a RUNNING agent starts nothing', async () => {
+        const record = register();
+        expect(host.start(record, dir)).toEqual({ ok: true });
+        await fakes.get(record.id)!.becomeReady();
+        await mail(record.id, 'hi');
+        expect(wakes).toEqual([]);
+        host.stop(record.id);
+        expect(wakes).toEqual([]);
+        expect(host.runOf(record.id)).toBeNull();
+    });
+});

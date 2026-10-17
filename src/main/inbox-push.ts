@@ -37,6 +37,12 @@ export interface InboxPushPorts {
     readonly reminders: (input: { run: (agentId: string) => number | null }) => Array<{ agentId: string; text: string }>;
     /** A notice settled (compose's `inboxNoticeSettled`): delivered, or its batch untold. */
     readonly settled: (agentId: string, delivered: boolean) => void;
+    /**
+     * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
+     * Start the session of an agent that has none — main's open-agent path, refusing by name for an asleep workspace or
+     * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
+     */
+    readonly wake?: ((agentId: AgentId) => boolean) | undefined;
 }
 
 export function wireInboxPush(ports: InboxPushPorts): () => void {
@@ -82,7 +88,16 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             }
         }
     };
-    const offSend = inbox.onSend((to) => { if (to !== 'human') push(to); });
+    // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
+    const offSend = inbox.onSend((to) => {
+        if (to === 'human') return;
+        if (host.runOf(to as AgentId) === null && ports.wake) {
+            let started = false;
+            try { started = ports.wake(to as AgentId); } catch { started = false; }
+            if (started) return; // its start announces itself, and that event delivers the notice
+        }
+        push(to);
+    });
     const offHost = host.subscribe((agentId) => push(agentId));
     return () => { offSend(); offHost(); };
 }
