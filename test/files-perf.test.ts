@@ -43,14 +43,23 @@ describe('the tree', () => {
         expect(all.filter((id) => /(^|\/)(vendor|dist|build|\.next)(\/|$)/.test(id))).toEqual([]);
     });
 
+    // The budget is INJECTED here (Genie's default stays TREE_BUDGET = 5000): writing 5,500 files took longer than the test's
+    // 5 s on the Windows test VM (beta.30's check, 2026-10-17) — the fixture's cost, not the listing's. The same rule,
+    // proven with a small budget, runs in milliseconds everywhere.
     it('a big workspace is capped by the budget, breadth-first: a huge folder never hides the root’s other entries', async () => {
         expect(TREE_BUDGET).toBe(5000);
         expect(TREE_MAX_DEPTH).toBe(6);
+        const budget = 50;
+        host = new FilesHost({ workspace: (id) => (id === 'w' ? { id: 'w', path: root } : null), agentsOf: () => [], eventsOf: () => [], treeBudget: budget });
         await mkdir(join(root, 'aaa-huge'), { recursive: true });
-        await Promise.all(Array.from({ length: TREE_BUDGET + 500 }, (_, i) => writeFile(join(root, 'aaa-huge', `f${i}.txt`), '')));
+        await Promise.all(Array.from({ length: budget + 30 }, (_, i) => writeFile(join(root, 'aaa-huge', `f${i}.txt`), '')));
         await writeFile(join(root, 'zzz-readme.md'), '# hi');
         const all = ids((await host.tree('w'))!);
-        expect(all.length).toBeLessThanOrEqual(TREE_BUDGET);
+        expect(all.length).toBeLessThanOrEqual(budget);
+        // CONTROL: the budget is what cut it — Genie's default budget lists every entry of the same folder (82).
+        const unbounded = new FilesHost({ workspace: (id) => (id === 'w' ? { id: 'w', path: root } : null), agentsOf: () => [], eventsOf: () => [] });
+        expect(ids((await unbounded.tree('w'))!)).toHaveLength(budget + 30 + 2);
+        await unbounded.close();
         // The root's own children are listed before any folder's contents spend the budget.
         expect(all).toContain('zzz-readme.md');
         expect(all).toContain('aaa-huge');
