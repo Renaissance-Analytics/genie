@@ -1,12 +1,13 @@
 import { Command } from '@particle-academy/react-fancy';
-import { useEffect, useMemo, useState } from 'react';
-import { filterCommandItems, firstMatch, groupCommandItems, parseCommandQuery, type CommandItem } from '../../core/command-window.js';
+import { useMemo, useState } from 'react';
+import { filterCommandItems, groupCommandItems, parseCommandQuery, type CommandItem } from '../../core/command-window.js';
 
 /**
  * CTRL/CMD+K — THE COMMAND WINDOW (Tynn #757; Genie 1's GenieCommandWindow). Fancy's `Command` draws it (in a portal on
  * <body>) and keeps the input, the active row and the keys; `core/command-window.ts` decides what is on offer for a
  * query. `shouldFilter={false}` (react-fancy 5.40.0, asked for by Genie): Genie filters for itself — a prefixed query
- * (`w> tynn`) is never a substring of an item's text — and reads the query through `query` / `onQueryChange`.
+ * (`w> tynn`) is never a substring of an item's text — and reads the query through `query` / `onQueryChange`. Enter is
+ * Fancy's too (5.42.0, asked for by Genie): the active item, or the first one shown — Genie adds no key handler.
  */
 export interface CommandWindowProps {
     readonly open: boolean;
@@ -20,22 +21,6 @@ export function CommandWindow({ open, items, onClose, onActivate }: CommandWindo
     const [query, setQuery] = useState('');
     const groups = useMemo(() => groupCommandItems(filterCommandItems(items, parseCommandQuery(query))), [items, query]);
     const close = (): void => { setQuery(''); onClose(); };
-    // ENTER IN THE SEARCH BOX opens the first match (core/command-window `firstMatch`): Fancy's Command takes Enter only on
-    // a focused item. An item the arrows focused keeps its own Enter (a button's click) — this is the box's alone.
-    useEffect(() => {
-        if (!open) return;
-        const onKey = (e: KeyboardEvent): void => {
-            const box = e.target as HTMLInputElement | null;
-            if (e.key !== 'Enter' || !box || box.tagName !== 'INPUT' || !box.placeholder.startsWith('Search prompts')) return;
-            const first = firstMatch(items, query);
-            if (!first) return;
-            e.preventDefault();
-            onActivate(first);
-            close();
-        };
-        window.addEventListener('keydown', onKey, true);
-        return () => window.removeEventListener('keydown', onKey, true);
-    });
     if (!open) return null;
     const shown = groups.reduce((n, g) => n + g.items.length, 0);
     return (
