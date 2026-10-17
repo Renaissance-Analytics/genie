@@ -40,7 +40,8 @@ export interface GenieToolParts {
     /** Pulse a terminal's row. Whether anything received the signal. */
     readonly glow: (terminalId: string) => boolean;
     readonly thumbsUp: (caller: Caller, reason: string) => void;
-    readonly openFile: (absolutePath: string, line: number | null) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
+    readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly terminals: TerminalsPort;
     /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;

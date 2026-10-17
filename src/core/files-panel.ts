@@ -1,3 +1,4 @@
+import { formatRoute, parseRoute } from './route.js';
 import type { ToolKind } from './stream-event.js';
 import { editLineCounts, joinToolCalls, type TimedEvent } from './stream-view.js';
 
@@ -108,6 +109,12 @@ const byName = (a: TreeNode, b: TreeNode) => (a.type === b.type ? a.label.locale
  */
 export function reloadsOpenFile(openPath: string, changed: readonly string[] | undefined): boolean {
     return changed === undefined || changed.includes(openPath);
+}
+
+/** Where openFileForUser lands (genie#922): that workspace, its file panel open on the file. Built by the router, never by hand. */
+export function openFileRoute(workspaceId: string, path: string): string {
+    const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}?files=`);
+    return base.surface === 'workspace' ? formatRoute({ ...base, panel: 'files', file: path }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
 }
 
 export function buildTree(entries: readonly Entry[]): TreeNode[] {

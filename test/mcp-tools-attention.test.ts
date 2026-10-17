@@ -16,7 +16,7 @@ import type { Caller } from '../src/main/mcp-tools.js';
 const caller: Caller = { agentId: 'agent_a' as never, agentName: 'atlas', workspaceId: 'tynn', workspacePath: '/w/tynn' };
 let dir: string;
 let feedback: FeedbackStore;
-let opened: Array<{ path: string; line: number | null }>;
+let opened: Array<{ workspaceId: string; path: string; absolutePath: string; line: number | null }>;
 let tools: Map<string, (args: Record<string, unknown>, context: { headers: Record<string, string> }) => Promise<{ text: string; isError: boolean }>>;
 
 beforeEach(async () => {
@@ -25,7 +25,7 @@ beforeEach(async () => {
     opened = [];
     const deps: AttentionToolsDeps = {
         resolveCaller: (id) => (id === 'term_a' ? caller : null),
-        openFile: async (path, line) => { opened.push({ path, line }); return { ok: true }; },
+        openFile: async (target) => { opened.push(target); return { ok: true }; },
         feedback,
     };
     tools = new Map(attentionTools(deps).map((r) => [r.definition.name, r.handler as never]));
@@ -42,11 +42,16 @@ const call = async (name: string, args: Record<string, unknown>) => {
 };
 
 describe('openFileForUser', () => {
-    it('opens a path inside the caller’s workspace (relative or absolute), with an optional line', async () => {
+    // genie#922: main is handed the caller's WORKSPACE and the path RELATIVE to it, so it opens Genie's own file panel there
+    // — never the absolute path the OS's default app would take (an agent's README opened in Notepad++).
+    it('opens a path inside the caller’s workspace (relative or absolute), with an optional line — as that workspace and a relative path', async () => {
         // The confined path is the OS's own absolute form (a drive letter and backslashes on Windows), so compare with resolve().
         expect(await call('openFileForUser', { terminalId: 'term_a', path: 'docs/plan.md', line: 12 })).toMatchObject({ ok: true, path: resolve('/w/tynn', 'docs/plan.md'), isError: false });
         expect(await call('openFileForUser', { terminalId: 'term_a', path: '/w/tynn/src/a.ts' })).toMatchObject({ ok: true, path: resolve('/w/tynn/src/a.ts') });
-        expect(opened).toEqual([{ path: resolve('/w/tynn', 'docs/plan.md'), line: 12 }, { path: resolve('/w/tynn/src/a.ts'), line: null }]);
+        expect(opened).toEqual([
+            { workspaceId: 'tynn', path: 'docs/plan.md', absolutePath: resolve('/w/tynn', 'docs/plan.md'), line: 12 },
+            { workspaceId: 'tynn', path: 'src/a.ts', absolutePath: resolve('/w/tynn/src/a.ts'), line: null },
+        ]);
     });
 
     it('refuses a path outside the workspace by name and opens nothing; refuses an unknown terminal', async () => {
