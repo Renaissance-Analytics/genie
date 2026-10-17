@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
@@ -975,6 +976,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                                     </li>
                                 ))}
                             </ul>
+                            {g === 'agents' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} onAction={onAction} /> : null}
                             {g === 'workstation' ? <Plugins plugins={data.plugins} onAction={onAction} /> : null}
                             {g === 'workstation' ? <Integrations integrations={data.integrations} onAction={onAction} /> : null}
                             {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
@@ -984,6 +986,97 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
             </Tabs>
             )}
         </div>
+    );
+}
+
+/**
+ * SAVED PROMPTS (Tynn #758): the Command Window's library, in Settings → Agents — each prompt's name, its text and its
+ * hotkey. The hotkey is RECORDED: click the box and press the keys; Backspace clears it. A key Genie cannot give it is
+ * refused on the row, with the reason. A new prompt is a draft until it has a name and text — the reader drops a row
+ * that cannot be found or sent, so saving an empty one would make it vanish (Genie 1 did).
+ */
+function SavedPrompts({ raw, onAction }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction'] }) {
+    const prompts = parsePromptLibrary(typeof raw === 'string' ? raw : undefined);
+    // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
+    const [platform, setPlatform] = useState('generic');
+    useEffect(() => { setPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
+    const [refused, setRefused] = useState<{ id: string; reason: string } | null>(null);
+    const [draft, setDraft] = useState<{ label: string; text: string } | null>(null);
+    const save = (next: readonly SavedPrompt[]): void => onAction({ kind: 'settings.set', key: 'saved_prompts', value: serializePromptLibrary(next) });
+    const record = (prompt: SavedPrompt, e: React.KeyboardEvent<HTMLInputElement>): void => {
+        if (e.key === 'Tab') return;
+        e.preventDefault();
+        const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+        if (bare && (e.key === 'Backspace' || e.key === 'Delete')) {
+            const { hotkey: _cleared, ...rest } = prompt;
+            setRefused(null);
+            save(upsertPrompt(prompts, rest));
+            return;
+        }
+        if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
+        const accelerator = acceleratorFromPress({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, platform);
+        if (accelerator === null) return;
+        const problem = hotkeyProblem(accelerator, prompts, prompt.id, platform);
+        if (problem !== null) { setRefused({ id: prompt.id, reason: problem }); return; }
+        setRefused(null);
+        save(upsertPrompt(prompts, { ...prompt, hotkey: accelerator }));
+    };
+    return (
+        <section data-saved-prompts className="border-t border-[var(--border-1)] px-5 py-3">
+            <div className="text-sm font-medium">Saved prompts</div>
+            <div className="mb-2 text-xs text-[var(--fg-3)]">Send one from the Command Window (Ctrl K, then p&gt;) or with its own hotkey. It goes to the agent whose chat is open, else the agent on screen, else Genie.</div>
+            {prompts.length === 0 && draft === null ? <p className="py-2 text-sm text-[var(--fg-3)]">No saved prompts yet. Add one and it appears under Prompts in the Command Window.</p> : null}
+            <ul className="flex flex-col gap-3">
+                {prompts.map((prompt) => (
+                    <li key={prompt.id} data-saved-prompt={prompt.id} className="flex flex-col gap-1.5 rounded-lg border border-[var(--border-1)] p-3">
+                        <div className="flex items-center gap-2">
+                            <Input
+                                aria-label="Prompt name"
+                                defaultValue={prompt.label}
+                                className="flex-1"
+                                onBlur={(e) => { const label = e.target.value.trim(); if (label && label !== prompt.label) save(upsertPrompt(prompts, { ...prompt, label })); }}
+                            />
+                            <Input
+                                data-prompt-hotkey={prompt.id}
+                                aria-label={`Hotkey for ${prompt.label}`}
+                                readOnly
+                                value={prompt.hotkey ? hotkeyLabel(prompt.hotkey, platform) : ''}
+                                placeholder="Click, then press keys"
+                                onKeyDown={(e) => record(prompt, e)}
+                                className="w-44"
+                            />
+                            <Button data-action="prompt-remove" size="sm" variant="ghost" onClick={() => save(removePrompt(prompts, prompt.id))}>Remove</Button>
+                        </div>
+                        <Textarea
+                            aria-label={`Text of ${prompt.label}`}
+                            defaultValue={prompt.text}
+                            rows={2}
+                            spellCheck={false}
+                            onBlur={(e) => { const text = e.target.value; if (text.trim() && text !== prompt.text) save(upsertPrompt(prompts, { ...prompt, text })); }}
+                        />
+                        {refused?.id === prompt.id ? <div data-prompt-refused={prompt.id} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
+                    </li>
+                ))}
+                {draft !== null ? (
+                    <li data-prompt-draft className="flex flex-col gap-1.5 rounded-lg border border-dashed border-[var(--border-1)] p-3">
+                        <Input aria-label="New prompt name" autoFocus placeholder="Name — what you search for" value={draft.label} onValueChange={(label) => setDraft({ ...draft, label })} />
+                        <Textarea aria-label="New prompt text" placeholder="What the agent is sent" rows={2} spellCheck={false} value={draft.text} onValueChange={(text) => setDraft({ ...draft, text })} />
+                        <div className="flex gap-2">
+                            <Button
+                                data-action="prompt-save"
+                                size="sm"
+                                disabled={!draft.label.trim() || !draft.text.trim()}
+                                onClick={() => { save([...prompts, { id: newPromptId(Date.now(), Math.random()), label: draft.label.trim(), text: draft.text }]); setDraft(null); }}
+                            >
+                                Save prompt
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+                        </div>
+                    </li>
+                ) : null}
+            </ul>
+            {draft === null ? <Button data-action="prompt-add" size="sm" className="mt-2" onClick={() => setDraft({ label: '', text: '' })}>Add a prompt</Button> : null}
+        </section>
     );
 }
 

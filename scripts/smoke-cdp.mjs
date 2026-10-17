@@ -689,6 +689,47 @@ if (!approvalEnabled) {
     check(landed, '55b. Enter opens the chosen workspace and closes the window');
 }
 
+/*
+ * 56. SAVED PROMPTS WITH THEIR OWN HOTKEYS (Tynn #758; the owner, 2026-10-17: "the ability to create prompts I can assign
+ * hotkeys to is missing"). Settings → Agents: Add a prompt, name it, give it text, Save; click its hotkey box and press
+ * Ctrl+Alt+P — the box reads it back; Ctrl+K, `p>` lists it with that key beside it. Not SENT here: CI has no signed-in
+ * provider, and the send itself is the chat's own path (unit-tested in test/prompt-library.test.ts for where it goes).
+ */
+{
+    await cdp.evaluate(`window.location.hash = '#genie://settings?group=agents'; true`);
+    const onSettings = await waitFor(cdp, `Boolean(document.querySelector('[data-saved-prompts] [data-action="prompt-add"]'))`, 'Settings → Agents to show Saved prompts');
+    check(onSettings, '56. Settings → Agents offers Saved prompts, with Add');
+    await cdp.evaluate(`document.querySelector('[data-saved-prompts] [data-action="prompt-add"]').click(); true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-prompt-draft] input'))`, 'the new-prompt draft');
+    await cdp.evaluate(`document.querySelector('[data-prompt-draft] input').focus(); true`);
+    await cdp.send('Input.insertText', { text: 'Smoke status' });
+    await cdp.evaluate(`document.querySelector('[data-prompt-draft] textarea').focus(); true`);
+    await cdp.send('Input.insertText', { text: 'Where are you up to?' });
+    await cdp.evaluate(`document.querySelector('[data-action="prompt-save"]')?.click(); true`);
+    const saved = await waitFor(cdp, `document.querySelectorAll('[data-saved-prompt]').length === 1 && !document.querySelector('[data-prompt-draft]')`, 'the prompt to be saved');
+    check(saved, '56a. a new prompt is saved once it has a name and text — and stays (it is not dropped as unusable)', await cdp.evaluate(`String(document.querySelectorAll('[data-saved-prompt]').length)`));
+    const hotkeyBox = `[data-saved-prompt] input[data-prompt-hotkey], [data-saved-prompt] [data-prompt-hotkey] input`;
+    await cdp.evaluate(`document.querySelector('${hotkeyBox}')?.focus(); true`);
+    const ctrlAltP = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 3 });
+    await ctrlAltP('rawKeyDown');
+    await ctrlAltP('keyUp');
+    const recorded = await waitFor(cdp, `(document.querySelector('${hotkeyBox}')?.value ?? '') === 'Ctrl+Alt+P'`, 'the hotkey to be recorded');
+    check(recorded, '56b. pressing Ctrl+Alt+P in its hotkey box assigns it, and the box reads it back', await cdp.evaluate(`JSON.stringify(document.querySelector('${hotkeyBox}')?.value ?? null)`));
+    const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2 });
+    await cdp.evaluate(`document.activeElement?.blur?.(); true`);
+    await ctrlK('rawKeyDown');
+    await ctrlK('keyUp');
+    const PALETTE_INPUT = `input[placeholder^="Search prompts"]`;
+    await waitFor(cdp, `Boolean(document.querySelector('${PALETTE_INPUT}'))`, 'the Command Window to open');
+    await cdp.evaluate(`document.querySelector('${PALETTE_INPUT}')?.focus(); true`);
+    await cdp.send('Input.insertText', { text: 'p>' });
+    const offered = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="prompt:"]').length === 1 && document.querySelectorAll('[data-command-item]:not([data-command-item^="prompt:"])').length === 0 && (document.querySelector('[data-command-item^="prompt:"]')?.parentElement?.textContent ?? '').includes('Ctrl+Alt+P')`, 'the prompt to be offered under p>');
+    check(offered, '56c. Ctrl+K, "p>" lists the prompt and nothing else, its hotkey beside it', await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-command-item]')].map((e) => e.parentElement?.textContent ?? ''))`));
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await waitFor(cdp, `!document.querySelector('${PALETTE_INPUT}')`, 'the Command Window to close');
+}
+
 {
     const token = `genie-${Math.random().toString(16).slice(2, 10)}`;
     await cdp.evaluate(`document.querySelector('[data-nav="genie://workspace/tynn"]').click(); true`);
