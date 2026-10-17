@@ -723,7 +723,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     });
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
-    const approvals = new ApprovalQueue({ now });
+    // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
+    const approvals = new ApprovalQueue({ now, autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true) });
     const feedback = await FeedbackStore.open(input.userData, now);
 
     const hostName = input.hostName ?? hostname();

@@ -18,7 +18,7 @@ import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/i
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
@@ -391,6 +391,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
             mode: record.mode,
             accessScope: record.accessScope,
+            autoApprove: record.autoApprove === true,
             permissions: record.permissions ?? 'all',
             // The model CHOSEN (null = the provider's default); the one IN USE is the session's, as reported.
             model: record.model ?? null,
@@ -752,6 +753,7 @@ async function boot(): Promise<void> {
             setBudget: (id, usd) => registry!.setBudget(id, usd),
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
+            setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
             setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
             setModel: (id, model) => registry!.setModel(id, model),
         },
@@ -805,6 +807,9 @@ async function boot(): Promise<void> {
         (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
     ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
         (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
+    // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
+    ipcMain.handle('genie:agent-set-auto-approve', (_event, raw: unknown, on: unknown) =>
+        (typeof raw === 'string' && typeof on === 'boolean' ? setAutoApprove(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'autonomy is on or off' }));
     ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
         (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
     ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
@@ -1182,6 +1187,7 @@ async function boot(): Promise<void> {
                 setBudget: (id, usd) => setBudget(agentOps, id, usd),
                 setMode: (id, mode) => setMode(agentOps, id, mode),
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
+                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
                 setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
                 setModel: (id, model) => setModel(agentOps, id, model),
                 diagnose: (id) => diagnose(agentOps, id),

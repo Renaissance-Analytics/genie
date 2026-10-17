@@ -100,6 +100,9 @@ export interface AgentOpsProps {
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
+    /** Autonomous (Tynn #801): its services/processes/sites/terminals actions run without asking. Absent setter = no switch. */
+    readonly autoApprove?: boolean;
+    readonly onSetAutoApprove?: (on: boolean) => void;
     /** A Claude agent's tools: all, ask before shell commands, or edits only (shell refused). Absent = no control (a window that cannot set it). */
     readonly permissions?: AgentPermissions;
     readonly onSetPermissions?: (permissions: AgentPermissions) => void;
@@ -948,6 +951,15 @@ export function AgentView({
                                                 <option value="all">any workspace here</option>
                                             </select>
                                         </label>
+                                        {ops.onSetAutoApprove ? (
+                                            <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
+                                                <input type="checkbox" data-auto-approve={ops.autoApprove ? 'on' : 'off'} checked={ops.autoApprove === true} onChange={(e) => ops.onSetAutoApprove?.(e.target.checked)} className="mt-0.5" />
+                                                <span>
+                                                    Autonomous — {agent.name} sets up services, processes, sites and terminals without asking you.
+                                                    <span className="mt-0.5 block text-[var(--fg-4)]">Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Applies to its next action.</span>
+                                                </span>
+                                            </label>
+                                        ) : null}
                                     </section>
                                 ) : null}
                                 {budget || budgetLimit !== null || headroom || policy || session?.mcpServers ? (

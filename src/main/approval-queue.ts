@@ -14,6 +14,15 @@ import type { Caller } from './mcp-tools.js';
 
 export type Verdict = 'allowed' | 'denied';
 
+/** One action an autonomous agent took without asking (Tynn #801). */
+export interface AutoApproved {
+    readonly agentId: string;
+    readonly agentName: string;
+    readonly action: string;
+    readonly detail: string;
+    readonly at: number;
+}
+
 interface Pending {
     readonly id: string;
     readonly caller: Caller;
@@ -47,10 +56,23 @@ export class ApprovalQueue {
     #cancelled: Array<{ action: string; detail: string; reason: string }> = [];
     #n = 0;
     readonly #listeners = new Set<() => void>();
+    readonly #autoApproved: ((caller: Caller, action: string) => boolean) | undefined;
+    #auto: AutoApproved[] = [];
 
-    constructor(options: { now?: () => number; timeoutMs?: number } = {}) {
+    /**
+     * `autoApproved`: whether this caller's actions run WITHOUT the person (Tynn #801, an autonomous agent). Such a
+     * request is allowed at once, parks nothing on the Deck, and is RECORDED (`autoApproved()`, the latest 50) so the
+     * person can see what it did.
+     */
+    constructor(options: { now?: () => number; timeoutMs?: number; autoApproved?: (caller: Caller, action: string) => boolean } = {}) {
         this.#now = options.now ?? Date.now;
         this.#timeoutMs = options.timeoutMs ?? 30 * 60_000;
+        this.#autoApproved = options.autoApproved;
+    }
+
+    /** What autonomous agents did without asking, oldest first — the latest 50. */
+    autoApproved(): readonly AutoApproved[] {
+        return this.#auto;
     }
 
     /**
@@ -71,6 +93,11 @@ export class ApprovalQueue {
     }
 
     gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
+        if (this.#autoApproved?.(caller, action) === true) {
+            this.#auto = [...this.#auto, { agentId: caller.agentId, agentName: caller.agentName, action, detail, at: this.#now() }].slice(-50);
+            this.#changed();
+            return Promise.resolve('allowed');
+        }
         return new Promise((resolve) => {
             const existing = [...this.#pending.values()].find((p) => p.caller.agentId === caller.agentId && p.action === action && p.detail === detail);
             if (existing) {

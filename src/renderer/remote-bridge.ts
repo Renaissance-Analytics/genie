@@ -179,6 +179,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
+            setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
             setModel: (agentId, model) => answer('agents.setModel', agentId, model),
             diagnose: (agentId) => answer('agents.diagnose', agentId),

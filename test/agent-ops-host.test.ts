@@ -27,6 +27,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             setBudget: async (id, usd) => { if (!current || current.id !== id) return null; current = { ...current, dailyBudgetUsd: usd } as AgentRecord; calls.push(`setBudget:${id}:${usd}`); return current; },
             setMode: async (id, mode) => { if (!current || current.id !== id) return null; current = { ...current, mode }; return current; },
             setAccessScope: async (id, accessScope) => { if (!current || current.id !== id) return null; current = { ...current, accessScope }; return current; },
+            setAutoApprove: async (id, autoApprove) => { if (!current || current.id !== id) return null; current = { ...current, autoApprove }; return current; },
             setPermissions: async (id, permissions) => { if (!current || current.id !== id) return null; current = { ...current, permissions }; return current; },
             setModel: async (id, model) => { if (!current || current.id !== id) return null; const { model: _previous, ...rest } = current; current = model === null ? rest : { ...rest, model }; return current; },
         },
