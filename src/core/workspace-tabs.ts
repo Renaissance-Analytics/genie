@@ -1,3 +1,4 @@
+import { formatRoute, parseRoute, type WorkspaceView } from './route.js';
 /**
  * WORKSPACE TABS YOU DESIGN (Tynn story #282). The owner, 2026-10-17: "By default we will have the Agents and Settings
  * tab, but in between those tabs is a small tab with a plus sign. Clicking this will create a new tab (this plus tab is
@@ -50,13 +51,49 @@ const isKind = (k: unknown): k is PanelKind => typeof k === 'string' && (PANEL_K
 
 export type StripItem =
     | { readonly kind: 'agents' }
+    /** An agent you opened in this workspace (Tynn #805): its page is drawn under this strip. */
+    | { readonly kind: 'agent'; readonly id: string; readonly name: string }
     | { readonly kind: 'designed'; readonly id: string; readonly name: string }
     | { readonly kind: 'add' }
     | { readonly kind: 'settings' };
 
-/** Agents, the designed tabs in the order made, +, Settings — + always just before Settings, Settings always last. */
-export function tabStrip(state: TabsState): StripItem[] {
-    return [{ kind: 'agents' }, ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })), { kind: 'add' }, { kind: 'settings' }];
+/**
+ * Agents, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
+ * the order made, +, Settings — + always just before Settings, Settings always last.
+ */
+export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = []): StripItem[] {
+    return [
+        { kind: 'agents' },
+        ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
+        ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
+        { kind: 'add' },
+        { kind: 'settings' },
+    ];
+}
+
+/** The route of one of a workspace's views (`home`, `settings`, `tab:<id>`), built by the router (Tynn #805). */
+export function workspaceViewRoute(workspaceId: string, view: string): string {
+    const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}`);
+    return base.surface === 'workspace' ? formatRoute({ ...base, view: view as WorkspaceView }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
+}
+
+/** How many agents stay open as tabs in one workspace's strip. */
+export const MAX_OPEN_AGENTS = 6;
+
+/**
+ * The agents open as tabs in a workspace, in the order opened (Tynn #805): the one you are on joins at the end, once;
+ * an agent no longer in the workspace drops out; past MAX_OPEN_AGENTS the oldest gives way — never the current one.
+ */
+export function openAgentTabs(prev: readonly string[], current: string | null, roster: readonly string[]): string[] {
+    const present = new Set(roster);
+    let open = prev.filter((id) => present.has(id));
+    if (current !== null && present.has(current) && !open.includes(current)) open = [...open, current];
+    while (open.length > MAX_OPEN_AGENTS) {
+        const drop = open.findIndex((id) => id !== current);
+        if (drop < 0) break;
+        open = [...open.slice(0, drop), ...open.slice(drop + 1)];
+    }
+    return open;
 }
 
 function freshId(state: TabsState): string {

@@ -4,7 +4,8 @@ import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
+import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
+import { openAgentTabs as nextOpenAgentTabs } from '../core/workspace-tabs.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -425,7 +426,8 @@ function DesktopApp({ bridge }: AppProps) {
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
     // Add from a git URL (§6.1): the form, then the host picks the parent and the plan replaces the form.
     const [addFromGit, setAddFromGit] = useState(false);
-    const workspaceId = parsed.surface === 'workspace' ? parsed.workspaceId : null;
+    // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
+    const workspaceId = routeWorkspace(route, snapshot.agents);
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
     const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
@@ -469,6 +471,32 @@ function DesktopApp({ bridge }: AppProps) {
         if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
     }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
+    // THE AGENTS OPEN AS TABS, per workspace (Tynn #805): the one you open joins its workspace's strip; closing the one you
+    // are on returns you to the workspace.
+    const [openAgentIds, setOpenAgentIds] = useState<Readonly<Record<string, readonly string[]>>>({});
+    const onAgentId = parsed.surface === 'agent' ? parsed.agentId : null;
+    useEffect(() => {
+        if (!workspaceId) return;
+        const roster = snapshot.agents.filter((a) => a.workspaceId === workspaceId).map((a) => a.id);
+        setOpenAgentIds((all) => {
+            const next = nextOpenAgentTabs(all[workspaceId] ?? [], onAgentId, roster);
+            const prev = all[workspaceId] ?? [];
+            return next.length === prev.length && next.every((id, i) => id === prev[i]) ? all : { ...all, [workspaceId]: next };
+        });
+    }, [workspaceId, onAgentId, snapshot.agents]);
+    const openAgentTabs = workspaceId
+        ? {
+              workspaceId,
+              agents: (openAgentIds[workspaceId] ?? []).flatMap((id) => {
+                  const a = snapshot.agents.find((x) => x.id === id);
+                  return a ? [{ id: a.id, name: a.name, state: a.state }] : [];
+              }),
+              onClose: (id: string) => {
+                  setOpenAgentIds((all) => ({ ...all, [workspaceId]: (all[workspaceId] ?? []).filter((x) => x !== id) }));
+                  if (onAgentId === id) navigate(`genie://workspace/${workspaceId}`);
+              },
+          }
+        : null;
     const previewAdd = () => {
         void resolvedBridge?.workspaces.previewAdd().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
     };
@@ -905,6 +933,7 @@ function DesktopApp({ bridge }: AppProps) {
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}
+            openAgentTabs={openAgentTabs}
             onOpenAgent={(id) => {
                 // Start or reattach, THEN navigate. Reattach is the main process's job and is
                 // idempotent, so arriving at an agent that is already running is not a second
