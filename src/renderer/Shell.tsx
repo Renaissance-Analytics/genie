@@ -576,6 +576,7 @@ export function Shell({
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
                             filesFile={parsed.file}
+                            filesLine={parsed.line}
                             filesFilter={parsed.filter}
                             onFilesRoute={(file, filter) => onNavigate(formatRoute({ ...parsed, panel: 'files', file, filter, detached: false }))}
                             filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}

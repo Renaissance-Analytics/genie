@@ -80,6 +80,8 @@ export type Route =
           view: WorkspaceView;
           /** The file open in the panel (the board's `?files=<path>`); `null` = the panel shows no file. */
           file: string | null;
+          /** The line that file opens at (`&line=<n>`, from 1) — openFileForUser's line (Tynn #804); `null` = the top. */
+          line: number | null;
           /** The panel's Changed filter (`&filter=changed`); `null` = All. */
           filter: 'changed' | null;
           /** The panel in its own window (`?files=detached`). */
@@ -111,6 +113,13 @@ function dashboard(group: DashboardGroup, common: Common): Route {
  * WHICH WORKSPACE A ROUTE IS IN (Tynn #805): the workspace's own pages, and an agent's page — which belongs to its
  * agent's workspace. The sidebar keeps that workspace highlighted wherever in it you are; `null` elsewhere.
  */
+/** A line number from the route: a whole number from 1, else none. */
+function lineOf(raw: string | null): number | null {
+    if (raw === null || !/^[0-9]+$/.test(raw)) return null;
+    const n = Number(raw);
+    return n >= 1 ? n : null;
+}
+
 export function routeWorkspace(route: string, agents: ReadonlyArray<{ id: string; workspaceId: string }>): string | null {
     const r = parseRoute(route);
     if (r.surface === 'workspace' || r.surface === 'files') return r.workspaceId;
@@ -181,6 +190,7 @@ export function parseRoute(input: string): Route {
                 workspaceId: tail,
                 panel: files !== null || params.get('panel') === 'files' ? 'files' : null,
                 file: files !== null && files !== '' && !detached ? files : null,
+                line: files !== null && files !== '' && !detached ? lineOf(params.get('line')) : null,
                 filter: files !== null && params.get('filter') === 'changed' ? 'changed' : null,
                 detached,
                 view: workspaceViewOf(params.get('view')),
@@ -230,6 +240,7 @@ export function formatRoute(route: Route): string {
             if (route.panel === 'files') {
                 params.set('files', route.detached ? 'detached' : route.file ?? '');
                 if (route.filter === 'changed' && !route.detached) params.set('filter', 'changed');
+                if (route.file && route.line !== null && !route.detached) params.set('line', String(route.line));
             }
             if (route.view !== 'home') params.set('view', route.view);
             break;

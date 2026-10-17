@@ -10,7 +10,7 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from 
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange }: {
+export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange, routeLine = null }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
@@ -35,6 +35,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
      * panel the route does not own (the dock, a code pane).
      */
     routeFile?: string | null | undefined;
+    /** The line the route's file opens at (openFileForUser, Tynn #804). */
+    routeLine?: number | null | undefined;
     routeFilter?: 'changed' | null | undefined;
     onRouteChange?: ((file: string | null, filter: 'changed' | null) => void) | undefined;
 }) {
@@ -173,5 +175,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         : undefined;
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
 }
