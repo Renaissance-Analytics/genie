@@ -55,3 +55,13 @@ export function groupCommandItems(items: readonly CommandItem[]): Array<{ catego
         .map((category) => ({ category, heading: CATEGORY_HEADINGS[category], items: items.filter((i) => i.category === category) }))
         .filter((g) => g.items.length > 0);
 }
+
+
+/**
+ * What Enter in the search box opens: the FIRST match, in the order the groups are shown. Fancy's Command starts with no
+ * row active and handles no Enter (only a focused item button takes it), so typing and pressing Enter did nothing — the
+ * one thing everybody does in a palette. `null` when nothing matches.
+ */
+export function firstMatch(items: readonly CommandItem[], raw: string): CommandItem | null {
+    return groupCommandItems(filterCommandItems(items, parseCommandQuery(raw)))[0]?.items[0] ?? null;
+}

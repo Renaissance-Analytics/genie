@@ -1,6 +1,6 @@
 import { Command } from '@particle-academy/react-fancy';
-import { useMemo, useState } from 'react';
-import { filterCommandItems, groupCommandItems, parseCommandQuery, type CommandItem } from '../../core/command-window.js';
+import { useEffect, useMemo, useState } from 'react';
+import { filterCommandItems, firstMatch, groupCommandItems, parseCommandQuery, type CommandItem } from '../../core/command-window.js';
 
 /**
  * CTRL/CMD+K — THE COMMAND WINDOW (Tynn #757; Genie 1's GenieCommandWindow). Fancy's `Command` draws it (in a portal on
@@ -19,8 +19,24 @@ export interface CommandWindowProps {
 export function CommandWindow({ open, items, onClose, onActivate }: CommandWindowProps) {
     const [query, setQuery] = useState('');
     const groups = useMemo(() => groupCommandItems(filterCommandItems(items, parseCommandQuery(query))), [items, query]);
-    if (!open) return null;
     const close = (): void => { setQuery(''); onClose(); };
+    // ENTER IN THE SEARCH BOX opens the first match (core/command-window `firstMatch`): Fancy's Command takes Enter only on
+    // a focused item. An item the arrows focused keeps its own Enter (a button's click) — this is the box's alone.
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent): void => {
+            const box = e.target as HTMLInputElement | null;
+            if (e.key !== 'Enter' || !box || box.tagName !== 'INPUT' || !box.placeholder.startsWith('Search prompts')) return;
+            const first = firstMatch(items, query);
+            if (!first) return;
+            e.preventDefault();
+            onActivate(first);
+            close();
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    });
+    if (!open) return null;
     const shown = groups.reduce((n, g) => n + g.items.length, 0);
     return (
         <div data-command-window="">

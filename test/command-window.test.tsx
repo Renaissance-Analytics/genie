@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { COMMAND_PREFIXES, filterCommandItems, groupCommandItems, parseCommandQuery, type CommandItem } from '../src/core/command-window.js';
+import { COMMAND_PREFIXES, filterCommandItems, firstMatch, groupCommandItems, parseCommandQuery, type CommandItem } from '../src/core/command-window.js';
 import { globalAction } from '../src/core/keys.js';
 import { CommandWindow } from '../src/renderer/components/CommandWindow.js';
 
@@ -70,5 +70,16 @@ describe('the chord is caught before anything focused can swallow it', () => {
         const effect = app.slice(at, app.indexOf('});', app.indexOf("removeEventListener('keydown'", at)) + 3);
         expect(effect).toContain("window.addEventListener('keydown', onKey, true)");
         expect(effect).toContain("window.removeEventListener('keydown', onKey, true)");
+    });
+});
+
+describe('Enter in the search box', () => {
+    // CI's real window: typing then Enter did nothing — Fancy's Command starts with no row active and handles no Enter;
+    // only a FOCUSED item button takes it. In the box, Enter opens the first match, in the order the groups show.
+    it('the first match, as shown (Prompts before Actions before Workspaces before Agents); none → null', () => {
+        expect(firstMatch(items, 'w>')?.id).toBe('tynn');
+        expect(firstMatch(items, '')?.id).toBe('p1');
+        expect(firstMatch(items, 'mo')?.id).toBe('a1');
+        expect(firstMatch(items, 'zzz')).toBeNull();
     });
 });
