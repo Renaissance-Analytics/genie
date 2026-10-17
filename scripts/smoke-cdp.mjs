@@ -679,7 +679,7 @@ if (!approvalEnabled) {
     await cdp.evaluate(`document.querySelector('${PALETTE_INPUT}')?.focus(); true`);
     await cdp.send('Input.insertText', { text: 'w> tynn' });
     const listed = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="workspace:"]').length >= 1 && document.querySelectorAll('[data-command-item^="agent:"], [data-command-item^="action:"]').length === 0`, 'only workspaces to be listed for w>');
-    const counts = await cdp.evaluate(`JSON.stringify({ workspaces: document.querySelectorAll('[data-command-item^="workspace:"]').length, others: document.querySelectorAll('[data-command-item]:not([data-command-item^="workspace:"])').length })`);
+    const counts = await cdp.evaluate(`(() => { const input = document.querySelector('${PALETTE_INPUT}'); const box = input ? input.closest('.fixed') ?? input.parentElement?.parentElement : null; return JSON.stringify({ workspaces: document.querySelectorAll('[data-command-item^="workspace:"]').length, others: document.querySelectorAll('[data-command-item]:not([data-command-item^="workspace:"])').length, value: input ? input.value : null, open: Boolean(input), options: box ? box.querySelectorAll('[role="option"], button, li').length : null, text: box ? box.innerText.slice(0, 240) : null }); })()`);
     check(listed, '55a. "w> tynn" lists the workspace and nothing else — the prefix narrows; Fancy’s own filter does not hide it', counts);
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
