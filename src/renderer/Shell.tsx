@@ -391,6 +391,7 @@ export function Shell({
                     workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
                     currentWorkspaceId={routeWorkspace(route, snapshot.agents)}
+                    agents={snapshot.agents}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
