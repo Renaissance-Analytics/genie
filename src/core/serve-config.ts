@@ -115,7 +115,11 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
         // Caddy 2.11.7 + php-cgi 8.3 + symfony/http-foundation 7.4: HTTP_X_FORWARDED_PROTO=http, url http://moic.gen/...
         // Set here, it is https for every request and NO proxy is trusted: `trusted_proxies` would also pass a caller's
         // X-Forwarded-For through to PHP (measured with `private_ranges`: a peer's spoofed 203.0.113.9 reached PHP).
-        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t\theader_up X-Forwarded-Proto https', '\t}', '\tfile_server');
+        //
+        // While the PHP worker restarts (an engine change restarts it alone, on the same port; a crash brings it back),
+        // the dial is RETRIED instead of answered 502 (Tynn #756). Measured in WSL, Caddy 2.11.7 + php-cgi, the worker
+        // gone 1.5 s: without these a request in the gap was 502 after 8 ms; with them, 200 after 1617 ms.
+        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t\theader_up X-Forwarded-Proto https', '\t\tlb_try_duration 10s', '\t\tlb_try_interval 100ms', '\t}', '\tfile_server');
     }
     lines.push('}', '');
     return lines.join('\n');

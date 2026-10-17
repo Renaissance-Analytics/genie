@@ -83,6 +83,19 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         expect(php).toContain('file_server');
     });
 
+    // Tynn #756: while the PHP worker restarts (an engine change, or a crash brought back by its `always` policy) the
+    // site's Caddy RETRIES the dial instead of answering 502. Measured in WSL genie-test, Caddy 2.11.7 + php-cgi, the
+    // worker gone 1.5 s on the same port: without these lines a request in the gap was 502 after 8 ms; with them, 200
+    // after 1617 ms.
+    it('php: the site’s Caddy waits for its PHP worker to come back instead of answering 502', () => {
+        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const block = /php_fastcgi 127\.0\.0\.1:4102 \{([\s\S]*?)\n\t\}/.exec(php)?.[1] ?? '';
+        expect(block.match(/^\t\tlb_try_duration 10s$/gm) ?? []).toHaveLength(1);
+        expect(block.match(/^\t\tlb_try_interval 100ms$/gm) ?? []).toHaveLength(1);
+        // CONTROL: a static site has no upstream to wait for.
+        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: false } })).not.toContain('lb_try');
+    });
+
     // B22, moic.gen again (2026-10-15): with HTTPS=on set, Laravel STILL built http:// asset links. The site's Caddy
     // sets X-Forwarded-Proto to its OWN scheme (`http`, its listener) and ignores the front door's `https`, because it
     // trusts no proxy; a Laravel app trusts 127.0.0.1, and Symfony prefers a trusted X-Forwarded-Proto over HTTPS=on.

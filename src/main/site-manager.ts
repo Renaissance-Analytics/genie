@@ -120,6 +120,8 @@ interface SiteRecord {
     problem: string | null;
     /** The env its processes were last started with (canonical JSON) — what an engine change is compared against. */
     startedEnv?: string;
+    /** A running PHP site's worker: what an engine change restarts ALONE, on the same port (Tynn #756). */
+    phpWorker?: { readonly command: string; readonly fcgiPort: number };
 }
 
 /** An env as one comparable string: keys sorted, so the same variables in another order are the same env. */
@@ -289,6 +291,7 @@ export class SiteManager {
         const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
         const baseEnv = Object.keys(merged).length > 0 ? merged : undefined;
         const startedEnv = canonicalEnv(merged);
+        delete record.phpWorker; // set again below for a PHP site only
 
         if (input.serve.mode === 'proxy') {
             if (input.hostPort !== undefined) {
@@ -324,12 +327,8 @@ export class SiteManager {
                 spec = { mode: 'php', root: input.serve.root, fcgiPort };
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
                 const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
-                const phpEnv = this.#deps.phpWorkerEnv?.() ?? {};
-                // PHP_WORKER_ENV last: no workspace variable brings the request limit back.
-                const fcgiEnv = { ...phpEnv, ...(baseEnv ?? {}), ...PHP_WORKER_ENV };
-                // ALWAYS back, a clean exit included: php-cgi's own exits are clean (status 0). A site the person stops
-                // stays stopped (the supervisor checks that first).
-                proc(`${id}-fcgi`, `${host} php worker`, `${cgiCommand} -b 127.0.0.1:${fcgiPort}`, fcgiEnv, 'always');
+                record.phpWorker = { command: cgiCommand, fcgiPort };
+                this.#startPhpWorker(record, baseEnv);
                 processIds.push(`${id}-fcgi`);
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {
@@ -360,6 +359,17 @@ export class SiteManager {
             if (workspaceId !== undefined && input.workspaceId !== workspaceId) continue;
             const now = canonicalEnv({ ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) });
             if (now === record.startedEnv) continue;
+            if (record.phpWorker) {
+                // Only PHP reads the service env: its worker alone is restarted, on the same fcgi port, so the site's
+                // Caddy, its port and the front door's route stay — and Caddy retries the dial while the worker comes
+                // back (serve-config's lb_try_duration). Stopping everything 502'd the site (Tynn #756, moic run 11).
+                const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
+                this.#deps.supervisor.stop(`${record.id}-fcgi`);
+                this.#startPhpWorker(record, Object.keys(merged).length > 0 ? merged : undefined);
+                record.startedEnv = canonicalEnv(merged);
+                restarted.push(record.id);
+                continue;
+            }
             this.#stopProcesses(record);
             try {
                 this.#start(record);
@@ -426,6 +436,26 @@ export class SiteManager {
         this.#sites.delete(id);
         this.#changed();
         return true;
+    }
+
+    /** The PHP worker of a site, with the service env given; the fcgi port and php-cgi are the site's own. */
+    #startPhpWorker(record: SiteRecord, baseEnv: Readonly<Record<string, string>> | undefined): void {
+        const input = record.input!;
+        const worker = record.phpWorker!;
+        const phpEnv = this.#deps.phpWorkerEnv?.() ?? {};
+        // PHP_WORKER_ENV last: no workspace variable brings the request limit back.
+        const env = { ...phpEnv, ...(baseEnv ?? {}), ...PHP_WORKER_ENV };
+        // ALWAYS back, a clean exit included: php-cgi's own exits are clean (status 0). A site the person stops stays
+        // stopped (the supervisor checks that first).
+        this.#deps.supervisor.start({
+            id: `${record.id}-fcgi`,
+            workspaceId: input.workspaceId,
+            name: `${record.host} php worker`,
+            command: `${worker.command} -b 127.0.0.1:${worker.fcgiPort}`,
+            cwd: input.repoPath,
+            restart: 'always',
+            env,
+        });
     }
 
     #stopProcesses(record: SiteRecord): void {
