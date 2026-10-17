@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
@@ -12,6 +12,9 @@ import { AgentSession, type DriverEvents, type SessionDriverFactory } from '../s
  * times, Turn 25 three times). Measured in the owner's own record: markers read `10, 10, 10, 10, 11, 12, 14, 14…`. A
  * prompt sent mid-turn was marked with the RUNNING turn's number, and the provider ran it as its own turn later, which
  * ended unmarked, so the count skipped. A queued prompt is marked when its turn starts.
+ *
+ * The markers are read after the thread's writes SETTLE, never on a clock: a 1 s waitFor read [] under a loaded batch
+ * (2026-10-17, Tynn #790).
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -46,7 +49,8 @@ describe('prompts sent while a turn runs', () => {
         session.prompt('from a peer', 'kai');
         // Every prompt still reaches the provider at once; only its MARKER waits.
         expect(prompts).toHaveLength(3);
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you']);
 
         end();
         expect(session.turnState).toBe('working');
@@ -56,7 +60,8 @@ describe('prompts sent while a turn runs', () => {
         expect(session.turnState).toBe('idle');
 
         // COUNTED: three turns, numbered 1, 2, 3, each by whoever sent it.
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you', '2:you', '3:kai']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you', '2:you', '3:kai']);
         expect(session.turns).toBe(3);
     });
 
@@ -66,7 +71,8 @@ describe('prompts sent while a turn runs', () => {
         end();
         session.prompt('b', 'you');
         end();
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you', '2:you']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you', '2:you']);
     });
 
     it('a CRASHED turn drops the queue: nothing is assumed to run after it, and the failure stands', async () => {
@@ -75,10 +81,12 @@ describe('prompts sent while a turn runs', () => {
         session.prompt('queued', 'you');
         end(true);
         expect(session.turnState).toBe('failed');
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you']);
         // The next prompt starts the next number.
         session.prompt('again', 'you');
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you', '2:you']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you', '2:you']);
     });
 
     it('a turn the agent starts itself after the queue drains still gets the next number', async () => {
@@ -88,6 +96,7 @@ describe('prompts sent while a turn runs', () => {
         end();
         end();
         events().onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a background task finished' } });
-        await vi.waitFor(async () => expect(await markers()).toEqual(['1:you', '2:you', '3:-']));
+        await session.settled();
+        expect(await markers()).toEqual(['1:you', '2:you', '3:-']);
     });
 });

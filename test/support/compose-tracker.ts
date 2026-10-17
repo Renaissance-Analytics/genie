@@ -1,4 +1,5 @@
 import { composeServices, type ComposedServices } from '../../src/main/compose.js';
+import { onceIssuer } from './once-issuer.js';
 
 /**
  * EVERY COMPOSITION A TEST STARTS IS SHUT DOWN BEFORE ITS FOLDER IS REMOVED — including one still composing when the
@@ -23,7 +24,8 @@ export function composeTracker(): ComposeTracker {
     let started: Promise<ComposedServices | null>[] = [];
     return {
         compose(input) {
-            const composing = composeServices(input);
+            // The real issuer, made once per file (support/once-issuer.ts), unless the test brings its own.
+            const composing = composeServices({ certIssuer: onceIssuer, ...input });
             // A composition that failed has nothing to shut down; its failure is the test's to report, not the cleanup's.
             started.push(composing.catch(() => null));
             return composing;

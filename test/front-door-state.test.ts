@@ -10,10 +10,11 @@ import { hostsFileBlock } from '../src/core/gen-router.js';
 import type { ComposedServices, FrontDoorStatus } from '../src/main/compose.js';
 import type { ElevationOutcome, PrivilegedStep, Step } from '../src/main/elevate.js';
 import type { FrontDoorPort, FrontDoorPorts, PortProbe } from '../src/main/front-door-port.js';
-import { thumbprintOf, x509Issuer, type CertIssuer, type TrustStorePort } from '../src/main/gen-ca.js';
+import { thumbprintOf, type TrustStorePort } from '../src/main/gen-ca.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
-import { issueCa, type IssuedPem } from '../src/main/x509.js';
+import { issueCa } from '../src/main/x509.js';
+import { onceIssuer } from './support/once-issuer.js';
 import { composeTracker } from './support/compose-tracker.js';
 
 /**
@@ -109,24 +110,6 @@ async function elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutco
     }
     return { ok: true };
 }
-
-/**
- * The REAL issuer, its certificates made once per file. Every compose here opened a fresh CA and leaf, each a
- * synchronous RSA-2048 key generation, whose time is a random prime search: on the GitHub Windows runner one S4 test
- * spent its whole 5 s in it (the beta.29 release build, 2026-10-17). What these tests count is hosts writes, prompts
- * and trust; the certificates are still real and still the CA's, only not minted again for each test.
- */
-const madeCa = new Map<string, IssuedPem>();
-const madeLeaf = new Map<string, IssuedPem>();
-const onceIssuer: CertIssuer = {
-    ca: (now) => { let c = madeCa.get('ca'); if (!c) { c = x509Issuer.ca(now); madeCa.set('ca', c); } return c; },
-    leaf: (ca, hosts, now) => {
-        const key = `${ca.certPem}|${[...hosts].sort().join(',')}`;
-        let l = madeLeaf.get(key);
-        if (!l) { l = x509Issuer.leaf(ca, hosts, now); madeLeaf.set(key, l); }
-        return l;
-    },
-};
 
 async function compose(caddyBin: string | null = CADDY): Promise<ComposedServices> {
     return composed.compose({
