@@ -74,7 +74,7 @@ import { FilesHost } from './files-host.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
-import { fileEventsOf } from '../core/files-panel.js';
+import { fileEventsOf, openFileRoute } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
@@ -1274,7 +1274,8 @@ async function boot(): Promise<void> {
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
-            openFile: async (absolutePath) => { const failed = await shell.openPath(absolutePath); return failed ? { ok: false, reason: failed } : { ok: true }; },
+            // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
+            openFile: async ({ workspaceId, path }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path)); return { ok: true }; },
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),

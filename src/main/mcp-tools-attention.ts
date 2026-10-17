@@ -13,8 +13,11 @@ import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext,
 
 export interface AttentionToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    /** Put the file in front of the person (the host's own opener, or the files panel). */
-    readonly openFile: (absolutePath: string, line: number | null) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /**
+     * Put the file in front of the person — in GENIE, that workspace's own file panel (genie#922): main is handed the
+     * workspace and the path RELATIVE to it, never just an absolute path the OS's default app would take.
+     */
+    readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly feedback: FeedbackStore;
 }
 
@@ -54,7 +57,8 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
             const abs = confineToWorkspace(caller.workspacePath, requested);
             if (abs === null) return err(`${requested} is outside ${caller.agentName}’s workspace (${caller.workspacePath}); Genie opens nothing there`);
             const line = typeof args.line === 'number' && args.line > 0 ? Math.floor(args.line) : null;
-            const r = await deps.openFile(abs, line);
+            const rel = relative(resolve(caller.workspacePath), abs).split(/[\\/]/).join('/');
+            const r = await deps.openFile({ workspaceId: caller.workspaceId, path: rel, absolutePath: abs, line });
             return r.ok ? ok({ ok: true, path: abs, line }) : err(r.reason);
         }),
     };
