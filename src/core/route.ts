@@ -45,7 +45,7 @@ interface Common {
 }
 
 export type DashboardGroup = 'workspace' | 'status';
-export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity';
+export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
 export type WorkspaceView = 'home' | 'terminals' | 'settings';
 const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings'];
@@ -90,7 +90,7 @@ export type Route =
 
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
-const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity'];
+const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
 const SETTINGS_GROUPS: readonly SettingsGroup[] = ['general', 'agents', 'workstation', 'appearance'];
 const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox'];
 /** The sub-routes lines and signals point at (`genie://settings/github`) → the group that holds them. */

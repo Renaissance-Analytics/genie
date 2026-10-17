@@ -37,7 +37,7 @@ describe('the Shells tab', () => {
     it('sits right after Changes, and carries the running count on EVERY tab — the indicator', () => {
         const html = view(twoRunning, 'stream');
         const tabs = [...html.matchAll(/data-tab="([a-z]+)"/g)].map((m) => m[1]);
-        expect(tabs).toEqual(['stream', 'files', 'changes', 'shells']);
+        expect(tabs).toEqual(['stream', 'files', 'changes', 'shells', 'settings']);
         expect(html.match(/data-shells-count="2"/g) ?? []).toHaveLength(1);
     });
 

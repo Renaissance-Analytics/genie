@@ -157,18 +157,19 @@ describe('the right rail', () => {
         expect(html).not.toContain('data-rail="plan"');
         expect(html).not.toContain('data-rail="budget"');
 
-        // POSITIVE CONTROL: with a plan and a context figure, both appear.
-        const full = render({
-            session: session({ plan: { step: 3, of: 7, doing: 'Passkey enrolment endpoint' }, contextUsed: 38_000, contextSize: 200_000 }),
-        });
+        // POSITIVE CONTROL: with a plan and a context figure, both appear — the plan in the rail, the budget on the
+        // Settings tab (Tynn #800: agent settings are a tab, not the rail).
+        const known = session({ plan: { step: 3, of: 7, doing: 'Passkey enrolment endpoint' }, contextUsed: 38_000, contextSize: 200_000 });
+        const full = render({ session: known });
         expect(full).toContain('data-rail="plan"');
-        expect(full).toContain('data-rail="budget"');
         expect(full).toContain('3/7');
+        expect(render({ session: known, tab: 'settings' })).toContain('data-rail="budget"');
     });
 
     it('omits the COST ROW when the provider reports none, and keeps the turn count', () => {
         // codex reports no cost. Not a `$0.00`, which claims the work was free.
-        const html = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }), cost: null });
+        // The budget is on the Settings tab (Tynn #800).
+        const html = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }), cost: null, tab: 'settings' });
 
         expect(html).toContain('data-rail="budget"');
         expect(html).not.toContain('data-rail-cost');
@@ -176,7 +177,7 @@ describe('the right rail', () => {
         expect(html).toContain('11 turns');
 
         // POSITIVE CONTROL: a provider that DOES report one gets the row.
-        const priced = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }), cost: 0.91 });
+        const priced = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }), cost: 0.91, tab: 'settings' });
         expect(priced).toContain('data-rail-cost');
         expect(priced).toContain('$0.91');
     });
@@ -245,12 +246,12 @@ describe('found by looking at the running Agent view', () => {
         expect(withPlan).toContain('data-rail="plan"');
     });
 
-    it('draws the rail for a budget alone, not only for a plan', () => {
-        // Either panel is enough. Requiring both would hide a context warning on an agent that
-        // never reported a plan, which is most of them.
-        const html = render({ session: session({ contextUsed: 38_000, contextSize: 200_000 }) });
-        expect(html).toContain('data-rail-column');
-        expect(html).toContain('data-rail="budget"');
+    it('a budget alone is on the Settings tab, and no longer pulls the rail into the Stream (Tynn #800)', () => {
+        // The owner, 2026-10-17: the settings panel was "always in the way". The budget is a setting's reading; the rail
+        // is for what is live. Shown where it is looked for, never lost: a context warning reads on the Settings tab.
+        const reported = session({ contextUsed: 38_000, contextSize: 200_000 });
+        expect(render({ session: reported, tab: 'settings' })).toContain('data-rail="budget"');
+        expect(render({ session: reported })).not.toContain('data-rail-column');
     });
 
     it('offers a way to TALK to the agent', () => {

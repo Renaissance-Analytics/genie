@@ -55,7 +55,7 @@ describe('the files host carries it on open', () => {
 describe('the rail', () => {
     const session = { running: true, turnState: 'idle' as const, startedAt: null, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null };
     const render = (git: 'committed' | 'modified' | 'untracked' | null) => renderToStaticMarkup(
-        <AgentView agent={{ id: 'sable', name: 'sable', provider: 'claude', fidelity: 'declared', cwd: '.', instructions: '.agents/sable/AGENT.md' }} session={session} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} personaText="# sable" personaGit={git} />,
+        <AgentView agent={{ id: 'sable', name: 'sable', provider: 'claude', fidelity: 'declared', cwd: '.', instructions: '.agents/sable/AGENT.md' }} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} personaText="# sable" personaGit={git} />,
     );
 
     it('`committed`, `uncommitted changes`, `not committed` after the path; nothing when git said nothing', () => {

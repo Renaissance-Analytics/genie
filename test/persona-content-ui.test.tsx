@@ -9,7 +9,7 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
  */
 const agent = { id: 'a1', name: 'sable', provider: 'claude', fidelity: 'declared' as const, cwd: '/w/tynn', instructions: '.agents/sable/AGENT.md' };
 const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
-    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} {...props} />);
+    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} {...props} />);
 
 describe('the persona block', () => {
     it('shows the file’s first lines under the path, and says when they are clipped', () => {
