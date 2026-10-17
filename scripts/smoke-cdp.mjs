@@ -699,16 +699,34 @@ if (!approvalEnabled) {
     await cdp.evaluate(`window.location.hash = '#genie://settings?group=agents'; true`);
     const onSettings = await waitFor(cdp, `Boolean(document.querySelector('[data-saved-prompts] [data-action="prompt-add"]'))`, 'Settings → Agents to show Saved prompts');
     check(onSettings, '56. Settings → Agents offers Saved prompts, with Add');
+    /*
+     * THE PROMPT THIS RUN MAKES, named uniquely and found by its row (beta.30's Windows VM check, 2026-10-17): the VM runs
+     * this smoke twice on ONE profile (from dist/, then the installed app), so the second run started with the first's
+     * prompt — "exactly one row" passed on the OLD row before the new save landed, and the hotkey went to the old one.
+     * First the smoke removes its own earlier prompts (named "Smoke status…"), counted; then it adds one and waits for
+     * the count to rise by exactly one with THAT name.
+     */
+    const SMOKE_NAME = 'Smoke status';
+    const rowsNamed = (prefix) => `[...document.querySelectorAll('[data-saved-prompt]')].filter((r) => (r.querySelector('input')?.value ?? '').startsWith(${JSON.stringify(prefix)}))`;
+    for (let i = 0; i < 5; i++) {
+        const left = await cdp.evaluate(`${rowsNamed(SMOKE_NAME)}.length`);
+        if (!left) break;
+        await cdp.evaluate(`${rowsNamed(SMOKE_NAME)}[0].querySelector('[data-action="prompt-remove"]').click(); true`);
+        await waitFor(cdp, `${rowsNamed(SMOKE_NAME)}.length === ${left - 1}`, 'an earlier run’s prompt to be removed');
+    }
+    const before = await cdp.evaluate(`document.querySelectorAll('[data-saved-prompt]').length`);
+    const name = `${SMOKE_NAME} ${Math.random().toString(16).slice(2, 8)}`;
     await cdp.evaluate(`document.querySelector('[data-saved-prompts] [data-action="prompt-add"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-prompt-draft] input'))`, 'the new-prompt draft');
     await cdp.evaluate(`document.querySelector('[data-prompt-draft] input').focus(); true`);
-    await cdp.send('Input.insertText', { text: 'Smoke status' });
+    await cdp.send('Input.insertText', { text: name });
     await cdp.evaluate(`document.querySelector('[data-prompt-draft] textarea').focus(); true`);
     await cdp.send('Input.insertText', { text: 'Where are you up to?' });
     await cdp.evaluate(`document.querySelector('[data-action="prompt-save"]')?.click(); true`);
-    const saved = await waitFor(cdp, `document.querySelectorAll('[data-saved-prompt]').length === 1 && !document.querySelector('[data-prompt-draft]')`, 'the prompt to be saved');
-    check(saved, '56a. a new prompt is saved once it has a name and text — and stays (it is not dropped as unusable)', await cdp.evaluate(`String(document.querySelectorAll('[data-saved-prompt]').length)`));
-    const hotkeyBox = `[data-saved-prompt] input[data-prompt-hotkey], [data-saved-prompt] [data-prompt-hotkey] input`;
+    const saved = await waitFor(cdp, `document.querySelectorAll('[data-saved-prompt]').length === ${before + 1} && ${rowsNamed(name)}.length === 1 && !document.querySelector('[data-prompt-draft]')`, 'the prompt to be saved');
+    check(saved, '56a. a new prompt is saved once it has a name and text — and stays (it is not dropped as unusable)', await cdp.evaluate(`JSON.stringify({ before: ${before}, now: document.querySelectorAll('[data-saved-prompt]').length, mine: ${rowsNamed(name)}.length })`));
+    const rowId = await cdp.evaluate(`${rowsNamed(name)}[0]?.getAttribute('data-saved-prompt') ?? ''`);
+    const hotkeyBox = `[data-saved-prompt="${rowId}"] input[data-prompt-hotkey], [data-saved-prompt="${rowId}"] [data-prompt-hotkey] input`;
     await cdp.evaluate(`document.querySelector('${hotkeyBox}')?.focus(); true`);
     const ctrlAltP = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 3 });
     await ctrlAltP('rawKeyDown');
@@ -723,8 +741,9 @@ if (!approvalEnabled) {
     await waitFor(cdp, `Boolean(document.querySelector('${PALETTE_INPUT}'))`, 'the Command Window to open');
     await cdp.evaluate(`document.querySelector('${PALETTE_INPUT}')?.focus(); true`);
     await cdp.send('Input.insertText', { text: 'p>' });
-    const offered = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="prompt:"]').length === 1 && document.querySelectorAll('[data-command-item]:not([data-command-item^="prompt:"])').length === 0 && (document.querySelector('[data-command-item^="prompt:"]')?.parentElement?.textContent ?? '').includes('Ctrl+Alt+P')`, 'the prompt to be offered under p>');
-    check(offered, '56c. Ctrl+K, "p>" lists the prompt and nothing else, its hotkey beside it', await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-command-item]')].map((e) => e.parentElement?.textContent ?? ''))`));
+    // Prompts and nothing else; THIS run's prompt among them, exactly once, with its key beside it.
+    const offered = await waitFor(cdp, `document.querySelectorAll('[data-command-item]:not([data-command-item^="prompt:"])').length === 0 && [...document.querySelectorAll('[data-command-item^="prompt:"]')].filter((e) => (e.parentElement?.textContent ?? '').startsWith(${JSON.stringify(name)})).length === 1 && [...document.querySelectorAll('[data-command-item^="prompt:"]')].some((e) => (e.parentElement?.textContent ?? '') === ${JSON.stringify(name)} + 'Ctrl+Alt+P')`, 'the prompt to be offered under p>');
+    check(offered, '56c. Ctrl+K, "p>" lists prompts and nothing else — this run’s, once, its hotkey beside it', await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-command-item]')].map((e) => e.parentElement?.textContent ?? ''))`));
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await waitFor(cdp, `!document.querySelector('${PALETTE_INPUT}')`, 'the Command Window to close');
