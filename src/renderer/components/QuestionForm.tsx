@@ -43,6 +43,8 @@ export interface QuestionFormProps {
     /** "Later" in the question window (the question stays in the Deck). Absent = no such button (the Deck's form is always open). */
     readonly onCancel?: (() => void) | undefined;
     readonly cancelLabel?: string;
+    /** The key that does what the cancel button does (the FTQ window's Esc is Later); named in its title. */
+    readonly cancelKey?: string | undefined;
     /** Dismiss without an answer, with the notes written so far (one per question); absent = not offered here. */
     readonly onDismiss?: ((notes: string[]) => void) | undefined;
     /** Why main refused the last answer — said beside the buttons. */
@@ -55,7 +57,7 @@ export interface QuestionFormProps {
     readonly onDraft?: ((draft: QuestionDraft) => void) | undefined;
 }
 
-export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', onDismiss, refusal = null, initial, showHeaders = true, onDraft }: QuestionFormProps) {
+export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', cancelKey, onDismiss, refusal = null, initial, showHeaders = true, onDraft }: QuestionFormProps) {
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const count = questions?.length ?? 0;
     const [selections, setSelections] = useState<string[][]>(() => Array.from({ length: count }, (_, i) => [...(initial?.selections[i] ?? [])]));
@@ -124,7 +126,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
             ))}
             <div className="flex flex-wrap items-center gap-2">
                 <button type="submit" data-action="deck-submit" disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</button>
-                {onCancel ? <button type="button" data-action="question-cancel" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button> : null}
+                {onCancel ? <button type="button" data-action="question-cancel" onClick={onCancel} {...(cancelKey ? { title: `${cancelLabel} (${cancelKey})`, 'aria-keyshortcuts': cancelKey === 'Esc' ? 'Escape' : cancelKey } : {})} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button> : null}
                 {onDismiss ? (
                     <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={() => onDismiss([...notes])} title="Put this question aside without an answer; the agent is told, with any note you wrote" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</button>
                 ) : null}

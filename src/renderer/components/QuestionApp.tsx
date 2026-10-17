@@ -1,4 +1,5 @@
-import type { CSSProperties } from 'react';
+import { useEffect, type CSSProperties } from 'react';
+import { questionWindowAction } from '../../core/keys.js';
 import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
 import { QuestionForm } from './QuestionForm.js';
@@ -54,6 +55,20 @@ const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
 const NO_DRAG = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
 export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now() }: QuestionAppProps) {
+    // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
+    // Dismiss, which tells the agent, is never a key. Re-bound every render so it acts on the question now shown.
+    useEffect(() => {
+        if (!view) return;
+        const onKey = (e: KeyboardEvent): void => {
+            const action = questionWindowAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, { drawerOpen: false });
+            if (action === 'later') {
+                e.preventDefault();
+                onLater();
+            }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    });
     if (!view) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
     const queue = view.queue && view.queue.length > 0 ? view.queue : [view.item];
     const activeId = activeQuestion({ picked, shown: view.item.id, queue: queue.map((q) => q.id) });
@@ -103,6 +118,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     answering={sending ? item.id : null}
                     refusal={refusal}
                     cancelLabel="Later"
+                    cancelKey="Esc"
                     onCancel={onLater}
                     onDismiss={(notes) => onDismiss(notes, item.id)}
                     onSubmit={(selections, notes) => onAnswer(selections, notes, item.id)}

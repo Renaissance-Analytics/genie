@@ -143,6 +143,18 @@ export type AgentViewAction =
  * the shortcut that opens the Take Over window. Meta is the ⌘ of macOS; Ctrl stands in for it
  * elsewhere; Alt on top makes it something else, so it answers `null`.
  */
+export type QuestionWindowAction = 'later' | 'close-drawer';
+
+/**
+ * The ForceTheQuestion window's one key (Tynn #759; Genie 1's ask.tsx): a bare Esc. It PARKS — Later, never Dismiss, which
+ * tells the agent — and acts while typing a note too, because the draft is kept. A file open beside the question is put
+ * away first: someone checking a file meant the file, not the question.
+ */
+export function questionWindowAction(press: KeyPress, window: { drawerOpen: boolean }): QuestionWindowAction | null {
+    if (press.key !== 'Escape' || press.ctrlKey || press.metaKey || press.altKey || press.shiftKey) return null;
+    return window.drawerOpen ? 'close-drawer' : 'later';
+}
+
 export function agentViewAction(press: KeyPress): AgentViewAction | null {
     if ((press.key === 't' || press.key === 'T') && press.shiftKey && (press.metaKey || press.ctrlKey) && !press.altKey) {
         return 'take-over';
