@@ -689,6 +689,14 @@ async function boot(): Promise<void> {
 
     // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
     // running. Ending the agent is `genie:stop-agent` above — a separate action, never reached from here.
+    // `Resume now` (Tynn #794): the agent's provider login is opened at once and its held agents go on.
+    ipcMain.handle('genie:resume-limit', (_event, raw: unknown) => {
+        const record = agentFromRenderer(raw);
+        if (!record || !host) return { ok: false, reason: 'not-running' };
+        host.resumeLimit(record.provider);
+        return { ok: true };
+    });
+
     ipcMain.handle('genie:cancel-turn', (_event, raw: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'not-running' };
@@ -1126,6 +1134,7 @@ async function boot(): Promise<void> {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
                 cancel: (id) => host!.cancel(id),
+                resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text) => host!.prompt(id, text),
                 answerApproval: (id, optionId) => host!.answerApproval(id, optionId),
                 subscribe: (cb) => host!.subscribe(cb),

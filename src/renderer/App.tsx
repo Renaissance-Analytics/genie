@@ -866,6 +866,7 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
+            onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
             onSelectRow={setSelectedRowId}
             onOpenPalette={() => {

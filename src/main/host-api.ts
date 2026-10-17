@@ -30,6 +30,8 @@ export interface HostApiDeps {
         answerApproval(agentId: AgentRecord['id'], optionId: string): boolean;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id']): CancelOutcome;
+        /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
+        resumeLimit(provider: string): void;
         subscribe(listener: (agentId: string) => void): () => void;
     };
     registerAgent(workspaceId: string): Promise<{ id: string }>;
@@ -114,6 +116,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'stopAgent': {
                 const r = agent(args[0]);
                 return { ok: r ? deps.host.stop(r.id) : false };
+            }
+            case 'resumeLimit': {
+                const r = agent(args[0]);
+                if (!r) return { ok: false, reason: 'unknown agent' };
+                deps.host.resumeLimit(r.provider);
+                return { ok: true };
             }
             case 'cancelTurn': {
                 const r = agent(args[0]);
