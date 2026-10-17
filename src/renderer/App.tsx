@@ -1,4 +1,6 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
+import { CommandWindow } from './components/CommandWindow.js';
+import type { CommandItem } from '../core/command-window.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
 import { setThemePreference } from '@particle-academy/react-fancy';
@@ -586,6 +588,11 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const action = globalAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
+            if (action === 'open-palette') {
+                e.preventDefault();
+                setPaletteOpen(true);
+                return;
+            }
             if (action === 'toggle-chat') {
                 e.preventDefault();
                 navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: 'genie' }));
@@ -596,8 +603,10 @@ function DesktopApp({ bridge }: AppProps) {
             e.preventDefault();
             navigate(parsed.panel === 'files' ? `genie://workspace/${parsed.workspaceId}` : `genie://workspace/${parsed.workspaceId}?files=`);
         };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
+        // CAPTURE: Genie's chords are caught before whatever has focus can swallow them (Genie 1's hotkeys rule; CI's
+        // real window, 2026-10-17: Ctrl+K never reached a bubbling listener with the chat composer focused).
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
     // The chat flyout's keys (§4.4, `core/keys.ts`): Esc closes an UNPINNED flyout; A / D answer the approval parked in
     // the chat — the letters follow the composer. Never while typing.
@@ -655,6 +664,7 @@ function DesktopApp({ bridge }: AppProps) {
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
     // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
+    const [paletteOpen, setPaletteOpen] = useState(false);
     const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): void => {
         // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
         const row = snapshot.agents.find((r) => r.id === agentId);
@@ -717,7 +727,26 @@ function DesktopApp({ bridge }: AppProps) {
         );
     }
 
+    // THE COMMAND WINDOW (Tynn #757): Genie's things on offer, in Genie 1's order of reach — the verbs, every
+    // workspace, every agent (named with its workspace). Saved prompts join with #758.
+    const paletteActions: Array<{ id: string; label: string; run: () => void }> = [
+        { id: 'go-dashboard', label: 'Open the Dashboard', run: () => navigate('genie://dashboard') },
+        { id: 'go-deck', label: 'Open the Deck', run: () => navigate('genie://deck') },
+        { id: 'go-hosting', label: 'Open Hosting', run: () => navigate('genie://hosting') },
+        { id: 'go-settings', label: 'Open Settings', run: () => navigate('genie://settings') },
+        { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },
+    ];
+    const paletteItems: CommandItem[] = [
+        ...paletteActions.map((a) => ({ id: a.id, category: 'action' as const, label: a.label })),
+        ...(snapshot.workspaces ?? []).map((w) => ({ id: w.id, category: 'workspace' as const, label: w.name ?? w.id, hint: w.path })),
+        ...snapshot.agents.map((a) => {
+            const where = (snapshot.workspaces ?? []).find((w) => w.id === a.workspaceId);
+            return { id: a.id, category: 'agent' as const, label: a.name, hint: where ? (where.name ?? where.id) : a.provider };
+        }),
+    ];
+
     return (
+        <>
         <Shell
             route={route}
             snapshot={snapshot}
@@ -871,12 +900,19 @@ function DesktopApp({ bridge }: AppProps) {
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
             onSelectRow={setSelectedRowId}
-            onOpenPalette={() => {
-                // Fancy's `Command` lands with the Deck in P4. The box stays in the bar because
-                // it is part of the bar's geometry and its label is honest about what it will
-                // do — but it opens nothing rather than opening an empty palette, which would
-                // teach someone that search does not work here.
+            // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
+            onOpenPalette={() => setPaletteOpen(true)}
+        />
+        <CommandWindow
+            open={paletteOpen}
+            items={paletteItems}
+            onClose={() => setPaletteOpen(false)}
+            onActivate={(item) => {
+                if (item.category === 'workspace') navigate(`genie://workspace/${item.id}`);
+                else if (item.category === 'agent') navigate(`genie://agent/${item.id}`);
+                else if (item.category === 'action') paletteActions.find((a) => a.id === item.id)?.run();
             }}
         />
+        </>
     );
 }

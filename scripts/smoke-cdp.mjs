@@ -659,6 +659,36 @@ if (!approvalEnabled) {
  * terminal at all). A single occurrence after Enter would mean the keystrokes reached xterm and
  * the pty never ran them, which is the failure this check exists to see.
  */
+/*
+ * 55. CTRL+K — THE COMMAND WINDOW (Tynn #757; Genie 1's Ctrl+K). The title bar's "Search, jump, run · Ctrl K" opened
+ * nothing. Driven here because Fancy's Command mounts its body only in a real window: the chord opens it, a COMPLETE
+ * prefix narrows it (`w> tynn` — workspaces only, and Fancy's own text filter does not hide them), Enter goes there.
+ */
+{
+    // A MEASUREMENT beside the check: what keydown actually reached the page (CI Linux failed this step while Windows
+    // passed — the record says whether the chord arrived, and as what).
+    await cdp.evaluate(`window.__genieKeys = []; window.addEventListener('keydown', (e) => window.__genieKeys.push([e.key, e.code, e.ctrlKey, e.metaKey, e.defaultPrevented]), true); true`);
+    const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, nativeVirtualKeyCode: 75, modifiers: 2 });
+    await ctrlK('rawKeyDown');
+    await ctrlK('keyUp');
+    // Fancy's Command draws in a portal on <body>, outside Genie's wrapper: the palette is found by ITS input.
+    const PALETTE_INPUT = `input[placeholder^="Search prompts"]`;
+    const opened = await waitFor(cdp, `Boolean(document.querySelector('${PALETTE_INPUT}'))`, 'the Command Window to open');
+    const arrived = await cdp.evaluate(`JSON.stringify({ keys: window.__genieKeys, focus: document.activeElement?.tagName ?? null, platform: navigator.platform })`);
+    check(opened, '55. Ctrl+K opens the Command Window, its input ready', arrived);
+    await cdp.evaluate(`document.querySelector('${PALETTE_INPUT}')?.focus(); true`);
+    // The workspace's NAME is what the palette matches (the seeded workspace is named "genie", its id is tynn): `w>`
+    // alone lists every workspace and nothing else — the prefix is what is under test.
+    await cdp.send('Input.insertText', { text: 'w>' });
+    const listed = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="workspace:"]').length >= 1 && document.querySelectorAll('[data-command-item^="agent:"], [data-command-item^="action:"]').length === 0`, 'only workspaces to be listed for w>');
+    const counts = await cdp.evaluate(`(() => { const input = document.querySelector('${PALETTE_INPUT}'); const box = input ? input.closest('.fixed') ?? input.parentElement?.parentElement : null; return JSON.stringify({ workspaces: document.querySelectorAll('[data-command-item^="workspace:"]').length, others: document.querySelectorAll('[data-command-item]:not([data-command-item^="workspace:"])').length, value: input ? input.value : null, open: Boolean(input), options: box ? box.querySelectorAll('[role="option"], button, li').length : null, text: box ? box.innerText.slice(0, 240) : null }); })()`);
+    check(listed, '55a. "w>" lists the workspaces and nothing else — the prefix narrows; Fancy’s own filter does not hide them', counts);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    const landed = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://workspace/') && !document.querySelector('${PALETTE_INPUT}')`, 'Enter to open the workspace');
+    check(landed, '55b. Enter opens the chosen workspace and closes the window');
+}
+
 {
     const token = `genie-${Math.random().toString(16).slice(2, 10)}`;
     await cdp.evaluate(`document.querySelector('[data-nav="genie://workspace/tynn"]').click(); true`);
