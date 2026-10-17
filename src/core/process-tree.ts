@@ -75,6 +75,41 @@ export interface ProcessTree {
      * every quit). Absent, the walk is done here, now, as before.
      */
     killTree(pids: readonly number[], oursBeforeKill?: readonly number[]): ReapResult;
+    /**
+     * The live descendants of `pid` WITH each one's parent, from one walk: what a stop needs to find a session's tree as
+     * it is NOW (Tynn #796). Empty when it cannot look. Absent on a tree that cannot report parents.
+     */
+    walk?(pid: number): readonly ProcessEdge[];
+}
+
+export interface ProcessEdge {
+    readonly pid: number;
+    readonly ppid: number;
+}
+
+/**
+ * `roots` and everything under them in a walk — the tree a session owns AT THIS MOMENT, however its members came to be
+ * there after the session started (a provider its shell launched later, a re-exec, a tool's child). Only pids the walk
+ * names are added; the roots are kept as given.
+ */
+export function subtreeOf(edges: readonly ProcessEdge[], roots: readonly number[]): number[] {
+    const children = new Map<number, number[]>();
+    for (const e of edges) {
+        const list = children.get(e.ppid);
+        if (list) list.push(e.pid);
+        else children.set(e.ppid, [e.pid]);
+    }
+    const out: number[] = [];
+    const seen = new Set<number>();
+    const queue = [...roots];
+    while (queue.length > 0) {
+        const pid = queue.shift()!;
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        out.push(pid);
+        for (const child of children.get(pid) ?? []) queue.push(child);
+    }
+    return out;
 }
 
 export interface ReapResult {
@@ -90,6 +125,8 @@ export interface ProcessTreeIo {
     descendants(pid: number): number[];
     /** Terminate exactly this pid. Not its tree. Never throws for an already-dead pid. */
     killOne(pid: number): void;
+    /** Live descendants of `pid` with each one's parent. May throw; callers treat a throw as "cannot look". */
+    tree?(pid: number): Array<{ pid: number; ppid: number }>;
 }
 
 /**
@@ -102,7 +139,17 @@ export interface ProcessTreeIo {
 const PLAUSIBLE_REAP = 24;
 
 export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () => process.pid): ProcessTree {
+    const walkWithParents = io.tree;
     return {
+        ...(walkWithParents ? {
+            walk(pid: number): readonly ProcessEdge[] {
+                try {
+                    return walkWithParents(pid);
+                } catch {
+                    return [];
+                }
+            },
+        } : {}),
         descendantsOf(pid) {
             try {
                 return io.descendants(pid);
@@ -168,7 +215,7 @@ export function makeProcessTree(io: ProcessTreeIo, selfPid: () => number = () =>
     };
 }
 
-function win32Descendants(pid: number): number[] {
+function win32Tree(pid: number): Array<{ pid: number; ppid: number }> {
     const script = [
         '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId;',
         `$queue = @(${pid}); $seen = @{};`,
@@ -183,14 +230,18 @@ function win32Descendants(pid: number): number[] {
         // survivors and nearly produced a false bug report against prism-acp. Exclude this
         // process and anything under it.
         '$mine = @{}; $q2 = @($PID); while ($q2.Count -gt 0) { $h = $q2[0]; $q2 = @($q2 | Select-Object -Skip 1); $mine[$h] = $true; foreach ($c in $all | Where-Object { $_.ParentProcessId -eq $h }) { if (-not $mine.ContainsKey($c.ProcessId)) { $q2 += $c.ProcessId } } }',
-        '(@($seen.Keys | Where-Object { -not $mine.ContainsKey($_) })) -join ","',
+        '$parentOf = @{}; foreach ($p in $all) { $parentOf[$p.ProcessId] = $p.ParentProcessId };',
+        '(@($seen.Keys | Where-Object { -not $mine.ContainsKey($_) } | ForEach-Object { "$($_):$($parentOf[$_])" })) -join ","',
     ].join(' ');
 
     const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
         encoding: 'utf8',
         timeout: 30_000,
     });
-    return out.trim().split(',').map((n) => Number.parseInt(n, 10)).filter((n) => Number.isFinite(n));
+    return out.trim().split(',').filter((pair) => pair.length > 0).map((pair) => {
+        const [pid, ppid] = pair.split(':').map((n) => Number.parseInt(n, 10));
+        return { pid: pid!, ppid: ppid! };
+    }).filter((e) => Number.isFinite(e.pid) && Number.isFinite(e.ppid));
 }
 
 function posixDescendants(pid: number): number[] {
@@ -201,8 +252,15 @@ function posixDescendants(pid: number): number[] {
     return direct.filter((n) => n !== process.pid).flatMap((child) => [child, ...posixDescendants(child)]);
 }
 
+function posixTree(pid: number): Array<{ pid: number; ppid: number }> {
+    const out = execFileSync('bash', ['-lc', `pgrep -P ${pid} || true`], { encoding: 'utf8', timeout: 20_000 });
+    const direct = out.trim().split('\n').map((n) => Number.parseInt(n, 10)).filter((n) => Number.isFinite(n));
+    return direct.filter((n) => n !== process.pid).flatMap((child) => [{ pid: child, ppid: pid }, ...posixTree(child)]);
+}
+
 export const systemProcessTree: ProcessTree = makeProcessTree({
-    descendants: (pid) => (process.platform === 'win32' ? win32Descendants(pid) : posixDescendants(pid)),
+    descendants: (pid) => (process.platform === 'win32' ? win32Tree(pid).map((e) => e.pid) : posixDescendants(pid)),
+    tree: (pid) => (process.platform === 'win32' ? win32Tree(pid) : posixTree(pid)),
 
     killOne: (pid) => {
         try {

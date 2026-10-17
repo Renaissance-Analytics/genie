@@ -53,6 +53,19 @@ function table(initial: Record<number, number>) {
             }
             return out;
         },
+        // The same walk, with each pid's parent: what the real scan reads from WMI ParentProcessId / pgrep -P.
+        tree(root) {
+            walks += 1;
+            const out: Array<{ pid: number; ppid: number }> = [];
+            const queue = [root];
+            while (queue.length > 0) {
+                const head = queue.shift()!;
+                for (const [pid, ppid] of parent) {
+                    if (ppid === head && !out.some((e) => e.pid === pid)) { out.push({ pid, ppid }); queue.push(pid); }
+                }
+            }
+            return out;
+        },
         killOne(pid) { kills.push(pid); parent.delete(pid); },
     };
     return {
@@ -114,6 +127,54 @@ describe('AgentSession.stop — the provider a shell-wrapped kill orphans', () =
         expect(t.alive(PROVIDER)).toBe(false);
         expect(t.killsOf(TERMINAL_HELPER)).toBe(0);
         expect(t.alive(TERMINAL_HELPER)).toBe(true);
+    });
+
+    // THE UPGRADE ORPHAN (Tynn #796, the owner, 2026-10-17): moic's provider survived an upgrade and kept writing to its
+    // worktree beside the new one, on the same session. The session's pids were snapshotted ONCE, right after start;
+    // a provider that appears under the shell AFTER that snapshot (cmd.exe has not launched it yet; a launcher that
+    // re-execs; an auto-update) was never in it, so the stop's kill could not reach it. Stop kills the session's tree
+    // AS IT IS at the stop, from the same pre-kill walk.
+    it('a provider that appeared under the session’s shell AFTER the start snapshot is still reaped at stop', () => {
+        const t = table({ [TERMINAL_HELPER]: SELF });
+        const dir = tempDir();
+        // start creates only the shell; the provider comes a moment later, after the snapshot
+        const shellOnly: SessionDriverFactory = () => ({ start: () => { t.spawn(CMD, SELF); }, prompt: () => {}, kill: () => t.exit(CMD), cliSessionId: null });
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: shellOnly,
+            processTree: t.tree,
+        });
+        session.start();
+        t.spawn(PROVIDER, CMD);
+        const LATE_CHILD = 910_003; // the provider's own child (a tool's shell), deeper still
+        t.spawn(LATE_CHILD, PROVIDER);
+
+        session.stop();
+
+        expect(t.killsOf(PROVIDER)).toBe(1);
+        expect(t.killsOf(LATE_CHILD)).toBe(1);
+        expect(t.alive(PROVIDER)).toBe(false);
+        // CONTROL: Genie's other child is not the session's
+        expect(t.killsOf(TERMINAL_HELPER)).toBe(0);
+    });
+
+    it('a provider REPLACED under the shell after start (a re-exec: new pid) is reaped, not the pid it replaced', () => {
+        const t = table({});
+        const dir = tempDir();
+        const session = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+            driverFactory: driverOver(t, () => t.exit(CMD)),
+            processTree: t.tree,
+        });
+        session.start();
+        const REEXEC = 910_004;
+        t.exit(PROVIDER);
+        t.spawn(REEXEC, CMD);
+
+        session.stop();
+
+        expect(t.alive(REEXEC)).toBe(false);
+        expect(t.killsOf(REEXEC)).toBe(1);
     });
 
     it('costs the stop no extra walk: two at start (before/after), one at stop', () => {
