@@ -11,7 +11,8 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 const agent = { id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared' as const, cwd: 'C:/Users/example/work/a-long-workspace-folder/repos/app', instructions: null };
 const idle = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
 const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'ws', name: 'genie2-vm', path: '/w/ws' }} />);
-const classOf = (attr: RegExp): string[] => (html.match(new RegExp(`<span ${attr.source}[^>]*class="([^"]*)"`))?.[1] ?? '').split(' ');
+// The crumb is a LINK to the workspace since Tynn #805 (a button); the chip and pill are spans.
+const classOf = (attr: RegExp): string[] => (html.match(new RegExp(`<(?:span|button) ${attr.source}[^>]*class="([^"]*)"`))?.[1] ?? '').split(' ');
 
 describe('the agent header', () => {
     it('the crumb never wraps — it truncates instead', () => {

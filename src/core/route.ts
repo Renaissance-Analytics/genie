@@ -107,6 +107,17 @@ function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };
 }
 
+/**
+ * WHICH WORKSPACE A ROUTE IS IN (Tynn #805): the workspace's own pages, and an agent's page — which belongs to its
+ * agent's workspace. The sidebar keeps that workspace highlighted wherever in it you are; `null` elsewhere.
+ */
+export function routeWorkspace(route: string, agents: ReadonlyArray<{ id: string; workspaceId: string }>): string | null {
+    const r = parseRoute(route);
+    if (r.surface === 'workspace' || r.surface === 'files') return r.workspaceId;
+    if (r.surface === 'agent') return agents.find((a) => a.id === r.agentId)?.workspaceId ?? null;
+    return null;
+}
+
 export function parseRoute(input: string): Route {
     const blank: Common = { chat: null, pin: null };
 

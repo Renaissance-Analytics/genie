@@ -1,6 +1,6 @@
 import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
-import { formatRoute, parseRoute, pickThreadRoute } from '../core/route.js';
+import { formatRoute, parseRoute, pickThreadRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
@@ -382,6 +382,8 @@ export function Shell({
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
                     workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
+                    // On an agent's page its workspace stays the highlighted row (Tynn #805).
+                    currentWorkspaceId={routeWorkspace(route, snapshot.agents)}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
