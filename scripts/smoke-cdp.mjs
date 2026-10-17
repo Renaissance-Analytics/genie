@@ -667,7 +667,8 @@ if (!approvalEnabled) {
 
     // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings, I
     // should see the agent lanes and all of the agents." The route opens on the agents rail with the seeded agent's
-    // card and NO settings section; the terminals are a labelled tab away.
+    // card and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
+    // makes a tab, the tab offers every panel kind, and a Terminals panel is the terminal manager.
     const home = await cdp.evaluate(`(() => ({
         rail: Boolean(document.querySelector('[data-workspace-home]')),
         cards: document.querySelectorAll('[data-home-agent]').length,
@@ -675,11 +676,14 @@ if (!approvalEnabled) {
         terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
     }))()`);
     check(home.rail && home.cards >= 1 && !home.settings && !home.terminals, '48. the workspace opens on its agents — the rail with the seeded agent, no settings, no terminals', JSON.stringify(home));
-    await cdp.evaluate(`document.querySelector('[data-workspace-tab="terminals"]').click(); true`);
-    const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-terminal-add]')) && !document.querySelector('[data-workspace-home]')`, 'the Terminals view');
-    check(terminalsView, '49. the Terminals tab shows the terminal strip (and puts the rail away)');
+    await cdp.evaluate(`document.querySelector('[data-workspace-tab="add"]').click(); true`);
+    const designer = await waitFor(cdp, `Boolean(document.querySelector('[data-designed-tab] [data-add-panel="terminal"]')) && !document.querySelector('[data-workspace-home]')`, 'the new tab to open on its designer');
+    check(designer, '49a. + makes a tab that opens on its panel designer (and puts the agents rail away)');
+    await cdp.evaluate(`document.querySelector('[data-designed-tab] [data-add-panel="terminal"]').click(); true`);
+    const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-add]'))`, 'the Terminals panel');
+    check(terminalsView, '49. a Terminals panel in that tab is the terminal manager, its strip and its + terminal');
 
-    await cdp.evaluate(`document.querySelector('[data-terminal-add]').click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-panel="terminal"] [data-terminal-add]').click(); true`);
     const paneUp = await waitFor(
         cdp,
         `Boolean(document.querySelector('[data-terminal-pane] .xterm-rows'))`,

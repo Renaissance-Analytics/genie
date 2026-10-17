@@ -47,8 +47,15 @@ interface Common {
 export type DashboardGroup = 'workspace' | 'status';
 export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
-export type WorkspaceView = 'home' | 'terminals' | 'settings';
+/** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
+export type WorkspaceView = 'home' | 'terminals' | 'settings' | `tab:${string}`;
 const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings'];
+/** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
+const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
+function workspaceViewOf(raw: string | null): WorkspaceView {
+    if (raw !== null && DESIGNED_TAB.test(raw)) return raw as WorkspaceView;
+    return WORKSPACE_VIEWS.includes(raw as WorkspaceView) ? (raw as WorkspaceView) : 'home';
+}
 /** The settings surface's four groups (`core/settings.ts` owns the registry; this is the URL's view of it). */
 export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 /** The Stream's two layouts (the board): the ledger, or one card per turn. */
@@ -165,7 +172,7 @@ export function parseRoute(input: string): Route {
                 file: files !== null && files !== '' && !detached ? files : null,
                 filter: files !== null && params.get('filter') === 'changed' ? 'changed' : null,
                 detached,
-                view: WORKSPACE_VIEWS.includes(params.get('view') as WorkspaceView) ? (params.get('view') as WorkspaceView) : 'home',
+                view: workspaceViewOf(params.get('view')),
                 ...common,
             };
         }
