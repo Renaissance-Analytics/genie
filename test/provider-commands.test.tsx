@@ -113,7 +113,7 @@ describe('agent settings show them, read-only', () => {
         lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null, extensions,
     });
     const render = (s: LiveSession) => renderToStaticMarkup(
-        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={s} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} ops={ops} />,
+        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={s} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} ops={ops} />,
     );
 
     it('each command and skill by name, the plugins and the subagents — and no control to change them', () => {

@@ -16,7 +16,7 @@ const ops = (over: Partial<AgentOpsProps> = {}): AgentOpsProps => ({
     ...over,
 });
 const render = (o?: AgentOpsProps) =>
-    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
+    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
 
 describe('mode and access scope', () => {
     it('shows the current mode, offers the other, and says mode is wording only', () => {

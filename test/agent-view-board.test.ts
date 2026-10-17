@@ -68,7 +68,7 @@ describe('headerActions — the board’s action set by state', () => {
 describe('tabsFor — the board’s order', () => {
     it('an observed agent opens on Activity; a declared one keeps Stream | Files | Changes, then Shells (the owner, 2026-10-14) (§1: no Terminal for an agent that has no pty)', () => {
         expect(tabsFor('observed')).toEqual(['activity', 'terminal', 'files', 'changes']);
-        expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes', 'shells']);
+        expect(tabsFor('declared')).toEqual(['stream', 'files', 'changes', 'shells', 'settings']);
         expect(tabsFor('remote')).toEqual(['files', 'changes']);
     });
 });

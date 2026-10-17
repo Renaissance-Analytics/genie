@@ -19,7 +19,7 @@ const ops = (over: Partial<AgentOpsProps> = {}): AgentOpsProps => ({
 });
 const broken = { running: false, turnState: 'failed', startedAt: null, pendingApproval: null, failure: { reason: 'ACP stream closed · exit 137', fixes: ['Restart'] }, contextUsed: null, contextSize: null, plan: null } as unknown as Parameters<typeof AgentView>[0]['session'];
 const render = (o?: AgentOpsProps, s: Parameters<typeof AgentView>[0]['session'] = null) =>
-    renderToStaticMarkup(<AgentView agent={agent} session={s} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
+    renderToStaticMarkup(<AgentView agent={agent} session={s} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
 
 describe('the header', () => {
     it('without ops: no restart, no overflow, no confirm card; with ops: the overflow trigger, and Restart ONLY when broken (the board)', () => {

@@ -74,6 +74,7 @@ const TAB_LABEL: Record<AgentTab, string> = {
     shells: 'Shells',
     terminal: 'Terminal',
     activity: 'Activity',
+    settings: 'Settings',
 };
 
 const PILL_TONE = {
@@ -858,6 +859,188 @@ export function AgentView({
                     ) : null}
 
                     {/* TERMINAL (observed, §4.2): the TUI's own terminal, attached here as a SECOND view of the same pty (§6.5). */}
+                    {/* AGENT SETTINGS (Tynn #800, the owner 2026-10-17: "the whole agent settings panel should be a settings tab
+                        on the agent screen, not this little panel that is always in the way"): persona, mode, budget, skills —
+                        full width, two columns on a wide window. The rail keeps only what is live: the plan, an ended process. */}
+                    {active === 'settings' ? (
+                        <div data-agent-settings="" className="min-h-0 flex-1 overflow-y-auto">
+                            <div className="mx-auto grid max-w-[1100px] grid-cols-1 items-start gap-6 p-6 text-xs xl:grid-cols-2">
+                                {persona ? (
+                                    <section data-rail="persona">
+                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
+                                        <p className="font-mono text-[11px] text-[var(--fg-2)]">
+                                            {persona}
+                                            {/* The board's `· committed`: git's own word on the file the session runs on; nothing when git said nothing. */}
+                                            {personaGitShown ? <> · <span data-persona-git={personaGitShown} className={personaGitShown === 'committed' ? 'text-[var(--fg-3)]' : 'text-[var(--warning)]'}>{personaGitShown === 'committed' ? 'committed' : personaGitShown === 'modified' ? 'uncommitted changes' : 'not committed'}</span></> : null}
+                                        </p>
+                                        {personaShown ? (
+                                            <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
+                                        ) : null}
+                                        {personaShown?.truncated ? <p data-persona-clipped="" className="mt-1 text-[11px] text-[var(--fg-4)]">… more in the file</p> : null}
+                                        {personaError ? <p data-persona-error="" className="mt-1 text-[11px] text-[var(--warning)]">could not read it: {personaError}</p> : null}
+                                    </section>
+                                ) : null}
+                                {ops ? (
+                                    <section data-rail="mode" data-mode={ops.mode}>
+                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Mode</h2>
+                                        <div className="flex items-center gap-1 text-[11px]">
+                                            <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
+                                            <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual')} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
+                                            </button>
+                                        </div>
+                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
+                                        {/* What a Claude agent may do is chosen here — all tools, ask before shell commands, or edits only; Codex asks in the chat. */}
+                                        {agent.provider === 'claude' && ops.onSetPermissions ? (
+                                            <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
+                                                Tools {agent.name} may use
+                                                <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : e.target.value === 'ask' ? 'ask' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                    <option value="all">all tools</option>
+                                                    <option value="ask">ask me before shell commands</option>
+                                                    <option value="edits">edits only — shell refused</option>
+                                                </select>
+                                                <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
+                                            </label>
+                                        ) : null}
+                                        {/* The model: what the provider REPORTED it runs, and what the agent starts with. Never one Genie made up. */}
+                                        {agent.fidelity === 'declared' && ops.onSetModel ? (
+                                            <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
+                                                <p data-model-reported={session?.model ? 'yes' : 'no'}>
+                                                    Model{' '}
+                                                    {session?.model ? (
+                                                        <span className="font-mono text-[var(--fg-2)]">{session.model}</span>
+                                                    ) : ops.model ? (
+                                                        <span className="text-[var(--fg-4)]">not reported yet</span>
+                                                    ) : (
+                                                        <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
+                                                    )}
+                                                </p>
+                                                <label className="mt-1 block">
+                                                    Start {agent.name} with
+                                                    {agent.provider === 'claude' ? (
+                                                        <select data-model-select={ops.model ?? ''} value={ops.model ?? ''} onChange={(e) => ops.onSetModel?.(e.target.value === '' ? null : e.target.value)} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                            <option value="">default</option>
+                                                            {CLAUDE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+                                                            {ops.model && !CLAUDE_MODELS.includes(ops.model) ? <option value={ops.model}>{ops.model}</option> : null}
+                                                        </select>
+                                                    ) : (
+                                                        <input
+                                                            key={ops.model ?? ''}
+                                                            data-model-input={ops.model ?? ''}
+                                                            type="text"
+                                                            defaultValue={ops.model ?? ''}
+                                                            placeholder="provider default"
+                                                            spellCheck={false}
+                                                            onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
+                                                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                            className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
+                                                        />
+                                                    )}
+                                                </label>
+                                                <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
+                                            </div>
+                                        ) : null}
+                                        <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
+                                            Who may message {agent.name}
+                                            <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                                <option value="none">nobody</option>
+                                                <option value="self">this workspace</option>
+                                                <option value="all">any workspace here</option>
+                                            </select>
+                                        </label>
+                                    </section>
+                                ) : null}
+                                {budget || budgetLimit !== null || headroom || policy || session?.mcpServers ? (
+                                    <section data-rail="budget">
+                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                                            Budget
+                                        </h2>
+                                        {budgetLimit !== null ? (
+                                            <p data-budget-limit={budgetLimit} className="mb-1.5 text-[11px] text-[var(--warning)]">
+                                                limit ${budgetLimit}/day — unenforceable: this provider reports no cost, so nothing will park
+                                            </p>
+                                        ) : null}
+                                        {budget ? (
+                                        <p className="font-mono text-[11px] text-[var(--fg-3)]">
+                                            ctx {Math.round(budget.used / 1000)}k/{Math.round(budget.size / 1000)}k
+                                        </p>
+                                        ) : null}
+                                        {budget ? (
+                                        <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
+                                            <span
+                                                data-budget-bar={budget.pct}
+                                                className={`block h-full ${budget.pct >= 90 ? 'bg-[var(--danger)]' : budget.pct >= 80 ? 'bg-[var(--warning)]' : 'bg-[var(--sky-400)]'}`}
+                                                style={{ width: `${budget.pct}%` }}
+                                            />
+                                        </span>
+                                        ) : null}
+                                        {/* The note under the bar (the board): compaction expected / compacted at / last reported. Absent when there is nothing to say. */}
+                                        {note ? (
+                                            <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-[var(--danger)]' : note.tone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
+                                        ) : null}
+                                        {/*
+                                         * No Cost row at all when the provider reports none — codex reports
+                                         * none. Not a `$0.00`, which claims the work was free, and not a
+                                         * dash, which reads as zero.
+                                         */}
+                                        {budget && budget.cost !== null ? (
+                                            <p data-rail-cost className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">
+                                                {`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}
+                                            </p>
+                                        ) : budget ? (
+                                            <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>
+                                        ) : null}
+                                        {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
+                                        {session?.mcpServers ? (
+                                            session.mcpServers.includes('genie') ? (
+                                                <p data-rail-mcp="given" className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">Genie’s MCP — given to this session <button type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</button></p>
+                                            ) : (
+                                                <p data-rail-mcp="missing" className="mt-1.5 text-[11px] text-[var(--warning)]">This session was not given Genie’s MCP — it started before the server was listening. Restart it to connect.</p>
+                                            )
+                                        ) : null}
+                                        {policy ? <p data-approval-policy className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">{policy}</p> : null}
+                                        {headroom ? (
+                                            <p data-rail-headroom className={`mt-1 font-mono text-[11px] ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{headroomLine(headroom)}</p>
+                                        ) : null}
+                                    </section>
+                                ) : null}
+                                {/*
+                                 * What the agent's OWN CLI can run (the owner, 2026-10-14: surfaced in the chat and here, read-only).
+                                 * Run one from the chat's `/` menu. Absent until the provider reports; an agent that reports none says so.
+                                 */}
+                                {session?.extensions ? (
+                                    <section data-rail="extensions">
+                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                                            Skills and commands
+                                        </h2>
+                                        {session.extensions.commands.length === 0 ? (
+                                            <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
+                                        ) : (
+                                            <ul data-rail-commands={session.extensions.commands.length} className="max-h-48 overflow-y-auto font-mono text-[11px] text-[var(--fg-2)]">
+                                                {session.extensions.commands.map((c) => (
+                                                    <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
+                                                        <span className="truncate">/{c.name}</span>
+                                                        <span className="shrink-0 font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                        {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
+                                            <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
+                                                Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
+                                            </p>
+                                        ) : null}
+                                        {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
+                                            <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
+                                                Subagents: {session.extensions.subagents.join(', ')}
+                                            </p>
+                                        ) : null}
+                                    </section>
+                                ) : null}
+                            </div>
+                        </div>
+                    ) : null}
+
                     {active === 'shells' ? <ShellsPanel shells={shells} agentName={agent.name} provider={agent.provider} /> : null}
 
                     {active === 'terminal' ? (
@@ -974,13 +1157,13 @@ export function AgentView({
                         <span className="sr-only">{railText}</span>
                     </div>
                 ) : null}
-                {showColumn && (inspector || plan || budget || budgetLimit !== null || headroom || policy || session?.mcpServers || ops || persona || ended || termBlock) ? (
+                {showColumn && (inspector || plan || ended || termBlock) ? (
                 <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
                 {railModeNow === 'strip' ? (
                     <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
                 ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
-                {plan || budget || budgetLimit !== null || headroom || policy || session?.mcpServers || ops || persona || ended || termBlock ? (
+                {plan || ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
                     {termBlock ? (
@@ -1021,21 +1204,6 @@ export function AgentView({
                             </div>
                         </section>
                     ) : null}
-                    {persona ? (
-                        <section data-rail="persona">
-                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
-                            <p className="font-mono text-[11px] text-[var(--fg-2)]">
-                                {persona}
-                                {/* The board's `· committed`: git's own word on the file the session runs on; nothing when git said nothing. */}
-                                {personaGitShown ? <> · <span data-persona-git={personaGitShown} className={personaGitShown === 'committed' ? 'text-[var(--fg-3)]' : 'text-[var(--warning)]'}>{personaGitShown === 'committed' ? 'committed' : personaGitShown === 'modified' ? 'uncommitted changes' : 'not committed'}</span></> : null}
-                            </p>
-                            {personaShown ? (
-                                <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
-                            ) : null}
-                            {personaShown?.truncated ? <p data-persona-clipped="" className="mt-1 text-[11px] text-[var(--fg-4)]">… more in the file</p> : null}
-                            {personaError ? <p data-persona-error="" className="mt-1 text-[11px] text-[var(--warning)]">could not read it: {personaError}</p> : null}
-                        </section>
-                    ) : null}
                     {/*
                      * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
                      * panel reads as an agent working without a plan; the truth is that it has
@@ -1064,164 +1232,7 @@ export function AgentView({
                         </section>
                     ) : null}
 
-                    {ops ? (
-                        <section data-rail="mode" data-mode={ops.mode}>
-                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Mode</h2>
-                            <div className="flex items-center gap-1 text-[11px]">
-                                <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
-                                <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual')} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
-                                    switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
-                                </button>
-                            </div>
-                            <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
-                            {/* What a Claude agent may do is chosen here — all tools, ask before shell commands, or edits only; Codex asks in the chat. */}
-                            {agent.provider === 'claude' && ops.onSetPermissions ? (
-                                <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
-                                    Tools {agent.name} may use
-                                    <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : e.target.value === 'ask' ? 'ask' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                        <option value="all">all tools</option>
-                                        <option value="ask">ask me before shell commands</option>
-                                        <option value="edits">edits only — shell refused</option>
-                                    </select>
-                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
-                                </label>
-                            ) : null}
-                            {/* The model: what the provider REPORTED it runs, and what the agent starts with. Never one Genie made up. */}
-                            {agent.fidelity === 'declared' && ops.onSetModel ? (
-                                <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
-                                    <p data-model-reported={session?.model ? 'yes' : 'no'}>
-                                        Model{' '}
-                                        {session?.model ? (
-                                            <span className="font-mono text-[var(--fg-2)]">{session.model}</span>
-                                        ) : ops.model ? (
-                                            <span className="text-[var(--fg-4)]">not reported yet</span>
-                                        ) : (
-                                            <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
-                                        )}
-                                    </p>
-                                    <label className="mt-1 block">
-                                        Start {agent.name} with
-                                        {agent.provider === 'claude' ? (
-                                            <select data-model-select={ops.model ?? ''} value={ops.model ?? ''} onChange={(e) => ops.onSetModel?.(e.target.value === '' ? null : e.target.value)} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                <option value="">default</option>
-                                                {CLAUDE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-                                                {ops.model && !CLAUDE_MODELS.includes(ops.model) ? <option value={ops.model}>{ops.model}</option> : null}
-                                            </select>
-                                        ) : (
-                                            <input
-                                                key={ops.model ?? ''}
-                                                data-model-input={ops.model ?? ''}
-                                                type="text"
-                                                defaultValue={ops.model ?? ''}
-                                                placeholder="provider default"
-                                                spellCheck={false}
-                                                onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
-                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                            />
-                                        )}
-                                    </label>
-                                    <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
-                                </div>
-                            ) : null}
-                            <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
-                                Who may message {agent.name}
-                                <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                    <option value="none">nobody</option>
-                                    <option value="self">this workspace</option>
-                                    <option value="all">any workspace here</option>
-                                </select>
-                            </label>
-                        </section>
-                    ) : null}
 
-                    {budget || budgetLimit !== null || headroom || policy || session?.mcpServers ? (
-                        <section data-rail="budget">
-                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                Budget
-                            </h2>
-                            {budgetLimit !== null ? (
-                                <p data-budget-limit={budgetLimit} className="mb-1.5 text-[11px] text-[var(--warning)]">
-                                    limit ${budgetLimit}/day — unenforceable: this provider reports no cost, so nothing will park
-                                </p>
-                            ) : null}
-                            {budget ? (
-                            <p className="font-mono text-[11px] text-[var(--fg-3)]">
-                                ctx {Math.round(budget.used / 1000)}k/{Math.round(budget.size / 1000)}k
-                            </p>
-                            ) : null}
-                            {budget ? (
-                            <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
-                                <span
-                                    data-budget-bar={budget.pct}
-                                    className={`block h-full ${budget.pct >= 90 ? 'bg-[var(--danger)]' : budget.pct >= 80 ? 'bg-[var(--warning)]' : 'bg-[var(--sky-400)]'}`}
-                                    style={{ width: `${budget.pct}%` }}
-                                />
-                            </span>
-                            ) : null}
-                            {/* The note under the bar (the board): compaction expected / compacted at / last reported. Absent when there is nothing to say. */}
-                            {note ? (
-                                <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-[var(--danger)]' : note.tone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
-                            ) : null}
-                            {/*
-                             * No Cost row at all when the provider reports none — codex reports
-                             * none. Not a `$0.00`, which claims the work was free, and not a
-                             * dash, which reads as zero.
-                             */}
-                            {budget && budget.cost !== null ? (
-                                <p data-rail-cost className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">
-                                    {`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}
-                                </p>
-                            ) : budget ? (
-                                <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>
-                            ) : null}
-                            {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
-                            {session?.mcpServers ? (
-                                session.mcpServers.includes('genie') ? (
-                                    <p data-rail-mcp="given" className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">Genie’s MCP — given to this session <button type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</button></p>
-                                ) : (
-                                    <p data-rail-mcp="missing" className="mt-1.5 text-[11px] text-[var(--warning)]">This session was not given Genie’s MCP — it started before the server was listening. Restart it to connect.</p>
-                                )
-                            ) : null}
-                            {policy ? <p data-approval-policy className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">{policy}</p> : null}
-                            {headroom ? (
-                                <p data-rail-headroom className={`mt-1 font-mono text-[11px] ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{headroomLine(headroom)}</p>
-                            ) : null}
-                        </section>
-                    ) : null}
-                    {/*
-                     * What the agent's OWN CLI can run (the owner, 2026-10-14: surfaced in the chat and here, read-only).
-                     * Run one from the chat's `/` menu. Absent until the provider reports; an agent that reports none says so.
-                     */}
-                    {session?.extensions ? (
-                        <section data-rail="extensions">
-                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                Skills and commands
-                            </h2>
-                            {session.extensions.commands.length === 0 ? (
-                                <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
-                            ) : (
-                                <ul data-rail-commands={session.extensions.commands.length} className="max-h-48 overflow-y-auto font-mono text-[11px] text-[var(--fg-2)]">
-                                    {session.extensions.commands.map((c) => (
-                                        <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
-                                            <span className="truncate">/{c.name}</span>
-                                            <span className="shrink-0 font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                            {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
-                                <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
-                                    Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
-                                </p>
-                            ) : null}
-                            {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
-                                <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
-                                    Subagents: {session.extensions.subagents.join(', ')}
-                                </p>
-                            ) : null}
-                        </section>
-                    ) : null}
                 </div>
                 ) : null}
                 </aside>

@@ -149,7 +149,7 @@ describe('the control', () => {
         lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model,
     });
     const render = (provider: string, o?: AgentOpsProps, s: LiveSession | null = null) => renderToStaticMarkup(
-        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider, fidelity: 'declared', cwd: '/w/tynn' }} session={s} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} ops={o} />,
+        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider, fidelity: 'declared', cwd: '/w/tynn' }} session={s} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} ops={o} />,
     );
 
     it('a Claude agent: the reported model, a select with the chosen one selected, and when a change applies', () => {
