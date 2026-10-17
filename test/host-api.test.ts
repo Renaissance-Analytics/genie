@@ -29,6 +29,7 @@ function fakes() {
             start: (r, cwd) => { calls.push(`start:${r.id}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
             cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
+            resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
             answerApproval: (id, opt) => { calls.push(`approve:${id}:${opt}`); return true; },
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
@@ -118,6 +119,15 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['cancel:agent_a', 'stop:agent_a']);
         expect(await api.invoke('cancelTurn', ['nope'])).toEqual({ ok: false, reason: 'unknown agent' });
         expect(f.calls).toHaveLength(2);
+    });
+
+    it('resumeLimit is `Resume now` (Tynn #794): it opens the AGENT’S PROVIDER login, once; an unknown agent is refused', async () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        expect(await api.invoke('resumeLimit', ['agent_a'])).toEqual({ ok: true });
+        expect(f.calls).toEqual(['resume-limit:claude']);
+        expect(await api.invoke('resumeLimit', ['nope'])).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(f.calls).toHaveLength(1);
     });
 
     it('agent operations pass through with their arguments narrowed', async () => {

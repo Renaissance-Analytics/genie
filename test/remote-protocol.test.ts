@@ -50,7 +50,8 @@ describe('the capability table', () => {
         // 52 since `agents.setPermissions` (a Claude agent's tools, chosen on its Agent view): a write, agent-scoped.
         // 53 since `agents.setModel` (an agent's model, chosen on its Agent view): a write, agent-scoped.
         // 54 since `cancelTurn` (`Stop this turn` — the current turn ends, the agent keeps running): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(54);
+        // 55 since `resumeLimit` (`Resume now` while a provider's login is held for its rate limit, Tynn #794): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(55);
         expect(capabilityOf('cancelTurn')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');

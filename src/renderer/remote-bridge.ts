@@ -135,6 +135,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
         cancelTurn: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId),
+        resumeLimit: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('resumeLimit', agentId),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.

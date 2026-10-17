@@ -151,6 +151,8 @@ export interface ShellProps {
     onStopAgent?: ((agentId: string) => void) | undefined;
     /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
     onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
+    onResumeLimit?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
@@ -234,6 +236,7 @@ export function Shell({
     onRestartAgent,
     onStopAgent,
     onCancelTurn,
+    onResumeLimit,
     onStartAgent,
     onOpenPalette,
     onSelectRow,
@@ -506,6 +509,7 @@ export function Shell({
                             log={agentDetail.log ?? []}
                             onStop={onStopAgent}
                             onCancelTurn={onCancelTurn}
+                            onResumeLimit={onResumeLimit}
                             onStart={onStartAgent}
                             terminals={terminals}
                         />

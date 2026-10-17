@@ -67,6 +67,15 @@ function ago(from: number, now: number): string {
     return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
 }
 
+/** The time LEFT until `at`: `m:ss`, or `h:mm:ss` from an hour; never negative (Tynn #794). */
+export function limitCountdown(at: number, now: number): string {
+    const total = Math.max(0, Math.floor((at - now) / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 export interface PillContext {
     /** Turns so far — the pill speaks in turns (`Turn 14 · running`). */
     turns: number;
@@ -96,6 +105,12 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
         // The wait is measured from Genie's own stamp — the moment the request parked here — not guessed from the turn.
         return { word: `Turn ${ctx.turns} · parked · waiting on you`, elapsed: session.parkedAt == null ? null : clock(session.parkedAt, now()), tone: 'warn' };
     }
+    // HELD FOR THE PROVIDER'S LIMIT (Tynn #794): until when, and the time left — or that it needs the person, with no
+    // timer when no reset is known. Never Broken: the limit is the provider's, and Genie resumes on its own.
+    const limit = session.limit;
+    if (limit && limit.state === 'paused') return { word: `Paused · rate limit · resumes ${hhmm(limit.resumeAtMs)}`, elapsed: limitCountdown(limit.resumeAtMs, now()), tone: 'warn' };
+    if (limit && limit.state === 'retrying') return { word: `Paused · rate limit · next try ${hhmm(limit.nextTryAtMs)}`, elapsed: limitCountdown(limit.nextTryAtMs, now()), tone: 'warn' };
+    if (limit && limit.state === 'needs-person') return { word: `Paused · rate limit · needs you${limit.message ? `: ${limit.message}` : ''}`, elapsed: null, tone: 'warn' };
     if (session.failure !== null) {
         const when = session.failure.at == null ? '' : ` ${hhmm(session.failure.at)}`;
         return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };
@@ -139,6 +154,8 @@ export interface HeaderActions {
     restart: boolean;
     /** In the error state: the Take Over window is the terminal. */
     openTerminal: boolean;
+    /** While the provider's login is held for its limit (Tynn #794): the person's Resume now. */
+    resumeLimit: boolean;
     /** A declared agent that is not running, and not broken (broken has its restart): start it. */
     start: boolean;
     takeOver: boolean;
@@ -150,7 +167,8 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity): 
     const managed = fidelity === 'declared' && session !== null;
     const broken = managed && session.failure !== null;
     const start = fidelity === 'declared' && !broken && (session === null || !session.running);
-    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, start, takeOver: true, chat: true };
+    const held = managed && session.limit !== undefined && session.limit.state !== 'open';
+    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {
@@ -417,3 +435,4 @@ export type ApprovalPlacement = 'chat' | 'stream';
 export function approvalPlacement(agentId: string, chatSubject: string | null): ApprovalPlacement {
     return chatSubject === agentId ? 'chat' : 'stream';
 }
+

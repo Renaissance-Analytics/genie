@@ -195,6 +195,8 @@ export interface AgentViewProps {
      * the agent keeps running. Ending the session is `onStop`, a separate and explicit action.
      */
     onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
+    onResumeLimit?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
 }
@@ -233,7 +235,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -520,6 +522,17 @@ export function AgentView({
                     {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
                         session is "Stop agent" in the operations menu. */}
                     {actions.stop && onCancelTurn ? <TurnStop onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : null}
+                    {actions.resumeLimit && onResumeLimit ? (
+                        <button
+                            type="button"
+                            data-action="resume-limit"
+                            title={`Resume now — every ${agent.provider} agent waiting for the rate limit goes on`}
+                            onClick={() => onResumeLimit(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
+                        >
+                            Resume now
+                        </button>
+                    ) : null}
                     {/*
                      * The way to TALK to this agent.
                      *
