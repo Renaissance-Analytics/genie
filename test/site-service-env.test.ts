@@ -91,6 +91,36 @@ describe('an engine change reaches running sites without anyone restarting them'
         expect(sites.list().find((s) => s.id === 'site_idle')?.state).toBe('stopped');
     });
 
+    // Tynn #756, moic's acceptance run 11 (2026-10-17): the site read straight after `services detach` answered 502 —
+    // an engine change stopped and restarted EVERY process of the site, Caddy included, on a NEW port the front door
+    // did not route to yet. Only PHP reads the service env, so only the PHP worker is restarted, on the SAME fcgi port
+    // (the site's Caddy retries the dial while it comes back: serve-config's lb_try_duration, measured in WSL).
+    it('a PHP site: ONLY its worker is restarted, on the same fcgi port; its Caddy and its port are kept', () => {
+        const env: Record<string, Record<string, string>> = { moic: { DB_PORT: '4103' } };
+        const { pty, sites } = make(env);
+        sites.create(phpSite);
+        const portBefore = sites.list().find((s) => s.id === 'site_moicapp')?.port;
+        const fcgiBefore = /php-cgi -b (\S+)/.exec(pty.opened.find((o) => /php-cgi -b /.test(o.command ?? ''))?.command ?? '')?.[1];
+        const caddyBefore = pty.opened.filter((o) => /caddy run /.test(o.command ?? '')).length;
+        expect(caddyBefore).toBe(1); // CONTROL: the gauge sees the site's Caddy
+        const before = pty.opened.length;
+
+        env.moic = { DB_PORT: '4104' };
+        expect(sites.serviceEnvChanged('moic')).toEqual(['site_moicapp']);
+
+        const started = pty.opened.slice(before);
+        expect(started.filter((o) => /caddy run /.test(o.command ?? ''))).toHaveLength(0);
+        const workers = started.filter((o) => /php-cgi -b /.test(o.command ?? ''));
+        expect(workers).toHaveLength(1);
+        expect(/php-cgi -b (\S+)/.exec(workers[0]!.command ?? '')?.[1]).toBe(fcgiBefore);
+        expect(workers[0]!.env).toMatchObject({ DB_PORT: '4104' });
+        const after = sites.list().find((s) => s.id === 'site_moicapp');
+        expect(after?.port).toBe(portBefore);
+        expect(after?.state).not.toBe('stopped');
+        // and the NEXT change still compares against what the worker now runs with
+        expect(sites.serviceEnvChanged('moic')).toEqual([]);
+    });
+
     it('CONTROL: the same env again restarts nothing — a change event is not a change', () => {
         const env = { moic: { DB_PORT: '4104' } };
         const { pty, sites } = make(env);
