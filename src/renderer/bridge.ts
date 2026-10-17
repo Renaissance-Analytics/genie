@@ -135,6 +135,8 @@ export interface GenieBridge {
 
     /** The host asking the window to go somewhere (the tray's Settings…). Absent on a remote bridge: a remote window is not this host's tray. */
     onNavigate?(onRoute: (route: string) => void): () => void;
+    /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
+    onAction?(onAction: (action: { agentId: string; kind: string }) => void): () => void;
 
     /** Start or REATTACH a session. Never creates a second for the same agent. */
     openAgent(agentId: string): void;

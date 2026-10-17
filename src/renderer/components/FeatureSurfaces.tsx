@@ -6,7 +6,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
-import { isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
+import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
@@ -987,10 +987,12 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                     {settingGroups().map((g) => (
                         <Tabs.Panel key={g} value={g}>
                             {g === 'general' && update ? <UpdatesBlock {...update} /> : null}
+                            {g === 'general' ? <AlertSounds values={values} onAction={onAction} /> : null}
                             {g === 'general' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
                             <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>
                                 {/* An INTERNAL setting (`hidden`) is remembered, never drawn — the tabs honour it as search does. */}
-                                {SETTINGS.filter((s) => s.group === g && !s.hidden).map((def) => (
+                                {/* The alert sounds are drawn below, under their own headings (Tynn #766 C). */}
+                                {SETTINGS.filter((s) => s.group === g && !s.hidden && !isAlertSoundKey(s.key)).map((def) => (
                                     <li key={def.key} data-setting={def.key} className="flex items-center gap-4 px-5 py-3">
                                         <div className="flex-1">
                                             <div className="text-sm font-medium">{def.label}</div>
@@ -1010,6 +1012,35 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
             </Tabs>
             )}
         </div>
+    );
+}
+
+/**
+ * SOUNDS (Tynn #766): a row per kind of action an agent takes, under the four headings it belongs to — Needs you, Its
+ * turn, Its work, Messages — each with its choice, Preview, and its own file when it is Custom file.
+ */
+function AlertSounds({ values, onAction }: { values: Readonly<Record<string, boolean | string>> | null; onAction: SurfaceProps['onAction'] }) {
+    return (
+        <section data-alert-sounds className="border-b border-[var(--border-1)] px-5 py-3">
+            <div className="text-sm font-medium">Sounds</div>
+            <div className="mb-1 text-xs text-[var(--fg-3)]">What plays when an agent does each thing. None is silent; the master switch above silences them all.</div>
+            {SOUND_GROUPS.map(({ group, label }) => (
+                <div key={group} data-sound-group={group} className="mt-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-3)]">{label}</div>
+                    <ul className="divide-y divide-[var(--border-1)]">
+                        {ALERT_KINDS.filter((k) => k.group === group).map((k) => {
+                            const def = SETTINGS.find((s) => s.key === `sound_${k.kind}`)!;
+                            return (
+                                <li key={def.key} data-setting={def.key} className="flex items-center gap-4 py-2">
+                                    <div className="flex-1 text-sm">{k.label}</div>
+                                    <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
+            ))}
+        </section>
     );
 }
 

@@ -1,4 +1,5 @@
 import type { McpServer } from '@particle-academy/prism-acp';
+import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
@@ -222,6 +223,8 @@ interface Running {
     rows: TimedEvent[];
     startedAt: number;
     nextRowId: number;
+    /** The action keys already sounded (Tynn #766 C): cleared when a turn ends. */
+    readonly sounded: Set<string>;
     /** The MCP servers this session was STARTED with, by name — what the Agent view says it has. */
     mcp: readonly string[];
     /** What its provider takes in a prompt beyond text. */
@@ -239,6 +242,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #onTurnEnded: ((agentId: AgentId, turns: number) => void) | undefined;
+    readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
     readonly #clock: () => number;
@@ -303,6 +307,12 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** A turn ended: the agent's turn count now — main writes it to the record (`lastTurn`) for the next start. */
         onTurnEnded?: (agentId: AgentId, turns: number) => void;
+        /**
+         * WHAT AN AGENT DID (Tynn #766 row C): each action once — started, a reply ended, a tool call by its provider's
+         * category, its plan (once a turn), being stopped — and for a whole login, its rate limit and the resume. Main
+         * pushes it to the window, which plays the sound the person chose for it.
+         */
+        onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
         /**
          * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
@@ -326,6 +336,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#onTurnEnded = options.onTurnEnded;
+        this.#onAction = options.onAction;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
@@ -349,9 +360,12 @@ export class SessionHost {
     #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
         const view = this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
         if (view.state !== 'open') {
+            let first: AgentId | null = null;
             for (const [id, entry] of this.#running) {
-                if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); }
+                if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
             }
+            // ONCE for the login, not once per agent it holds: one limit, one sound.
+            if (first !== null) this.#onAction?.(first, 'limited');
         }
         this.#wake();
     }
@@ -372,9 +386,11 @@ export class SessionHost {
     }
 
     #resumeHeld(provider: string): void {
+        let first: AgentId | null = null;
         for (const [id, entry] of this.#running) {
-            if (entry.provider === provider && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); }
+            if (entry.provider === provider && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
         }
+        if (first !== null) this.#onAction?.(first, 'resumed');
     }
 
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
@@ -479,7 +495,7 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt: this.#clock(), nextRowId: 0, mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt: this.#clock(), nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
 
         let reportedTurns = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
@@ -502,7 +518,13 @@ export class SessionHost {
             onStateChange: () => {
                 // A turn that ended moves the count on: reported once per turn, for the record.
                 const turns = session.turns;
-                if (turns > reportedTurns) { reportedTurns = turns; this.#onTurnEnded?.(record.id, turns); }
+                if (turns > reportedTurns) {
+                    reportedTurns = turns;
+                    this.#onTurnEnded?.(record.id, turns);
+                    // A REPLY that ended — not a failed, stopped or held turn; and the plan sounds again next turn.
+                    if (session.lastTurnEnd === 'replied') this.#onAction?.(record.id, 'replied');
+                    entry.sounded.clear();
+                }
                 this.#emit(record.id);
             },
             /*
@@ -540,6 +562,9 @@ export class SessionHost {
                  * session-level test asserted the FLAG was sent and passed the whole time; only
                  * a row COUNT could have caught it.
                  */
+                // What the agent did, sounded ONCE per key (a tool call's many updates; a plan's rewrites in a turn).
+                const action = agentActionOf(event);
+                if (action && !entry.sounded.has(action.key)) { entry.sounded.add(action.key); this.#onAction?.(record.id, action.kind); }
                 const last = rows.at(-1);
                 if (meta?.replacesLast && last) {
                     rows[rows.length - 1] = { ...last, event };
@@ -613,6 +638,8 @@ export class SessionHost {
         }
 
         this.#emit(record.id);
+        // It started (Tynn #766 C): its own sound, if the person chose one.
+        this.#onAction?.(record.id, 'started');
         return { ok: true };
     }
 

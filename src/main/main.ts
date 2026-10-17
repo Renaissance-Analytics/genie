@@ -488,6 +488,8 @@ async function boot(): Promise<void> {
         userData: genieHome(),
         // Each turn's number is kept on the agent's record, so its next session numbers on at once (no "Turn 1").
         onTurnEnded: (agentId, turns) => { void registry?.setLastTurn(agentId, turns); },
+        // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
+        onAction: (agentId, kind) => broadcast('genie:action', { agentId, kind }),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
         // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
