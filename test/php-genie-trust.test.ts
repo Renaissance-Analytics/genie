@@ -34,6 +34,15 @@ describe('the bundle and the ini', () => {
         expect(certs(phpTrustFiles({ genCaPem: GENIE_CA, systemRootsPem: SYSTEM + GENIE_CA, dir: '/d', platform: 'linux' }).bundle)).toBe(3);
         expect(certs(phpTrustFiles({ genCaPem: GENIE_CA, systemRootsPem: null, dir: '/d', platform: 'linux' }).bundle)).toBe(1);
     });
+
+    // The beta.29 Windows VM verify (2026-10-17): the paths were joined with the HOST's separator, not the platform's
+    // the files are for — `:\t\conf.d` for a linux worker on a Windows host. The platform given decides, on any host.
+    it("paths use the GIVEN platform's separator, whatever the host is", () => {
+        const linux = phpTrustFiles({ genCaPem: GENIE_CA, systemRootsPem: null, dir: '/data/php-trust', platform: 'linux' });
+        expect([linux.bundlePath, linux.confDir, linux.iniPath]).toEqual(['/data/php-trust/genie-ca-bundle.pem', '/data/php-trust/conf.d', '/data/php-trust/conf.d/zzz-genie-trust.ini']);
+        const win = phpTrustFiles({ genCaPem: GENIE_CA, systemRootsPem: null, dir: 'C:\\Genie\\php-trust', platform: 'win32' });
+        expect([win.bundlePath, win.confDir, win.iniPath]).toEqual(['C:\\Genie\\php-trust\\genie-ca-bundle.pem', 'C:\\Genie\\php-trust\\conf.d', 'C:\\Genie\\php-trust\\conf.d\\zzz-genie-trust.ini']);
+    });
 });
 
 describe("a PHP worker's environment", () => {
