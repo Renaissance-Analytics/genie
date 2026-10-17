@@ -1,6 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useState } from 'react';
-import { deckBadge, type RailItem, type RailSurface } from '../../core/rail-view.js';
+import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
 
 export type { RailSurface };
@@ -49,6 +49,10 @@ export interface SidebarProps {
      */
     available: readonly RailSurface[];
     onNavigate: (route: string) => void;
+    /** Add a workspace (Tynn #283): the `+` in the rail's tools, any time. Absent = no `+` (a control that does nothing is not offered). */
+    onAddWorkspace?: (() => void) | undefined;
+    /** Where the collapsed state is remembered; `undefined` = the window's localStorage, `null` = nowhere (tests pass their own). */
+    railStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
 }
 
 const ROW =
@@ -62,6 +66,7 @@ function NavRow({
     label,
     onNavigate,
     children,
+    compact = false,
 }: {
     route: string;
     current: string;
@@ -69,6 +74,8 @@ function NavRow({
     label: string;
     onNavigate: (route: string) => void;
     children?: React.ReactNode;
+    /** Collapsed rail: the icon alone, the label as its tooltip and accessible name. */
+    compact?: boolean;
 }) {
     // A route carries query state (`?group=workspace`), so the comparison is on the path.
     // Matching the whole string would un-highlight the Dashboard the moment someone regrouped
@@ -82,13 +89,23 @@ function NavRow({
             data-active={active ? 'true' : 'false'}
             aria-current={active ? 'page' : undefined}
             onClick={() => onNavigate(route)}
-            className={`${ROW} ${active ? ROW_ACTIVE : ''}`}
+            {...(compact ? { 'aria-label': label, title: label } : {})}
+            className={`${compact ? ICON_BUTTON : ROW} relative ${active ? ROW_ACTIVE : ''}`}
         >
             <Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
-            <span className="truncate">{label}</span>
+            {compact ? null : <span className="truncate">{label}</span>}
             {children}
         </button>
     );
+}
+
+const ICON_BUTTON = 'flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
+
+/** Where the rail remembers whether it is collapsed — this device's preference (Tynn #799). */
+const COLLAPSED_KEY = 'genie.rail.collapsed';
+
+function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+    try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
 }
 
 /** Where the rail remembers whether hibernated workspaces are shown — this device's preference, not the host's. */
@@ -98,8 +115,17 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
+    const storage = railStorage === undefined ? browserStorage() : railStorage;
+    // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
+    const [collapsed, setCollapsed] = useState(() => { try { return storage?.getItem(COLLAPSED_KEY) === '1'; } catch { return false; } });
+    const setRail = (next: boolean): void => {
+        setCollapsed(next);
+        try { storage?.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* a preference that cannot be saved still applies now */ }
+    };
+    // THE FILTER (Genie 1's "Search workspaces…", Tynn #282): narrows the workspace rows by name or path.
+    const [query, setQuery] = useState('');
     // Hibernated workspaces are hidden by default; the one being looked at is never hidden from under the reader.
     const [showAsleep, setShowAsleep] = useState(readShowAsleep);
     const toggleAsleep = (): void => {
@@ -108,16 +134,91 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
         try { window.localStorage.setItem(SHOW_ASLEEP_KEY, next ? '1' : '0'); } catch { /* a preference that cannot be saved still applies now */ }
     };
     const current = route.split('?')[0];
-    const asleepCount = workspaces.filter((w) => w.asleep === true).length;
-    const shown = workspaces.filter((w) => showAsleep || w.asleep !== true || current === `genie://workspace/${w.id}`);
     // No orphan badge: the Deck's count has nowhere to live without the Deck.
     const badge = has('deck') ? deckBadge(deckCount) : null;
+    const asleepCount = workspaces.filter((w) => w.asleep === true).length;
+    const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true || current === `genie://workspace/${w.id}`), collapsed ? '' : query);
+    const asleepLabel = `${showAsleep ? 'Hide' : 'Show'} ${asleepCount} hibernated workspace${asleepCount === 1 ? '' : 's'}`;
+    // THE HIBERNATED TOOL (Tynn #282): an eye, no words — its count and action are its name and tooltip.
+    const asleepTool = asleepCount > 0 ? (
+        <button type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
+            <Icon name={showAsleep ? 'eye' : 'eye-off'} size="sm" />
+        </button>
+    ) : null;
+    const addTool = onAddWorkspace ? (
+        <button type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
+            <Icon name="plus" size="sm" />
+        </button>
+    ) : null;
+    // System (Genie 1's monitor-cog): the system agent — Genie's own, never in a workspace.
+    const systemTool = has('genie') ? (
+        <button type="button" data-rail-tool="system" aria-label="System" title="System" onClick={() => onNavigate('genie://agent/genie')} className={ICON_BUTTON}>
+            <Icon name="monitor-cog" size="sm" />
+        </button>
+    ) : null;
+
+    if (collapsed) {
+        return (
+            <nav aria-label="Genie" data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
+                <button type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
+                    <Icon name="panel-left-open" size="sm" />
+                </button>
+                {has('deck') ? (
+                    <NavRow route="genie://deck" current={route} icon="inbox" label={badge !== null ? `Deck · ${badge}` : 'Deck'} onNavigate={onNavigate} compact>
+                        {badge !== null ? <span data-deck-dot="" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
+                    </NavRow>
+                ) : null}
+                {has('dashboard') ? <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact /> : null}
+                {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
+                {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
+                {has('browser') ? <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact /> : null}
+                {has('toolchain') ? <NavRow route="genie://toolchain" current={route} icon="wrench" label="Toolchain" onNavigate={onNavigate} compact /> : null}
+                {has('inbox') ? <NavRow route="genie://inbox" current={route} icon="mail" label="AgentInbox" onNavigate={onNavigate} compact /> : null}
+                {has('settings') ? <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact /> : null}
+                {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
+                {(has('workspace') ? shown : []).map((w) => {
+                    const route_ = `genie://workspace/${w.id}`;
+                    const active = current === route_;
+                    const name = w.name ?? folderName(w.path);
+                    return (
+                        <button
+                            key={w.id}
+                            type="button"
+                            data-nav={route_}
+                            data-workspace={w.id}
+                            {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
+                            data-active={active ? 'true' : 'false'}
+                            {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
+                            onClick={() => onNavigate(route_)}
+                            title={name}
+                            aria-label={name}
+                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''}`}
+                        >
+                            {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
+                            {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
+                        </button>
+                    );
+                })}
+                <div className="mt-auto flex flex-col items-center gap-1">
+                    {asleepTool}
+                    {addTool}
+                </div>
+            </nav>
+        );
+    }
 
     return (
         <nav
             aria-label="Genie"
             className="flex w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
         >
+            {/* THE TOOLS (Genie 1's rail header, Tynn #282/#799): collapse and System; hibernated and + sit by Workspaces. */}
+            <div data-rail-tools="" className="flex items-center gap-0.5">
+                <button type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
+                    <Icon name="panel-left" size="sm" />
+                </button>
+                {systemTool}
+            </div>
             {has('deck') ? (
                 <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate}>
                 {/*
@@ -169,19 +270,24 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate }:
              * reads as a list that failed to load, which is a worse lie than no heading.
              */}
             {has('workspace') ? (
-                <div className="mt-2 flex items-center px-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                    Workspaces
-                    {asleepCount > 0 ? (
-                        <button
-                            type="button"
-                            data-toggle-asleep={showAsleep ? 'hide' : 'show'}
-                            onClick={toggleAsleep}
-                            className="ml-auto rounded px-1 font-normal normal-case tracking-normal hover:text-[var(--fg-2)]"
-                        >
-                            {showAsleep ? 'Hide hibernated' : `Show hibernated · ${asleepCount}`}
-                        </button>
-                    ) : null}
-                </div>
+                <>
+                    <div className="mt-2 flex items-center px-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
+                        Workspaces
+                        <span className="ml-auto flex items-center gap-0.5 normal-case tracking-normal">
+                            {asleepTool}
+                            {addTool}
+                        </span>
+                    </div>
+                    <input
+                        type="search"
+                        data-rail-filter=""
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Filter workspaces…"
+                        aria-label="Filter workspaces"
+                        className="mx-1 rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[12px] text-[var(--fg-1)] placeholder:text-[var(--fg-4)] focus:border-[var(--accent)] focus:outline-none"
+                    />
+                </>
             ) : null}
 
             {(has('workspace') ? shown : []).map((w) => {
