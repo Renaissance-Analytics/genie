@@ -16,8 +16,9 @@ describe('globalAction', () => {
         expect(globalAction(press({}))).toBeNull();
         expect(globalAction(press({ altKey: true, metaKey: true }))).toBeNull();
         expect(globalAction(press({ shiftKey: true, metaKey: true }))).toBeNull();
-        // ⌘K is the Command Window now (Tynn #757); an unbound chord still does nothing.
-        expect(globalAction(press({ key: 'k', metaKey: true }))).toBe('open-palette');
+        // ⌘K is the Command Window's REMAPPABLE binding (Tynn #759, core/hotkeys.ts) — not a fixed chord here; an unbound
+        // chord still does nothing.
+        expect(globalAction(press({ key: 'k', metaKey: true }))).toBeNull();
         expect(globalAction(press({ key: 'x', metaKey: true }))).toBeNull();
     });
 

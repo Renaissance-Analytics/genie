@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
@@ -964,6 +965,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                     {settingGroups().map((g) => (
                         <Tabs.Panel key={g} value={g}>
                             {g === 'general' && update ? <UpdatesBlock {...update} /> : null}
+                            {g === 'general' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
                             <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>
                                 {/* An INTERNAL setting (`hidden`) is remembered, never drawn — the tabs honour it as search does. */}
                                 {SETTINGS.filter((s) => s.group === g && !s.hidden).map((def) => (
@@ -976,7 +978,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                                     </li>
                                 ))}
                             </ul>
-                            {g === 'agents' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} onAction={onAction} /> : null}
+                            {g === 'agents' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
                             {g === 'workstation' ? <Plugins plugins={data.plugins} onAction={onAction} /> : null}
                             {g === 'workstation' ? <Integrations integrations={data.integrations} onAction={onAction} /> : null}
                             {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
@@ -989,13 +991,80 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
     );
 }
 
+/** A key press as core/hotkeys.ts reads it. */
+const pressOf = (e: React.KeyboardEvent): { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; typing: boolean } => ({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false });
+
+/**
+ * GENIE'S KEYS (Tynn #759; Genie 1's Settings → "Terminal hotkeys"): the Command Window and the ForceTheQuestion nudge,
+ * each RECORDED — click the box, press the keys; Backspace or Reset goes back to Genie's default. A key Genie cannot give
+ * it (one you type with, one Genie or a saved prompt already uses) is refused on the row, with the reason.
+ */
+function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, boolean | string>> | null; onAction: SurfaceProps['onAction'] }) {
+    const [platform, setPlatform] = useState('generic');
+    useEffect(() => { setPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
+    const [refused, setRefused] = useState<{ name: BindingName; reason: string } | null>(null);
+    const bindings = bindingsFrom(values);
+    const prompts = parsePromptLibrary(typeof values?.['saved_prompts'] === 'string' ? values['saved_prompts'] : undefined);
+    const set = (name: BindingName, value: string): void => { setRefused(null); onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value }); };
+    const record = (name: BindingName, e: React.KeyboardEvent<HTMLInputElement>): void => {
+        if (e.key === 'Tab') return;
+        e.preventDefault();
+        const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+        if (bare && (e.key === 'Backspace' || e.key === 'Delete')) { set(name, ''); return; }
+        if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
+        const accelerator = acceleratorFromPress(pressOf(e), platform);
+        if (accelerator === null) return;
+        const problem = bindingProblem(accelerator, name, bindings, prompts, platform);
+        if (problem !== null) { setRefused({ name, reason: problem }); return; }
+        // Genie's default is stored as empty, so it follows Genie's default.
+        set(name, accelerator === DEFAULT_HOTKEYS[name] ? '' : accelerator);
+    };
+    const rows: Array<{ name: BindingName; label: string; desc: string }> = [
+        { name: 'commandWindow', label: 'Command Window', desc: 'Search, jump and run — prompts, actions, workspaces, agents.' },
+        { name: 'ftqNudge', label: 'ForceTheQuestion nudge', desc: 'Tells the agent in front of you to ask its question through ForceTheQuestion, where you will see it.' },
+    ];
+    return (
+        <section data-genie-hotkeys className="border-b border-[var(--border-1)] px-5 py-3">
+            <div className="text-sm font-medium">Keyboard shortcuts</div>
+            <ul className="mt-1 flex flex-col">
+                {rows.map(({ name, label, desc }) => {
+                    const raw = values?.[BINDING_SETTING[name]];
+                    const stored = typeof raw === 'string' ? raw.trim() : '';
+                    const current = bindings[name];
+                    return (
+                        <li key={name} className="flex flex-col gap-1 py-2">
+                            <div className="flex items-center gap-4">
+                                <div className="flex-1">
+                                    <div className="text-sm">{label}</div>
+                                    <div className="text-xs text-[var(--fg-3)]">{current === null ? `“${stored}” is not a key Genie can read — this shortcut is off until you set it again.` : desc}</div>
+                                </div>
+                                <Input
+                                    data-binding={name}
+                                    aria-label={`Key for ${label}`}
+                                    readOnly
+                                    value={current === null ? '' : hotkeyLabel(current, platform)}
+                                    placeholder="Click, then press keys"
+                                    onKeyDown={(e) => record(name, e)}
+                                    className="w-44"
+                                />
+                                {stored !== '' ? <Button data-action={`binding-reset-${name}`} size="sm" variant="ghost" onClick={() => set(name, '')}>Reset</Button> : null}
+                            </div>
+                            {refused?.name === name ? <div data-binding-refused={name} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
+                        </li>
+                    );
+                })}
+            </ul>
+        </section>
+    );
+}
+
 /**
  * SAVED PROMPTS (Tynn #758): the Command Window's library, in Settings → Agents — each prompt's name, its text and its
  * hotkey. The hotkey is RECORDED: click the box and press the keys; Backspace clears it. A key Genie cannot give it is
  * refused on the row, with the reason. A new prompt is a draft until it has a name and text — the reader drops a row
  * that cannot be found or sent, so saving an empty one would make it vanish (Genie 1 did).
  */
-function SavedPrompts({ raw, onAction }: { raw: boolean | string | undefined; onAction: SurfaceProps['onAction'] }) {
+function SavedPrompts({ raw, bindings, onAction }: { raw: boolean | string | undefined; bindings: HotkeyBindings; onAction: SurfaceProps['onAction'] }) {
     const prompts = parsePromptLibrary(typeof raw === 'string' ? raw : undefined);
     // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
     const [platform, setPlatform] = useState('generic');
@@ -1016,7 +1085,7 @@ function SavedPrompts({ raw, onAction }: { raw: boolean | string | undefined; on
         if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
         const accelerator = acceleratorFromPress({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: false }, platform);
         if (accelerator === null) return;
-        const problem = hotkeyProblem(accelerator, prompts, prompt.id, platform);
+        const problem = hotkeyProblem(accelerator, prompts, prompt.id, platform, bindings);
         if (problem !== null) { setRefused({ id: prompt.id, reason: problem }); return; }
         setRefused(null);
         save(upsertPrompt(prompts, { ...prompt, hotkey: accelerator }));

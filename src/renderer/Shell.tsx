@@ -27,6 +27,7 @@ import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
@@ -351,6 +352,7 @@ export function Shell({
                 remote={remote}
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
+                paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
                 update={updateChip(updateState)}
                 onUpdateAction={(action) => {
                     if (action === 'update-download') void updates.download();
