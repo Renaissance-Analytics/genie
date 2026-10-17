@@ -1,3 +1,4 @@
+import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
@@ -103,6 +104,8 @@ export interface ComposeInput {
     readonly caddyBin: string | null;
     /** What every site's php-cgi worker is given on top of the pty host's env: Genie's CA ini directory (toolchain-ops.ts). */
     readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
+    /** This machine's system CA roots for PHP's trust bundle (main/php-trust-host.ts systemRootsPem). Absent = none. */
+    readonly phpSystemRoots?: () => string | null;
     /** Which php-cgi a site's PHP pin runs (main/php-versions.ts `resolvePhpCgi`); absent = PATH php-cgi, pins refused. */
     readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
     /** 0 picks a free loopback port. */
@@ -663,7 +666,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             mkdirSync(join(path, '..'), { recursive: true });
             writeFileSync(path, content, 'utf8');
         },
-        ...(input.phpWorkerEnv ? { phpWorkerEnv: input.phpWorkerEnv } : {}),
+        // Every PHP worker trusts Genie's own CA too (core/php-trust.ts): a site's server side reaches https .gen addresses.
+        phpWorkerEnv: () => phpWorkerEnvWithTrust({
+            base: input.phpWorkerEnv?.() ?? {},
+            genCaPem: () => { const opened = genCa(); if (opened.ca === null) return null; try { return readFileSync(opened.ca.certPath, 'utf8'); } catch { return null; } },
+            systemRoots: () => input.phpSystemRoots?.() ?? null,
+            dir: join(runtimeDir(input.userData), 'php-trust'),
+            platform: process.platform,
+            fs: {
+                readText: (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } },
+                writeText: (p, t) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, t, 'utf8'); },
+            },
+        }),
         ...(input.resolvePhpCgi ? { resolvePhpCgi: input.resolvePhpCgi } : {}),
         serviceEnv: (workspaceId) => engines.envFor(workspaceId),
     });
