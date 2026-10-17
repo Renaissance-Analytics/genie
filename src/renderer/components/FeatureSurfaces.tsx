@@ -912,7 +912,7 @@ export function InboxSurface({ data, onAction, compose }: SurfaceProps & { compo
 
 const GROUP_LABEL: Record<SettingsGroup, string> = { general: 'General', agents: 'Agents', workstation: 'Workstation', appearance: 'Appearance' };
 
-function SettingControl({ def, value, onAction }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction'] }) {
+function SettingControl({ def, value, onAction, customPath }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined }) {
     if (value === null) return <Skeleton shape="text" width={80} />;
     if (def.type === 'boolean') {
         return (
@@ -921,17 +921,25 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     }
     if (def.type === 'enum') {
         const select = (
-            <select value={String(value)} onChange={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
+            // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
+            <select value={String(value)} onChange={(e) => onAction(isAlertSoundKey(def.key) && e.target.value === 'custom' ? { kind: 'settings.pickSound', key: def.key } : { kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
                 {/* By name when the setting has names for its options (a sound is "Wind Down", not `winddown`). */}
                 {def.options.map((o) => <option key={o} value={o}>{def.optionLabels?.[o] ?? o}</option>)}
             </select>
         );
         if (!isAlertSoundKey(def.key)) return select;
         // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
-        const sound = previewSound(def.key.slice('sound_'.length) as AlertKind, value);
+        const sound = previewSound(def.key.slice('sound_'.length) as AlertKind, value, customPath);
+        const file = value === 'custom' && typeof customPath === 'string' && customPath.trim() !== '' ? customPath.split(/[\\/]/).pop() : null;
         return (
             <span className="flex items-center gap-2">
                 {select}
+                {file ? (
+                    <span data-sound-custom={def.key} title={String(customPath)} className="max-w-[160px] truncate text-xs text-[var(--fg-3)]">{file}</span>
+                ) : null}
+                {value === 'custom' ? (
+                    <Button type="button" size="sm" variant="ghost" data-action="sound-pick" onClick={() => onAction({ kind: 'settings.pickSound', key: def.key })}>Change…</Button>
+                ) : null}
                 <Button type="button" size="sm" variant="ghost" data-sound-preview={def.key} disabled={sound === null} onClick={() => playAlertSound(sound)} title="Preview" aria-label={`Preview: ${def.label}`}>
                     <Icon name="play" size="xs" />
                 </Button>
@@ -964,7 +972,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                                     <div className="flex items-center gap-2 text-sm font-medium">{def.label}<Badge variant="soft" size="sm">{GROUP_LABEL[def.group]}</Badge></div>
                                     <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
                                 </div>
-                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} />
+                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
                             </li>
                         ))}
                     </ul>
@@ -988,7 +996,7 @@ export function SettingsSurface({ data, onAction, onNavigate, group, workspaces 
                                             <div className="text-sm font-medium">{def.label}</div>
                                             <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
                                         </div>
-                                        <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} />
+                                        <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
                                     </li>
                                 ))}
                             </ul>

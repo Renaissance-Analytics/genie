@@ -10,9 +10,24 @@ import type { AlertSound } from '../core/alerts.js';
 export function playAlertSound(sound: AlertSound | null): void {
     if (!sound) return;
     if (sound.kind === 'synth') { playChime(sound.motif); return; }
+    if (sound.kind === 'custom') {
+        // Your own file, read by main (the renderer cannot read disk); one that cannot be read plays the kind's own sound.
+        void customLoader(sound.key).then((data) => (data ? playUrl(data) : playAlertSound(sound.fallback))).catch(() => playAlertSound(sound.fallback));
+        return;
+    }
+    playUrl(new URL(`./sounds/${sound.file}`, import.meta.url).href);
+}
+
+/** How a custom file is read — main's, through the bridge (App sets it once). Until then, none: the fallback plays. */
+let customLoader: (key: string) => Promise<string | null> = async () => null;
+
+export function setCustomSoundLoader(load: (key: string) => Promise<string | null>): void {
+    customLoader = load;
+}
+
+function playUrl(url: string): void {
     if (typeof Audio === 'undefined') return;
-    const audio = new Audio(new URL(`./sounds/${sound.file}`, import.meta.url).href);
-    void audio.play().catch(() => { /* autoplay refused: the toast still says it */ });
+    void new Audio(url).play().catch(() => { /* autoplay refused: the toast still says it */ });
 }
 
 function playChime(motif: ChimeMotif): void {

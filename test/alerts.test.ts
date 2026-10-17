@@ -28,7 +28,7 @@ describe('the registry', () => {
             expect(r.type === 'enum' ? r.optionLabels : undefined).toEqual(Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label])));
         }
         // COUNTED in the live registry too: the rows are in SETTINGS, once each.
-        expect(SETTINGS.filter((s) => s.key.startsWith('sound_')).map((s) => s.key)).toEqual(rows.map((r) => r.key));
+        expect(SETTINGS.filter((s) => /^sound_[a-z]+$/.test(s.key)).map((s) => s.key)).toEqual(rows.map((r) => r.key));
     });
 });
 
@@ -41,9 +41,10 @@ describe('the sounds (Genie 1’s five, all shipped — Tynn #766)', () => {
             { value: 'sparkle', label: 'Sparkle' },
             { value: 'triumphant', label: 'Triumphant' },
             { value: 'winddown', label: 'Wind Down' },
+            { value: 'custom', label: 'Custom file…' },
             { value: 'off', label: 'None' },
         ]);
-        for (const c of SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth')) {
+        for (const c of SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom')) {
             const file = new URL(`../src/renderer/sounds/${c.value}.wav`, import.meta.url);
             expect(existsSync(file), c.value).toBe(true);
             expect(readFileSync(file).subarray(0, 4).toString('latin1'), c.value).toBe('RIFF');
@@ -54,7 +55,7 @@ describe('the sounds (Genie 1’s five, all shipped — Tynn #766)', () => {
         const dir = new URL('../src/renderer/sounds/', import.meta.url);
         expect(exists(dir)).toBe(true);
         const shipped = readdirSync(dir).filter((f) => f.endsWith('.wav')).map((f) => f.replace(/\.wav$/, '')).sort();
-        expect(shipped).toEqual(SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth').map((c) => c.value).sort());
+        expect(shipped).toEqual(SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom').map((c) => c.value).sort());
     });
 });
 
@@ -70,6 +71,14 @@ describe('alertSound', () => {
         expect(alertSound('mail', on)).toEqual({ kind: 'synth', motif: 'done' });
         // A value Genie does not ship plays the kind's own sound, never a file that is not there.
         expect(alertSound('question', { notification_sounds: true, sound_question: 'kazoo' })).toEqual({ kind: 'wav', file: 'dingdongdoink.wav' });
+    });
+
+    it('Custom file: played by its setting key, the kind’s own sound as the fallback; with no file chosen, the fallback itself', () => {
+        const s = { notification_sounds: true, sound_question: 'custom', sound_question_custom: '/home/a/ding.wav', sound_mail: 'custom', sound_mail_custom: '' };
+        expect(alertSound('question', s)).toEqual({ kind: 'custom', key: 'sound_question', fallback: { kind: 'wav', file: 'dingdongdoink.wav' } });
+        expect(alertSound('mail', s)).toEqual({ kind: 'wav', file: 'dingdongdoink.wav' });
+        expect(previewSound('question', 'custom', '/home/a/ding.wav')).toEqual({ kind: 'custom', key: 'sound_question', fallback: { kind: 'wav', file: 'dingdongdoink.wav' } });
+        expect(previewSound('question', 'custom', '')).toEqual({ kind: 'wav', file: 'dingdongdoink.wav' });
     });
 
     it('every kind has a motif: question, approval and broken knock (attention); finished and mail rise (done)', () => {
@@ -101,10 +110,16 @@ describe('Genie 1’s sound settings carry over (they never did: its master swit
         expect(carryOverV1({ notify_sound: 'off' }).applied).toEqual({ notification_sounds: false });
     });
 
-    it('Genie 1’s Default chime carries over as the Default chime; a custom file (not here yet) is reported, not guessed', () => {
-        const r = carryOverV1({ sound_imdone: 'synth', sound_forcequestion: 'custom' });
-        expect(r.applied).toEqual({ sound_finished: 'synth' });
-        expect(r.dropped.map((d) => d.key)).toEqual(['sound_forcequestion']);
+    it('Genie 1’s Default chime and its custom files carry over — the choice and the file’s path', () => {
+        const r = carryOverV1({ sound_imdone: 'synth', sound_forcequestion: 'custom', sound_forcequestion_custom: 'C:\\Users\\a\\ask.mp3', sound_failure_custom: '/home/a/oops.wav' });
+        expect(r.applied).toEqual({ sound_finished: 'synth', sound_question: 'custom', sound_question_custom: 'C:\\Users\\a\\ask.mp3', sound_broken_custom: '/home/a/oops.wav' });
+        expect(r.dropped).toEqual([]);
+    });
+
+    it('each alert keeps its file’s path in a hidden setting (drawn by its row, not as a text box)', () => {
+        for (const k of ALERT_KINDS) {
+            expect(SETTINGS.find((s) => s.key === `sound_${k.kind}_custom`)).toMatchObject({ type: 'string', default: '', hidden: true, scope: 'device', group: 'general' });
+        }
     });
 });
 

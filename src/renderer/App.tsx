@@ -21,7 +21,7 @@ import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from './features
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { alertSound, toastFor } from '../core/alerts.js';
-import { playAlertSound } from './alert-sound.js';
+import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { remoteUrl, rememberedTokens } from './remote-session.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -387,6 +387,8 @@ function DesktopApp({ bridge }: AppProps) {
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));
     const snapshot = useSnapshot(resolvedBridge);
     const [features, setFeatures] = useFeatures(resolvedBridge);
+    // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
+    useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
     useHostRequests(resolvedBridge, features.settings.values);
 

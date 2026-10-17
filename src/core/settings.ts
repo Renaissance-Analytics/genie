@@ -17,7 +17,7 @@
 export type SettingGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 export type SettingScope = 'device' | 'workspace' | 'host';
 
-import { alertSoundSettings, legacySoundChoice } from './alerts.js';
+import { alertSoundFileSettings, alertSoundSettings, legacySoundChoice } from './alerts.js';
 import { LEGACY_CHANNEL_NAMES } from './update-channel.js';
 
 /** INTERNAL settings are remembered, never drawn and never found by search — state the UI writes, not a choice a person makes. */
@@ -68,6 +68,7 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'sidebar_width', group: 'appearance', scope: 'device', label: 'Sidebar width', description: 'Pixels.', type: 'string', default: '208' },
     // One row per alert kind, DERIVED from the registry — never a hand-kept list.
     ...alertSoundSettings(),
+    ...alertSoundFileSettings(),
 ];
 
 export function settingGroups(): readonly SettingGroup[] {
@@ -95,6 +96,10 @@ const V1_MAP: Readonly<Record<string, string>> = {
     sound_forcequestion: 'sound_question',
     sound_imdone: 'sound_finished',
     sound_failure: 'sound_broken',
+    // ...and the file each played when set to Custom file (Genie 1's `<setting>_custom`).
+    sound_forcequestion_custom: 'sound_question_custom',
+    sound_imdone_custom: 'sound_finished_custom',
+    sound_failure_custom: 'sound_broken_custom',
     dnd_reply: 'dnd_reply',
     // Genie 1 stored it as 'on' / 'off' (genie main/db.ts). Its "launch at sign-in" lived in the OS, not here: read from the OS at boot (core/tray-resident.ts).
     start_minimized: 'start_minimized',

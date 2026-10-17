@@ -12,12 +12,13 @@ const general = (values: Record<string, boolean | string>) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} group="general" />);
 
 describe('a sound per alert', () => {
-    it('each alert row offers the sounds by name — the Default chime first, None last; COUNTED: five rows of seven choices', () => {
+    it('each alert row offers the sounds by name — the Default chime first, Custom file…, None last; COUNTED: five rows of eight choices', () => {
         const html = general({});
         const rows = html.match(/<li[^>]*data-setting="sound_[a-z]+"[\s\S]*?<\/li>/g) ?? [];
         expect(rows).toHaveLength(5);
         for (const row of rows) {
-            expect(row.match(/<option /g)).toHaveLength(7);
+            expect(row.match(/<option /g)).toHaveLength(8);
+            expect(row).toMatch(/value="custom"[^>]*>Custom file…<\/option><option value="off"/);
             expect(row).toMatch(/<select[^>]*><option value="synth"[^>]*>Default chime<\/option>/);
             expect(row).toContain('>Wind Down</option>');
             expect(row).toMatch(/value="off"[^>]*>None<\/option><\/select>/);
@@ -29,6 +30,15 @@ describe('a sound per alert', () => {
         const previews = html.match(/<button[^>]*data-sound-preview="sound_[a-z]+"[^>]*>/g) ?? [];
         expect(previews).toHaveLength(5);
         expect(previews.filter((b) => / disabled=""/.test(b))).toEqual([expect.stringContaining('data-sound-preview="sound_mail"')]);
+    });
+
+    it('a custom file is named on its row, with Change…; CONTROL: a row without one shows no file', () => {
+        const html = general({ sound_question: 'custom', sound_question_custom: '/home/a/sounds/ding.mp3' });
+        const question = html.match(/<li[^>]*data-setting="sound_question"[\s\S]*?<\/li>/)![0];
+        expect(question).toMatch(/data-sound-custom="sound_question"[^>]*>[\s\S]*ding\.mp3/);
+        expect(question).toContain('data-action="sound-pick"');
+        const finished = html.match(/<li[^>]*data-setting="sound_finished"[\s\S]*?<\/li>/)![0];
+        expect(finished).not.toContain('data-sound-custom');
     });
 
     it('the person’s choice is the selected one; CONTROL: an untouched row selects its own sound', () => {
