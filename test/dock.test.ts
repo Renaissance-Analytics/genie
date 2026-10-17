@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHAT_STRIP_WIDTH, DOCK_SLOTS, DOCK_WIDTH, dockReserve, pinPanel } from '../src/core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_SLOTS, DOCK_WIDTH, dockReserve, pinPanel , CHAT_DOCK_DEFAULT_WIDTH } from '../src/core/dock.js';
 
 /**
  * THE DOCK'S GEOMETRY, which has three shipped failures behind it.
@@ -15,7 +15,9 @@ describe('the width', () => {
          * Asserted as an identity rather than against a literal, because the thing that must
          * hold is that they cannot diverge.
          */
-        expect(dockReserve('chat')).toBe(DOCK_WIDTH);
+        // A pinned CHAT reserves its own width — the same number its panel is sized by (Tynn #798) — default or dragged.
+        expect(dockReserve('chat')).toBe(CHAT_DOCK_DEFAULT_WIDTH);
+        expect(dockReserve('chat', 640)).toBe(640);
         expect(dockReserve('files')).toBe(DOCK_WIDTH);
         expect(dockReserve('lists')).toBe(DOCK_WIDTH);
     });

@@ -1,3 +1,4 @@
+import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, pickThreadRoute } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
@@ -304,7 +305,9 @@ export function Shell({
     // The file panel popped out releases the reserve (§4.3); the slot stays its workspace's, the lamp stays on.
     const filesSlot = filesDock({ pinned, filesWorkspaceId: filesWorkspaceId ?? null, popped: filesPopped });
     // A pinned slot reserves whatever panel holds it; only a POPPED-OUT file panel gives the width back.
-    const reserve = filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(pinned);
+    // The pinned chat's width is the person's (Tynn #798): remembered, dragged live — and the reserve is the same number.
+    const [chatDockWidth, setChatDockWidth] = useState(() => readChatDockWidth(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
+    const reserve = filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(pinned, chatDockWidth);
     // The header on screen sets where the dock starts: 56px on most surfaces, 44px on the Agent view. Measured before
     // paint; 56 until then (and in a static render), 0 on a surface without one.
     const rowRef = useRef<HTMLDivElement | null>(null);
@@ -675,6 +678,8 @@ export function Shell({
                     <ChatFlyout
                         thread={chatThread ? { ...chatThread, chips: tabs } : null}
                         pinned={pinned === 'chat'}
+                        dockWidth={chatDockWidth}
+                        onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
                         approval={chatApproval}
                         commands={chatSession?.extensions?.commands ?? null}
