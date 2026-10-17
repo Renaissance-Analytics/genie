@@ -1,3 +1,5 @@
+import { limitWords } from './limit-words.js';
+import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
 /**
  * THE DASHBOARD'S DECISIONS, with no React in sight.
@@ -47,6 +49,8 @@ export interface Delivery {
 }
 
 export interface AgentRow {
+    /** Its provider login's rate-limit gate (Tynn #794); absent/`null` = not reported. */
+    limit?: GateView | null | undefined;
     id: string;
     name: string;
     provider: string;
@@ -121,6 +125,9 @@ export function statusOf(row: AgentRow): StatusCell {
     if (row.fidelity === 'remote') {
         return { word: 'Unreachable', detail: row.reason, tone: 'muted' };
     }
+    // HELD FOR ITS PROVIDER'S LIMIT (Tynn #794): Paused, with until when — a waiting question still comes first.
+    const held = row.state === 'waiting' ? null : limitWords(row.limit);
+    if (held) return { word: 'Paused', detail: held, tone: 'warn' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };

@@ -1,3 +1,4 @@
+import { limitWords } from './limit-words.js';
 import type { AgentRow, AgentState, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
@@ -92,6 +93,9 @@ export function chatContext(detail: ChatDetail): ChatContext {
     const s = detail.session;
     if (!s) return { text: 'Not started', tone: 'muted' };
     if (s.pendingApproval !== null) return { text: 'Parked · waiting on you', tone: 'warn' };
+    // Held for its provider's limit (Tynn #794): until when, never Idle.
+    const held = limitWords(s.limit);
+    if (held) return { text: `Paused · ${held}`, tone: 'warn' };
     if (s.failure !== null) return { text: `Broken · ${s.failure.reason}`, tone: 'bad' };
     if (s.running && s.turnState === 'working') {
         return { text: s.plan ? `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}` : 'Working', tone: 'ok' };

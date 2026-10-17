@@ -168,5 +168,6 @@ export function agentRowFor(
         links: session?.links ?? null,
         contextUsed: session?.contextUsed ?? null,
         contextSize: session?.contextSize ?? null,
+        limit: session?.limit ?? null,
     };
 }
