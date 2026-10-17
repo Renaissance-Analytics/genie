@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
@@ -44,13 +44,14 @@ describe('a RECOVERABLE problem', () => {
 
         expect(session.turnState).toBe('working');
         expect(session.failure).toBeNull();
-        await vi.waitFor(async () => {
-            const rows = (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; level?: string; message?: string });
-            // COUNTED: exactly one warning notice, carrying prism-acp's own words.
-            expect(rows.filter((r) => r.kind === 'notice' && r.level === 'warning')).toEqual([
-                expect.objectContaining({ message: 'NDJSON frame exceeds 64000000 bytes (64000001 bytes; content withheld)' }),
-            ]);
-        });
+        // The thread write is async: wait for it to SETTLE, never for a clock. A 1 s waitFor here failed one suite run in
+        // three under the release gate's back-to-back load (beta.29 gate, 2026-10-17) with the row simply not yet written.
+        await session.settled();
+        const rows = (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; level?: string; message?: string });
+        // COUNTED: exactly one warning notice, carrying prism-acp's own words.
+        expect(rows.filter((r) => r.kind === 'notice' && r.level === 'warning')).toEqual([
+            expect.objectContaining({ message: 'NDJSON frame exceeds 64000000 bytes (64000001 bytes; content withheld)' }),
+        ]);
     });
 
     it('a clean exit after one still reads STOPPED, not failed', () => {
