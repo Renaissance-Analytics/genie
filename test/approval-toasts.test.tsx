@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isValidElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EMPTY_TOASTS, TOAST_DEPTH, WHEEL_STEP, isApprovalToast, toastReducer, toastView, type ToastEvent, type ToastState } from '../src/core/approval-toasts.js';
+import { EMPTY_TOASTS, TOAST_DEPTH, isApprovalToast, toastReducer, toastView, type ToastEvent, type ToastState } from '../src/core/approval-toasts.js';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 import { deckAnswerRoute } from '../src/core/deck-resolve.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
@@ -16,8 +16,10 @@ import { Deck } from '../src/renderer/components/Deck.js';
 
 /**
  * APPROVAL TOASTS — the rules (core/approval-toasts.ts) and the stack's controls (ApprovalToasts.tsx), pressed for real:
- * the stack is a pure function of its view, so the test reads its element tree and calls the handlers a click, a wheel
- * or a key would. Allow travels the Deck's own path into a real composed ApprovalQueue (feature-ipc `deck.answer`).
+ * the stack is a pure function of its view, so the test reads its element tree and calls the handlers a click would.
+ * The stack itself is Fancy's Toast.Stack (react-fancy 5.41, built at Genie's request): Fancy turns it — wheel, arrows —
+ * and hands Genie the new front through onFrontIndexChange; Genie decides WHICH requests and in what order. A card's
+ * content is Genie's renderItem, so the test renders the front card the way Fancy does and presses its buttons. Allow travels the Deck's own path into a real composed ApprovalQueue (feature-ipc `deck.answer`).
  *
  * On origin/main this file is red on the missing modules (`core/approval-toasts`, `ApprovalToasts`): the feature does
  * not exist there. Its sibling approval-toasts-shell.test.tsx imports only what origin/main has and goes red on the
@@ -65,21 +67,30 @@ function approval(n: number, over: Partial<DeckItem> = {}): DeckItem {
 const FIVE = [1, 2, 3, 4, 5].map((n) => approval(n));
 
 const run = (events: ToastEvent[], from: ToastState = EMPTY_TOASTS): ToastState => events.reduce(toastReducer, from);
-const frontOf = (state: ToastState, items: readonly DeckItem[]): string | undefined => toastView(state, items).cards[0]?.id;
+const frontOf = (state: ToastState, items: readonly DeckItem[]): string | undefined => { const v = toastView(state, items); return v.ring[v.front]?.id; };
 
 /** The stack's element tree for a state, with every handler counting into `calls`. */
 function stack(state: ToastState, items: readonly DeckItem[], over: Partial<ApprovalToastStackProps> = {}) {
-    const calls = { answer: [] as Array<[string, string]>, later: [] as string[], cycle: [] as number[], wheel: [] as number[], engage: [] as boolean[] };
+    const calls = { answer: [] as Array<[string, string]>, later: [] as string[], front: [] as number[], engage: [] as boolean[] };
+    const view = toastView(state, items);
     const tree = ApprovalToastStack({
-        view: toastView(state, items),
+        view,
         onAnswer: (item, optionId) => { calls.answer.push([item.id, optionId]); },
         onLater: (item) => { calls.later.push(item.id); },
-        onCycle: (by) => { calls.cycle.push(by); },
-        onWheel: (deltaY) => { calls.wheel.push(deltaY); },
+        onFront: (index) => { calls.front.push(index); },
         onEngage: (on) => { calls.engage.push(on); },
         ...over,
     });
-    return { tree, calls };
+    // Fancy's Toast.Stack, as Genie configures it; and the front card rendered the way Fancy renders it.
+    const fancy = (): Props => one(tree, (p) => typeof p.renderItem === 'function');
+    // renderItem gives Genie's front-card element; it is rendered here as React would (it holds no hooks), so its buttons
+    // are in the tree read.
+    const frontCard = (): ReactNode => {
+        const el = (fancy().renderItem as (i: DeckItem, s: { index: number; isFront: boolean }) => ReactNode)(view.ring[view.front]!, { index: view.front, isFront: true });
+        if (!isValidElement(el) || typeof el.type !== 'function') return el;
+        return (el.type as (p: unknown) => ReactNode)(el.props);
+    };
+    return { tree, calls, fancy, frontCard };
 }
 
 describe('which Deck items are toasts', () => {
@@ -132,14 +143,14 @@ describe('Allow from the toast is the Deck’s own answer — one resolution pat
             expect(route.kind).toBe('feature');
             pending.push(handleFeatureAction(services, { kind: 'deck.answer', item: it, optionId }, state()));
         };
-        const { tree } = stack(toasts, items, { onAnswer: (it, opt) => { toasts = toastReducer(toasts, { kind: 'answering', id: it.id }); onAnswer(it, opt); } });
-        (one(tree, (p) => p['data-toast-option'] === 'allow').onClick as () => void)();
+        const { frontCard } = stack(toasts, items, { onAnswer: (it, opt) => { toasts = toastReducer(toasts, { kind: 'answering', id: it.id }); onAnswer(it, opt); } });
+        (one(frontCard(), (p) => p['data-toast-option'] === 'allow').onClick as () => void)();
         await Promise.all(pending);
 
         expect(resolved).toEqual([`${item.id}:allow`]);
         expect(await verdict).toBe('allowed');
         // A second press cannot happen: the pressed toast's buttons are disabled until it leaves.
-        expect(one(stack(toasts, items).tree, (p) => p['data-toast-option'] === 'allow').disabled).toBe(true);
+        expect(one(stack(toasts, items).frontCard(), (p) => p['data-toast-option'] === 'allow').disabled).toBe(true);
 
         // The next snapshot: gone from the Deck and from the toasts.
         items = services.deckItems();
@@ -166,46 +177,44 @@ describe('the stack turns', () => {
     const items = FIVE;
     const at = (s: ToastState) => toastView(s, items).position;
 
-    it('5 parked: 3 cards, newest in front, "+2"; CONTROL: the depth is 3', () => {
+    it('5 parked: the ring newest first, the newest in front; Fancy draws 3 (front + 2 behind) and counts the rest', () => {
         expect(TOAST_DEPTH).toBe(3);
-        const view = toastView(run([{ kind: 'items', items, dnd: false }]), items);
-        expect(view.cards.map((c) => c.id)).toEqual([approval(5).id, approval(4).id, approval(3).id]);
-        expect(view.more).toBe(2);
+        const s = run([{ kind: 'items', items, dnd: false }]);
+        const view = toastView(s, items);
+        expect(view.ring.map((c) => c.id)).toEqual([5, 4, 3, 2, 1].map((n) => approval(n).id));
+        expect(view.front).toBe(0);
         expect(view.position).toBe(1);
+        const fancy = stack(s, items).fancy();
+        expect(fancy.depth).toBe(TOAST_DEPTH - 1);
+        expect(fancy.position).toBe('inline');
+        expect((fancy.items as DeckItem[]).map((c) => c.id)).toEqual(view.ring.map((c) => c.id));
+        expect(fancy.frontIndex).toBe(0);
     });
 
-    it('the wheel over the stack moves the front one request per notch — counted, accumulated, and round the ring', () => {
+    it('Fancy’s new front (wheel or arrow) is the front: the index chosen, round the ring both ways', () => {
         let s = run([{ kind: 'items', items, dnd: false }, { kind: 'engage', on: true }]);
         expect(at(s)).toBe(1);
-        s = toastReducer(s, { kind: 'wheel', deltaY: WHEEL_STEP });
+        s = toastReducer(s, { kind: 'front', index: 1 });
         expect(at(s)).toBe(2);
         expect(frontOf(s, items)).toBe(approval(4).id);
-        // A trackpad's small deltas add up to one step, not three.
-        s = run([{ kind: 'wheel', deltaY: 40 }, { kind: 'wheel', deltaY: 40 }], s);
-        expect(at(s)).toBe(2);
-        s = toastReducer(s, { kind: 'wheel', deltaY: 20 });
-        expect(at(s)).toBe(3);
-        // Up goes back.
-        s = toastReducer(s, { kind: 'wheel', deltaY: -WHEEL_STEP });
-        expect(at(s)).toBe(2);
-        // Past the oldest is the newest again.
-        s = toastReducer(s, { kind: 'wheel', deltaY: 4 * WHEEL_STEP });
+        s = toastReducer(s, { kind: 'front', index: 4 });
+        expect(frontOf(s, items)).toBe(approval(1).id);
+        // Out of range wraps, as Fancy's own does: past the oldest is the newest again.
+        s = toastReducer(s, { kind: 'front', index: 5 });
         expect(at(s)).toBe(1);
-        // The cards follow the front: the scrolled-to one is drawn first, the next two behind it.
-        s = toastReducer(s, { kind: 'cycle', by: 3 });
-        expect(toastView(s, items).cards.map((c) => c.id)).toEqual([approval(2).id, approval(1).id, approval(5).id]);
+        s = toastReducer(s, { kind: 'front', index: -1 });
+        expect(frontOf(s, items)).toBe(approval(1).id);
     });
 
-    it('the stack’s own wheel and arrow handlers send exactly those steps (counted); other keys send nothing', () => {
+    it('Fancy’s onFrontIndexChange is passed through (counted); Genie adds no wheel or key handler of its own; the pointer engages', () => {
         const s = run([{ kind: 'items', items, dnd: false }]);
-        const { tree, calls } = stack(s, items);
+        const { tree, calls, fancy } = stack(s, items);
+        (fancy().onFrontIndexChange as (i: number) => void)(3);
+        (fancy().onFrontIndexChange as (i: number) => void)(0);
+        expect(calls.front).toEqual([3, 0]);
         const root = one(tree, (p) => p['data-approval-toasts'] === '');
-        expect(root.tabIndex).toBe(0);
-        (root.onWheel as (e: { deltaY: number }) => void)({ deltaY: 100 });
-        const key = (k: string) => (root.onKeyDown as (e: { key: string; preventDefault: () => void }) => void)({ key: k, preventDefault: () => {} });
-        key('ArrowDown'); key('ArrowDown'); key('ArrowUp'); key('ArrowRight'); key('ArrowLeft'); key('a'); key('Enter');
-        expect(calls.wheel).toEqual([100]);
-        expect(calls.cycle).toEqual([1, 1, -1, 1, -1]);
+        expect(root.onWheel).toBeUndefined();
+        expect(root.onKeyDown).toBeUndefined();
         (root.onMouseEnter as () => void)();
         (root.onMouseLeave as () => void)();
         expect(calls.engage).toEqual([true, false]);
@@ -233,13 +242,13 @@ describe('Later, and never expiring', () => {
     it('Later takes the toast off and the Deck keeps the request (counted); CONTROL: the other toasts stay', () => {
         const items = [approval(1), approval(2)];
         let s = run([{ kind: 'items', items, dnd: false }]);
-        const { tree, calls } = stack(s, items);
-        (one(tree, (p) => p['data-toast-later'] === '').onClick as () => void)();
+        const { calls, frontCard } = stack(s, items);
+        (one(frontCard(), (p) => p['data-toast-later'] === '').onClick as () => void)();
         expect(calls.later).toEqual([approval(2).id]);
         expect(calls.answer).toEqual([]);
         s = toastReducer(s, { kind: 'later', id: approval(2).id });
         const view = toastView(s, items);
-        expect(view.cards.map((c) => c.id)).toEqual([approval(1).id]);
+        expect(view.ring.map((c) => c.id)).toEqual([approval(1).id]);
         // Still in the Deck: nothing was answered.
         const deck = renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} />);
         expect(deck.match(/data-deck-item="appr_[^"]+"/g)).toHaveLength(2);
@@ -265,7 +274,7 @@ describe('Do Not Disturb', () => {
         expect(toastView(s, two).total).toBe(0);
         const three = [...two, approval(3)];
         s = toastReducer(s, { kind: 'items', items: three, dnd: false });
-        expect(toastView(s, three).cards.map((c) => c.id)).toEqual([approval(3).id]);
+        expect(toastView(s, three).ring.map((c) => c.id)).toEqual([approval(3).id]);
     });
 
     it('the stateful stack, first render under DND: no toast markup; CONTROL: DND off, the toast', () => {
