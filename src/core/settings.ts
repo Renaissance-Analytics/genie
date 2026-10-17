@@ -34,6 +34,10 @@ export const SETTINGS: readonly SettingDef[] = [
     // TRAY-RESIDENT (core/tray-resident.ts): closing the window hides Genie; these two decide how it comes up.
     { key: 'start_minimized', group: 'general', scope: 'host', label: 'Start minimized to tray', description: 'Genie starts without opening its window; open it from the tray icon.', type: 'boolean', default: false },
     { key: 'launch_at_login', group: 'general', scope: 'host', label: 'Launch at sign-in', description: 'Start Genie when you sign in to this computer.', type: 'boolean', default: false },
+    // GENIE'S REMAPPABLE KEYS (Tynn #759; Genie 1's): empty = Genie's default (Ctrl/⌘+K, F5). Hidden: Settings → General
+    // draws them as recorders (core/hotkeys.ts reads them; a malformed one disables its binding).
+    { key: 'command_window_hotkey', group: 'general', scope: 'host', label: 'Command Window key', description: 'Opens the Command Window. Empty: Ctrl+K (⌘K on macOS).', type: 'string', default: '', hidden: true },
+    { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
     // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON
@@ -89,6 +93,9 @@ const V1_MAP: Readonly<Record<string, string>> = {
     start_minimized: 'start_minimized',
     // Genie 1's prompt library, as written: the reader is forgiving, so a row Genie 2 cannot use is dropped where it is read.
     saved_prompts: 'saved_prompts',
+    // Genie 1's two remappable keys (Tynn #759), as written: a malformed one disables its binding where it is read.
+    command_window_hotkey: 'command_window_hotkey',
+    ftq_nudge_hotkey: 'ftq_nudge_hotkey',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {

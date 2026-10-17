@@ -67,10 +67,13 @@ describe('the library, read forgivingly (Genie 1’s rules)', () => {
 });
 
 describe('a prompt’s hotkey', () => {
-    it('Ctrl on Windows and Linux, ⌘ on macOS for CommandOrControl; the exact modifiers, no more', () => {
+    // CommandOrControl is Ctrl OR ⌘ — exactly one — on every platform (Tynn #759): Genie 2's chords have always taken
+    // either (core/keys.ts), and the title bar's first-paint "Ctrl K" is true only if Ctrl works on an Apple keyboard too.
+    it('Ctrl or ⌘ for CommandOrControl, on every platform; the exact modifiers, no more', () => {
         expect(promptForPress(library, press('r', { ctrl: true, alt: true }), 'win32')?.id).toBe('p1');
         expect(promptForPress(library, press('R', { meta: true, alt: true }), 'darwin')?.id).toBe('p1');
-        expect(promptForPress(library, press('r', { ctrl: true, alt: true }), 'darwin')).toBeNull();
+        expect(promptForPress(library, press('r', { ctrl: true, alt: true }), 'darwin')?.id).toBe('p1');
+        expect(promptForPress(library, press('r', { ctrl: true, meta: true, alt: true }), 'darwin')).toBeNull();
         expect(promptForPress(library, press('r', { ctrl: true, alt: true, shift: true }), 'win32')).toBeNull();
         expect(promptForPress(library, press('F6'), 'linux')?.id).toBe('p3');
         expect(promptForPress(library, press('F6', {}, true), 'linux')?.id).toBe('p3');

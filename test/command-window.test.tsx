@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { COMMAND_PREFIXES, filterCommandItems, firstMatch, groupCommandItems, parseCommandQuery, type CommandItem } from '../src/core/command-window.js';
 import { globalAction } from '../src/core/keys.js';
+import { DEFAULT_HOTKEYS, hotkeyAction } from '../src/core/hotkeys.js';
 import { CommandWindow } from '../src/renderer/components/CommandWindow.js';
 
 /**
@@ -43,10 +44,12 @@ describe('the query', () => {
 
 describe('the key', () => {
     const press = (key: string, mod: { ctrl?: boolean; meta?: boolean }, typing = false) => ({ key, ctrlKey: mod.ctrl ?? false, metaKey: mod.meta ?? false, altKey: false, shiftKey: false, typing });
+    // The key is the remappable binding (Tynn #759): Ctrl+K on Windows and Linux, ⌘K on macOS, by default.
     it('Ctrl+K (Cmd+K) opens it, even while typing in a field; a bare K never does', () => {
-        expect(globalAction(press('k', { ctrl: true }))).toBe('open-palette');
-        expect(globalAction(press('K', { meta: true }, true))).toBe('open-palette');
-        expect(globalAction(press('k', {}))).toBeNull();
+        expect(hotkeyAction(press('k', { ctrl: true }), DEFAULT_HOTKEYS, 'win32')).toBe('open-palette');
+        expect(hotkeyAction(press('K', { meta: true }, true), DEFAULT_HOTKEYS, 'darwin')).toBe('open-palette');
+        expect(hotkeyAction(press('k', {}), DEFAULT_HOTKEYS, 'win32')).toBeNull();
+        expect(globalAction(press('k', { ctrl: true }))).toBeNull();
     });
 });
 

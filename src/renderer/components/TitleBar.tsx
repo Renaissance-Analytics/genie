@@ -11,6 +11,7 @@ import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { SignalAction } from '../../core/deck.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
+import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -62,9 +63,11 @@ export interface TitleBarProps {
      * one machine; resolved from the browser after mount when it is not.
      */
     platform?: FancyPlatform | undefined;
+    /** The Command Window's key as set (core/hotkeys.ts); absent = Genie's default. A disabled one is absent too. */
+    paletteKey?: string | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction, paletteKey }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -91,7 +94,10 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
     }, [platform]);
 
     const modifier = modifierKeyLabel(platform ?? resolved);
-    const hint = modifier === 'Ctrl' ? 'Ctrl K' : `${modifier}K`;
+    // The key that ACTUALLY opens it (Tynn #759): Genie's default reads as before; a remapped one by its own name.
+    const hint = paletteKey === undefined || paletteKey === DEFAULT_HOTKEYS.commandWindow
+        ? (modifier === 'Ctrl' ? 'Ctrl K' : `${modifier}K`)
+        : hotkeyLabel(paletteKey, (platform ?? resolved) === 'apple' ? 'darwin' : 'generic');
 
     return (
         <div

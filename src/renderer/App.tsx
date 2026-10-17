@@ -2,6 +2,7 @@ import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
+import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute } from '../core/route.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
@@ -589,11 +590,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const action = globalAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
-            if (action === 'open-palette') {
-                e.preventDefault();
-                setPaletteOpen(true);
-                return;
-            }
+            // The Command Window's key is a remappable binding, handled with the nudge below (Tynn #759).
             if (action === 'open-settings') {
                 e.preventDefault();
                 navigate('genie://settings');
@@ -712,18 +709,36 @@ function DesktopApp({ bridge }: AppProps) {
     const savedPrompts: SavedPrompt[] = parsePromptLibrary(typeof savedRaw === 'string' ? savedRaw : undefined);
     const [promptPlatform, setPromptPlatform] = useState('generic');
     useEffect(() => { setPromptPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
-    const sendSavedPrompt = (prompt: SavedPrompt): void => {
+    const sendToAgentInFront = (text: string): void => {
         const to = promptTarget({ chat: parsed.chat, agentOnScreen: parsed.surface === 'agent' ? parsed.agentId : null });
-        send(to, prompt.text);
+        send(to, text);
         if (parsed.chat !== to) navigate(formatRoute({ ...parsed, chat: to }));
     };
-    // CAPTURE, as Genie's own chords are: a prompt's hotkey is a chord or a function key, so it acts while typing too.
-    // Re-bound every render so it always sends with the current route and library.
+    const sendSavedPrompt = (prompt: SavedPrompt): void => sendToAgentInFront(prompt.text);
+    // GENIE'S REMAPPABLE KEYS (Tynn #759): the Command Window (Ctrl/⌘+K) and the ForceTheQuestion nudge (F5) — Genie 1's
+    // words to the agent in front of you, for a question it asked in plain text where nobody was looking.
+    const bindings = bindingsFrom(features.settings.values);
+    // CAPTURE, as Genie's own chords are: these keys are chords or function keys, so they act while typing too.
+    // Re-bound every render so it always acts with the current route, bindings and library.
     useEffect(() => {
         const onKey = (e: KeyboardEvent): void => {
-            // Not while the Command Window is open, nor in Settings' hotkey recorder — a key pressed there is being assigned.
-            if (paletteOpen || (e.target as Element | null)?.closest?.('[data-prompt-hotkey]')) return;
-            const prompt = promptForPress(savedPrompts, { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) }, promptPlatform);
+            // Not in Settings' key recorders — a key pressed there is being assigned.
+            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-binding]')) return;
+            const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
+            const action = hotkeyAction(press, bindings, promptPlatform);
+            if (action === 'open-palette') {
+                e.preventDefault();
+                setPaletteOpen(true);
+                return;
+            }
+            if (paletteOpen) return;
+            if (action === 'ftq-nudge') {
+                e.preventDefault();
+                e.stopPropagation();
+                sendToAgentInFront(FTQ_NUDGE_TEXT);
+                return;
+            }
+            const prompt = promptForPress(savedPrompts, press, promptPlatform);
             if (!prompt) return;
             e.preventDefault();
             e.stopPropagation();
