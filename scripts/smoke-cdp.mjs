@@ -659,6 +659,28 @@ if (!approvalEnabled) {
  * terminal at all). A single occurrence after Enter would mean the keystrokes reached xterm and
  * the pty never ran them, which is the failure this check exists to see.
  */
+/*
+ * 55. CTRL+K — THE COMMAND WINDOW (Tynn #757; Genie 1's Ctrl+K). The title bar's "Search, jump, run · Ctrl K" opened
+ * nothing. Driven here because Fancy's Command mounts its body only in a real window: the chord opens it, a COMPLETE
+ * prefix narrows it (`w> tynn` — workspaces only, and Fancy's own text filter does not hide them), Enter goes there.
+ */
+{
+    const ctrlK = (type) => cdp.send('Input.dispatchKeyEvent', { type, key: 'k', code: 'KeyK', windowsVirtualKeyCode: 75, modifiers: 2 });
+    await ctrlK('keyDown');
+    await ctrlK('keyUp');
+    const opened = await waitFor(cdp, `Boolean(document.querySelector('[data-command-window] input'))`, 'the Command Window to open');
+    check(opened, '55. Ctrl+K opens the Command Window, its input ready');
+    await cdp.evaluate(`document.querySelector('[data-command-window] input')?.focus(); true`);
+    await cdp.send('Input.insertText', { text: 'w> tynn' });
+    const listed = await waitFor(cdp, `document.querySelectorAll('[data-command-item^="workspace:"]').length >= 1 && document.querySelectorAll('[data-command-item^="agent:"], [data-command-item^="action:"]').length === 0`, 'only workspaces to be listed for w>');
+    const counts = await cdp.evaluate(`JSON.stringify({ workspaces: document.querySelectorAll('[data-command-item^="workspace:"]').length, others: document.querySelectorAll('[data-command-item]:not([data-command-item^="workspace:"])').length })`);
+    check(listed, '55a. "w> tynn" lists the workspace and nothing else — the prefix narrows; Fancy’s own filter does not hide it', counts);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    const landed = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://workspace/tynn') && !document.querySelector('[data-command-window]')`, 'Enter to open the workspace');
+    check(landed, '55b. Enter opens the chosen workspace and closes the window');
+}
+
 {
     const token = `genie-${Math.random().toString(16).slice(2, 10)}`;
     await cdp.evaluate(`document.querySelector('[data-nav="genie://workspace/tynn"]').click(); true`);

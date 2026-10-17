@@ -16,7 +16,9 @@ describe('globalAction', () => {
         expect(globalAction(press({}))).toBeNull();
         expect(globalAction(press({ altKey: true, metaKey: true }))).toBeNull();
         expect(globalAction(press({ shiftKey: true, metaKey: true }))).toBeNull();
-        expect(globalAction(press({ key: 'k', metaKey: true }))).toBeNull();
+        // ⌘K is the Command Window now (Tynn #757); an unbound chord still does nothing.
+        expect(globalAction(press({ key: 'k', metaKey: true }))).toBe('open-palette');
+        expect(globalAction(press({ key: 'x', metaKey: true }))).toBeNull();
     });
 
     it('the agent view ignores the chord, so one press is one action', () => {
