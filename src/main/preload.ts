@@ -188,6 +188,7 @@ const bridge: GenieBridge = {
         act: (action) => ipcRenderer.invoke(FEATURE_CHANNELS.act, action) as Promise<FeatureData>,
         setBrowserBounds: (bounds) => ipcRenderer.invoke(FEATURE_CHANNELS.browserBounds, bounds) as Promise<void>,
         pickFiles: () => ipcRenderer.invoke(FEATURE_CHANNELS.pickFiles) as Promise<string[]>,
+        soundData: (key) => ipcRenderer.invoke(FEATURE_CHANNELS.soundData, key) as Promise<string | null>,
     },
 
     // The window's native buttons (Windows / Linux): their space and their colours (the owner: "content covered and

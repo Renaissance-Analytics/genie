@@ -33,7 +33,8 @@ import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
-import { featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
+import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
+import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
@@ -1444,6 +1445,12 @@ async function boot(): Promise<void> {
         openInBrowser,
         // The Deck's Dismiss on a recorded main-process error.
         mainErrors,
+        // An alert's own sound (Tynn #766 B2): the host's picker, sound files only.
+        pickSound: async () => {
+            if (!window || window.isDestroyed()) return null;
+            const picked = await dialog.showOpenDialog(window, { title: 'Choose a sound', properties: ['openFile'], filters: [{ name: 'Sounds', extensions: [...SOUND_FILE_EXTENSIONS] }] });
+            return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0]!;
+        },
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),
@@ -1501,6 +1508,8 @@ async function boot(): Promise<void> {
         return picked.canceled ? [] : picked.filePaths;
     });
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
+    // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
+    ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);

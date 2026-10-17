@@ -209,6 +209,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setBrowserBounds: async () => {},
             // A remote window cannot reach the host's files to attach; it answers nothing picked.
             pickFiles: async () => [],
+            // Nor the host's sound files: the alert plays its own sound here.
+            soundData: async () => null,
         },
         updates: {
             state: () => read<UpdateState>('updates.state'),

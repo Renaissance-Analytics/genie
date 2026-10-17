@@ -36,6 +36,8 @@ export const SOUND_CHOICES = [
     { value: 'sparkle', label: 'Sparkle' },
     { value: 'triumphant', label: 'Triumphant' },
     { value: 'winddown', label: 'Wind Down' },
+    // Your own file (row B2): main picks it and reads it; its path is `sound_<kind>_custom`.
+    { value: 'custom', label: 'Custom file…' },
     { value: 'off', label: 'None' },
 ] as const;
 
@@ -66,6 +68,11 @@ export function alertSoundSettings(): SettingDef[] {
     }));
 }
 
+/** Each alert's own file's path (row B2): hidden — its row names the file and offers Change…, never a text box. */
+export function alertSoundFileSettings(): SettingDef[] {
+    return ALERT_KINDS.map((k) => ({ key: `sound_${k.kind}_custom`, group: 'general', scope: 'device', label: `Sound file: ${k.label.toLowerCase()}`, description: 'The file played when this alert is set to Custom file.', type: 'string', default: '', hidden: true }));
+}
+
 /**
  * A row saved by an earlier Genie 2, when each was an on/off box: on is the kind's own sound, off is None. Read through
  * `migrateLegacyValue` (core/settings.ts), where every renamed value is read as its new one.
@@ -77,29 +84,39 @@ export function legacySoundChoice(key: string, value: boolean | string): boolean
     return value ? kind.sound : 'off';
 }
 
-/** What to play: one of the shipped wavs, or the Default chime's motif. */
-export type AlertSound = { readonly kind: 'wav'; readonly file: string } | { readonly kind: 'synth'; readonly motif: ChimeMotif };
+/** What to play: one of the shipped wavs, the Default chime's motif, or your own file — read by its setting key, the kind's own sound if it cannot be. */
+export type AlertSound =
+    | { readonly kind: 'wav'; readonly file: string }
+    | { readonly kind: 'synth'; readonly motif: ChimeMotif }
+    | { readonly kind: 'custom'; readonly key: string; readonly fallback: AlertSound };
 
 export function isAlertSoundKey(key: string): boolean {
     return ALERT_KINDS.some((k) => `sound_${k.kind}` === key);
 }
 
+/** The kind's own sound: what a row never set plays, and what a custom file that cannot be read falls back to. */
+function ownSound(def: AlertDef): AlertSound {
+    return def.sound === 'synth' ? { kind: 'synth', motif: def.motif } : { kind: 'wav', file: `${def.sound}.wav` };
+}
+
 /** The sound a choice plays for a kind — what Preview plays, and what the alert plays — or `null` for None. */
-export function previewSound(kind: AlertKind, choice: boolean | string | undefined): AlertSound | null {
+export function previewSound(kind: AlertKind, choice: boolean | string | undefined, customPath?: boolean | string): AlertSound | null {
     const def = ALERT_KINDS.find((k) => k.kind === kind);
     if (!def) return null;
     const value = choice === undefined ? def.sound : legacySoundChoice(`sound_${kind}`, choice);
     if (value === 'off') return null;
     if (value === 'synth') return { kind: 'synth', motif: def.motif };
+    // Custom with no file chosen yet is the kind's own sound, not silence.
+    if (value === 'custom') return typeof customPath === 'string' && customPath.trim() !== '' ? { kind: 'custom', key: `sound_${kind}`, fallback: ownSound(def) } : ownSound(def);
     // A value Genie does not ship plays the kind's own sound — never a file that is not there.
-    const known = SOUND_CHOICES.some((c) => c.value === value && c.value !== 'off' && c.value !== 'synth');
-    return { kind: 'wav', file: `${known ? (value as string) : def.sound}.wav` };
+    const known = SOUND_CHOICES.some((c) => c.value === value && c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom');
+    return known ? { kind: 'wav', file: `${value as string}.wav` } : ownSound(def);
 }
 
 /** What to play for an alert, or `null`: the master switch off, or this alert set to None. */
 export function alertSound(kind: AlertKind, settings: Readonly<Record<string, boolean | string | undefined>>): AlertSound | null {
     if (settings.notification_sounds === false) return null;
-    return previewSound(kind, settings[`sound_${kind}`]);
+    return previewSound(kind, settings[`sound_${kind}`], settings[`sound_${kind}_custom`]);
 }
 
 export function toastFor(alert: { kind: AlertKind; workspace: string; agent: string; detail: string }): { title: string; body: string } {

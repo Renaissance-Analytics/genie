@@ -1,4 +1,7 @@
+import { readFile, stat } from 'node:fs/promises';
 import { classifyNavigation } from '../core/browser-policy.js';
+import { isAlertSoundKey } from '../core/alerts.js';
+import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
 import type { SyncResult } from '../core/integrations.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
@@ -61,6 +64,29 @@ export interface FeaturePorts {
     readonly openInBrowser?: OpenInBrowser;
     /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
     readonly mainErrors?: { dismiss(id: string): boolean };
+    /** The host's file picker for an alert's own sound (Tynn #766 B2): the chosen path, or `null` when cancelled. */
+    readonly pickSound?: () => Promise<string | null>;
+}
+
+/**
+ * YOUR OWN SOUND, READ BY KEY (Tynn #766 B2; Genie 1's `settings:sound-data-url`): the renderer is sandboxed and cannot
+ * read disk, so main reads the file the alert's setting names into a data URL. It is asked by SETTING KEY, never by
+ * path, and reads only a sound file within the cap — so it is not a way to read an arbitrary file. `null` (the alert
+ * plays its own sound) for no file, a gone file, a non-sound, a key that is not an alert sound, or one too big.
+ */
+export async function customSoundData(settings: { get(key: string): unknown }, key: string): Promise<string | null> {
+    if (!isAlertSoundKey(key)) return null;
+    const path = settings.get(`${key}_custom`);
+    if (typeof path !== 'string' || path.trim() === '') return null;
+    const mime = soundFileMime(path);
+    if (!mime) return null;
+    try {
+        const info = await stat(path);
+        if (!info.isFile() || info.size > MAX_SOUND_BYTES) return null;
+        return `data:${mime};base64,${(await readFile(path)).toString('base64')}`;
+    } catch {
+        return null;
+    }
 }
 
 export interface FeatureState {
@@ -689,6 +715,16 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // Developer mode decides whether unsigned local plugins are admitted: re-read the folder under the new rule.
             if (action.key === 'developer_mode') await services.pluginsRefresh();
             break;
+        case 'settings.pickSound': {
+            // Your own file for an alert (Tynn #766 B2): the host's picker; a cancel changes nothing.
+            if (!isAlertSoundKey(action.key)) throw new Error(`${action.key} is not an alert sound`);
+            const path = ports.pickSound ? await ports.pickSound() : null;
+            if (path === null) break;
+            if (!soundFileMime(path)) throw new Error(`${path.split(/[\\/]/).pop()} is not a sound file Genie can play (wav, mp3, ogg, m4a, aac, flac or webm)`);
+            await services.settings.set(`${action.key}_custom`, path);
+            await services.settings.set(action.key, 'custom');
+            break;
+        }
         case 'settings.reset':
             await services.settings.reset(action.key);
             break;

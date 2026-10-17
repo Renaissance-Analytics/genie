@@ -101,6 +101,8 @@ export const FEATURE_CHANNELS = {
     browserBounds: 'genie:features-browser-bounds',
     /** The host's file picker, for attachments (§6.4): paths never typed, never guessed. */
     pickFiles: 'genie:features-pick-files',
+    /** An alert's own sound file, read by main into a data URL — asked by setting KEY, never by path (Tynn #766 B2). */
+    soundData: 'genie:features-sound-data',
 } as const;
 
 export interface GenieBridge {
@@ -117,6 +119,8 @@ export interface GenieBridge {
         setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
         /** The host's own file picker; the paths it answers are what `inbox.send` may attach. `[]` when cancelled. */
         pickFiles(): Promise<string[]>;
+        /** An alert's own sound file as a data URL, by its setting key (`sound_question`); `null` when it cannot be read. */
+        soundData(key: string): Promise<string | null>;
     };
 
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */
@@ -351,6 +355,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     act: async () => { throw new Error('no main process to act on'); },
     setBrowserBounds: async () => {},
     pickFiles: async () => [],
+    soundData: async () => null,
 };
 
 export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
