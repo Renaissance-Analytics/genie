@@ -111,6 +111,11 @@ export interface AgentRecord {
      */
     readonly permissions?: AgentPermissions;
     /**
+     * AUTONOMOUS (Tynn #801): its gated actions — services, processes, sites, terminals — run without the person's
+     * approval, each one recorded. Absent = asked, as every agent was before this field existed.
+     */
+    readonly autoApprove?: boolean;
+    /**
      * The model this agent's provider is started with — a name the provider accepts: Claude's `sonnet` / `opus` /
      * `haiku` or a full model id, Codex's model id. Absent = the provider's own default. Read when its session starts.
      * What the provider actually RUNS is reported separately (`LiveSession.model`) and may differ.

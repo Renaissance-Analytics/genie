@@ -78,6 +78,7 @@ export interface HostApiDeps {
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
+        setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
@@ -157,6 +158,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.agentOps.setBudget(str(args[0]), args[1] === null ? null : Number(args[1]));
             case 'agents.setMode':
                 return deps.agentOps.setMode(str(args[0]), args[1] === 'automated' ? 'automated' : 'manual');
+            case 'agents.setAutoApprove':
+                return deps.agentOps.setAutoApprove(str(args[0]), args[1] === true);
             case 'agents.setAccessScope':
                 return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
             case 'agents.setPermissions':

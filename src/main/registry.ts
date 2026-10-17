@@ -443,6 +443,11 @@ export class Registry {
     }
 
     /** The agent's own half of who may message it (§6.4). */
+    /** Autonomous or asked (Tynn #801); kept on the record like every other setting of the agent. */
+    async setAutoApprove(agentId: AgentId, autoApprove: boolean): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, autoApprove }));
+    }
+
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }));
     }

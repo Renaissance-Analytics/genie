@@ -27,6 +27,7 @@ export interface AgentOpsPorts {
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
+        setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
@@ -216,6 +217,14 @@ export class SettingApplier {
 }
 
 /** The agent's own half of who may message it (§6.4). */
+/** Autonomous or asked (Tynn #801): applies to its NEXT gated action — nothing restarts. */
+export async function setAutoApprove(ports: AgentOpsPorts, agentId: string, autoApprove: boolean): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setAutoApprove(record.id, autoApprove);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
 export async function setAccessScope(ports: AgentOpsPorts, agentId: string, scope: AgentRecord['accessScope']): Promise<{ ok: true; record: AgentRecord } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
