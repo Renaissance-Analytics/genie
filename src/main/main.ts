@@ -1,3 +1,4 @@
+import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { livenessOf } from '../core/liveness.js';
@@ -49,7 +50,7 @@ import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -1073,6 +1074,8 @@ async function boot(): Promise<void> {
         caddyBin: caddyCopy?.path ?? null,
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
+        // The system roots for PHP's trust bundle, beside Genie's own CA (main/php-trust-host.ts).
+        phpSystemRoots: () => systemRootsPem(process.platform, (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }, toolchainPaths(toolchainDataDir()).bundle),
         // A php site's pin (T4): unpinned runs PATH php-cgi as before; pinned runs that Genie-managed version or is refused.
         resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpVersionsBase()),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
