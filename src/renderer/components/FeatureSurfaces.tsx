@@ -920,7 +920,8 @@ function SettingControl({ def, value, onAction }: { def: SettingDef; value: bool
     if (def.type === 'enum') {
         return (
             <select value={String(value)} onChange={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-                {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                {/* By name when the setting has names for its options (a sound is "Wind Down", not `winddown`). */}
+                {def.options.map((o) => <option key={o} value={o}>{def.optionLabels?.[o] ?? o}</option>)}
             </select>
         );
     }

@@ -17,14 +17,14 @@
 export type SettingGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 export type SettingScope = 'device' | 'workspace' | 'host';
 
-import { alertSoundSettings } from './alerts.js';
+import { alertSoundSettings, legacySoundChoice } from './alerts.js';
 import { LEGACY_CHANNEL_NAMES } from './update-channel.js';
 
 /** INTERNAL settings are remembered, never drawn and never found by search — state the UI writes, not a choice a person makes. */
 export type SettingDef =
     | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'boolean'; default: boolean; hidden?: true }
     | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'string'; default: string; hidden?: true }
-    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'enum'; options: readonly string[]; default: string; hidden?: true };
+    | { key: string; group: SettingGroup; scope: SettingScope; label: string; description: string; type: 'enum'; options: readonly string[]; optionLabels?: Readonly<Record<string, string>>; default: string; hidden?: true };
 
 export const SETTINGS: readonly SettingDef[] = [
     { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'stable: full releases only. dev: every build, including prereleases.', type: 'enum', options: ['stable', 'dev'], default: 'dev' },
@@ -87,7 +87,14 @@ const V1_MAP: Readonly<Record<string, string>> = {
     update_channel: 'update_channel',
     track_cwd: 'track_cwd',
     detached_terminals: 'detached_terminals',
-    notification_sounds: 'notification_sounds',
+    // Genie 1's master sound switch is `notify_sound` ('on' / 'off'; genie main/db.ts). This map named
+    // `notification_sounds`, which Genie 1 never had, so nobody's sound settings carried over (Tynn #766).
+    notify_sound: 'notification_sounds',
+    // Genie 1's per-alert choice, for the kinds Genie 2 has (genie main/notify-sound-kinds.ts). A choice Genie 2
+    // cannot play yet — its synthesized chime, a custom file — is reported, not guessed.
+    sound_forcequestion: 'sound_question',
+    sound_imdone: 'sound_finished',
+    sound_failure: 'sound_broken',
     dnd_reply: 'dnd_reply',
     // Genie 1 stored it as 'on' / 'off' (genie main/db.ts). Its "launch at sign-in" lived in the OS, not here: read from the OS at boot (core/tray-resident.ts).
     start_minimized: 'start_minimized',
@@ -115,7 +122,8 @@ export interface CarryOver {
  */
 export function migrateLegacyValue(key: string, value: boolean | string): boolean | string {
     if (key === 'update_channel' && typeof value === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_CHANNEL_NAMES, value)) return LEGACY_CHANNEL_NAMES[value]!;
-    return value;
+    // An alert's sound was an on/off box before it was a choice (Tynn #766): on is the kind's own sound, off is None.
+    return legacySoundChoice(key, value);
 }
 
 function coerce(def: SettingDef, raw: string): boolean | string | null {
