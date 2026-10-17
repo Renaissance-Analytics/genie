@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { posix, win32 } from 'node:path';
 
 /**
  * PHP TRUSTS GENIE'S OWN CERTIFICATE AUTHORITY (moic acceptance W5b, 2026-10-17). A PHP app's server side reaching an
@@ -15,6 +15,8 @@ export function phpTrustFiles(input: { genCaPem: string; systemRootsPem: string 
     const genie = input.genCaPem.trim();
     const already = roots !== '' && body(roots).includes(body(genie));
     const bundle = `${[roots, already ? '' : genie].filter((x) => x !== '').join('\n')}\n`;
+    // The GIVEN platform's separator, never the host's (the beta.29 Windows VM verify: `:\t\conf.d` for a linux worker).
+    const join = input.platform === 'win32' ? win32.join : posix.join;
     const bundlePath = join(input.dir, 'genie-ca-bundle.pem');
     const confDir = join(input.dir, 'conf.d');
     const iniPath = join(confDir, 'zzz-genie-trust.ini');
