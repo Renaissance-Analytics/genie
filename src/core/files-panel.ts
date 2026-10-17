@@ -112,9 +112,9 @@ export function reloadsOpenFile(openPath: string, changed: readonly string[] | u
 }
 
 /** Where openFileForUser lands (genie#922): that workspace, its file panel open on the file. Built by the router, never by hand. */
-export function openFileRoute(workspaceId: string, path: string): string {
+export function openFileRoute(workspaceId: string, path: string, line: number | null = null): string {
     const base = parseRoute(`genie://workspace/${encodeURIComponent(workspaceId)}?files=`);
-    return base.surface === 'workspace' ? formatRoute({ ...base, panel: 'files', file: path }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
+    return base.surface === 'workspace' ? formatRoute({ ...base, panel: 'files', file: path, line }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
 }
 
 export function buildTree(entries: readonly Entry[]): TreeNode[] {

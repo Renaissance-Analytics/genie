@@ -98,7 +98,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
             { surface: 'deck', item: null, chat: null, pin: null },
             { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, layout: 'ledger', chat: null, pin: null },
-            { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', file: null, filter: null, detached: false, chat: null, pin: null },
+            { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', file: null, line: null, filter: null, detached: false, chat: null, pin: null },
         ];
 
         expect(shapes.map(formatRoute).filter((r) => r.endsWith('?'))).toEqual([]);

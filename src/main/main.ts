@@ -1275,7 +1275,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             thumbsUp: (caller, reason) => { broadcast('genie:thumbs-up', { agentId: caller.agentId, reason }); },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
-            openFile: async ({ workspaceId, path }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path)); return { ok: true }; },
+            openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),
