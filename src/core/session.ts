@@ -6,6 +6,8 @@ import { extensionsFrom, type ProviderExtensions } from './provider-commands.js'
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
 import { subtreeOf, systemProcessTree, type ProcessTree } from './process-tree.js';
+import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
+import { RATE_LIMIT_META } from './headroom.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -157,6 +159,9 @@ export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readon
 /** How many lines of provider output to keep. Enough to explain a failure, bounded. */
 const STDERR_KEPT = 50;
 
+/** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
+export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
+
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
@@ -210,6 +215,11 @@ export interface AgentSessionOptions {
      */
     onSessionId?: (threadId: string) => void;
     /**
+     * The provider's rate-limit readings, as they arrive (Tynn #792/#793): what the host's gate for this login is fed.
+     * `message` is the notice's own words, when it had any.
+     */
+    onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
+    /**
      * How a session reaps what the driver leaves behind. Injected so a test can assert the
      * reap happened without killing anything on the machine running the test.
      */
@@ -222,6 +232,11 @@ export class AgentSession {
     readonly agentId: AgentId;
 
     #driver: SessionDriver | null = null;
+    #held = false;
+    /** A non-allowed rate-limit reading arrived during the turn now running. */
+    #limitThisTurn = false;
+    /** Prompts sent while held: recorded as sent, handed to the provider on resume. */
+    #heldPrompts: Array<{ text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null }> = [];
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -332,6 +347,33 @@ export class AgentSession {
         this.#options = options;
         this.agentId = options.agentId;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) this.#turns = options.turnsBefore;
+    }
+
+    /**
+     * HELD FOR THE PROVIDER'S RATE LIMIT (Tynn #793): the turn the limit ended is not a failure, and a prompt sent now
+     * waits here — a provider at its limit would only refuse it. `resumeAfterLimit` sends what waited.
+     */
+    get held(): boolean { return this.#held; }
+
+    /** Hold an agent whose LOGIN is at its limit (another agent hit it): its next prompts wait too. */
+    hold(): void {
+        if (this.#held) return;
+        this.#held = true;
+        this.#changed();
+    }
+
+    /** The limit has reset (the gate's timer, or the person's Resume now): what waited goes out in order; nothing waited -> continue. */
+    resumeAfterLimit(): void {
+        if (!this.#held) return;
+        this.#held = false;
+        const waiting = this.#heldPrompts;
+        this.#heldPrompts = [];
+        if (waiting.length === 0) {
+            this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+            return;
+        }
+        for (const p of waiting) this.#send(p.text, p.by, p.sent);
+        this.#changed();
     }
 
     get turnState(): TurnState {
@@ -548,7 +590,17 @@ export class AgentSession {
                     // the human did, and painting it as a fault blames the agent for being
                     // stopped.
                     const crashed = outcome.stopReason === null || outcome.isError;
-                    if (crashed) {
+                    const byLimit = crashed && this.#limitThisTurn;
+                    this.#limitThisTurn = false;
+                    if (byLimit) {
+                        // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
+                        // Broken; the agent waits for the limit to reset and is resumed then.
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                        this.#held = true;
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
+                    } else if (crashed) {
                         this.#turnState = 'failed';
                         this.#failure = outcome.raw;
                         this.#failedAt = this.#now();
@@ -659,6 +711,20 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null): void {
         if (!this.#driver) throw new Error('session is not started');
+        if (this.#held) {
+            // Held for the limit: recorded now, as it was sent; handed to the provider when the limit resets.
+            const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
+            void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
+            this.#heldPrompts.push({ text, by, sent });
+            this.#changed();
+            return;
+        }
+        this.#send(text, by, sent, true);
+    }
+
+    /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
+    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false): void {
+        if (!this.#driver) throw new Error('session is not started');
         // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
@@ -670,11 +736,12 @@ export class AgentSession {
         else {
             void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
             this.#inTurn = true;
+            this.#limitThisTurn = false;
         }
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
-        void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
+        if (record) void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
         // A provider that DOES echo it is not recorded twice (see `#handle`).
         this.#echo = text;
         this.#echoSeen = '';
@@ -875,6 +942,19 @@ export class AgentSession {
          * placed after that return would never run on the one update that matters.
          */
         this.#noticeSessionId();
+
+        // THE PROVIDER'S RATE LIMIT (Tynn #793), read before anything awaits: the gate is told every reading, and a
+        // non-allowed one in a running turn marks that turn as ended by the limit if it then ends in error.
+        const meta = update['_meta'];
+        if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
+            const readings = limitReadingsFromMeta((meta as Record<string, unknown>)[RATE_LIMIT_META]);
+            if (readings.length > 0) {
+                const notice = update['notice'];
+                const said = typeof notice === 'object' && notice !== null ? (notice as Record<string, unknown>)['message'] : null;
+                this.#options.onRateLimit?.(readings, typeof said === 'string' ? said : null);
+                if (this.#inTurn && readings.some((r) => r.status !== 'allowed')) this.#limitThisTurn = true;
+            }
+        }
 
         // The agent's commands, skills and plugins (core/provider-commands.ts): state, not a ledger row — and checked
         // before the early return below for the same reason as the session id.
