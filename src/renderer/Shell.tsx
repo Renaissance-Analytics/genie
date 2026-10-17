@@ -687,6 +687,7 @@ export function Shell({
                         onPickThread={(id) => onNavigate(pickThreadRoute(parsed, id, pinned === 'chat'))}
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
+                        onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                     />
                     </DockFrame>
                 ) : null}

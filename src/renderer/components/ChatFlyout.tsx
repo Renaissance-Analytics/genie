@@ -103,6 +103,8 @@ export interface ChatFlyoutProps {
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
      */
     onStopTurn?: (() => void) | undefined;
+    /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
+    onResumeLimit?: (() => void) | undefined;
     /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /**
@@ -128,7 +130,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, pinned, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, widthStorage, scope,
+    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
@@ -291,10 +293,21 @@ export function ChatFlyout({
             ) : null}
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || onStopTurn ? (
+            {thread?.context || onStopTurn || onResumeLimit ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.text ?? 'Working'}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
+                    {onResumeLimit ? (
+                        <button
+                            type="button"
+                            data-action="resume-limit"
+                            title="Resume now — every agent waiting for this provider's rate limit goes on"
+                            onClick={() => onResumeLimit()}
+                            className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
+                        >
+                            Resume now
+                        </button>
+                    ) : null}
                 </div>
             ) : null}
 
