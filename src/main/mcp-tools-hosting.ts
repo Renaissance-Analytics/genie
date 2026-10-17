@@ -1,3 +1,4 @@
+import { OS_WORKSPACE } from './registry.js';
 import { isAbsolute as isAbsolutePath, relative as relativePath, resolve as resolvePath } from 'node:path';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
@@ -145,6 +146,9 @@ function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<Engi
         ...(i.detached?.includes(workspaceId) ? { detached: true } : {}),
         // The workspace's own WebSocket app — its id and its PUBLIC key. Never its secret (that is `env`'s, masked).
         ...(sliceIsDroppable(i.engine) && i.slices?.[workspaceId] ? { app: { id: i.slices[workspaceId]!.identifier, key: i.slices[workspaceId]!.identifier } } : {}),
+        // The Genie agent sees EVERY workspace's app on the server; a workspace agent its own only (the owner, 2026-10-17).
+        // Ids and public keys — never a secret.
+        ...(sliceIsDroppable(i.engine) && workspaceId === OS_WORKSPACE && i.slices ? { apps: Object.entries(i.slices).map(([ws, s]) => ({ workspaceId: ws, id: s.identifier, key: s.identifier })) } : {}),
         // The surfaces beside the primary port, by name — and Mailpit's web inbox as the address to open.
         ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}),
         ...(i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? { inbox: `http://127.0.0.1:${i.publishedPorts.ui}/` } : {}),
