@@ -28,6 +28,7 @@ import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTy
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
+import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
@@ -1344,6 +1345,9 @@ async function boot(): Promise<void> {
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
     void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
+        // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
+        // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
+        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })));
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted, restoreAll: composed.settings.snapshot().restore_agents_on_launch === true });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
