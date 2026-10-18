@@ -33,7 +33,8 @@ describe('shared.md', () => {
         expect(md).toContain('written by Genie 2');
         expect(md).toMatch(/Started by Genie as a session[\s\S]*your replies reach the person in Genie’s chat/);
         expect(md).toMatch(/GENIE_TERMINAL_ID[\s\S]*Genie does not read your terminal[\s\S]*`imDone`[\s\S]*`ForceTheQuestion`/);
-        for (const t of tools) expect(md).toContain(`- \`${t.name}\` — ${t.description}`);
+        // Each tool by NAME; its description reaches the agent in its tool list, never copied here (the owner, 2026-10-18).
+        for (const t of tools) { expect(md).toContain(`\`${t.name}\``); expect(md).not.toContain(t.description); }
         expect(md).toMatch(/If the `genie` tools are missing, say so in your reply/);
         expect(md).not.toContain('UNSEEN');
         expect(md).not.toContain('genieGuide');
