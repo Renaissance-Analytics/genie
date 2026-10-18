@@ -3,7 +3,6 @@ import type { Liveness } from '../core/liveness.js';
 import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
-import type { FeedbackStore } from './feedback-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
 import type { HostingApproval, ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
@@ -29,7 +28,6 @@ export interface GenieToolParts {
     readonly attention: AttentionStore;
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
-    readonly feedback: FeedbackStore;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
     readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
@@ -96,7 +94,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             processes: p.processes ?? null,
         },
-        attention: { resolveCaller: p.resolveCaller, openFile: p.openFile, feedback: p.feedback },
+        attention: { resolveCaller: p.resolveCaller, openFile: p.openFile },
         sidecar: {
             resolveCaller: p.resolveCaller,
             roster: p.roster,

@@ -1376,7 +1376,6 @@ async function boot(): Promise<void> {
             attention: composed.attention,
             knowledge: composed.knowledge,
             settings: composed.settings,
-            feedback: composed.feedback,
             approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
             roster,
             resolveCaller,

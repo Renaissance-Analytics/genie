@@ -9,7 +9,6 @@ import type { ProcessTree } from '../core/process-tree.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { AttentionStore } from './attention-store.js';
 import { askAndWait } from './doctor-mcp.js';
-import { FeedbackStore } from './feedback-store.js';
 import { genieToolDeps } from './genie-tool-deps.js';
 import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
@@ -122,7 +121,6 @@ export class DoctorRun {
             const inbox = await InboxStore.open(home);
             const attention = await AttentionStore.open(home, inbox);
             const knowledge = KnowledgeStore.open(home);
-            const feedback = await FeedbackStore.open(home);
             const book = new CallerBook();
             const resolveCaller = (key: string) => sessionCallerOf(book, key, registry, this.#osaDir());
             const roster = () => registry.listAgents();
@@ -132,7 +130,6 @@ export class DoctorRun {
                 attention,
                 knowledge,
                 settings,
-                feedback,
                 approve: unavailable('approving an action (there is no Deck in doctor mode)') as never,
                 roster,
                 resolveCaller,

@@ -147,7 +147,7 @@ describe('starting a loaded agent', () => {
         await d.call('startAgent', { workspace: 'tynn.ai', agent: 'kai' });
         const never = (() => { throw new Error('not exercised'); }) as never;
         const normal = allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, feedback: never, approve: never, roster: () => [], resolveCaller: () => null,
+            inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
             sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },

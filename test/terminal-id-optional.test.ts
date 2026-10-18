@@ -16,7 +16,7 @@ function deps(): AllToolsDeps {
     return {
         genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, workspaceSetting: never as never, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller: () => null },
-        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }), feedback: never as never },
+        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         sidecar: { resolveCaller: () => null, roster: () => [], register: never as never, start: never as never, running: () => false, addressOf: () => '' },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
@@ -29,7 +29,7 @@ describe('terminalId', () => {
     const schemaOf = (d: (typeof tools)[number]) => d.inputSchema as { required?: string[]; properties?: Record<string, { description?: string }> };
 
     it('is required by NO tool — counted, the offenders named (the control: tools that take it exist)', () => {
-        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(15);
+        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(14);
         expect(tools.filter((d) => schemaOf(d).required?.includes('terminalId')).map((d) => d.name)).toEqual([]);
     });
 

@@ -14,7 +14,7 @@ function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => [
     return {
         genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, workspaceSetting: never as never, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller: () => null },
-        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }), feedback: never as never },
+        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         sidecar: { resolveCaller: () => null, roster: () => [], register: never as never, start: never as never, running: () => false, addressOf: () => '' },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
@@ -23,9 +23,11 @@ function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => [
 }
 
 describe('allGenieTools', () => {
-    it('is the fourteen Genie tools, unique, in a stable order', () => {
+    // `submitFeedback` was REMOVED (the owner, 2026-10-18: "get rid of the submit feedback feature"); the person's
+    // Feedback window (Ctrl+Shift+W, Tynn #760) is how feedback reaches Tynn now.
+    it('is the thirteen Genie tools, unique, in a stable order — no submitFeedback', () => {
         const names = allGenieTools(deps()).map((r) => r.definition.name);
-        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites', 'processes']);
+        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'runAgent', 'services', 'sites', 'processes']);
         expect(new Set(names).size).toBe(names.length);
     });
 
@@ -33,7 +35,7 @@ describe('allGenieTools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
         const names = allGenieTools(deps(() => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }])).map((r) => r.definition.name);
-        expect(names).toHaveLength(15);
-        expect(names[14]).toBe('acme.lint.lint');
+        expect(names).toHaveLength(14);
+        expect(names[13]).toBe('acme.lint.lint');
     });
 });

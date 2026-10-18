@@ -1,14 +1,12 @@
 import { callerFrom } from './mcp-callers.js';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
-import type { FeedbackKind, FeedbackStore } from './feedback-store.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
- * THE TWO ATTENTION TOOLS THAT WERE MISSING (§6.3). `openFileForUser` puts a file in front of the
- * person: the path is CONFINED to the caller's workspace, so an agent cannot open the host's own files
- * through it, and a refusal names whose workspace. `submitFeedback` records what the agent thinks of
- * Genie, durably, saying plainly that it stays on this machine until Tynn is connected.
+ * THE ATTENTION TOOL (§6.3). `openFileForUser` puts a file in front of the person: the path is CONFINED to the caller's
+ * workspace, so an agent cannot open the host's own files through it, and a refusal names whose workspace.
+ * (`submitFeedback` was removed — the owner, 2026-10-18; the person's Feedback window files to Tynn, Tynn #760.)
  */
 
 export interface AttentionToolsDeps {
@@ -18,7 +16,6 @@ export interface AttentionToolsDeps {
      * workspace and the path RELATIVE to it, never just an absolute path the OS's default app would take.
      */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
-    readonly feedback: FeedbackStore;
 }
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
@@ -63,18 +60,5 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
         }),
     };
 
-    const submitFeedback: Registration = {
-        definition: new ToolDefinition(
-            'submitFeedback',
-            'Tell Genie’s makers something about Genie itself — a bug, an idea, or praise. Kept on this machine until Tynn is connected; the answer says so.',
-            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, kind: { type: 'string', enum: ['bug', 'idea', 'praise'] }, text: { type: 'string' } }, required: ['kind', 'text'] },
-            'Submit feedback',
-        ),
-        handler: withCaller((caller, args) => {
-            const item = deps.feedback.add({ workspaceId: caller.workspaceId, agentName: caller.agentName, kind: (str(args.kind) ?? '') as FeedbackKind, text: str(args.text) ?? '' });
-            return ok({ ok: true, id: item.id, kept: 'on this machine; Tynn is not connected, so nothing was sent' });
-        }),
-    };
-
-    return [openFileForUser, submitFeedback];
+    return [openFileForUser];
 }

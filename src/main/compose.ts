@@ -37,7 +37,6 @@ import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
-import { FeedbackStore } from './feedback-store.js';
 import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
 import { FlowScheduler } from './flow-scheduler.js';
 import { FlowStore } from './flow-store.js';
@@ -240,8 +239,6 @@ export interface ComposedServices {
     readonly approvals: ApprovalQueue;
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
-    /** Feedback about Genie itself (§6.3 submitFeedback), kept here until Tynn is connected. */
-    readonly feedback: FeedbackStore;
     /** The Deck's signal strip, MEASURED from the stores (§4.5). */
     signals(context: { osAgentWorking: boolean }): SignalState;
     /**
@@ -725,7 +722,6 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
 
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
     const approvals = new ApprovalQueue({ now, autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true) });
-    const feedback = await FeedbackStore.open(input.userData, now);
 
     const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
@@ -861,7 +857,6 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         frontDoor,
         approvals,
         remote,
-        feedback,
         frontDoorPort,
         browserTrust: () => {
             const opened = genCa();
@@ -993,7 +988,6 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 await Promise.race([flowScheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
                 clearTimeout(quitWait);
                 await remoteDevices.flushed();
-                await feedback.flushed();
                 await portAllocator?.settled();
                 knowledge.close();
             })();

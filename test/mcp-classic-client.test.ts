@@ -26,7 +26,7 @@ async function start(thumbs: string[]): Promise<{ url: string; token: string }> 
     server = genieMcpServer({
         port: 0,
         registrations: allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, feedback: never, approve: never, roster: () => [],
+            inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [],
             resolveCaller: (id) => (id === 'term_7' ? term : null),
             userActive: () => true, glow: () => false, thumbsUp: (_caller: Caller, reason: string) => { thumbs.push(reason); }, openFile: never, terminals: never,
             sidecar: { register: never, start: never, running: () => false },
