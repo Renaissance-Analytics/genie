@@ -502,6 +502,7 @@ export function Shell({
                                     current={{ kind: 'agent', id: parsed.agentId }}
                                     canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
+                                    github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
                                     onView={(v) => onNavigate(workspaceViewRoute(agentWorkspace.id, v))}
                                     onAdd={() => {
                                         const raw = workspaceOps?.settings?.values?.['workspace_tabs'];
@@ -567,6 +568,7 @@ export function Shell({
                             files={files}
                             panel={parsed.panel}
                             view={parsed.view}
+                            issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             rows={snapshot.agents}
                             onOpenAgent={onOpenAgent}
                             openAgents={openAgentTabs?.workspaceId === parsed.workspaceId ? openAgentTabs.agents : []}
