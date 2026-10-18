@@ -57,6 +57,7 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { openDurableStore, readHistory } from '../core/thread-store.js';
+import { lastNumberedTurn, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
 /**
@@ -257,7 +258,7 @@ export class SessionHost {
     readonly #userData: string;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
-    readonly #onTurnEnded: ((agentId: AgentId, turns: number) => void) | undefined;
+    readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -266,7 +267,7 @@ export class SessionHost {
     /** Sessions stopped whose writes may still be in flight — what `settled()` waits for besides the running ones. */
     readonly #stopped = new Set<AgentSession>();
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
-    readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] } | 'loading'>();
+    readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[]; turns: number } | 'loading'>();
     #listeners = new Set<(agentId: AgentId) => void>();
     #runs = 0;
 
@@ -321,8 +322,11 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
-        /** A turn ended: the agent's turn count now — main writes it to the record (`lastTurn`) for the next start. */
-        onTurnEnded?: (agentId: AgentId, turns: number) => void;
+        /**
+         * A turn STARTED and took its number — main writes it to the record (`lastTurn`) for the next start. At the start,
+         * not the end: a turn cut off by an exit or a quit had already taken its number, and the next run numbered it again.
+         */
+        onTurnNumbered?: (agentId: AgentId, n: number) => void;
         /**
          * WHAT AN AGENT DID (Tynn #766 row C): each action once — started, a reply ended, a tool call by its provider's
          * category, its plan (once a turn), being stopped — and for a whole login, its rate limit and the resume. Main
@@ -351,7 +355,7 @@ export class SessionHost {
         this.#userData = options.userData;
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
-        this.#onTurnEnded = options.onTurnEnded;
+        this.#onTurnNumbered = options.onTurnNumbered;
         this.#onAction = options.onAction;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
@@ -537,6 +541,7 @@ export class SessionHost {
         const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt: this.#clock(), nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
 
         let reportedTurns = record.lastTurn ?? 0;
+        let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
             agentId: record.id,
             cwd,
@@ -556,11 +561,10 @@ export class SessionHost {
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
             onStateChange: () => {
-                // A turn that ended moves the count on: reported once per turn, for the record.
+                // A turn that ended: once per turn.
                 const turns = session.turns;
                 if (turns > reportedTurns) {
                     reportedTurns = turns;
-                    this.#onTurnEnded?.(record.id, turns);
                     // A REPLY that ended — not a failed, stopped or held turn; and the plan sounds again next turn.
                     if (session.lastTurnEnd === 'replied') this.#onAction?.(record.id, 'replied');
                     entry.sounded.clear();
@@ -583,6 +587,11 @@ export class SessionHost {
                 this.#onThreadId?.(record.id, threadId);
             },
             onEvent: (event: StreamEvent, meta) => {
+                // A TURN TOOK ITS NUMBER: kept on the record now, so a turn cut off before it ends is never numbered again.
+                if (event.kind === 'turn' && event.n > numberedTurn) {
+                    numberedTurn = event.n;
+                    this.#onTurnNumbered?.(record.id, event.n);
+                }
                 /*
                  * `replacesLast` means the SAME message with another chunk of text on the end.
                  *
@@ -803,21 +812,24 @@ export class SessionHost {
             this.#histories.set(agentId, 'loading');
             void readHistory(openDurableStore(sessionsDir(this.#userData)), agentId, { ...(before !== null ? { before } : {}), limit: HISTORY_LIMIT })
                 .then((h) => {
-                    const rows: TimedEvent[] = [
-                        ...(h.earlier > 0 ? [{ id: `${agentId}:earlier`, event: { kind: 'earlier' as const, count: h.earlier }, at: null }] : []),
+                    // NUMBERED as a person reads them (core/turn-numbers.ts): 1, 2, 3 … on from the turns the window cut off.
+                    const rows = numberTurns([
+                        ...(h.earlier > 0 ? [{ id: `${agentId}:earlier`, event: { kind: 'earlier' as const, count: h.earlier, turns: h.earlierTurns }, at: null }] : []),
                         ...h.rows.map((r) => ({ id: `${agentId}:h${r.position}`, event: r.event, at: r.at })),
-                    ];
-                    this.#histories.set(agentId, { before, rows });
+                    ]);
+                    this.#histories.set(agentId, { before, rows, turns: lastNumberedTurn(rows) });
                     this.#emit(agentId);
                 })
-                .catch(() => { this.#histories.set(agentId, { before, rows: [] }); });
+                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
         }
-        const history = cached !== undefined && cached !== 'loading' && cached.before === before ? cached.rows : [];
+        const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
+        const history = loaded ? loaded.rows : [];
         if (!entry) return history;
         // Where this run begins: said once, when there is something before it to tell it from — recorded rows, or a
         // conversation the provider resumed (which it remembers even when Genie recorded none of it).
         const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [{ id: `${agentId}:run`, event: { kind: 'run', resumed: entry.resumed }, at: entry.startedAt }] : [];
-        return [...history, ...marker, ...entry.rows];
+        // This run's turns number on from the history's — once it is read; until then they keep the session's own numbers.
+        return [...history, ...marker, ...(loaded ? numberTurns(entry.rows, loaded.turns) : entry.rows)];
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */

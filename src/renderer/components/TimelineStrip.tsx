@@ -2,7 +2,7 @@ import { Icon } from '@particle-academy/react-fancy';
 import type { RefObject } from 'react';
 import type { StreamFilter } from '../../core/lanes.js';
 import type { Chip, SessionTimeline, TickKind, TimelineHead } from '../../core/session-timeline.js';
-import { FACETS, FILTERS } from '../../core/stream-view.js';
+import { FACETS, FILTERS, type StreamFilter as LaneFilter } from '../../core/stream-view.js';
 
 /**
  * THE SESSION TIMELINE STRIP (46px) AND THE CHIPS ROW (44px) — the board's `Agent View`, above the Stream.
@@ -16,7 +16,9 @@ const TICK: Record<TickKind, string> = { edit: 'bg-[var(--success)]', message: '
 const TICK_HEIGHT: Record<TickKind, string> = { edit: 'h-5', message: 'h-3.5', thought: 'h-2', tool: 'h-1.5' };
 const HEAD: Record<TimelineHead, string> = { ok: 'bg-[var(--success)]', warn: 'bg-[var(--warning)]', bad: 'bg-[var(--danger)]' };
 // The activity's kinds: replies live in the chat, so the strip carries no message ticks and no message legend.
-const LEGEND: readonly TickKind[] = ['edit', 'thought', 'tool'];
+const LEGEND = ['edit', 'thought', 'tool'] as const;
+/** The Stream lane each legend entry shows. */
+const LEGEND_LANE: Record<(typeof LEGEND)[number], LaneFilter> = { edit: 'edits', thought: 'thoughts', tool: 'tools' };
 
 export interface TimelineStripProps {
     timeline: SessionTimeline;
@@ -27,9 +29,14 @@ export interface TimelineStripProps {
     /** The other layout, as a door: the route that opens it, and its label (`Turns` from the ledger, `Ledger` from the cards). */
     layoutDoor?: { label: string; route: string } | undefined;
     onNavigate?: ((route: string) => void) | undefined;
+    /** `Next edit`: what `E` does — open the next edit after the one open. */
+    onNextEdit?: (() => void) | undefined;
+    /** The Stream's lane filter (`null`: everything) and its change — a legend entry shows only its kind. */
+    filter?: readonly LaneFilter[] | null | undefined;
+    onFilter?: ((next: readonly LaneFilter[] | null) => void) | undefined;
 }
 
-export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, layoutDoor, onNavigate }: TimelineStripProps) {
+export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, layoutDoor, onNavigate, onNextEdit, filter = null, onFilter }: TimelineStripProps) {
     return (
         <div data-session-timeline="" className="flex h-[46px] shrink-0 items-center gap-3.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-6">
             <span className="w-14 shrink-0 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Session</span>
@@ -39,11 +46,14 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                         key={s.rowId}
                         type="button"
                         data-segment={s.label}
+                        title={`Turn ${s.n}`}
+                        aria-label={`Turn ${s.n}`}
                         onClick={() => onOpenRow(s.rowId)}
                         className="absolute inset-y-0 border-l border-[var(--border-2)] text-left hover:bg-[var(--bg-2)]"
                         style={{ left: `${s.x * 100}%`, width: `${s.w * 100}%` }}
                     >
-                        <span className="absolute -top-px left-1 font-mono text-[9px] text-[var(--fg-4)]">{s.label}</span>
+                        {/* A label only where there is room (session-timeline.ts LABEL_GAP); the title names every turn. */}
+                        {s.showLabel ? <span data-segment-label="" className="absolute -top-0.5 left-1 whitespace-nowrap font-mono text-[11px] text-[var(--fg-3)]">{s.label}</span> : null}
                     </button>
                 ))}
                 {timeline.ticks.map((k) => (
@@ -57,15 +67,31 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                 {timeline.head ? <span data-head={timeline.head} className={`absolute bottom-0 right-0 top-1 w-0.5 ${HEAD[timeline.head]}`} /> : null}
             </div>
             <div className="flex shrink-0 gap-2.5 text-[11px] text-[var(--fg-3)]">
-                {LEGEND.map((k) => (
-                    <span key={k} data-legend={k} className="flex items-center gap-1">
-                        <span className={`size-1.5 rounded-[2px] ${TICK[k]}`} />
-                        {k}
-                    </span>
-                ))}
-                {/* The board's hint for the key (§4.2 `E`): only when there is an edit to jump to — a key that would do nothing gets no hint. */}
+                {/* Each kind is a button: the Stream shows only that kind; pressed again, everything. */}
+                {LEGEND.map((k) => {
+                    const lane = LEGEND_LANE[k];
+                    const on = filter !== null && filter.includes(lane);
+                    return (
+                        <button
+                            key={k}
+                            type="button"
+                            data-legend={k}
+                            aria-pressed={on}
+                            title={on ? 'Show everything' : `Show only ${lane}`}
+                            onClick={() => onFilter?.(filter !== null && filter.length === 1 && filter[0] === lane ? null : [lane])}
+                            className={`flex items-center gap-1 rounded px-1 ${on ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'hover:bg-[var(--bg-2)]'}`}
+                        >
+                            <span className={`size-1.5 rounded-[2px] ${TICK[k]}`} />
+                            {k}
+                        </button>
+                    );
+                })}
+                {/* NEXT EDIT (§4.2 `E`), a button: only when there is an edit to go to — a button that would do nothing is not drawn. */}
                 {timeline.ticks.some((k) => k.kind === 'edit') ? (
-                    <span data-hint="next-edit" className="font-mono text-[10px] text-[var(--fg-4)]">E next edit</span>
+                    <button type="button" data-action="next-edit" title="Next edit (E)" onClick={() => onNextEdit?.()} className="flex items-center gap-1 rounded px-1 hover:bg-[var(--bg-2)]">
+                        Next edit
+                        <kbd className="font-mono text-[10px] text-[var(--fg-4)]">E</kbd>
+                    </button>
                 ) : null}
             </div>
             {layoutDoor ? (

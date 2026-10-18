@@ -59,7 +59,7 @@ export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
  * `before` (epoch ms) keeps a running agent's CURRENT run out: its rows are already live. `limit` keeps the most recent
  * rows; `earlier` says how many older ones were left out. A row written unserialisable is skipped, never guessed at.
  */
-export async function readHistory(store: SessionStore, agentId: AgentId, options: { before?: number; limit?: number } = {}): Promise<{ rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number }> {
+export async function readHistory(store: SessionStore, agentId: AgentId, options: { before?: number; limit?: number } = {}): Promise<{ rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number }> {
     const messages = await openAgentThread(store, agentId).messages();
     const rows: { event: StreamEvent; at: number | null; position: number }[] = [];
     for (const m of messages) {
@@ -71,7 +71,9 @@ export async function readHistory(store: SessionStore, agentId: AgentId, options
     }
     const limit = options.limit ?? rows.length;
     const earlier = Math.max(0, rows.length - limit);
-    return { rows: rows.slice(earlier), earlier };
+    // The turns the window cut off: the turns shown number on from them.
+    const earlierTurns = rows.slice(0, earlier).filter((r) => r.event.kind === 'turn').length;
+    return { rows: rows.slice(earlier), earlier, earlierTurns };
 }
 
 /** The highest turn number in an agent's record (0 when none) — where its next run's turns continue from. */

@@ -253,6 +253,11 @@ export class AgentSession {
     #unpersisted = 0;
     /** Completed turns, failed ones included — a failed turn still happened and still cost. */
     #turns = 0;
+    /**
+     * The number of the last turn MARKER written. A turn cut off before it ended (an exit, a quit) still took its
+     * number, so the next turn numbers on from here, not from the turns that ended — which used to number it again.
+     */
+    #marked = 0;
     #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | null = null;
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
@@ -357,7 +362,7 @@ export class AgentSession {
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
-        if (options.turnsBefore !== undefined && options.turnsBefore >= 0) this.#turns = options.turnsBefore;
+        if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
     /**
@@ -452,6 +457,17 @@ export class AgentSession {
     /** Turns this session has completed. The Budget panel's count comes from here. */
     get turns(): number {
         return this.#turns;
+    }
+
+    /** The number of the last turn this agent STARTED — what its record keeps, so its next run numbers on from it. */
+    get lastTurn(): number {
+        return Math.max(this.#marked, this.#turns);
+    }
+
+    /** The next turn's number, taken now: one past every turn started or ended. */
+    #nextTurn(): number {
+        this.#marked = Math.max(this.#marked, this.#turns) + 1;
+        return this.#marked;
     }
 
     /** Turns that ended in THIS run — never the recorded history's. What a caller waiting on an answer counts. */
@@ -637,13 +653,13 @@ export class AgentSession {
                     // here did.
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
-                    if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: this.#turns, by: stopper });
+                    if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // The next queued prompt's turn starts now: its marker, and `working` again. After a crashed turn
                     // nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
                     else if (this.#queued.length > 0) {
                         const by = this.#queued.shift() ?? null;
-                        void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
                         this.#inTurn = true;
                         this.#turnState = 'working';
                     }
@@ -721,7 +737,7 @@ export class AgentSession {
         if (this.#options.turnsBefore === undefined) {
             const startedAt = Date.now();
             void readHistory(this.#options.store, this.agentId, { before: startedAt })
-                .then((h) => { this.#turns += lastTurnOf(h.rows); })
+                .then((h) => { const recorded = lastTurnOf(h.rows); this.#turns += recorded; this.#marked += recorded; })
                 .catch(() => { /* no record yet: turns start at 1 */ });
         }
         this.#turnState = 'working';
@@ -756,7 +772,7 @@ export class AgentSession {
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
         else {
-            void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by });
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
             this.#inTurn = true;
             this.#limitThisTurn = false;
         }
@@ -1037,7 +1053,7 @@ export class AgentSession {
         // "Idle", and a quit, which cancels only the turns it believes are running, killed it mid-flight. What trails a
         // turn's end (usage, debug notices) is not activity and opens nothing.
         if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
-            void this.#emitRow({ kind: 'turn', n: this.#turns + 1, by: null });
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: null });
             this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
