@@ -23,10 +23,11 @@ export type AlertKind =
     | 'started' | 'replied' | 'finished' | 'thumbsup' | 'stopped' | 'resumed'
     | 'edits' | 'runs' | 'reads' | 'fetches' | 'plans'
     | 'mail' | 'agentmail'
-    | 'exits' | 'siteup' | 'sitedown' | 'serviceup' | 'flowdone';
+    | 'exits' | 'siteup' | 'sitedown' | 'serviceup' | 'flowdone'
+    | 'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci';
 
 /** The headings the sound rows are shown under in Settings. */
-export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages' | 'things';
+export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages' | 'things' | 'github';
 
 export const SOUND_GROUPS: ReadonlyArray<{ group: SoundGroup; label: string }> = [
     { group: 'needs-you', label: 'Needs you' },
@@ -34,6 +35,7 @@ export const SOUND_GROUPS: ReadonlyArray<{ group: SoundGroup; label: string }> =
     { group: 'work', label: 'Its work' },
     { group: 'messages', label: 'Messages' },
     { group: 'things', label: 'Things it runs' },
+    { group: 'github', label: 'GitHub' },
 ];
 
 export interface AlertDef {
@@ -92,6 +94,11 @@ export const ALERT_KINDS: readonly AlertDef[] = [
     { kind: 'sitedown', group: 'things', label: 'A site goes down', sound: 'off', motif: 'attention', verb: 'Down' },
     { kind: 'serviceup', group: 'things', label: 'A service is started', sound: 'off', motif: 'done', verb: 'Started' },
     { kind: 'flowdone', group: 'things', label: 'A flow finishes a run', sound: 'off', motif: 'done', verb: 'Ran' },
+    // What IssueWatch hears from GitHub (Tynn #806, core/issue-watch.ts issueWatchSoundKinds): what needs you knocks.
+    { kind: 'ghissue', group: 'github', label: 'A new GitHub issue', sound: 'off', motif: 'done', verb: 'New issue' },
+    { kind: 'ghpr', group: 'github', label: 'A new pull request', sound: 'off', motif: 'done', verb: 'New PR' },
+    { kind: 'ghsecurity', group: 'github', label: 'A new security alert', sound: 'off', motif: 'attention', verb: 'Security alert' },
+    { kind: 'ghci', group: 'github', label: 'A CI run fails', sound: 'off', motif: 'attention', verb: 'CI failed' },
 ];
 
 const OPTION_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label]));

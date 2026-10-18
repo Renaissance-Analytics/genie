@@ -14,13 +14,13 @@ import { SETTINGS, carryOverV1, migrateLegacyValue } from '../src/core/settings.
 
 describe('the registry', () => {
     it('names every kind of action — needs you, its turn, its work, messages — each with a label and a default sound; one CHOICE row per kind (Tynn #766)', () => {
-        expect(ALERT_KINDS.map((k) => k.kind)).toEqual(['question', 'approval', 'broken', 'limited', 'started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed', 'edits', 'runs', 'reads', 'fetches', 'plans', 'mail', 'agentmail', 'exits', 'siteup', 'sitedown', 'serviceup', 'flowdone']);
+        expect(ALERT_KINDS.map((k) => k.kind)).toEqual(['question', 'approval', 'broken', 'limited', 'started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed', 'edits', 'runs', 'reads', 'fetches', 'plans', 'mail', 'agentmail', 'exits', 'siteup', 'sitedown', 'serviceup', 'flowdone', 'ghissue', 'ghpr', 'ghsecurity', 'ghci']);
         for (const k of ALERT_KINDS) {
             expect(k.label.length).toBeGreaterThan(0);
             expect(SOUND_CHOICES.map((c) => c.value)).toContain(k.sound);
         }
         const rows = alertSoundSettings();
-        expect(rows.map((r) => r.key)).toEqual(['question', 'approval', 'broken', 'limited', 'started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed', 'edits', 'runs', 'reads', 'fetches', 'plans', 'mail', 'agentmail', 'exits', 'siteup', 'sitedown', 'serviceup', 'flowdone'].map((k) => `sound_${k}`));
+        expect(rows.map((r) => r.key)).toEqual(['question', 'approval', 'broken', 'limited', 'started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed', 'edits', 'runs', 'reads', 'fetches', 'plans', 'mail', 'agentmail', 'exits', 'siteup', 'sitedown', 'serviceup', 'flowdone', 'ghissue', 'ghpr', 'ghsecurity', 'ghci'].map((k) => `sound_${k}`));
         for (const [i, r] of rows.entries()) {
             expect(r).toMatchObject({ group: 'general', scope: 'device', type: 'enum', default: ALERT_KINDS[i]!.sound });
             expect(r.type === 'enum' ? r.options : []).toEqual(SOUND_CHOICES.map((c) => c.value));
@@ -87,6 +87,7 @@ describe('alertSound', () => {
             started: 'done', replied: 'done', finished: 'done', thumbsup: 'done', stopped: 'done', resumed: 'done',
             edits: 'done', runs: 'done', reads: 'done', fetches: 'done', plans: 'done', mail: 'done', agentmail: 'done',
             exits: 'attention', siteup: 'done', sitedown: 'attention', serviceup: 'done', flowdone: 'done',
+            ghissue: 'done', ghpr: 'done', ghsecurity: 'attention', ghci: 'attention',
         });
     });
 

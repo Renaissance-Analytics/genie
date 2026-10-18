@@ -95,7 +95,7 @@ import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
 import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
-import { issueWatchPanelView, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 
 /**
  * THE MAIN PROCESS.
@@ -1502,6 +1502,8 @@ async function boot(): Promise<void> {
         onEvents: (projectId, events) => {
             issueWatchRecent.set(projectId, [...[...events].reverse(), ...(issueWatchRecent.get(projectId) ?? [])].slice(0, PANEL_RECENT));
             issueWatchDelivery.onEvents(projectId, events);
+            // The person's GitHub sound rows (core/alerts.ts): one per kind per batch, played by the window like any action.
+            for (const kind of issueWatchSoundKinds(events)) broadcast('genie:action', { agentId: null, kind });
             pushFeatures();
         },
         onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); pushFeatures(); },
