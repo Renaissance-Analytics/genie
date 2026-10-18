@@ -65,7 +65,8 @@ describe('the registry has a row for each', () => {
         expect(by('turn')).toEqual(['started', 'replied', 'finished', 'thumbsup', 'stopped', 'resumed']);
         expect(by('work')).toEqual(['edits', 'runs', 'reads', 'fetches', 'plans']);
         expect(by('messages')).toEqual(['mail', 'agentmail']);
-        expect(ALERT_KINDS).toHaveLength(17);
+        expect(by('things')).toEqual(['exits', 'siteup', 'sitedown', 'serviceup', 'flowdone']);
+        expect(ALERT_KINDS).toHaveLength(22);
     });
 });
 

@@ -40,7 +40,7 @@ const bridge: GenieBridge = {
         return () => ipcRenderer.removeListener('genie:navigate', listener);
     },
     onAction: (onAction) => {
-        const listener = (_event: unknown, action: { agentId: string; kind: string }): void => onAction(action);
+        const listener = (_event: unknown, action: { agentId: string | null; kind: string }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
     },

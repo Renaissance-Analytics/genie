@@ -21,6 +21,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { mailAction } from '../core/agent-actions.js';
+import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
@@ -1229,6 +1230,15 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
+    // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a
+    // site's own server is the site's), a site up or down, a service started, a flow run finished.
+    const things = new ThingSounds();
+    const siteProcess = (id: string) => composed.sites.list().some((s) => s.processIds.includes(id));
+    things.sites(composed.sites.list());
+    composed.supervisor.onChange((status) => { const kind = things.process(status, siteProcess(status.id)); if (kind) broadcast('genie:action', { agentId: null, kind }); });
+    composed.sites.onChange(() => { for (const kind of things.sites(composed.sites.list())) broadcast('genie:action', { agentId: null, kind }); });
+    composed.engines.onStarted(() => { broadcast('genie:action', { agentId: null, kind: 'serviceup' }); });
+    composed.flows.onRun((_id, run) => { const kind = flowRunSound(run); if (kind) broadcast('genie:action', { agentId: null, kind }); });
     // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
     // `openSite` checks the site is served first): the pane loads it, the window comes up on the browser surface, and
     // the snapshot's address bar says it. The person sees what the agent opened; nothing opens outside Genie.
