@@ -13,7 +13,11 @@ export interface ProtocolTool {
 const HEADER = '<!-- Written by Genie 2 and replaced on every sync. Put your own rules in RULES.md. -->';
 
 export function sharedProtocol(tools: readonly ProtocolTool[]): string {
-    const list = tools.length > 0 ? tools.map((t) => `- \`${t.name}\` — ${t.description}`).join('\n') : '- (Genie’s MCP server is not listening right now; no tools are listed.)';
+    // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already
+    // reaches the agent through the MCP tool list; this file is read into every agent's instructions on top of it.
+    const list = tools.length > 0
+        ? `${tools.map((t) => `\`${t.name}\``).join(', ')}. Each describes itself in your tool list; read it there.`
+        : '(Genie’s MCP server is not listening right now; no tools are listed.)';
     return `${HEADER}
 
 ## Genie 2
