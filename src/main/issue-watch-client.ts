@@ -1,4 +1,4 @@
-import { IssueWatchFeed, parseIssueWatchEntry, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { IssueWatchFeed, parseIssueWatchActivity, parseIssueWatchEntry, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 import { encodePong, encodeSubscribe, parsePusherFrame, pusherWsUrl, socketIdOf } from '../core/pusher.js';
 
 /**
@@ -150,6 +150,11 @@ export class IssueWatchClient {
             return;
         }
         if (frame.event === 'issuewatch.delta') this.#apply(frame.data);
+        // What HAPPENED (Tynn's GitHub webhooks): news, told as it arrives — no feed, no baseline.
+        if (frame.event === 'issuewatch.activity') {
+            const activity = parseIssueWatchActivity(frame.data);
+            if (activity && activity.events.length > 0) this.#ports.onEvents(activity.projectId, activity.events);
+        }
     }
 
     async #reconcile(base: string, token: string): Promise<void> {
