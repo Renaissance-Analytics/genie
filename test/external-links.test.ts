@@ -54,8 +54,9 @@ describe('the wiring', () => {
 
     it('a terminal’s URL is clickable and goes the same way: window.open, which the guard sends to the browser', () => {
         const pane = readFileSync('src/renderer/components/TerminalPane.tsx', 'utf8');
-        expect(pane).toMatch(/onLinkActivate=\{\(url\) => \{ if \(\/\^https\?:\/i\.test\(url\)\) window\.open\(url, '_blank', 'noopener'\); \}\}/);
+        // fancy-term 0.8.0's `links.url` (Tynn #763; was 0.7.0's onLinkActivate).
+        expect(pane).toMatch(/url: \(url\) => \{ if \(\/\^https\?:\/i\.test\(url\)\) window\.open\(url, '_blank', 'noopener'\); \},/);
         const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { dependencies: Record<string, string> };
-        expect(pkg.dependencies['@particle-academy/fancy-term']).toBe('^0.7.0');
+        expect(pkg.dependencies['@particle-academy/fancy-term']).toBe('^0.8.0');
     });
 });

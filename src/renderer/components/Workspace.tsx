@@ -23,6 +23,7 @@ import type { RepoEntry } from '../../core/repo-registry.js';
 import { SETTINGS } from '../../core/settings.js';
 import { LAYOUT_MODES, dragSplit, gridTemplate, layoutModeFrom, serializeSplits, splitsFrom, visiblePanes } from '../../core/panel-layout.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
+import { workspaceFileOf } from '../../core/terminal-links.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { reattachAll } from '../reattach.js';
 import { PluginPane, type PluginPanelView } from './PluginPane.js';
@@ -145,6 +146,8 @@ export interface WorkspaceProps {
     /** The agents open as tabs in this workspace's strip (Tynn #805), and closing one. */
     openAgents?: ReadonlyArray<{ id: string; name: string; state: string }> | undefined;
     onCloseAgent?: ((agentId: string) => void) | undefined;
+    /** Open a file of this workspace in its file panel at a line (a path clicked in a terminal, Tynn #763). */
+    onOpenFile?: ((path: string, line: number | null) => void) | undefined;
     onAddAgent?: (() => void) | undefined;
     /** The tabs ask for a view; the shell writes it into the route. */
     onViewChange?: ((view: WorkspaceView) => void) | undefined;
@@ -156,7 +159,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -477,6 +480,12 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                             onResize={({ cols, rows }) => {
                                                 lastSize.current = { cols, rows };
                                                 terminals.resize(id, cols, rows);
+                                            }}
+                                            root={workspace.path}
+                                            onOpenFile={(file) => {
+                                                // Only a file INSIDE this workspace opens; one elsewhere on the machine is not Genie's to show.
+                                                const target = workspaceFileOf(workspace.path, file);
+                                                if (target) onOpenFile?.(target.path, target.line);
                                             }}
                                         />
                                     ) : null}

@@ -29,6 +29,7 @@ import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import { openFileRoute } from '../core/files-panel.js';
 import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
@@ -581,6 +582,7 @@ export function Shell({
                             filesLine={parsed.line}
                             filesFilter={parsed.filter}
                             onFilesRoute={(file, filter) => onNavigate(formatRoute({ ...parsed, panel: 'files', file, filter, detached: false }))}
+                            onOpenFile={(path, line) => onNavigate(openFileRoute(parsed.workspaceId, path, line))}
                             filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
                             onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
                             filesPopped={filesPopped.includes(parsed.workspaceId)}

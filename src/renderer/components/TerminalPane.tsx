@@ -22,9 +22,13 @@ export interface TerminalPaneProps {
     readOnly: boolean;
     onData: (data: string) => void;
     onResize: (size: { cols: number; rows: number }) => void;
+    /** What relative file paths in the output are relative to: the workspace's folder. */
+    root?: string;
+    /** A file path in the output was clicked (fancy-term 0.8.0): the workspace decides whether and where it opens. */
+    onOpenFile?: (file: { path: string; line?: number; column?: number; absolutePath?: string }) => void;
 }
 
-export function TerminalPane({ paneId, output, readOnly, onData, onResize }: TerminalPaneProps) {
+export function TerminalPane({ paneId, output, readOnly, onData, onResize, root, onOpenFile }: TerminalPaneProps) {
     return (
         <Terminal
             data-terminal-pane={paneId}
@@ -33,8 +37,13 @@ export function TerminalPane({ paneId, output, readOnly, onData, onResize }: Ter
             readOnly={readOnly}
             onData={onData}
             onResize={onResize}
-            // A URL in the output is clickable (fancy-term 0.7.0): it opens in the browser through the window's link guard.
-            onLinkActivate={(url) => { if (/^https?:/i.test(url)) window.open(url, '_blank', 'noopener'); }}
+            // Clickable output (fancy-term 0.8.0): a URL opens in the browser through the window's link guard; a file path
+            // (`src/app.ts:42:7`) goes to the workspace, which opens it in its file panel at the line when it is inside.
+            links={{
+                url: (url) => { if (/^https?:/i.test(url)) window.open(url, '_blank', 'noopener'); },
+                file: (file) => onOpenFile?.(file),
+                ...(root ? { root } : {}),
+            }}
         />
     );
 }
