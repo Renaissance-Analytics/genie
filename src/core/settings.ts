@@ -29,6 +29,8 @@ export type SettingDef =
 export const SETTINGS: readonly SettingDef[] = [
     { key: 'update_channel', group: 'general', scope: 'host', label: 'Update channel', description: 'stable: full releases only. dev: every build, including prereleases.', type: 'enum', options: ['stable', 'dev'], default: 'dev' },
     { key: 'do_not_disturb', group: 'general', scope: 'host', label: 'Do not disturb', description: 'An agent that asks is told your reply at once; its question still waits for you.', type: 'boolean', default: false },
+    // Do not disturb silences every sound; this is Genie 1's one exception, carried over (`ftq_dnd_sound`).
+    { key: 'dnd_question_sound', group: 'general', scope: 'host', label: 'Still chime for questions in Do not disturb', description: 'While Do not disturb is on, every alert is silent — except an agent asking you something, when this is on.', type: 'boolean', default: false },
     { key: 'dnd_reply', group: 'general', scope: 'host', label: 'Do-not-disturb reply', description: 'What an agent is told when it asks while you are away.', type: 'string', default: 'Away from the desk — I will answer when I am back.' },
     { key: 'notification_sounds', group: 'general', scope: 'device', label: 'Notification sounds', description: 'Play a sound for each alert kind.', type: 'boolean', default: true },
     // TRAY-RESIDENT (core/tray-resident.ts): closing the window hides Genie; these two decide how it comes up.
@@ -101,6 +103,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     sound_imdone_custom: 'sound_finished_custom',
     sound_failure_custom: 'sound_broken_custom',
     dnd_reply: 'dnd_reply',
+    // Genie 1's question inbox's "still chime" while DND is on ('on' / 'off').
+    ftq_dnd_sound: 'dnd_question_sound',
     // Genie 1 stored it as 'on' / 'off' (genie main/db.ts). Its "launch at sign-in" lived in the OS, not here: read from the OS at boot (core/tray-resident.ts).
     start_minimized: 'start_minimized',
     // Genie 1's prompt library, as written: the reader is forgiving, so a row Genie 2 cannot use is dropped where it is read.

@@ -159,6 +159,9 @@ export function previewSound(kind: AlertKind, choice: boolean | string | undefin
 /** What to play for an alert, or `null`: the master switch off, or this alert set to None. */
 export function alertSound(kind: AlertKind, settings: Readonly<Record<string, boolean | string | undefined>>): AlertSound | null {
     if (settings.notification_sounds === false) return null;
+    // DO NOT DISTURB silences every alert (Tynn #766 row D) — except, when the person opted in, an agent asking
+    // something (Genie 1's `ftq_dnd_sound`), with that row's own choice: its None still wins.
+    if (settings.do_not_disturb === true && !(kind === 'question' && settings.dnd_question_sound === true)) return null;
     return previewSound(kind, settings[`sound_${kind}`], settings[`sound_${kind}_custom`]);
 }
 
