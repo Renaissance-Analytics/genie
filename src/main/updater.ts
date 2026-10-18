@@ -1,4 +1,11 @@
 import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
+import { whatsNewSection } from '../core/whats-new.js';
+
+/** An update's notes as the state carries them: its "What's new" section, or no key at all (Tynn #762). */
+function notesOf(notes: string | null | undefined): { notes?: string } {
+    const section = notes ? whatsNewSection(notes) : null;
+    return section ? { notes: section } : {};
+}
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
 
 /**
@@ -47,6 +54,8 @@ export interface UpdateState {
     error: string | null;
     /** When the last check ANSWERED (not when it started). */
     checkedAt: number | null;
+    /** What the offered version brings: its release notes' "What's new" section (Tynn #762); absent/`null` = none. */
+    notes?: string | null;
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -57,7 +66,7 @@ export interface UpdaterPort {
      */
     configure(channel: { allowPrerelease: boolean; autoDownload: boolean }): void;
     /** Resolves the offered version, or `null` when there is none. Rejects on a library error. */
-    check(): Promise<{ version: string } | null>;
+    check(): Promise<{ version: string; notes?: string | null } | null>;
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
@@ -193,7 +202,7 @@ export class UpdateHost {
         this.inFlight = this.options.port.check().then(
             (found) => {
                 const checkedAt = this.clock();
-                if (found) this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt });
+                if (found) this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...notesOf(found.notes) });
                 else this.set({ phase: 'none', version: null, percent: null, error: null, checkedAt });
                 return this.current;
             },
@@ -220,7 +229,7 @@ export class UpdateHost {
             this.set({ ...this.current, phase: 'error', error: message });
             return false;
         }
-        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt });
+        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.notes ? { notes: this.current.notes } : {}) });
         return true;
     }
 

@@ -1,5 +1,7 @@
 import {
+    ContentRenderer,
     Icon,
+    Popover,
     Tooltip,
     browserPlatformHints,
     detectPlatform,
@@ -187,8 +189,8 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 </div>
             ) : null}
             {/* THE UPDATE (the owner: "in the header, not buried in the deck page"): a button when there is a next step. */}
-            {update ? (
-                update.action && onUpdateAction ? (
+            {update ? (() => {
+                const chip = update.action && onUpdateAction ? (
                     <button
                         type="button"
                         data-update-chip={update.phase}
@@ -205,8 +207,17 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                         <Icon name="download" size="xs" />
                         {update.label}
                     </span>
-                )
-            ) : null}
+                );
+                // What the version brings, on hover (Tynn #762; Genie 1's changelog popover on its upgrade pill).
+                return update.notes ? (
+                    <Popover hover placement="bottom">
+                        <Popover.Trigger>{chip}</Popover.Trigger>
+                        <Popover.Content>
+                            <UpdateNotes version={update.version} notes={update.notes} />
+                        </Popover.Content>
+                    </Popover>
+                ) : chip;
+            })() : null}
             {workstation ? (
                 <div
                     data-workstation-health={workstation.healthy ? 'healthy' : 'unhealthy'}
@@ -219,6 +230,16 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     {workstation.name}
                 </div>
             ) : null}
+        </div>
+    );
+}
+
+/** What an update brings (Tynn #762): the offered version's "What's new", rendered — the update chip's hover. */
+export function UpdateNotes({ version, notes }: { version: string; notes: string }) {
+    return (
+        <div data-update-notes={version} className="flex max-w-sm flex-col gap-2 p-3">
+            <span className="text-xs font-semibold">What’s new in Genie {version}</span>
+            <ContentRenderer value={notes} format="markdown" lineSpacing={1.4} className="max-h-72 overflow-auto text-xs text-[var(--fg-2)]" />
         </div>
     );
 }

@@ -26,3 +26,14 @@ export function whatsNewFor(
     const section = raw === undefined ? null : whatsNewSection(raw);
     return section === null ? null : { version, notes: section };
 }
+
+/**
+ * The release notes electron-updater hands over with an update (`UpdateInfo.releaseNotes`): the release body as a string,
+ * or — with `fullChangelog` — one note per version, of which only the offered version's is this update's. `null` = none.
+ */
+export function releaseNotesText(raw: unknown, version: string): string | null {
+    if (typeof raw === 'string') return raw.trim().length > 0 ? raw : null;
+    if (!Array.isArray(raw)) return null;
+    const mine = raw.find((n): n is { version: string; note: unknown } => typeof n === 'object' && n !== null && (n as { version?: unknown }).version === version);
+    return mine && typeof mine.note === 'string' && mine.note.trim().length > 0 ? mine.note : null;
+}

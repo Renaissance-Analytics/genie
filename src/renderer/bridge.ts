@@ -334,6 +334,8 @@ export interface UpdateState {
     percent: number | null;
     error: string | null;
     checkedAt: number | null;
+    /** What the offered version brings (Tynn #762): its "What's new". */
+    notes?: string | null;
 }
 
 /** The updates bridge when there is no bridge: idle forever, every action refused. */

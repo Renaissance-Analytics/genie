@@ -18,10 +18,10 @@ const bar = (update: ReturnType<typeof updateChip>) =>
 
 describe('the chip', () => {
     it('available → download; downloading → its progress; downloaded → restart to install; installing → said so', () => {
-        expect(updateChip(u('available'))).toEqual({ phase: 'available', label: 'Genie 2.0.0-beta.20 is available — download', action: 'update-download' });
-        expect(updateChip(u('downloading', '2.0.0-beta.20', 42.4))).toEqual({ phase: 'downloading', label: 'Downloading Genie 2.0.0-beta.20 42%', action: null });
-        expect(updateChip(u('downloaded'))).toEqual({ phase: 'downloaded', label: 'Genie 2.0.0-beta.20 is ready — restart to install', action: 'update-install' });
-        expect(updateChip(u('installing'))).toEqual({ phase: 'installing', label: 'Installing Genie 2.0.0-beta.20…', action: null });
+        expect(updateChip(u('available'))).toEqual({ phase: 'available', label: 'Genie 2.0.0-beta.20 is available — download', action: 'update-download', version: '2.0.0-beta.20' });
+        expect(updateChip(u('downloading', '2.0.0-beta.20', 42.4))).toEqual({ phase: 'downloading', label: 'Downloading Genie 2.0.0-beta.20 42%', action: null, version: '2.0.0-beta.20' });
+        expect(updateChip(u('downloaded'))).toEqual({ phase: 'downloaded', label: 'Genie 2.0.0-beta.20 is ready — restart to install', action: 'update-install', version: '2.0.0-beta.20' });
+        expect(updateChip(u('installing'))).toEqual({ phase: 'installing', label: 'Installing Genie 2.0.0-beta.20…', action: null, version: '2.0.0-beta.20' });
     });
 
     it('nothing while there is nothing to act on — idle, checking, none, error, no version, no updater', () => {
