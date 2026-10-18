@@ -3,6 +3,7 @@ import { CommandWindow } from './components/CommandWindow.js';
 import { FeedbackWindow } from './components/FeedbackWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
 import { FEEDBACK_ROUTE } from '../core/feedback.js';
+import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
@@ -84,17 +85,21 @@ function useRoute(): [string, (route: string) => void] {
  * never read (the owner's light desktop showed a dark Genie with a white composer); the tray's Settings… needs
  * a way to move this window. Both are effects of data the renderer already has.
  */
-function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null, onFeedback: () => void): void {
+function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null, onFeedback: () => void, onWhatsNew: () => void): void {
     const theme = themePreferenceFrom(settings);
     useEffect(() => { if (theme) setThemePreference(theme); }, [theme]);
     const feedback = useRef(onFeedback);
     feedback.current = onFeedback;
+    const whatsNew = useRef(onWhatsNew);
+    whatsNew.current = onWhatsNew;
     useEffect(() => {
         if (!bridge?.onNavigate) return;
         // The Feedback window (Tynn #760) opens OVER whatever page is showing — it is not a page of its own.
         const onFeedback = () => feedback.current();
+        const onWhatsNew = () => whatsNew.current();
         return bridge.onNavigate((route) => {
             if (route === FEEDBACK_ROUTE) { onFeedback(); return; }
+            if (route === WHATS_NEW_ROUTE) { onWhatsNew(); return; }
             window.location.hash = `#${route}`;
         });
     }, [bridge]);
@@ -414,7 +419,7 @@ function DesktopApp({ bridge }: AppProps) {
             console.error(`[genie] ${what}:`, (error as Error).message);
         });
     };
-    useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'feedback.open', ...(feedbackFrom.current ? { workspaceId: feedbackFrom.current } : {}) }, 'the Feedback window did not open'));
+    useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'feedback.open', ...(feedbackFrom.current ? { workspaceId: feedbackFrom.current } : {}) }, 'the Feedback window did not open'), () => featureAct({ kind: 'whatsNew.show' }, 'What’s new did not open'));
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
@@ -1011,7 +1016,7 @@ function DesktopApp({ bridge }: AppProps) {
         {features.whatsNew ? (
             <WhatsNewWindow
                 whatsNew={features.whatsNew}
-                onClose={() => featureAct({ kind: 'settings.set', key: 'whats_new_seen_version', value: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
+                onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
             />
         ) : null}
         <FeedbackWindow

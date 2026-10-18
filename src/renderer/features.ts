@@ -212,6 +212,8 @@ export const EMPTY_FEATURES: FeatureData = {
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
 export type FeatureAction =
+    | { kind: 'whatsNew.show' }
+    | { kind: 'whatsNew.close'; version: string }
     | { kind: 'feedback.open'; workspaceId?: string }
     | { kind: 'feedback.close' }
     | { kind: 'feedback.again' }
