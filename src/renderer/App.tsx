@@ -1,6 +1,7 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import { FeedbackWindow } from './components/FeedbackWindow.js';
+import { WhatsNewWindow } from './components/WhatsNewWindow.js';
 import { FEEDBACK_ROUTE } from '../core/feedback.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
@@ -1006,6 +1007,13 @@ function DesktopApp({ bridge }: AppProps) {
                 else if (item.category === 'prompt') { const prompt = savedPrompts.find((p) => p.id === item.id); if (prompt) sendSavedPrompt(prompt); }
             }}
         />
+        {/* What's New, once per version (Tynn #762): closing records the version as seen. */}
+        {features.whatsNew ? (
+            <WhatsNewWindow
+                whatsNew={features.whatsNew}
+                onClose={() => featureAct({ kind: 'settings.set', key: 'whats_new_seen_version', value: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
+            />
+        ) : null}
         <FeedbackWindow
             view={features.feedback}
             onSend={(target, message) => featureAct({ kind: 'feedback.send', workspaceId: target, message }, 'feedback not sent')}
