@@ -366,7 +366,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
             ) : (
                 <>
                 <FrontDoorLines frontDoor={hosting.frontDoor} onAction={onAction} />
-                <Tabs defaultTab={tab ?? 'sites'} variant="underline" className="flex min-h-0 flex-1 flex-col">
+                <Tabs key={tab ?? 'sites'} defaultTab={tab ?? 'sites'} variant="underline" className="flex min-h-0 flex-1 flex-col">
                     <Tabs.List className="px-5">
                         <Tabs.Tab value="sites">Sites</Tabs.Tab>
                         <Tabs.Tab value="processes">Processes</Tabs.Tab>

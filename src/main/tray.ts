@@ -1,4 +1,5 @@
 import { Menu, Tray, nativeImage } from 'electron';
+import type { UpdateState } from './updater.js';
 
 /**
  * THE TRAY — the one place Genie is reachable when its window is hidden behind thirty others,
@@ -21,6 +22,24 @@ export interface TrayHandlers {
     readonly onResumeLimit?: (provider: string) => void;
     /** Send feedback… (Tynn #760): opens the Feedback window. */
     readonly onFeedback?: () => void;
+    /** `⬆ Update to vX…` (Tynn #761): opens Genie, where the title bar's chip downloads and restarts it. */
+    readonly onUpdate?: () => void;
+    /** Task Manager… (Tynn #761): every kept process across workspaces — Hosting → Processes. */
+    readonly onTaskManager?: () => void;
+}
+
+/** An update on offer, as the tray shows it. */
+export interface TrayUpdate {
+    readonly version: string;
+}
+
+/**
+ * The update the tray leads with: on offer, downloading or ready (Genie 1's tray). A restart is never started from here —
+ * it ends every agent's session — so the item opens Genie, where the title bar's chip asks and does it.
+ */
+export function trayUpdate(state: UpdateState | null): TrayUpdate | null {
+    if (!state || !state.version) return null;
+    return state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded' ? { version: state.version } : null;
 }
 
 /** A provider login the rate limit holds, in the words every other surface uses (core/limit-words.ts). */
@@ -45,18 +64,21 @@ function loginName(provider: string): string {
  * The menu, as labels and handlers — pure enough for a test to hold the verbs. A held login (Tynn #794) leads: its line,
  * then Resume now for it — the tray is where Genie is seen when its window is not.
  */
-export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = []): TrayItem[] {
+export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null): TrayItem[] {
     const limits: TrayItem[] = held.flatMap((h) => [
         { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
         { label: `Resume ${loginName(h.provider)} now`, click: () => handlers.onResumeLimit?.(h.provider) },
     ]);
+    const offer: TrayItem[] = update && handlers.onUpdate ? [{ label: `⬆ Update to v${update.version}…`, click: handlers.onUpdate }, { type: 'separator' }] : [];
     return [
+        ...offer,
         ...limits,
         ...(limits.length > 0 ? [{ type: 'separator' as const }] : []),
         { label: 'Open Genie', click: handlers.onOpen },
         { label: 'Settings…', click: handlers.onSettings },
         // Genie 1's tray had it (Tynn #760): the Feedback window, from wherever the person is.
         ...(handlers.onFeedback ? [{ label: 'Send feedback…', click: handlers.onFeedback }] : []),
+        ...(handlers.onTaskManager ? [{ label: 'Task Manager…', click: handlers.onTaskManager }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
         { label: 'Quit Genie', click: handlers.onQuit },
     ];
