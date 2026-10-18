@@ -388,3 +388,20 @@ export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly
         recent: recent.slice(0, PANEL_RECENT).map((e) => ({ text: eventText(e), url: e.item?.url || null })),
     };
 }
+
+const SOUND_OF: Partial<Record<IwEventKind, 'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci'>> = {
+    'issue.new': 'ghissue', 'pr.new': 'ghpr', 'security.new': 'ghsecurity', 'ci.failed': 'ghci',
+};
+
+/**
+ * The sounds one IssueWatch batch plays (the GitHub rows, core/alerts.ts): one per kind, however many items arrived
+ * together, in the order first heard. A change, a close, a comment, a review, a push or a CI pass plays nothing.
+ */
+export function issueWatchSoundKinds(events: readonly IwEvent[]): Array<'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci'> {
+    const out: Array<'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci'> = [];
+    for (const e of events) {
+        const sound = SOUND_OF[e.kind];
+        if (sound && !out.includes(sound)) out.push(sound);
+    }
+    return out;
+}

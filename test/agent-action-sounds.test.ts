@@ -66,7 +66,8 @@ describe('the registry has a row for each', () => {
         expect(by('work')).toEqual(['edits', 'runs', 'reads', 'fetches', 'plans']);
         expect(by('messages')).toEqual(['mail', 'agentmail']);
         expect(by('things')).toEqual(['exits', 'siteup', 'sitedown', 'serviceup', 'flowdone']);
-        expect(ALERT_KINDS).toHaveLength(22);
+        expect(by('github')).toEqual(['ghissue', 'ghpr', 'ghsecurity', 'ghci']);
+        expect(ALERT_KINDS).toHaveLength(26);
     });
 });
 

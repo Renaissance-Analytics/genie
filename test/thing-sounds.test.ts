@@ -34,7 +34,7 @@ describe('the rows', () => {
             expect(alertSound(k, { notification_sounds: true }), k).toBeNull();
             expect(alertSound(k, { notification_sounds: true, [`sound_${k}`]: 'sparkle' }), k).toEqual({ kind: 'wav', file: 'sparkle.wav' });
         }
-        expect(ALERT_KINDS).toHaveLength(22);
+        expect(ALERT_KINDS).toHaveLength(26);
     });
 });
 
