@@ -359,6 +359,7 @@ export function Shell({
                 onOpenPalette={onOpenPalette}
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
                 update={updateChip(updateState)}
+                version={features.version ?? null}
                 onUpdateAction={(action) => {
                     if (action === 'update-download') void updates.download();
                     else if (action === 'update-install') void updates.install();

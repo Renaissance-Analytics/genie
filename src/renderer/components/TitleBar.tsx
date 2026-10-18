@@ -58,6 +58,8 @@ export interface TitleBarProps {
     controlsInset?: number | undefined;
     /** The update, from `available` on (core/update-chip.ts); absent = nothing to act on. */
     update?: UpdateChip | null | undefined;
+    /** The running version (Tynn #763; Genie 1's wordmark label), shown until there is an update to act on; `null` = not known yet. */
+    version?: string | null | undefined;
     /** Its next step: download, or restart to install. */
     onUpdateAction?: ((action: SignalAction) => void) | undefined;
     /**
@@ -69,7 +71,7 @@ export interface TitleBarProps {
     paletteKey?: string | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction, paletteKey }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction, paletteKey, version }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -122,6 +124,8 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             >
                 <GenieLogo />
                 <span className="text-[13px] font-semibold">Genie</span>
+                {/* The running version until there is an update to act on — then the chip says what comes next. */}
+                {version && !update ? <span data-running-version={version} className="font-mono text-[10px] text-[var(--fg-4)]">v{version}</span> : null}
             </button>
 
             {/*

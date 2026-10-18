@@ -192,6 +192,8 @@ export interface FeatureData {
     readonly feedback?: FeedbackView;
     /** What's New for the running version, once (Tynn #762); `null`/absent = nothing to show. */
     readonly whatsNew?: { version: string; notes: string } | null;
+    /** The running version (Tynn #763: the header shows it); absent/`null` = not known yet. */
+    readonly version?: string | null;
 }
 
 /** First paint: nothing has been asked yet. */
