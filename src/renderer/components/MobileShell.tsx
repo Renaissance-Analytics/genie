@@ -2,6 +2,7 @@ import { Icon, Input } from '@particle-academy/react-fancy';
 import type { FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
+import { limitWords } from '../../core/limit-words.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
@@ -207,6 +208,8 @@ export interface MobileAgentProps {
     onBack: () => void;
     onSend: (text: string) => void;
     onStart: () => void;
+    /** Resume now (Tynn #794): open this agent's provider login at once, while its rate limit holds it. */
+    onResumeLimit: () => void;
 }
 
 /**
@@ -214,7 +217,7 @@ export interface MobileAgentProps {
  * oldest first — and a composer to keep it going. Not running: Start instead of the composer, and the
  * refusal (if a start was refused) in words. The back control returns to the shell.
  */
-export function MobileAgent({ detail, sending, onBack, onSend, onStart }: MobileAgentProps) {
+export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResumeLimit }: MobileAgentProps) {
     if (!detail) {
         return (
             <div data-mobile-agent-view="loading" className="flex min-h-dvh flex-col bg-[var(--bg-0)] p-4" aria-busy>
@@ -224,6 +227,8 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart }: Mobile
         );
     }
     const running = detail.session !== null;
+    // Held by its provider's limit (Tynn #794): the same words as every surface, and Resume now.
+    const held = limitWords(detail.session?.limit);
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const text = String(new FormData(e.currentTarget).get('text') ?? '').trim();
@@ -239,6 +244,12 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart }: Mobile
                 <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
             </header>
             {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
+            {held ? (
+                <div data-mobile-limit className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
+                    <span className="text-[var(--warning)]">Paused · {held}</span>
+                    <button type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</button>
+                </div>
+            ) : null}
             <main data-mobile-activity className="flex flex-1 flex-col gap-1 overflow-auto px-4 py-3">
                 {detail.rows.length === 0 ? (
                     <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>

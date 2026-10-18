@@ -323,6 +323,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 onBack={() => { window.history.back(); }}
                 onSend={(text) => { setSending(true); void bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
                 onStart={() => bridge!.openAgent(agentId)}
+                onResumeLimit={() => { void bridge!.resumeLimit(agentId); }}
             />
         );
     }
