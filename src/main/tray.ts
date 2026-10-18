@@ -17,16 +17,50 @@ export interface TrayHandlers {
     /** Asks the feed now (the owner, 2026-10-13: "where even is the check for updates button?"). The header chip shows what it finds. */
     readonly onCheckUpdates: () => void;
     readonly onQuit: () => void;
+    /** `Resume now` for a held provider login (Tynn #794): open it at once, its held agents go on. */
+    readonly onResumeLimit?: (provider: string) => void;
 }
 
-/** The menu, as labels and handlers — pure enough for a test to hold the two verbs. */
-export function trayMenuTemplate(handlers: TrayHandlers): { label: string; click: () => void }[] {
+/** A provider login the rate limit holds, in the words every other surface uses (core/limit-words.ts). */
+export interface HeldLogin {
+    readonly provider: string;
+    readonly words: string;
+}
+
+export interface TrayItem {
+    readonly label?: string;
+    readonly type?: 'separator';
+    readonly enabled?: boolean;
+    readonly click?: () => void;
+}
+
+/** The login's name: the limit belongs to the account, not to the CLI. */
+function loginName(provider: string): string {
+    return provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : provider;
+}
+
+/**
+ * The menu, as labels and handlers — pure enough for a test to hold the verbs. A held login (Tynn #794) leads: its line,
+ * then Resume now for it — the tray is where Genie is seen when its window is not.
+ */
+export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = []): TrayItem[] {
+    const limits: TrayItem[] = held.flatMap((h) => [
+        { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
+        { label: `Resume ${loginName(h.provider)} now`, click: () => handlers.onResumeLimit?.(h.provider) },
+    ]);
     return [
+        ...limits,
+        ...(limits.length > 0 ? [{ type: 'separator' as const }] : []),
         { label: 'Open Genie', click: handlers.onOpen },
         { label: 'Settings…', click: handlers.onSettings },
         { label: 'Check for updates', click: handlers.onCheckUpdates },
         { label: 'Quit Genie', click: handlers.onQuit },
     ];
+}
+
+/** The tray's tooltip: what is held, or just Genie. */
+export function trayTooltip(held: readonly HeldLogin[]): string {
+    return held.length === 0 ? 'Genie' : `Genie — ${held.map((h) => `${loginName(h.provider)}: ${h.words}`).join('; ')}`;
 }
 
 export function createTray(handlers: TrayHandlers, iconPath: string | null = null): Tray {

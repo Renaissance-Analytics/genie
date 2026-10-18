@@ -16,10 +16,10 @@ describe('tray', () => {
         const onQuit = vi.fn();
         const menu = trayMenuTemplate({ onOpen, onSettings, onCheckUpdates, onQuit });
         expect(menu.map((m) => m.label)).toEqual(['Open Genie', 'Settings…', 'Check for updates', 'Quit Genie']);
-        menu[0]!.click();
-        menu[1]!.click();
-        menu[2]!.click();
-        menu[3]!.click();
+        menu[0]!.click!();
+        menu[1]!.click!();
+        menu[2]!.click!();
+        menu[3]!.click!();
         expect(onOpen).toHaveBeenCalledTimes(1);
         expect(onSettings).toHaveBeenCalledTimes(1);
         expect(onCheckUpdates).toHaveBeenCalledTimes(1);
