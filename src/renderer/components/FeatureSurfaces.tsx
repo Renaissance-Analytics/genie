@@ -4,6 +4,7 @@ import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type Bi
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
+import { groupTools, toneLabel } from '../../core/toolchain.js';
 import type { SettingsGroup } from '../../core/route.js';
 import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
@@ -753,17 +754,25 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                             Not on this machine yet: {missing.map((t) => t.tool).join(', ')}. Each row shows the command Genie would run; nothing runs until you click Install.
                         </p>
                     ) : null}
+                    {/* GROUPED BY TYPE (the owner, 2026-10-18): languages, package managers, version control, containers, agent CLIs. */}
+                    {groupTools(tc.tools).map((g) => (
+                    <section key={g.group} data-tool-group={g.group}>
+                    <h3 className="px-5 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-[var(--fg-3)]">{g.label}</h3>
                     <ul className="divide-y divide-[var(--border-1)]">
-                        {tc.tools.map((t) => {
+                        {g.tools.map((t) => {
                             const plan = t.tone === 'not-installed' ? tc.installs?.[t.tool] : undefined;
                             const refusal = toolRefusal(t.tool);
+                            const word = toneLabel(t.tone);
                             return (
                                 <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
-                                    <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{t.tone}</Badge>
+                                    {word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    {/* Update from here: to the version Genie knows of, or — with none known — whatever the tool's own update path finds newest. */}
                                     {t.tone === 'update-available' && t.latest ? (
-                                        <button type="button" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
+                                        <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
+                                    ) : t.tone === 'unknown' && t.installed !== null ? (
+                                        <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update</button>
                                     ) : null}
                                     {plan && 'label' in plan ? (
                                         <>
@@ -778,6 +787,8 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                             );
                         })}
                     </ul>
+                    </section>
+                    ))}
                 </>
             )}
         </div>

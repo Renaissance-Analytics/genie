@@ -236,3 +236,46 @@ export function repairOutcome(input: { tool: string; wanted: string | null; befo
     if (wanted !== null && compareVersions(after, wanted) !== 0) notes.push(`wanted ${wanted}; the manager installed ${after}`);
     return { kind: 'repaired', from: before, to: after, ...(notes.length > 0 ? { note: notes.join('; ') } : {}) };
 }
+
+/**
+ * THE TOOLCHAIN'S GROUPS (the owner, 2026-10-18: "the items managed by the toolchain should be grouped by their type").
+ * Every tool in HOST_TOOLS is in exactly one; the surface draws one section per group, in this order. A tool not in the
+ * table (a newer Genie's, read by an older one) goes under Other rather than vanishing.
+ */
+export type ToolGroup = 'languages' | 'package-managers' | 'version-control' | 'containers' | 'agents' | 'other';
+
+export const TOOL_GROUPS: readonly { readonly group: Exclude<ToolGroup, 'other'>; readonly label: string; readonly tools: readonly string[] }[] = [
+    { group: 'languages', label: 'Languages and runtimes', tools: ['php', 'node', 'python', 'go', 'rustc'] },
+    { group: 'package-managers', label: 'Package managers', tools: ['composer', 'npm', 'cargo'] },
+    { group: 'version-control', label: 'Version control', tools: ['git'] },
+    { group: 'containers', label: 'Containers', tools: ['docker'] },
+    { group: 'agents', label: 'Agent CLIs', tools: ['claude-code', 'codex'] },
+];
+
+export function groupTools<T extends { readonly tool: string }>(tools: readonly T[]): Array<{ group: ToolGroup; label: string; tools: T[] }> {
+    const known = new Set(TOOL_GROUPS.flatMap((g) => g.tools));
+    const out: Array<{ group: ToolGroup; label: string; tools: T[] }> = TOOL_GROUPS.map((g) => ({
+        group: g.group,
+        label: g.label,
+        tools: tools.filter((t) => g.tools.includes(t.tool)).sort((a, b) => g.tools.indexOf(a.tool) - g.tools.indexOf(b.tool)),
+    }));
+    out.push({ group: 'other', label: 'Other', tools: tools.filter((t) => !known.has(t.tool)) });
+    return out.filter((g) => g.tools.length > 0);
+}
+
+/**
+ * What a row's badge says. `unknown` says nothing: it was Genie not knowing the newest version, never the tool's state,
+ * and a badge reading "unknown" made a working tool look broken (the owner's screenshot, 2026-10-18).
+ */
+export function toneLabel(tone: Tone): string | null {
+    switch (tone) {
+        case 'update-available':
+            return 'Update available';
+        case 'up-to-date':
+            return 'Up to date';
+        case 'not-installed':
+            return 'Not installed';
+        default:
+            return null;
+    }
+}
