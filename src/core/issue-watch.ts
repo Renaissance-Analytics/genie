@@ -166,8 +166,8 @@ export function issueWatchNotice(events: readonly IwEvent[], to: { workspace: st
 export type IwDelivery = 'push' | 'next-turn' | 'count' | 'off';
 
 export const IW_DELIVERIES: ReadonlyArray<{ value: IwDelivery; label: string }> = [
-    { value: 'push', label: 'pushed to it as a turn' },
-    { value: 'next-turn', label: 'on its next turn' },
+    { value: 'push', label: 'pushed to it now, waking it if it is stopped' },
+    { value: 'next-turn', label: 'when it is next running — never woken for it' },
     { value: 'count', label: 'only the count, on imDone' },
     { value: 'off', label: 'not at all' },
 ];
@@ -216,4 +216,18 @@ export function issueWatchPrefsFor(
 /** Whether an event reaches the agent as a notice. The count-only agent hears it on imDone, not here. */
 export function wantsEvent(prefs: IssueWatchSetting, kind: IwEventKind): boolean {
     return (prefs.delivery === 'push' || prefs.delivery === 'next-turn') && prefs.kinds.includes(kind);
+}
+
+/**
+ * A workspace's Tynn project, from its project.json (the shared envelope schema's top-level `tynn: { projectId, project }`)
+ * — how a Tynn push for a project finds its Genie workspace. Anything else is `null`, never a guess.
+ */
+export function tynnProjectIdOf(manifest: string | null): string | null {
+    if (manifest === null) return null;
+    try {
+        const tynn = (JSON.parse(manifest) as { tynn?: { projectId?: unknown } } | null)?.tynn;
+        return typeof tynn?.projectId === 'string' && tynn.projectId.length > 0 ? tynn.projectId : null;
+    } catch {
+        return null;
+    }
 }
