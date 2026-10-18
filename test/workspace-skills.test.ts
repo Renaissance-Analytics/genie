@@ -24,9 +24,9 @@ function memFs(files: Record<string, string>) {
 const W = '/w/moic';
 const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20261012' });
 
-// The thirteen tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts).
-const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites', 'processes'];
-const V1_ONLY = ['connectToGenie', 'genieGuide', 'checkIssues', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
+// The fourteen tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
+const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites', 'processes'];
+const V1_ONLY = ['connectToGenie', 'genieGuide', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
 
 describe('Genie 2\'s skills', () => {
     it('name only tools Genie 2 serves, and each is written for both harnesses', async () => {

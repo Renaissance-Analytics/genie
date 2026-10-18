@@ -1,4 +1,4 @@
-import { IssueWatchFeed, parseIssueWatchEntry, type IwEvent } from '../core/issue-watch.js';
+import { IssueWatchFeed, parseIssueWatchEntry, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 import { encodePong, encodeSubscribe, parsePusherFrame, pusherWsUrl, socketIdOf } from '../core/pusher.js';
 
 /**
@@ -35,6 +35,8 @@ export interface IssueWatchClientPorts {
     readonly onEvents: (projectId: string, events: IwEvent[]) => void;
     /** Each state, as it changes (the panel's line). */
     readonly onState?: (state: IssueWatchState) => void;
+    /** Every entry Tynn sent, reconciled or pushed — the latest is what `checkIssues` and imDone's count line read. */
+    readonly onEntry?: (entry: IwEntry) => void;
 }
 
 export type IssueWatchState =
@@ -164,6 +166,7 @@ export class IssueWatchClient {
     #apply(raw: unknown): void {
         const entry = parseIssueWatchEntry(raw);
         if (!entry) return;
+        this.#ports.onEntry?.(entry);
         const events = this.#feed.apply(entry);
         if (events.length > 0) this.#ports.onEvents(entry.projectId, events);
     }

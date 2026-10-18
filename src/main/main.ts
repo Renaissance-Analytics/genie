@@ -95,7 +95,7 @@ import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
 import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
-import { tynnProjectIdOf } from '../core/issue-watch.js';
+import { tynnProjectIdOf, type IssueWatchSummary, type IwEntry } from '../core/issue-watch.js';
 
 /**
  * THE MAIN PROCESS.
@@ -161,6 +161,20 @@ let tray: Tray | null = null;
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let autoCheckStop: (() => void) | null = null;
 let registry: Registry | null = null;
+/**
+ * ISSUEWATCH (Tynn #806): the latest entry Tynn sent per project, and the client's state — what `checkIssues` and imDone's
+ * count line read for a workspace (its project.json `tynn.projectId`). Filled by the client once it runs.
+ */
+const issueWatchLatest = new Map<string, IwEntry>();
+let issueWatchState: IssueWatchSummary['state'] = 'stopped';
+function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
+    const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
+    let manifest: string | null = null;
+    if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
+    const projectId = tynnProjectIdOf(manifest);
+    const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
+    return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}) };
+}
 let terminals: TerminalHost | null = null;
 let filesHost: FilesHost | null = null;
 let snapshots: TerminalSnapshots | null = null;
@@ -1297,6 +1311,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
+            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId) },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             terminals: {
@@ -1469,7 +1484,11 @@ async function boot(): Promise<void> {
         socket: (url) => new WebSocket(url) as unknown as SocketLike,
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onEvents: (projectId, events) => issueWatchDelivery.onEvents(projectId, events),
-        onState: (state) => console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`),
+        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); },
+        onState: (state) => {
+            issueWatchState = state.kind;
+            console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
+        },
     });
     issueWatchClient.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.

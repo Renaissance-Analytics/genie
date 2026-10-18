@@ -1,3 +1,4 @@
+import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { Liveness } from '../core/liveness.js';
 import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
@@ -40,6 +41,8 @@ export interface GenieToolParts {
     /** Pulse a terminal's row. Whether anything received the signal. */
     readonly glow: (terminalId: string) => boolean;
     readonly thumbsUp: (caller: Caller, reason: string) => void;
+    /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as last heard from Tynn. Absent = none (doctor mode). */
+    readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary };
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly terminals: TerminalsPort;
@@ -71,6 +74,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             glow: p.glow,
             thumbsUp: p.thumbsUp,
             dnd: () => ({ on: values().do_not_disturb === true, reply: String(values().dnd_reply ?? '') }),
+            ...(p.issueWatch ? { issueWatch: p.issueWatch } : {}),
         },
         more: {
             knowledge: p.knowledge,
