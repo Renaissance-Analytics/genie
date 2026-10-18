@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FeedbackStore } from '../src/main/feedback-store.js';
+import { DeviceStore } from '../src/main/remote-devices.js';
 import { reportFlush } from '../src/main/store.js';
 
 /**
@@ -49,17 +49,18 @@ describe('a store whose fire-and-forget flush fails', () => {
     beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-flush-')); });
     afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5 }); });
 
-    it('FeedbackStore.add with its file turned into a directory: the add still returns, the failure is reported, nothing is unhandled', async () => {
-        const store = await FeedbackStore.open(dir);
+    // Was FeedbackStore, removed with submitFeedback (the owner, 2026-10-18); the remote devices store flushes the same way.
+    it('DeviceStore.pair with its file turned into a directory: the pair still returns, the failure is reported, nothing is unhandled', async () => {
+        const store = await DeviceStore.open(dir, { now: () => 1, random: () => 'r' });
         // The store's file path is now a DIRECTORY: the rename onto it cannot succeed.
-        await mkdir(join(dir, 'runtime', 'feedback.json'), { recursive: true });
+        await mkdir(join(dir, 'runtime', 'remote-devices.json'), { recursive: true });
         const error = vi.spyOn(console, 'error').mockImplementation(() => {});
         let unhandled = 0;
         const onUnhandled = () => { unhandled += 1; };
         process.on('unhandledRejection', onUnhandled);
         try {
-            const item = store.add({ workspaceId: 'tynn', agentName: null, kind: 'bug', text: 'the window cannot be moved' });
-            expect(item.text).toBe('the window cannot be moved');
+            const paired = store.pair('phone');
+            expect(paired.device.label).toBe('phone');
             // Windows refuses the rename with EPERM, which writeJsonAtomic retries for ~300 ms before giving up;
             // Linux answers EISDIR at once. The test's deadline must exceed the code's retry budget (the Windows
             // release runner failed a 150 ms wait on 2026-10-12): poll for the report, up to 3 s.
@@ -67,7 +68,7 @@ describe('a store whose fire-and-forget flush fails', () => {
             while (error.mock.calls.length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
             expect(unhandled).toBe(0);
             expect(error).toHaveBeenCalled();
-            expect(String(error.mock.calls[0]?.[0])).toMatch(/feedback/);
+            expect(String(error.mock.calls[0]?.[0])).toMatch(/remote devices/);
         } finally {
             process.off('unhandledRejection', onUnhandled);
             error.mockRestore();

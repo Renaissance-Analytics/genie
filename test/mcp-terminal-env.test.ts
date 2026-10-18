@@ -64,7 +64,7 @@ describe('manageTerminals create', () => {
         const t = fakeTerminals();
         const never = (() => { throw new Error('not exercised'); }) as never;
         const tools = allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, feedback: never, approve: async () => 'allowed', roster: () => [], resolveCaller: (id) => (id === 't-atlas' ? atlas : null),
+            inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'allowed', roster: () => [], resolveCaller: (id) => (id === 't-atlas' ? atlas : null),
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: t.port, terminalEnv: () => SERVICE_ENV,
             sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },

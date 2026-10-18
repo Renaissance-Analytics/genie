@@ -20,7 +20,7 @@ function deps(): AllToolsDeps {
     return {
         genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, workspaceSetting: never as never, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller: () => null },
-        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }), feedback: never as never },
+        attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         sidecar: { resolveCaller: () => null, roster: () => [], register: never as never, start: never as never, running: () => false, addressOf: () => '' },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
@@ -42,7 +42,7 @@ describe('Genie’s published tool schemas', () => {
     });
 
     it('the mirror resolves terminalId on every tool that takes it — counted, with the tool set as the control', () => {
-        expect(withTerminalId.length).toBe(15); // the fourteen Genie tools and the plugin tool
+        expect(withTerminalId.length).toBe(14); // the thirteen Genie tools (no submitFeedback, removed 2026-10-18) and the plugin tool
         const mirrored = withTerminalId.filter((d) => {
             const p = MirroredParameters.fromSchema(d.name, d.inputSchema as never).parameters as Record<string, { path: string[] }>;
             return p.terminalId?.path.join('.') === 'terminalId';

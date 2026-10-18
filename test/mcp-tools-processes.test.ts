@@ -235,7 +235,7 @@ describe('processes: wiring', () => {
         await keep('example', 'queue');
         const never = (() => { throw new Error('not exercised'); }) as never;
         const wired = allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, feedback: never, approve: async () => 'denied', roster: () => [], resolveCaller: (id) => callers[id] ?? null,
+            inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'denied', roster: () => [], resolveCaller: (id) => callers[id] ?? null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
             processes: { book, logs: (id, lines) => services.supervisor.readLog(id, lines) },
             sidecar: { register: never, start: never, running: () => false },

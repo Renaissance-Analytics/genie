@@ -39,7 +39,7 @@ const facts = { version: '2', platform: 'win32', installDir: 'I', genieHome: 'H'
 describe('every tool Genie serves', () => {
     const servers: Array<[string, () => Registration[]]> = [
         ['normal Genie', () => allGenieTools(genieToolDeps({
-            inbox: never, attention: never, knowledge: never, settings: never, feedback: never, approve: never, roster: () => [], resolveCaller: () => null,
+            inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
             sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },

@@ -42,7 +42,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
 - \`runAgent\` to start your sidecar, a review partner with its own context.
 - \`knowledge\` for the workstation's knowledge graph.
-- \`thumbsUp\` to say you are ready; \`submitFeedback\` to tell Genie's makers about Genie itself.
+- \`thumbsUp\` to say you are ready.
 
 Workspace rules are in \`RULES.md\`; they may be stricter than this.
 `,
