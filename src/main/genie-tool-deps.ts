@@ -8,6 +8,7 @@ import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
 import type { HostingApproval, ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
 import type { InboxStore } from './inbox-store.js';
+import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
@@ -42,7 +43,7 @@ export interface GenieToolParts {
     readonly glow: (terminalId: string) => boolean;
     readonly thumbsUp: (caller: Caller, reason: string) => void;
     /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as last heard from Tynn. Absent = none (doctor mode). */
-    readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary };
+    readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer> };
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly terminals: TerminalsPort;

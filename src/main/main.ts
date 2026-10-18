@@ -93,7 +93,7 @@ import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
-import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
+import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
 import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 
@@ -184,6 +184,15 @@ function issueWatchPanels(): Record<string, IssueWatchPanelView> {
         out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? []);
     }
     return out;
+}
+/** The running IssueWatch client, once boot has started it: what a `checkIssues(refresh: true)` goes through. */
+let issueWatchRunning: IssueWatchClient | null = null;
+/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`). */
+async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefreshAnswer> {
+    const projectId = tynnProjectFor(workspaceId);
+    if (projectId === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
+    if (!issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running' };
+    return issueWatchRunning.refresh(projectId);
 }
 function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
@@ -1327,7 +1336,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
-            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId) },
+            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId) },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             terminals: {
@@ -1513,6 +1522,7 @@ async function boot(): Promise<void> {
             console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
         },
     });
+    issueWatchRunning = issueWatchClient;
     issueWatchClient.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
     composed.settings.onChange((key) => { if (key === 'tynn_token' || key === 'tynn_host') { issueWatchClient.stop(); issueWatchClient.start(); } });
