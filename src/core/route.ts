@@ -61,7 +61,10 @@ export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 /** The Stream's two layouts (the board): the ledger, or one card per turn. */
 export type StreamLayout = 'ledger' | 'turns';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
-export type PlainFeature = 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'inbox';
+export type PlainFeature = 'knowledge' | 'flows' | 'toolchain' | 'inbox';
+/** Hosting's three tabs: `?tab=` opens it on one (the tray's Task Manager…, Tynn #761); absent = Sites. */
+export type HostingTab = 'sites' | 'processes' | 'services';
+const HOSTING_TABS: readonly HostingTab[] = ['sites', 'processes', 'services'];
 
 export type Route =
     | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
@@ -93,6 +96,7 @@ export type Route =
     | ({ surface: 'files'; workspaceId: string } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
+    | ({ surface: 'hosting'; tab?: HostingTab } & Common)
     | ({ surface: 'settings'; group: SettingsGroup | null } & Common)
     /** The Genie browser; the page it shows rides the URL so back and deep links work. */
     | ({ surface: 'browser'; url: string | null } & Common);
@@ -101,7 +105,7 @@ export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
 const SETTINGS_GROUPS: readonly SettingsGroup[] = ['general', 'agents', 'workstation', 'appearance'];
-const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox'];
+const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'toolchain', 'inbox'];
 /** The sub-routes lines and signals point at (`genie://settings/github`) → the group that holds them. */
 const SETTINGS_ALIASES: Readonly<Record<string, SettingsGroup>> = { github: 'workstation', tynn: 'general', agents: 'agents', updates: 'general', mcp: 'workstation' };
 
@@ -210,6 +214,11 @@ export function parseRoute(input: string): Route {
         case 'browser':
             return { surface: 'browser', url: params.get('url') || null, ...common };
 
+        case 'hosting': {
+            const tab = params.get('tab');
+            return { surface: 'hosting', ...(HOSTING_TABS.includes(tab as HostingTab) ? { tab: tab as HostingTab } : {}), ...common };
+        }
+
         default:
             if (PLAIN_FEATURES.includes(head as PlainFeature)) return { surface: head as PlainFeature, ...common };
             return dashboard('workspace', common);
@@ -225,6 +234,9 @@ export function formatRoute(route: Route): string {
             break;
         case 'browser':
             if (route.url !== null) params.set('url', route.url);
+            break;
+        case 'hosting':
+            if (route.tab) params.set('tab', route.tab);
             break;
         case 'dashboard':
             params.set('group', route.group);

@@ -51,7 +51,7 @@ import { planV1Import } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray, trayMenuTemplate, trayTooltip, type TrayHandlers } from './tray.js';
+import { createTray, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { showOnBoot } from '../core/tray-resident.js';
@@ -170,10 +170,12 @@ let trayHeldKey = '';
 function refreshTray(): void {
     if (!tray || !trayHandlers) return;
     const held = (host?.heldLogins() ?? []).flatMap((l) => { const words = limitWords(l.view); return words ? [{ provider: l.provider, words }] : []; });
-    const key = JSON.stringify(held);
+    // An update on offer leads the menu (Tynn #761).
+    const update = trayUpdate(updates?.state() ?? null);
+    const key = JSON.stringify({ held, update });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held)));
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update)));
     tray.setToolTip(trayTooltip(held));
 }
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
@@ -698,6 +700,7 @@ async function boot(): Promise<void> {
         },
     });
     updates.onChange((state) => {
+        refreshTray();
         for (const w of BrowserWindow.getAllWindows()) {
             if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
         }
@@ -1733,6 +1736,8 @@ async function boot(): Promise<void> {
     const openFeedback = (): void => { revealMainWindow(); broadcast('genie:navigate', FEEDBACK_ROUTE); };
     trayHandlers = {
         onFeedback: openFeedback,
+        onUpdate: revealMainWindow,
+        onTaskManager: () => { revealMainWindow(); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
         onOpen: revealMainWindow,
         onSettings: () => {
             revealMainWindow();
