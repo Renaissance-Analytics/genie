@@ -1,6 +1,6 @@
 import type { McpServer } from '@particle-academy/prism-acp';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
-import { RateLimitGate, type LimitReading } from '../core/rate-limit-gate.js';
+import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
@@ -419,6 +419,17 @@ export class SessionHost {
             if (entry.provider === provider && entry.session.held) { entry.session.resumeAfterLimit(); this.#emit(id); first ??= id; }
         }
         if (first !== null) this.#onAction?.(first, 'resumed');
+    }
+
+    /** The provider logins the gate holds now, among the running agents — one per login, however many it holds (Tynn #794: the tray). */
+    heldLogins(): Array<{ provider: string; view: GateView }> {
+        const now = this.#clock();
+        const out: Array<{ provider: string; view: GateView }> = [];
+        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
+            const view = this.#gate.view(this.#loginOf(provider), now);
+            if (view.state !== 'open') out.push({ provider, view });
+        }
+        return out;
     }
 
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */

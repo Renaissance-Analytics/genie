@@ -47,7 +47,8 @@ import { planV1Import } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray } from './tray.js';
+import { createTray, trayMenuTemplate, trayTooltip, type TrayHandlers } from './tray.js';
+import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { showOnBoot } from '../core/tray-resident.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
@@ -158,6 +159,19 @@ if (launch.kind === 'exit') {
 let window: BrowserWindow | null = null;
 /** The tray outlives every window; held so it is not garbage-collected into nothing. */
 let tray: Tray | null = null;
+/** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
+let trayHandlers: TrayHandlers | null = null;
+let trayHeldKey = '';
+/** The tray says which provider logins the rate limit holds, with Resume now — redrawn only when that CHANGES. */
+function refreshTray(): void {
+    if (!tray || !trayHandlers) return;
+    const held = (host?.heldLogins() ?? []).flatMap((l) => { const words = limitWords(l.view); return words ? [{ provider: l.provider, words }] : []; });
+    const key = JSON.stringify(held);
+    if (key === trayHeldKey) return;
+    trayHeldKey = key;
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held)));
+    tray.setToolTip(trayTooltip(held));
+}
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let autoCheckStop: (() => void) | null = null;
 let registry: Registry | null = null;
@@ -1657,6 +1671,7 @@ async function boot(): Promise<void> {
     });
     let published = '';
     host.subscribe((agentId) => {
+        refreshTray();
         pushAgent(agentId);
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
@@ -1695,7 +1710,7 @@ async function boot(): Promise<void> {
         appImage: process.env.APPIMAGE ?? null,
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
     });
-    tray = createTray({
+    trayHandlers = {
         onOpen: revealMainWindow,
         onSettings: () => {
             revealMainWindow();
@@ -1703,7 +1718,9 @@ async function boot(): Promise<void> {
         },
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
-    }, trayIconPath());
+        onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
+    };
+    tray = createTray(trayHandlers, trayIconPath());
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
