@@ -302,10 +302,9 @@ export function carryChat(next: string, current: Route, roster: readonly ChatRos
 
 /**
  * PICKING A CHAT TAB (the owner, 2026-10-14: "When the chat is pinned, whenever I select an agent tab, it should bring me
- * to that agent's view as well"). Pinned: the main view goes to that agent too, the chat pinned beside it. Floating: only
- * the conversation switches, and the view stays where the person is roaming.
+ * to that agent's view as well"). The chat is always docked now (2026-10-17), so this is what a pick does: the main view
+ * goes to that agent too, the chat beside it.
  */
-export function pickThreadRoute(current: Route, agentId: string, pinned: boolean): string {
-    if (!pinned) return formatRoute({ ...current, chat: agentId });
-    return formatRoute({ ...parseRoute(`genie://agent/${agentId}?tab=stream`), chat: agentId, pin: 'right' });
+export function pickThreadRoute(agentId: string): string {
+    return formatRoute({ ...parseRoute(`genie://agent/${agentId}?tab=stream`), chat: agentId });
 }

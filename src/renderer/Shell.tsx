@@ -2,7 +2,7 @@ import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, pickThreadRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
-import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockReserve, type DockPanel, type DockNotice } from '../core/dock.js';
+import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockHolder, dockReserve, type DockPanel, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
 import { chatScope } from '../core/chat-scope.js';
 import { composerMeter } from '../core/composer.js';
@@ -88,7 +88,7 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
-    /** The chat's tabs (`core/chat-view.ts` `chatThreads`): on the strip when nothing is pinned, and heading the flyout. */
+    /** The chat's tabs (`core/chat-view.ts` `chatThreads`): on the strip while the chat is closed, and heading the chat. */
     chatThreads?: readonly ChatChip[] | undefined;
     /** The chat subject's session (§4.4): its approval is answered where the composer is; its running turn gets `[Stop]`. */
     chatSession?: LiveSession | null | undefined;
@@ -100,8 +100,8 @@ export interface ShellProps {
     pickFiles?: (() => Promise<string[]>) | undefined;
     /** The browser surface's box, for main to place the view over. */
     onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
-    /** Which panel holds the single dock slot. `null` = nothing pinned, so no reserve. */
-    pinned: DockPanel | null;
+    /** The panel pinned to the dock (files, lists), or `null`. An open chat holds the dock over it (`dockHolder`). */
+    pinned: PinnedPanel | null;
     onNavigate: (route: string) => void;
     onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
     /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
@@ -114,7 +114,6 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
-    onTogglePin: () => void;
     onCloseChat: () => void;
     /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
@@ -191,15 +190,12 @@ export type ShellRemote = { host: string; driver: string | null; driving: boolea
 /** The dock's panels, as the notice names them (§4.4). */
 const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel', lists: 'lists' };
 
-/**
- * A pinned chat sits in the dock's frame, under the view header (§4.4). Unpinned, the flyout positions itself over
- * the right edge and nothing moves, so there is no frame.
- */
 /** No Deck items yet: one array, so the toasts see the same list on every render until the snapshot brings one. */
 const NO_DECK_ITEMS: readonly DeckItem[] = [];
 
-function DockFrame({ pinned, style, children }: { pinned: boolean; style: CSSProperties; children: ReactNode }) {
-    return pinned ? <div data-dock-frame="chat" className="z-10 bg-[var(--bg-0)]" style={style}>{children}</div> : <>{children}</>;
+/** The chat sits in the dock's frame, under the view header (§4.4) — always: there is no overlay (2026-10-17). */
+function DockFrame({ style, children }: { style: CSSProperties; children: ReactNode }) {
+    return <div data-dock-frame="chat" className="z-10 bg-[var(--bg-0)]" style={style}>{children}</div>;
 }
 
 export function Shell({
@@ -248,7 +244,6 @@ export function Shell({
     onOpenPalette,
     onSelectRow,
     onSend,
-    onTogglePin,
     onCloseChat,
     onRestartAndSend,
     answeringApproval,
@@ -308,14 +303,17 @@ export function Shell({
      *  - not on a `flex: 1` column — measured: that squeezed the left rail from 300px to
      *    163px, because a flex child with a margin gives up basis rather than slack.
      *
-     * An unpinned flyout reserves nothing: it overlays the right edge and nothing moves.
+     * An open chat holds the dock over whatever is pinned (`dockHolder`): it reserves its own width, and a pinned file
+     * panel under it stays mounted, hidden, until the chat closes.
      */
     // The file panel popped out releases the reserve (§4.3); the slot stays its workspace's, the lamp stays on.
     const filesSlot = filesDock({ pinned, filesWorkspaceId: filesWorkspaceId ?? null, popped: filesPopped });
     // A pinned slot reserves whatever panel holds it; only a POPPED-OUT file panel gives the width back.
     // The pinned chat's width is the person's (Tynn #798): remembered, dragged live — and the reserve is the same number.
     const [chatDockWidth, setChatDockWidth] = useState(() => readChatDockWidth(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
-    const reserve = filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(pinned, chatDockWidth);
+    const chatOpen = chatThread !== null || parsed.chat !== null;
+    const holder = dockHolder(pinned, chatOpen);
+    const reserve = holder !== 'chat' && filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(holder, chatDockWidth);
     // The header on screen sets where the dock starts: 56px on most surfaces, 44px on the Agent view. Measured before
     // paint; 56 until then (and in a static render), 0 on a surface without one.
     const rowRef = useRef<HTMLDivElement | null>(null);
@@ -637,17 +635,12 @@ export function Shell({
                 </main>
 
                 {/*
-                 * The flyout. Pinned, it sits in the row and the reserve above makes room for
-                 * it; unpinned, it is absolutely positioned over the right edge and the
-                 * reserve is zero. One component, two geometries, one width.
-                 */}
-                {/*
                  * THE FILE PANEL IN THE DOCK (§4.3/§4.4): pinned, the one panel of that workspace sits in the
                  * slot on every surface; the reserve above makes room. One panel per workspace — the Workspace
                  * surface does not draw it inline while it is here.
                  */}
                 {filesSlot.kind === 'docked' && workspaceFor(filesSlot.workspaceId!) ? (
-                    <aside data-dock="files" data-dock-frame="files" className="z-10 border-l border-[var(--border-1)] bg-[var(--bg-0)]" style={{ ...dockFrame, width: DOCK_WIDTH }}>
+                    <aside data-dock="files" data-dock-frame="files" hidden={holder === 'chat'} className="z-10 border-l border-[var(--border-1)] bg-[var(--bg-0)]" style={{ ...dockFrame, width: DOCK_WIDTH, ...(holder === 'chat' ? { display: 'none' } : {}) }}>
                         <FilesPanelContainer
                             workspace={workspaceFor(filesSlot.workspaceId!)!}
                             files={files}
@@ -662,7 +655,7 @@ export function Shell({
                     </aside>
                 ) : null}
                 {/* Popped out (§4.3): the reserve is released and the dock column is a bar that brings the panel back. */}
-                {filesSlot.kind === 'popped' ? (
+                {filesSlot.kind === 'popped' && holder !== 'chat' ? (
                     <aside data-files-popped={filesSlot.workspaceId} data-dock-frame="files-popped" className="z-10 w-7 items-start justify-center border-l border-[var(--border-1)] bg-[var(--bg-0)] pt-2" style={dockFrame}>
                         <button
                             type="button"
@@ -677,11 +670,11 @@ export function Shell({
                     </aside>
                 ) : null}
                 {/*
-                 * THE CHAT STRIP (the owner: "a flyout that is always present with chat tabs"): with nothing pinned, a tab
-                 * per conversation on the right edge of every surface, in the width the reserve keeps for it; a tab opens
-                 * that conversation in the flyout, which overlays it. A pinned panel takes the edge instead.
+                 * THE CHAT STRIP (the owner: "a flyout that is always present with chat tabs"): with the chat closed and
+                 * nothing pinned, a tab per conversation on the right edge of every surface, in the width the reserve keeps
+                 * for it; a tab opens that conversation in the dock. A pinned panel takes the edge instead.
                  */}
-                {pinned === null ? (
+                {holder === null ? (
                     <aside data-chat-strip="" aria-label="Chats" className="flex-col items-center gap-1 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] py-2" style={{ ...dockFrame, width: CHAT_STRIP_WIDTH, flexDirection: 'column' }}>
                         {tabs.map((t) => (
                             <button
@@ -712,13 +705,12 @@ export function Shell({
                     hidden={parsed.surface === 'deck'}
                     onAnswer={onAnswerDeckItem}
                     onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
-                    right={(pinned !== 'chat' && (chatThread || parsed.chat) ? Math.max(reserve, DOCK_WIDTH) : reserve) + 16}
+                    right={reserve + 16}
                 />
-                {chatThread || parsed.chat ? (
-                    <DockFrame pinned={pinned === 'chat'} style={dockFrame}>
+                {chatOpen ? (
+                    <DockFrame style={dockFrame}>
                     <ChatFlyout
                         thread={chatThread ? { ...chatThread, chips: tabs } : null}
-                        pinned={pinned === 'chat'}
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
@@ -728,9 +720,8 @@ export function Shell({
                         onAnswerApproval={onAnswerApproval}
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
-                        onTogglePin={onTogglePin}
                         onClose={onCloseChat}
-                        onPickThread={(id) => onNavigate(pickThreadRoute(parsed, id, pinned === 'chat'))}
+                        onPickThread={(id) => onNavigate(pickThreadRoute(id))}
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}

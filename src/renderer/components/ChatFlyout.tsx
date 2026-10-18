@@ -2,8 +2,8 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardE
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
-import { DOCK_WIDTH } from '../../core/dock.js';
-import { atThreadEnd, clampChatDockWidth, clampChatWidth, dragChatWidth, readChatDockWidth, readChatWidth, writeChatDockWidth, writeChatWidth } from '../../core/chat-width.js';
+import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
+import { horizontalWheel } from '../../core/wheel.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
@@ -20,22 +20,15 @@ import { TurnStop } from './TurnStop.js';
  * a parked approval renders wherever it is — see `approvalPlacement`. One actionable rendering,
  * one marker, never two sets of buttons for one decision.
  *
- * ## Pinned and unpinned are different geometries, not a style
+ * ## Docked, always
  *
- * **Unpinned** overlays the right edge with a shadow and **nothing underneath moves**. `Esc`
- * closes it.
+ * The owner, 2026-10-17: "get rid of the chat flyout and make the pinned chat be the only chat ux". The chat sits in the
+ * dock: a gutter that starts *below* the view header — the header keeps its width and position, and the content
+ * reflows into what is left (`Shell`, `core/dock.ts`). Nothing is overlaid. It stays until it is closed (its close
+ * button, or ⌘J / Ctrl+J); `Esc` does not close it.
  *
- * **Pinned** reserves a gutter that starts *below* the view header — the header keeps its width
- * and position, and the content reflows into what is left. **`Esc` does not close a pinned
- * dock**, because a pin is a statement that this panel stays.
- *
- * The reserve lives on the content row in `Shell`, as a `margin`, from the same `DOCK_WIDTH`
- * this panel is sized by. See `core/dock.ts` for the three places it must not go, each of
- * which has already cost a release.
- *
- * **Unpinned, the person sets the width** by dragging the left edge, and it is remembered
- * across closing, pinning and restarts (`core/chat-width.ts`). Pinned ignores it: the dock is
- * `DOCK_WIDTH`, because the reserve reads that token and a wider panel would overlap the content.
+ * **The person sets the width** by dragging the left edge (Tynn #798), and it is remembered; the content row's
+ * reserve reads the same number, so the two never diverge.
  *
  * ## Not a `Drawer`
  *
@@ -73,7 +66,6 @@ function clock(at: number): string {
 
 export interface ChatFlyoutProps {
     thread: ChatThread | null;
-    pinned: boolean;
     /**
      * The chat agent's REAL context usage and window (`core/composer.ts` `composerMeter`), for the composer's meter.
      * `null` or absent = not reported, and then there is no meter — never a made-up window.
@@ -91,9 +83,8 @@ export interface ChatFlyoutProps {
     answeringApproval?: string | null | undefined;
     onAnswerApproval?: ((optionId: string) => void) | undefined;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
-    /** Absent = no pin control (the doctor window: the chat is the page, not a panel). */
-    onTogglePin?: (() => void) | undefined;
-    onClose: () => void;
+    /** Absent = no close button (the doctor window: the chat is the page, not a panel). */
+    onClose?: (() => void) | undefined;
     /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
@@ -105,11 +96,11 @@ export interface ChatFlyoutProps {
     onStopTurn?: (() => void) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
-    /** Where the unpinned width is remembered; absent = the window's localStorage (tests pass their own). */
+    /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
-    /** Pinned: the width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered pinned width. */
+    /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
     dockWidth?: number | undefined;
-    /** Pinned: the edge was dragged — the new width, live, so the reserve follows; the panel remembers it at the drag's end. */
+    /** The edge was dragged — the new width, live, so the reserve follows; the panel remembers it at the drag's end. */
     onDockWidth?: ((width: number) => void) | undefined;
     /**
      * The chat's agent against the workspace on screen (`core/chat-scope.ts`). `elsewhere`: the composer and the header
@@ -133,35 +124,29 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, pinned, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onTogglePin, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
+    thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
+    onSend, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
-    const [overlayWidth, setOverlayWidth] = useState(() => readChatWidth(storage));
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
-    const pinnedWidth = dockWidth ?? ownDockWidth;
-    const width = pinned ? pinnedWidth : overlayWidth;
-    const setPinnedWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
+    const width = dockWidth ?? ownDockWidth;
+    const setWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
 
     /**
-     * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive
-     * over whatever is underneath; the width is written once, when the drag ends.
+     * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive over whatever is underneath;
+     * the width is clamped so the view keeps its room, handed up live so the reserve follows, and written once, when the
+     * drag ends.
      */
     const startResize = (e: ReactPointerEvent<HTMLDivElement>) => {
         e.preventDefault();
         const startX = e.clientX;
-        const from = pinned ? pinnedWidth : overlayWidth;
+        const from = width;
         let last = from;
-        // Pinned, the width is the dock's: clamped so the view keeps its room, and handed up live so the reserve follows.
-        const onMove = (ev: PointerEvent) => {
-            if (pinned) { last = clampChatDockWidth(from + (startX - ev.clientX), window.innerWidth); setPinnedWidth(last); }
-            else { last = dragChatWidth(from, startX, ev.clientX, window.innerWidth); setOverlayWidth(last); }
-        };
+        const onMove = (ev: PointerEvent) => { last = clampChatDockWidth(from + (startX - ev.clientX), window.innerWidth); setWidth(last); };
         const onUp = () => {
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
-            if (pinned) writeChatDockWidth(storage, last);
-            else writeChatWidth(storage, last);
+            writeChatDockWidth(storage, last);
         };
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
@@ -171,15 +156,9 @@ export function ChatFlyout({
         const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
         if (step === 0) return;
         e.preventDefault();
-        if (pinned) {
-            const next = clampChatDockWidth(pinnedWidth + step, window.innerWidth);
-            setPinnedWidth(next);
-            writeChatDockWidth(storage, next);
-            return;
-        }
-        const next = clampChatWidth(overlayWidth + step, window.innerWidth);
-        setOverlayWidth(next);
-        writeChatWidth(storage, next);
+        const next = clampChatDockWidth(width + step, window.innerWidth);
+        setWidth(next);
+        writeChatDockWidth(storage, next);
     };
 
     /**
@@ -213,31 +192,22 @@ export function ChatFlyout({
 
     return (
         <aside
-            data-chat={pinned ? 'pinned' : 'overlay'}
+            data-chat="pinned"
             style={{ width }}
-            className={[
-                'flex min-h-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]',
-                // Unpinned: absolutely positioned over the right edge with a shadow. Nothing
-                // underneath moves, which is why it needs no reserve.
-                pinned ? '' : 'absolute inset-y-0 right-0 z-20 shadow-xl',
-            ]
-                .filter(Boolean)
-                .join(' ')}
+            className="relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
         >
-            {/* The left edge, pinned or not (Tynn #798): unpinned it sizes the overlay, pinned the dock — each remembered. */}
-            {(
-                <div
-                    data-chat-resize=""
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label="Resize chat"
-                    aria-valuenow={width}
-                    tabIndex={0}
-                    onPointerDown={startResize}
-                    onKeyDown={keyResize}
-                    className="absolute inset-y-0 left-0 z-30 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-[var(--accent)]/40 focus-visible:bg-[var(--accent)]/40 focus-visible:outline-none"
-                />
-            )}
+            {/* The left edge (Tynn #798): drag it, or arrow it, to size the dock — remembered. */}
+            <div
+                data-chat-resize=""
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize chat"
+                aria-valuenow={width}
+                tabIndex={0}
+                onPointerDown={startResize}
+                onKeyDown={keyResize}
+                className="absolute inset-y-0 left-0 z-30 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-[var(--accent)]/40 focus-visible:bg-[var(--accent)]/40 focus-visible:outline-none"
+            />
             <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3">
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                     {thread ? thread.name : 'genie'}
@@ -263,36 +233,27 @@ export function ChatFlyout({
                     </span>
                 ) : null}
 
-                {onTogglePin ? (
-                <button
-                    type="button"
-                    data-chat-pin={pinned ? 'on' : 'off'}
-                    aria-label={pinned ? 'Unpin chat' : 'Pin chat'}
-                    aria-pressed={pinned}
-                    onClick={onTogglePin}
-                    className={`flex size-5 items-center justify-center rounded ${pinned ? 'text-[var(--violet-400)]' : 'text-[var(--fg-4)]'} hover:bg-[var(--bg-2)]`}
-                >
-                    <Icon name="pin" size="xs" />
-                </button>
-                ) : null}
-
-                {/* No close button on a pinned dock: a pin says this panel stays, and `Esc`
-                    does not close it either. Unpin first — which is one click and reversible. */}
-                {pinned ? null : (
+                {onClose ? (
                     <button
                         type="button"
                         aria-label="Close chat"
                         onClick={onClose}
-                        className="flex size-5 items-center justify-center rounded text-[var(--fg-4)] hover:bg-[var(--bg-2)]"
+                        className="flex size-5 shrink-0 items-center justify-center rounded text-[var(--fg-4)] hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="x" size="xs" />
                     </button>
-                )}
+                ) : null}
             </div>
 
-            {/* THREAD TABS (the board): your conversations, whoever waits on you, genie last; a click switches the thread. */}
+            {/* THREAD TABS (the board): your conversations, whoever waits on you, genie last; a click switches the thread.
+                One row, never wider than the panel (`min-w-0`); the mouse wheel scrolls it sideways (the owner, 2026-10-17),
+                so it draws no scrollbar across its chips and the line under it. */}
             {thread?.chips && thread.chips.length > 0 ? (
-                <div data-chat-threads="" className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-[var(--border-1)] px-3 py-2">
+                <div
+                    data-chat-threads=""
+                    onWheel={(e) => { const dx = horizontalWheel(e); if (dx !== 0) e.currentTarget.scrollLeft += dx; }}
+                    className="flex min-w-0 shrink-0 gap-1.5 overflow-x-auto border-b border-[var(--border-1)] px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                >
                     {thread.chips.map((c) => (
                         <button
                             key={c.agentId}

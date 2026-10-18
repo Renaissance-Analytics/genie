@@ -1,9 +1,7 @@
-import { CHAT_DOCK_DEFAULT } from '../src/core/chat-width.js';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
-import { DOCK_WIDTH } from '../src/core/dock.js';
-import { CHAT_MIN_WIDTH, CHAT_VIEW_KEEP, CHAT_WIDTH_KEY, atThreadEnd, clampChatWidth, dragChatWidth, readChatWidth, writeChatWidth } from '../src/core/chat-width.js';
+import { CHAT_DOCK_DEFAULT, CHAT_DOCK_WIDTH_KEY, atThreadEnd } from '../src/core/chat-width.js';
 
 /**
  * THE OWNER, 2026-10-13: "The chat message panel doesn't have a scroll bar so I can't scroll to see messages at all"
@@ -25,22 +23,22 @@ import { CHAT_MIN_WIDTH, CHAT_VIEW_KEEP, CHAT_WIDTH_KEY, atThreadEnd, clampChatW
 const many = Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, who: 'agent' as const, from: 'genie', text: `reply ${i}`, delivered: true, at: null }));
 const thread: ChatThread = { agentId: 'genie', name: 'genie', fidelity: 'declared', unread: null, messages: many };
 const memory = (value: string | null) => {
-    const m = new Map<string, string>(value === null ? [] : [[CHAT_WIDTH_KEY, value]]);
+    const m = new Map<string, string>(value === null ? [] : [[CHAT_DOCK_WIDTH_KEY, value]]);
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); }, map: m };
 };
-const render = (pinned: boolean, stored: string | null = null) =>
-    renderToStaticMarkup(<ChatFlyout thread={thread} pinned={pinned} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} widthStorage={memory(stored)} />);
+const render = (stored: string | null = null) =>
+    renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} widthStorage={memory(stored)} />);
 const classOf = (html: string, attr: string) => (html.match(new RegExp(`<[^>]*${attr}[^>]*class="([^"]*)"`)) ?? html.match(new RegExp(`<[^>]*class="([^"]*)"[^>]*${attr}`)))?.[1]?.split(/\s+/) ?? null;
 
 describe('the chat thread scrolls', () => {
     it('no element is both the scroller and end-packed — counted over every element, so the old shape is named', () => {
-        const html = render(false);
+        const html = render();
         const both = [...html.matchAll(/class="([^"]*)"/g)].map((m) => m[1]!.split(/\s+/)).filter((c) => c.some((x) => /^overflow(-y)?-auto$/.test(x)) && c.includes('justify-end'));
         expect(both).toEqual([]);
     });
 
     it('the scroller is the bounded flex child (flex-1, min-h-0, overflow-y-auto) and holds the messages', () => {
-        const html = render(false);
+        const html = render();
         const scroller = classOf(html, 'data-chat-scroll=""');
         expect(scroller).not.toBeNull();
         expect(scroller).toEqual(expect.arrayContaining(['min-h-0', 'flex-1', 'overflow-y-auto']));
@@ -50,7 +48,7 @@ describe('the chat thread scrolls', () => {
     });
 
     it('short threads still sit at the bottom: the end-packing lives on an inner column at least as tall as the scroller', () => {
-        const log = classOf(render(false), 'data-chat-log=""');
+        const log = classOf(render(), 'data-chat-log=""');
         expect(log).toEqual(expect.arrayContaining(['flex', 'flex-col', 'justify-end', 'min-h-full']));
     });
 
@@ -61,42 +59,14 @@ describe('the chat thread scrolls', () => {
     });
 });
 
-describe('the unpinned flyout is resizable and remembers its width; pinned is the dock', () => {
-    it('unpinned: the remembered width, and a left-edge separator to drag', () => {
-        const html = render(false, '520');
-        expect(html).toMatch(/data-chat="overlay"[^>]*style="width:520px"|style="width:520px"[^>]*data-chat="overlay"/);
+describe('the chat is resizable and remembers its width (Tynn #798)', () => {
+    it('the remembered width, and a left-edge separator to drag', () => {
+        const html = render('700');
+        expect(html).toMatch(/data-chat="pinned"[^>]*style="width:700px"|style="width:700px"[^>]*data-chat="pinned"/);
         expect(html).toMatch(/role="separator"[^>]*data-chat-resize=""|data-chat-resize=""[^>]*role="separator"/);
     });
 
-    it('pinned: the PINNED width (Tynn #798: its own, remembered apart — never the unpinned one) and a handle to drag', () => {
-        // The owner, 2026-10-17: "expanding the chat panel when pinned. It's too thin now." The pinned chat has its own
-        // remembered width (default CHAT_DOCK_DEFAULT) and its edge drags; the unpinned width does not leak into it.
-        const html = render(true, '700');
-        expect(html).toContain(`style="width:${CHAT_DOCK_DEFAULT}px"`);
-        expect(html).not.toContain('width:700px');
-        expect(html).toContain('data-chat-resize');
-    });
-
-    it('nothing (or nothing sane) remembered = the designed width', () => {
-        expect(readChatWidth(memory(null))).toBe(DOCK_WIDTH);
-        expect(readChatWidth(memory('banana'))).toBe(DOCK_WIDTH);
-        expect(readChatWidth(memory('12'))).toBe(DOCK_WIDTH);
-        expect(readChatWidth(null)).toBe(DOCK_WIDTH);
-        expect(readChatWidth(memory('600'))).toBe(600);
-    });
-
-    it('a width written is the width read back', () => {
-        const s = memory(null);
-        writeChatWidth(s, 611.4);
-        expect(s.map.get(CHAT_WIDTH_KEY)).toBe('611');
-        expect(readChatWidth(s)).toBe(611);
-    });
-
-    it('dragging the LEFT edge left widens it, right narrows it, clamped to [min, viewport − keep]', () => {
-        expect(dragChatWidth(400, 1000, 900, 1600)).toBe(500);
-        expect(dragChatWidth(400, 1000, 1050, 1600)).toBe(350);
-        expect(dragChatWidth(400, 1000, 1400, 1600)).toBe(CHAT_MIN_WIDTH);
-        expect(dragChatWidth(400, 1000, -2000, 1600)).toBe(1600 - CHAT_VIEW_KEEP);
-        expect(clampChatWidth(900, 500)).toBe(CHAT_MIN_WIDTH);
+    it('nothing remembered = the designed width', () => {
+        expect(render()).toContain(`style="width:${CHAT_DOCK_DEFAULT}px"`);
     });
 });

@@ -57,7 +57,6 @@ function shell(chatSession: LiveSession | null): string {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onToggleFilesPin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
@@ -136,7 +135,7 @@ describe('a stopped turn says so, plainly', () => {
         const messages = chatMessages({ agent: { id: 'a_lark', name: 'lark', provider: 'claude', fidelity: 'declared' }, session: null, rows });
         expect(messages.map((m) => m.who)).toEqual(['you', 'agent', 'stopped']);
         expect(messages[2]).toMatchObject({ id: 'r3', text: 'Stopped by you', at: 3_000 });
-        const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: 'a_lark', name: 'lark', fidelity: 'declared', unread: null, messages }} pinned={false} onSend={() => {}} onClose={() => {}} />);
+        const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: 'a_lark', name: 'lark', fidelity: 'declared', unread: null, messages }} onSend={() => {}} onClose={() => {}} />);
         expect(count(html, 'data-who="stopped"')).toBe(1);
         expect(html).toMatch(/data-who="stopped"[^]*Stopped by you/);
         // Control: the reply it cut short is still the agent's, by name.

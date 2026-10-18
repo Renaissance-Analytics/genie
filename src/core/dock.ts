@@ -92,13 +92,29 @@ export function pinPanel(
 }
 
 /**
- * THE ROUTE AFTER A PIN (§4.4): `?pin=right` says the CHAT is pinned. When pinning the file panel displaces the chat,
- * the route stops saying so — a stale `pin=right` would reopen the chat pinned on the next navigation and undo the
- * handoff the user just watched. Anything that leaves the chat alone leaves the route alone.
+ * THE ROUTE AFTER A PIN (§4.4): the chat is open while the route names it (`chat=`). When pinning the file panel
+ * displaces the chat, the chat leaves the route — a stale `chat=` would reopen it in the dock on the next navigation and
+ * undo the handoff the person just watched. Anything that leaves the chat alone leaves the route alone.
  */
 export function routeAfterPin(route: string, outcome: PinOutcome): string {
     if (outcome.replaced !== 'chat') return route;
-    return route.replace(/([?&])pin=right(&|$)/, (_m, lead: string, tail: string) => (tail === '&' ? lead : '')).replace(/\?$/, '');
+    // The chat is open exactly while the route names it, so a chat the file panel displaced leaves the route.
+    const at = route.indexOf('?');
+    if (at < 0) return route;
+    const kept = route.slice(at + 1).split('&').filter((p) => { const k = p.split('=')[0]; return k !== 'chat' && k !== 'pin'; });
+    return kept.length > 0 ? `${route.slice(0, at)}?${kept.join('&')}` : route.slice(0, at);
+}
+
+/** A panel the person pins: the chat is never pinned, it is open or closed (`dockHolder`). */
+export type PinnedPanel = Exclude<DockPanel, 'chat'>;
+
+/**
+ * WHO HOLDS THE DOCK (the owner, 2026-10-17: "get rid of the chat flyout and make the pinned chat be the only chat ux").
+ * An open chat always sits in the dock — there is no overlay any more — so it holds the slot whenever it is open. A
+ * panel pinned under it is not unpinned: it waits, mounted and hidden, and holds the dock again when the chat closes.
+ */
+export function dockHolder(pinned: PinnedPanel | null, chatOpen: boolean): DockPanel | null {
+    return chatOpen ? 'chat' : pinned;
 }
 
 /**
