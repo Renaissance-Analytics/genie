@@ -33,6 +33,8 @@ export function TerminalPane({ paneId, output, readOnly, onData, onResize }: Ter
             readOnly={readOnly}
             onData={onData}
             onResize={onResize}
+            // A URL in the output is clickable (fancy-term 0.7.0): it opens in the browser through the window's link guard.
+            onLinkActivate={(url) => { if (/^https?:/i.test(url)) window.open(url, '_blank', 'noopener'); }}
         />
     );
 }
