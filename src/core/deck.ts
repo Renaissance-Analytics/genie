@@ -289,6 +289,8 @@ export interface UpdateSignalInput {
     phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
+    /** What the offered version brings (Tynn #762): its "What's new". */
+    notes?: string | null;
 }
 
 export interface SignalState {

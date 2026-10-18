@@ -11,10 +11,18 @@ export interface UpdateChip {
     readonly label: string;
     /** The next step, or `null` while one is already under way. */
     readonly action: SignalAction | null;
+    readonly version: string;
+    /** What the version brings — its release notes' "What's new" (Tynn #762) — shown on hover; absent = none. */
+    readonly notes?: string;
 }
 
 export function updateChip(u: UpdateSignalInput | null | undefined): UpdateChip | null {
     if (!u || !u.version) return null;
+    const chip = phaseChip(u);
+    return chip ? { ...chip, version: u.version, ...(u.notes ? { notes: u.notes } : {}) } : null;
+}
+
+function phaseChip(u: UpdateSignalInput): Omit<UpdateChip, 'version' | 'notes'> | null {
     switch (u.phase) {
         case 'available':
             return { phase: 'available', label: `Genie ${u.version} is available — download`, action: 'update-download' };
