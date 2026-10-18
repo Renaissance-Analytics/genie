@@ -121,3 +121,39 @@ describe('one breach holds the whole login', () => {
         expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
     });
 });
+
+/**
+ * A TURN THAT FAILED ON THE LIMIT WITH NO READING (Tynn #791, prism-acp 0.18.0 `failure.kind: 'rate_limit'`). The gate
+ * has no reset to wait for, so the login is held and tried again on the gate's STATED backoff — never a guessed reset.
+ */
+describe('a breach the turn reported itself', () => {
+    const failOnLimit = (name: string) => events.get(name)!.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution', failure: { kind: 'rate_limit', reason: 'rate_limit' } });
+
+    it('holds the whole login, retries on the first backoff step, and every held agent goes on then', () => {
+        const a = record('atlas'); const b = record('wren'); const c = record('kai', 'codex');
+        for (const r of [a, b, c]) host.start(r, dir);
+        host.prompt(a.id, 'build it', 'you');
+        failOnLimit('atlas');
+        expect(host.probe(a.id)?.limit).toMatchObject({ state: 'retrying', nextTryAtMs: now + 15 * MIN, attempt: 1 });
+        host.prompt(b.id, 'hello', 'you');
+        expect(sent.get('wren')).toEqual([]);
+        // CONTROL: codex is another login
+        expect(host.probe(c.id)?.limit).toEqual({ state: 'open' });
+        const t0 = now;
+        advanceTo(t0 + 14 * MIN);
+        expect(sent.get('wren')).toEqual([]);
+        advanceTo(t0 + 15 * MIN);
+        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('wren')).toEqual(['hello']);
+    });
+
+    it('CONTROL: a turn that failed for another reason holds nobody', () => {
+        const a = record('atlas'); const b = record('wren');
+        host.start(a, dir); host.start(b, dir);
+        host.prompt(a.id, 'build it', 'you');
+        events.get('atlas')!.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution', failure: { kind: 'overloaded', reason: 'overloaded' } });
+        expect(host.probe(a.id)?.limit).toEqual({ state: 'open' });
+        host.prompt(b.id, 'hello', 'you');
+        expect(sent.get('wren')).toEqual(['hello']);
+    });
+});
