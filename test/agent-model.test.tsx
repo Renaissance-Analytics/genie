@@ -13,7 +13,7 @@ import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js'
 import { MODEL_META, toStreamEvent } from '../src/core/stream-event.js';
 import { setModel, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
 import { Registry } from '../src/main/registry.js';
-import { SessionHost, claudeOptionsFor, type DriverFor } from '../src/main/session-host.js';
+import { SessionHost, claudeOptionsFor, codexOptionsFor, type DriverFor } from '../src/main/session-host.js';
 import { Store } from '../src/main/store.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
 
@@ -91,9 +91,12 @@ describe('the chosen model reaches the provider', () => {
         expect(claudeArgs(claudeOptionsFor(claude(), '/w/tynn', null))).not.toContain('--model');
     });
 
-    it('Codex: the chosen model is passed into CodexDriver options (a SOURCE check — realDriverFor constructs the real driver, so there is no seam to observe it through)', () => {
-        const source = readFileSync('src/main/session-host.ts', 'utf8');
-        expect(source).toMatch(/new CodexDriver\(\{[^}]*model: record\.model/);
+    it('Codex: the chosen model is in the driver’s options (codexOptionsFor, Tynn #797); none = no key, Codex’s own default', () => {
+        const codex = (model: string | null) => codexOptionsFor({ provider: 'codex', model } as unknown as AgentRecord, '/w', null, []);
+        expect(codex('gpt-5')).toMatchObject({ model: 'gpt-5' });
+        expect(codex(null)).not.toHaveProperty('model');
+        // ...and the real driver is built from them (a SOURCE check: realDriverFor constructs it).
+        expect(readFileSync('src/main/session-host.ts', 'utf8')).toMatch(/new CodexDriver\(\{ \.\.\.codexOptionsFor\(record, cwd, resumeSessionId, /);
     });
 });
 

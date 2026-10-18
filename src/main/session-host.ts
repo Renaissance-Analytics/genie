@@ -193,6 +193,23 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
     };
 }
 
+/**
+ * A Codex agent's driver options (Tynn #797). Codex asks before an MCP server's tools run, and a session has nobody to
+ * answer, so Genie's tools were declined on every call. Genie's OWN server is approved (`default_tools_approval_mode`
+ * through prism-acp's `mcpToolApproval`), as a Claude agent already runs them unasked: each Genie tool that acts for the
+ * person gates itself. No other server is touched, and with no Genie server there is nothing to approve (prism refuses
+ * an approval naming a server it was not given). The chosen model goes on thread/start and thread/resume; none = Codex's own.
+ */
+export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: { genie: 'approve' } } {
+    return {
+        cwd,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        ...(record.model ? { model: record.model } : {}),
+        ...(mcpServers.length > 0 ? { mcpServers } : {}),
+        ...(mcpServers.some((s) => s.name === 'genie') ? { mcpToolApproval: { genie: 'approve' as const } } : {}),
+    };
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
@@ -206,8 +223,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
             return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp, ...env }, driverEvents(options.events));
 
         case 'codex':
-            // The chosen model goes on thread/start and thread/resume; none = no key, Codex's own default.
-            return (options) => new CodexDriver({ cwd, ...resume, ...(record.model ? { model: record.model } : {}), ...binary, ...mcp, ...env }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...binary, ...env }, driverEvents(options.events));
 
         default:
             return null;
