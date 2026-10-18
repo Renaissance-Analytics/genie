@@ -1,5 +1,7 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
+import { FeedbackWindow } from './components/FeedbackWindow.js';
+import { FEEDBACK_ROUTE } from '../core/feedback.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
@@ -17,7 +19,7 @@ import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../cor
 import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
-import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from './features.js';
+import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
@@ -81,12 +83,19 @@ function useRoute(): [string, (route: string) => void] {
  * never read (the owner's light desktop showed a dark Genie with a white composer); the tray's Settings… needs
  * a way to move this window. Both are effects of data the renderer already has.
  */
-function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null): void {
+function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null, onFeedback: () => void): void {
     const theme = themePreferenceFrom(settings);
     useEffect(() => { if (theme) setThemePreference(theme); }, [theme]);
+    const feedback = useRef(onFeedback);
+    feedback.current = onFeedback;
     useEffect(() => {
         if (!bridge?.onNavigate) return;
-        return bridge.onNavigate((route) => { window.location.hash = `#${route}`; });
+        // The Feedback window (Tynn #760) opens OVER whatever page is showing — it is not a page of its own.
+        const onFeedback = () => feedback.current();
+        return bridge.onNavigate((route) => {
+            if (route === FEEDBACK_ROUTE) { onFeedback(); return; }
+            window.location.hash = `#${route}`;
+        });
     }, [bridge]);
 }
 
@@ -397,7 +406,14 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
     }), [resolvedBridge]);
-    useHostRequests(resolvedBridge, features.settings.values);
+    // The Feedback window opens for the workspace in front of the person (its project first in the picker).
+    const feedbackFrom = useRef<string | null>(null);
+    const featureAct = (action: FeatureAction, what: string) => {
+        void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
+            console.error(`[genie] ${what}:`, (error as Error).message);
+        });
+    };
+    useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'feedback.open', ...(feedbackFrom.current ? { workspaceId: feedbackFrom.current } : {}) }, 'the Feedback window did not open'));
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
@@ -428,6 +444,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [addFromGit, setAddFromGit] = useState(false);
     // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
     const workspaceId = routeWorkspace(route, snapshot.agents);
+    feedbackFrom.current = workspaceId ?? null;
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
     const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
@@ -988,6 +1005,12 @@ function DesktopApp({ bridge }: AppProps) {
                 else if (item.category === 'action') paletteActions.find((a) => a.id === item.id)?.run();
                 else if (item.category === 'prompt') { const prompt = savedPrompts.find((p) => p.id === item.id); if (prompt) sendSavedPrompt(prompt); }
             }}
+        />
+        <FeedbackWindow
+            view={features.feedback}
+            onSend={(target, message) => featureAct({ kind: 'feedback.send', workspaceId: target, message }, 'feedback not sent')}
+            onClose={() => featureAct({ kind: 'feedback.close' }, 'the Feedback window did not close')}
+            onAgain={() => featureAct({ kind: 'feedback.again' }, 'the Feedback window did not reset')}
         />
         </>
     );

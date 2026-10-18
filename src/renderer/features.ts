@@ -22,6 +22,7 @@ export type { FrontDoorStatus };
 import type { HostedProcess } from '../main/process-book.js';
 import type { RestartPolicy } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
+import type { FeedbackView } from '../core/feedback.js';
 
 /**
  * WHAT THE FEATURE SURFACES RENDER FROM — the renderer's view of the stores, crossed over the
@@ -187,6 +188,8 @@ export interface FeatureData {
     readonly plugins: PluginsSection | null;
     /** IssueWatch's view per workspace id (Tynn #806), pushed by main; `null` until main reports. */
     readonly issueWatch: Readonly<Record<string, IssueWatchPanelView>> | null;
+    /** The Feedback window (Tynn #760). Absent = closed. */
+    readonly feedback?: FeedbackView;
 }
 
 /** First paint: nothing has been asked yet. */
@@ -207,6 +210,10 @@ export const EMPTY_FEATURES: FeatureData = {
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
 export type FeatureAction =
+    | { kind: 'feedback.open'; workspaceId?: string }
+    | { kind: 'feedback.close' }
+    | { kind: 'feedback.again' }
+    | { kind: 'feedback.send'; workspaceId: string; message: string }
     | { kind: 'knowledge.search'; query: string }
     | { kind: 'knowledge.openAdd'; workspaceId?: string }
     | { kind: 'knowledge.cancelForm' }
