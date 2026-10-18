@@ -20,8 +20,6 @@ export interface TrayHandlers {
     readonly onQuit: () => void;
     /** `Resume now` for a held provider login (Tynn #794): open it at once, its held agents go on. */
     readonly onResumeLimit?: (provider: string) => void;
-    /** Send feedback… (Tynn #760): opens the Feedback window. */
-    readonly onFeedback?: () => void;
     /** `⬆ Update to vX…` (Tynn #761): opens Genie, where the title bar's chip downloads and restarts it. */
     readonly onUpdate?: () => void;
     /** Task Manager… (Tynn #761): every kept process across workspaces — Hosting → Processes. */
@@ -76,8 +74,6 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         ...(limits.length > 0 ? [{ type: 'separator' as const }] : []),
         { label: 'Open Genie', click: handlers.onOpen },
         { label: 'Settings…', click: handlers.onSettings },
-        // Genie 1's tray had it (Tynn #760): the Feedback window, from wherever the person is.
-        ...(handlers.onFeedback ? [{ label: 'Send feedback…', click: handlers.onFeedback }] : []),
         ...(handlers.onTaskManager ? [{ label: 'Task Manager…', click: handlers.onTaskManager }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
         { label: 'Quit Genie', click: handlers.onQuit },

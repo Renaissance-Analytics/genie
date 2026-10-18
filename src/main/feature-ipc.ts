@@ -23,8 +23,6 @@ import {
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeedbackOutcome, FeedbackTarget } from '../core/feedback.js';
-import type { FeedbackRequest, FeedbackSent } from './feedback-send.js';
 import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
 
 /**
@@ -71,16 +69,10 @@ export interface FeaturePorts {
     readonly mainErrors?: { dismiss(id: string): boolean };
     /** The host's file picker for an alert's own sound (Tynn #766 B2): the chosen path, or `null` when cancelled. */
     readonly pickSound?: () => Promise<string | null>;
-    /** The Feedback window (Tynn #760): where it can go, whether Genie is signed in to Tynn, and the send. Absent = none. */
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
+    readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it). */
     readonly appVersion?: () => string;
-    readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
-    readonly feedback?: {
-        targets(current: string | null): readonly FeedbackTarget[];
-        signedIn(): boolean;
-        send(request: FeedbackRequest): Promise<FeedbackSent>;
-    };
 }
 
 /**
@@ -119,12 +111,8 @@ export interface FeatureState {
     toolchainRepairedAt?: number | null;
     toolchainWarning?: ToolchainSection['warning'] | null;
     toolchainResult?: string | null;
-    /** The Feedback window (Tynn #760): open, the workspace it was opened from, and what the last send did. */
     /** What's new asked for again (Help → What's new, Tynn #762): shown although seen, until closed. */
     whatsNewShown?: boolean;
-    feedbackOpen?: boolean;
-    feedbackWorkspace?: string | null;
-    feedbackOutcome?: FeedbackOutcome | null;
     /** Refused or failed toolchain actions, one per row, each cleared by that row's next action. */
     toolchainRefusals?: readonly ToolchainRefusal[] | null;
     toolchainPhp?: PhpVersionsView | null;
@@ -271,12 +259,6 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
-        feedback: {
-            open: state.feedbackOpen === true,
-            signedIn: ports.feedback?.signedIn() ?? false,
-            targets: ports.feedback?.targets(state.feedbackWorkspace ?? null) ?? [],
-            outcome: state.feedbackOutcome ?? null,
-        },
         plugins: { dir: services.pluginsDir, developerMode: services.settings.snapshot().developer_mode === true, entries: services.plugins.list(), panels: services.plugins.panels() as never },
         remote: {
             host: services.remote.hostName,
@@ -318,7 +300,6 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
     const next: FeatureState = { ...state };
     switch (action.kind) {
-        // THE FEEDBACK WINDOW (Tynn #760): opened from the key, the tray or the page; sent to the chosen workspace's project.
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
         case 'whatsNew.show':
             next.whatsNewShown = true;
@@ -327,29 +308,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.settings.set('whats_new_seen_version', action.version);
             next.whatsNewShown = false;
             break;
-        case 'feedback.open':
-            next.feedbackOpen = true;
-            next.feedbackWorkspace = action.workspaceId ?? null;
-            next.feedbackOutcome = null;
-            break;
-        case 'feedback.close':
-            next.feedbackOpen = false;
-            next.feedbackOutcome = null;
-            break;
-        case 'feedback.again':
-            next.feedbackOutcome = null;
-            break;
-        case 'feedback.send': {
-            const message = action.message.trim();
-            const target = ports.feedback?.targets(next.feedbackWorkspace ?? null).find((t) => t.workspaceId === action.workspaceId);
-            if (message.length === 0) next.feedbackOutcome = { ok: false, reason: 'Write something first.' };
-            else if (!target || !ports.feedback) next.feedbackOutcome = { ok: false, reason: 'That workspace is not linked to a Tynn project.' };
-            else {
-                const sent = await ports.feedback.send({ projectId: target.projectId, message, meta: { workspace: target.name } });
-                next.feedbackOutcome = sent.ok ? { ok: true, issueNumber: sent.issueNumber, target: target.name } : sent;
-            }
-            break;
-        }
         case 'knowledge.search':
             next.knowledgeQuery = action.query;
             break;
