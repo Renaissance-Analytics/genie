@@ -1,6 +1,7 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
 import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, threadIdIsResumable } from '../core/identity.js';
+import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
@@ -446,6 +447,11 @@ export class Registry {
     /** Autonomous or asked (Tynn #801); kept on the record like every other setting of the agent. */
     async setAutoApprove(agentId: AgentId, autoApprove: boolean): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, autoApprove }));
+    }
+
+    /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
+    async setIssueWatch(agentId: AgentId, issueWatch: IssueWatchSetting): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, issueWatch }));
     }
 
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {

@@ -9,6 +9,7 @@ import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon } from '@particle-academy/react-fancy';
 import { agentChanges } from '../../core/agent-changes.js';
+import { IW_DELIVERIES, IW_EVENT_KINDS, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
 import { agentShells } from '../../core/agent-shells.js';
 import { ShellsPanel } from './ShellsPanel.js';
 import type { GenieBridge } from '../bridge.js';
@@ -103,6 +104,9 @@ export interface AgentOpsProps {
     /** Autonomous (Tynn #801): its services/processes/sites/terminals actions run without asking. Absent setter = no switch. */
     readonly autoApprove?: boolean;
     readonly onSetAutoApprove?: (on: boolean) => void;
+    /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
+    readonly issueWatch?: IssueWatchPrefs;
+    readonly onSetIssueWatch?: (setting: IssueWatchSetting) => void;
     /** A Claude agent's tools: all, ask before shell commands, or edits only (shell refused). Absent = no control (a window that cannot set it). */
     readonly permissions?: AgentPermissions;
     readonly onSetPermissions?: (permissions: AgentPermissions) => void;
@@ -961,6 +965,9 @@ export function AgentView({
                                                 </span>
                                             </label>
                                         ) : null}
+                                        {ops.onSetIssueWatch && ops.issueWatch ? (
+                                            <IssueWatchSettings name={agent.name} prefs={ops.issueWatch} onSet={ops.onSetIssueWatch} />
+                                        ) : null}
                                     </section>
                                 ) : null}
                                 {budget || budgetLimit !== null || headroom || policy || session?.mcpServers ? (
@@ -1250,6 +1257,43 @@ export function AgentView({
                 ) : null}
                 </aside>
                 ) : null}
+            </div>
+        </div>
+    );
+}
+
+/**
+ * WHAT THIS AGENT HEARS FROM ISSUEWATCH (Tynn #806; the owner: "the granularity is set in genie in the agent settings").
+ * How it hears — pushed as a turn, on its next turn, only the count on imDone, or not at all — and a box per kind. Never
+ * set, it says so: the workspace's first agent hears the default kinds, every other agent nothing.
+ */
+function IssueWatchSettings({ name, prefs, onSet }: { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => void }) {
+    return (
+        <div data-issue-watch="" className="mt-2 text-[11px] text-[var(--fg-3)]">
+            <label className="block">
+                GitHub, through IssueWatch: {name} hears it
+                <select data-issue-watch-delivery={prefs.delivery} value={prefs.delivery} onChange={(e) => onSet({ delivery: e.target.value as IwDelivery, kinds: prefs.kinds })} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                    {IW_DELIVERIES.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+            </label>
+            {prefs.chosen ? null : (
+                <span data-issue-watch-default="" className="mt-0.5 block text-[var(--fg-4)]">
+                    {prefs.delivery === 'off' ? 'Never set: the workspace’s first agent hears GitHub, so this one does not.' : 'Never set: as the workspace’s first agent, it hears new issues, pull requests, security alerts and feedback.'}
+                </span>
+            )}
+            <div className="mt-1 grid gap-0.5">
+                {IW_EVENT_KINDS.map((k) => (
+                    <label key={k.kind} className={`flex items-center gap-2 ${prefs.delivery === 'off' ? 'opacity-60' : ''}`}>
+                        <input
+                            type="checkbox"
+                            data-issue-watch-kind={k.kind}
+                            checked={prefs.kinds.includes(k.kind)}
+                            disabled={prefs.delivery === 'off'}
+                            onChange={(e) => onSet({ delivery: prefs.delivery, kinds: e.target.checked ? [...prefs.kinds, k.kind] : prefs.kinds.filter((x) => x !== k.kind) })}
+                        />
+                        <span>{k.label}</span>
+                    </label>
+                ))}
             </div>
         </div>
     );

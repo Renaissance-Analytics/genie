@@ -161,3 +161,59 @@ export function issueWatchNotice(events: readonly IwEvent[], to: { workspace: st
     lines.push(to.mode === 'automated' ? AUTOMATED_FRAMING : MANUAL_FRAMING);
     return lines.join('\n');
 }
+
+/** How an agent hears what it chose (Tynn #806): pushed as a turn, on its next turn, only the count on imDone, or not. */
+export type IwDelivery = 'push' | 'next-turn' | 'count' | 'off';
+
+export const IW_DELIVERIES: ReadonlyArray<{ value: IwDelivery; label: string }> = [
+    { value: 'push', label: 'pushed to it as a turn' },
+    { value: 'next-turn', label: 'on its next turn' },
+    { value: 'count', label: 'only the count, on imDone' },
+    { value: 'off', label: 'not at all' },
+];
+
+/** An agent's own IssueWatch setting, as kept on its record. */
+export interface IssueWatchSetting {
+    readonly delivery: IwDelivery;
+    readonly kinds: readonly IwEventKind[];
+}
+
+/** What applies to an agent now; `chosen` false = the default, never set by anyone. */
+export interface IssueWatchPrefs extends IssueWatchSetting {
+    readonly chosen: boolean;
+}
+
+const DEFAULT_KINDS: readonly IwEventKind[] = IW_EVENT_KINDS.filter((k) => k.default).map((k) => k.kind);
+
+/** A setting from outside (the window, a remote client): checked, deduplicated — or the reason it is refused. */
+export function parseIssueWatchSetting(raw: unknown): IssueWatchSetting | string {
+    if (raw === null || typeof raw !== 'object') return 'an IssueWatch setting is { delivery, kinds }';
+    const r = raw as Record<string, unknown>;
+    if (!IW_DELIVERIES.some((d) => d.value === r.delivery)) return `delivery is one of ${IW_DELIVERIES.map((d) => d.value).join(', ')}`;
+    if (!Array.isArray(r.kinds)) return 'kinds is a list of IssueWatch kinds';
+    const known = new Set<string>(IW_EVENT_KINDS.map((k) => k.kind));
+    const bad = r.kinds.find((k) => typeof k !== 'string' || !known.has(k));
+    if (bad !== undefined) return `${String(bad)} is not an IssueWatch kind`;
+    return { delivery: r.delivery as IwDelivery, kinds: [...new Set(r.kinds as IwEventKind[])] };
+}
+
+/**
+ * The setting that applies to an agent. Its own, when it has one. Never set: the workspace's FIRST agent (the earliest
+ * made) hears the default kinds pushed, and every other agent hears nothing — so five agents never all react to one
+ * issue (Genie 1's reason for designated handlers; the owner's FTQ answer q_c78a4476).
+ */
+export function issueWatchPrefsFor(
+    agent: { readonly id: string; readonly workspaceId: string; readonly createdAt: string; readonly issueWatch?: IssueWatchSetting | undefined },
+    all: ReadonlyArray<{ readonly id: string; readonly workspaceId: string; readonly createdAt: string }>,
+): IssueWatchPrefs {
+    if (agent.issueWatch) return { ...agent.issueWatch, chosen: true };
+    const first = all
+        .filter((a) => a.workspaceId === agent.workspaceId)
+        .reduce<{ id: string; createdAt: string } | null>((best, a) => (best === null || a.createdAt < best.createdAt || (a.createdAt === best.createdAt && a.id < best.id) ? a : best), null);
+    return { delivery: first?.id === agent.id ? 'push' : 'off', kinds: DEFAULT_KINDS, chosen: false };
+}
+
+/** Whether an event reaches the agent as a notice. The count-only agent hears it on imDone, not here. */
+export function wantsEvent(prefs: IssueWatchSetting, kind: IwEventKind): boolean {
+    return (prefs.delivery === 'push' || prefs.delivery === 'next-turn') && prefs.kinds.includes(kind);
+}
