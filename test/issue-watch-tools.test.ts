@@ -80,7 +80,7 @@ describe('the tools', () => {
 describe('main keeps the latest entry per project and answers for a workspace', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
-        expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); \}/);
+        expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); pushFeatures\(\); \}/);
         expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\) \}/);
     });
 });

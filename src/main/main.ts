@@ -95,7 +95,7 @@ import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
 import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
-import { tynnProjectIdOf, type IssueWatchSummary, type IwEntry } from '../core/issue-watch.js';
+import { issueWatchPanelView, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 
 /**
  * THE MAIN PROCESS.
@@ -167,11 +167,26 @@ let registry: Registry | null = null;
  */
 const issueWatchLatest = new Map<string, IwEntry>();
 let issueWatchState: IssueWatchSummary['state'] = 'stopped';
-function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
+/** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
+const issueWatchRecent = new Map<string, IwEvent[]>();
+/** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
+function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
     let manifest: string | null = null;
     if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
-    const projectId = tynnProjectIdOf(manifest);
+    return tynnProjectIdOf(manifest);
+}
+/** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
+function issueWatchPanels(): Record<string, IssueWatchPanelView> {
+    const out: Record<string, IssueWatchPanelView> = {};
+    for (const w of registry?.snapshot().workspaces ?? []) {
+        const projectId = tynnProjectFor(w.id);
+        out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? []);
+    }
+    return out;
+}
+function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
+    const projectId = tynnProjectFor(workspaceId);
     const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
     return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}) };
 }
@@ -1076,7 +1091,8 @@ async function boot(): Promise<void> {
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
     let processBook: ProcessBook | null = null;
-    const processPorts = (): FeaturePorts => (processBook ? { processes: processBook } : {});
+    // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
+    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1483,10 +1499,15 @@ async function boot(): Promise<void> {
         fetch: (url, init) => fetch(url, init),
         socket: (url) => new WebSocket(url) as unknown as SocketLike,
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onEvents: (projectId, events) => issueWatchDelivery.onEvents(projectId, events),
-        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); },
+        onEvents: (projectId, events) => {
+            issueWatchRecent.set(projectId, [...[...events].reverse(), ...(issueWatchRecent.get(projectId) ?? [])].slice(0, PANEL_RECENT));
+            issueWatchDelivery.onEvents(projectId, events);
+            pushFeatures();
+        },
+        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); pushFeatures(); },
         onState: (state) => {
             issueWatchState = state.kind;
+            pushFeatures();
             console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
         },
     });

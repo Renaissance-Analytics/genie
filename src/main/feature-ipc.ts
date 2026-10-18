@@ -1,3 +1,4 @@
+import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import { readFile, stat } from 'node:fs/promises';
 import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
@@ -41,6 +42,8 @@ import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, Tool
 export interface FeaturePorts {
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
+    /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
+    readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     readonly toolchain?: {
         probe(): Promise<ToolStatus[]>;
         update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
@@ -247,6 +250,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
+        issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         plugins: { dir: services.pluginsDir, developerMode: services.settings.snapshot().developer_mode === true, entries: services.plugins.list(), panels: services.plugins.panels() as never },
         remote: {
             host: services.remote.hostName,

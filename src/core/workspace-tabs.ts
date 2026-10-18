@@ -54,6 +54,8 @@ export type StripItem =
     /** An agent you opened in this workspace (Tynn #805): its page is drawn under this strip. */
     | { readonly kind: 'agent'; readonly id: string; readonly name: string }
     | { readonly kind: 'designed'; readonly id: string; readonly name: string }
+    /** IssueWatch's view (Tynn #806), for a workspace linked to a Tynn project. */
+    | { readonly kind: 'github' }
     | { readonly kind: 'add' }
     | { readonly kind: 'settings' };
 
@@ -61,11 +63,13 @@ export type StripItem =
  * Agents, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
  * the order made, +, Settings — + always just before Settings, Settings always last.
  */
-export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = []): StripItem[] {
+export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean } = {}): StripItem[] {
     return [
         { kind: 'agents' },
         ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
         ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
+        // IssueWatch's view (Tynn #806): only for a workspace linked to a Tynn project — the others have nothing to show.
+        ...(extra.github ? [{ kind: 'github' as const }] : []),
         { kind: 'add' },
         { kind: 'settings' },
     ];

@@ -1,3 +1,4 @@
+import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
 import type { ServiceInstance } from '../core/services.js';
@@ -184,6 +185,8 @@ export interface FeatureData {
     readonly remote: RemoteSection | null;
     readonly integrations: IntegrationsSection | null;
     readonly plugins: PluginsSection | null;
+    /** IssueWatch's view per workspace id (Tynn #806), pushed by main; `null` until main reports. */
+    readonly issueWatch: Readonly<Record<string, IssueWatchPanelView>> | null;
 }
 
 /** First paint: nothing has been asked yet. */
@@ -199,6 +202,7 @@ export const EMPTY_FEATURES: FeatureData = {
     remote: null,
     integrations: null,
     plugins: null,
+    issueWatch: null,
 };
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */

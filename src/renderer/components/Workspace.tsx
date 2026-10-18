@@ -1,3 +1,5 @@
+import { IssueWatchPanel } from './IssueWatchPanel.js';
+import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
@@ -109,6 +111,8 @@ export interface WorkspaceProps {
     files?: GenieBridge['files'] | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
+    /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
+    issueWatch?: IssueWatchPanelView | null | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
     /** The file panel's route keys (`?files=<path>&filter=changed`) and their write-back. */
@@ -152,7 +156,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -536,6 +540,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 current={{ kind: 'view', view }}
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
+                github={issueWatch?.linked === true}
                 onView={(v) => onViewChange?.(v as WorkspaceView)}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
                 onOpenAgent={(id) => onOpenAgent?.(id)}
@@ -718,6 +723,8 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
             {view === 'terminals' ? terminalsBody : null}
+            {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
+            {view === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} /></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {view.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);

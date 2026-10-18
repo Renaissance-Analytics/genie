@@ -16,6 +16,8 @@ export interface WorkspaceTabsProps {
     /** The + needs somewhere to keep a tab; a + that could not keep anything is not offered. */
     readonly canDesign: boolean;
     readonly hasSettings: boolean;
+    /** The workspace is linked to a Tynn project: its GitHub (IssueWatch) view has something to show (Tynn #806). */
+    readonly github?: boolean;
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
@@ -28,11 +30,11 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, openAgents, current, canDesign, hasSettings, onView, onAdd, onOpenAgent, onCloseAgent }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, openAgents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, onCloseAgent }: WorkspaceTabsProps) {
     const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
     return (
         <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
-            {tabStrip(designed, openAgents).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
+            {tabStrip(designed, openAgents, { github }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
                         <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
@@ -55,11 +57,11 @@ export function WorkspaceTabs({ designed, openAgents, current, canDesign, hasSet
                         </span>
                     );
                 }
-                const view = t.kind === 'agents' ? 'home' : t.kind === 'settings' ? 'settings' : `tab:${t.id}`;
+                const view = t.kind === 'agents' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
                     <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
-                        {t.kind === 'designed' ? t.name : t.kind === 'agents' ? 'Agents' : 'Settings'}
+                        {t.kind === 'designed' ? t.name : t.kind === 'agents' ? 'Agents' : t.kind === 'github' ? 'GitHub' : 'Settings'}
                     </button>
                 );
             })}

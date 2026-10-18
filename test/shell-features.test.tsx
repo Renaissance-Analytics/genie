@@ -31,6 +31,7 @@ const FEATURES: FeatureData = {
     remote: null,
     integrations: null,
     plugins: null,
+    issueWatch: null,
 };
 
 function render(route: string, features: Partial<FeatureData> = {}): string {

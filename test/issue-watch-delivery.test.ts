@@ -167,7 +167,7 @@ describe('main runs it', () => {
     it('one client listening with the Tynn token and host, one delivery, through the inbox delivery', () => {
         expect(src.match(/new IssueWatchClient\(/g)).toHaveLength(1);
         expect(src.match(/new IssueWatchDelivery\(/g)).toHaveLength(1);
-        expect(src).toMatch(/onEvents: \(projectId, events\) => issueWatchDelivery\.onEvents\(projectId, events\)/);
+        expect(src).toMatch(/onEvents: \(projectId, events\) => \{[\s\S]{0,300}issueWatchDelivery\.onEvents\(projectId, events\);/);
         expect(src).toMatch(/wireInboxPush\(\{\s*inbox: \{ onSend: \(listener\) => issueWatchDelivery\.onQueued\(listener\) \}/);
         expect(src).toMatch(/tynn_token/);
     });
