@@ -15,13 +15,25 @@ export function whatsNewSection(markdown: string): string | null {
     return section.length > 0 ? section : null;
 }
 
-/** What to show for the running version: its section, unless already seen or there is none to show. */
+/** Where main sends the window to open What's new over the page (Help → What's new) — not a page of its own. */
+export const WHATS_NEW_ROUTE = 'genie://whats-new';
+
+/** Genie's documentation: the Genie pages of the Tynn docs site, on the Tynn this Genie uses (Tynn #762). */
+export function genieDocsUrl(tynnHost: string): string {
+    return `${tynnHost.replace(/\/+$/, '')}/docs/genie-getting-started`;
+}
+
+/**
+ * What to show for the running version: its section, unless already seen or there is none to show. `shown` — the
+ * person asked for it (Help → What's new) — shows it although seen.
+ */
 export function whatsNewFor(
     version: string,
     seen: string,
     notes: Readonly<Record<string, string>>,
+    shown = false,
 ): { version: string; notes: string } | null {
-    if (seen === version) return null;
+    if (seen === version && !shown) return null;
     const raw = notes[version];
     const section = raw === undefined ? null : whatsNewSection(raw);
     return section === null ? null : { version, notes: section };

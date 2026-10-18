@@ -73,7 +73,7 @@ export interface FeaturePorts {
     readonly pickSound?: () => Promise<string | null>;
     /** The Feedback window (Tynn #760): where it can go, whether Genie is signed in to Tynn, and the send. Absent = none. */
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
-    readonly whatsNew?: () => { version: string; notes: string } | null;
+    readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     readonly feedback?: {
         targets(current: string | null): readonly FeedbackTarget[];
         signedIn(): boolean;
@@ -118,6 +118,8 @@ export interface FeatureState {
     toolchainWarning?: ToolchainSection['warning'] | null;
     toolchainResult?: string | null;
     /** The Feedback window (Tynn #760): open, the workspace it was opened from, and what the last send did. */
+    /** What's new asked for again (Help → What's new, Tynn #762): shown although seen, until closed. */
+    whatsNewShown?: boolean;
     feedbackOpen?: boolean;
     feedbackWorkspace?: string | null;
     feedbackOutcome?: FeedbackOutcome | null;
@@ -265,7 +267,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
-        whatsNew: ports.whatsNew ? ports.whatsNew() : null,
+        whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
         feedback: {
             open: state.feedbackOpen === true,
             signedIn: ports.feedback?.signedIn() ?? false,
@@ -314,6 +316,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // THE FEEDBACK WINDOW (Tynn #760): opened from the key, the tray or the page; sent to the chosen workspace's project.
+        // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'whatsNew.show':
+            next.whatsNewShown = true;
+            break;
+        case 'whatsNew.close':
+            await services.settings.set('whats_new_seen_version', action.version);
+            next.whatsNewShown = false;
+            break;
         case 'feedback.open':
             next.feedbackOpen = true;
             next.feedbackWorkspace = action.workspaceId ?? null;

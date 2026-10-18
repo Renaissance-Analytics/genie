@@ -10,7 +10,7 @@ import { BrowserWindow, Menu, Notification, Tray, app, dialog, globalShortcut, i
 import { FEEDBACK_ROUTE, feedbackTargets } from '../core/feedback.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { wireFeedbackHotkey } from './feedback-hotkey.js';
-import { whatsNewFor } from '../core/whats-new.js';
+import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
 import { sendFeedback } from './feedback-send.js';
 import { appMenuTemplate } from './app-menu.js';
@@ -1125,11 +1125,14 @@ async function boot(): Promise<void> {
     let processBook: ProcessBook | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // THE FEEDBACK WINDOW (Tynn #760): it can go to the workspaces linked to a Tynn project; it goes by Genie's own token.
+    const tynnHost = (): string => {
+        const host = composed.settings.get('tynn_host');
+        return typeof host === 'string' && host.trim().length > 0 ? host.trim() : 'https://tynn.ai';
+    };
     const tynnCredentials = (): { host: string; token: string } | null => {
         const values = composed.settings.snapshot();
         const token = typeof values.tynn_token === 'string' ? values.tynn_token.trim() : '';
-        const tynnHost = typeof values.tynn_host === 'string' && values.tynn_host.trim().length > 0 ? values.tynn_host.trim() : 'https://tynn.ai';
-        return token.length > 0 ? { host: tynnHost, token } : null;
+        return token.length > 0 ? { host: tynnHost(), token } : null;
     };
     const feedbackPort: NonNullable<FeaturePorts['feedback']> = {
         targets: (current) => {
@@ -1139,7 +1142,7 @@ async function boot(): Promise<void> {
         signedIn: () => tynnCredentials() !== null,
         send: (request) => sendFeedback({ credentials: tynnCredentials, fetch: (url, init) => fetch(url, init) }, { ...request, meta: { ...request.meta, genie_version: app.getVersion() } }),
     };
-    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels(), feedback: feedbackPort, whatsNew: () => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES) });
+    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels(), feedback: feedbackPort, whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown) });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1767,6 +1770,9 @@ async function boot(): Promise<void> {
         onQuit: requestQuit,
         onCloseWindow: () => { (BrowserWindow.getFocusedWindow() ?? window)?.close(); },
         onOpenRepo: () => { void shell.openExternal('https://github.com/Renaissance-Analytics/genie'); },
+        // HELP (Tynn #762): Genie's documentation is the Tynn docs site; What's new opens over the page, again.
+        onDocs: () => { void shell.openExternal(genieDocsUrl(tynnHost())); },
+        onWhatsNew: () => { revealMainWindow(); broadcast('genie:navigate', WHATS_NEW_ROUTE); },
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts

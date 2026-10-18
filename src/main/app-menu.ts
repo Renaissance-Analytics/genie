@@ -18,6 +18,10 @@ export interface AppMenuHandlers {
     onCloseWindow(): void;
     onOpenRepo(): void;
     onReportIssue(): void;
+    /** Genie's documentation, on the Tynn docs site (Tynn #762). */
+    onDocs?(): void;
+    /** What's new in this version, again (Tynn #762). */
+    onWhatsNew?(): void;
 }
 
 export function appMenuTemplate(platform: string, version: string, h: AppMenuHandlers): MenuItemConstructorOptions[] {
@@ -72,6 +76,8 @@ export function appMenuTemplate(platform: string, version: string, h: AppMenuHan
             submenu: [
                 { label: `Genie v${version}`, enabled: false },
                 { type: 'separator' },
+                ...(h.onDocs ? [{ label: 'Genie documentation', click: () => h.onDocs?.() }] : []),
+                ...(h.onWhatsNew ? [{ label: 'What’s new', click: () => h.onWhatsNew?.() }] : []),
                 { label: 'Genie on GitHub', click: () => h.onOpenRepo() },
                 { label: 'Report an Issue', click: () => h.onReportIssue() },
             ],
