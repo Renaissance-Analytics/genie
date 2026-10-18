@@ -154,6 +154,7 @@ export class ServiceRegistry {
     readonly #deps: RegistryDeps;
     #data: RegistryFile;
     readonly #listeners = new Set<() => void>();
+    readonly #startedListeners = new Set<(id: string) => void>();
     /** Slices are made one at a time: two at once for one workspace would race two passwords onto one role. */
     #slicing: Promise<unknown> = Promise.resolve();
 
@@ -304,6 +305,8 @@ export class ServiceRegistry {
         if (this.#data.ports?.[name]) this.#data = { ...this.#data, ports: Object.fromEntries(Object.entries(this.#data.ports).filter(([k]) => k !== name)) };
         if (this.#data.kept?.[name]) this.#data = { ...this.#data, kept: Object.fromEntries(Object.entries(this.#data.kept).filter(([k]) => k !== name)) };
         await this.#flush();
+        // Created and started: it is started, like a start of one already there.
+        for (const l of this.#startedListeners) l(instance.id);
         if (admin && input.workspaceId !== undefined) return { kind: 'added', instance: await this.#useSlice(instance.id, input.workspaceId) };
         return { kind: 'added', instance };
     }
@@ -551,11 +554,18 @@ export class ServiceRegistry {
         await this.#driver.start(this.#nameOf(id));
         this.#changed();
         await this.restoreSlices(id);
+        for (const l of this.#startedListeners) l(id);
     }
 
     async stop(id: string): Promise<void> {
         await this.#driver.stop(this.#nameOf(id));
         this.#changed();
+    }
+
+    /** Fires with an engine's id each time it is started — added, or started again (Tynn #766 C2b: its sound). */
+    onStarted(listener: (id: string) => void): () => void {
+        this.#startedListeners.add(listener);
+        return () => { this.#startedListeners.delete(listener); };
     }
 
     /** Fires after an engine is added, adopted, made active, removed, started or stopped. Returns an unsubscribe. */

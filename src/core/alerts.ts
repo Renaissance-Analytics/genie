@@ -22,16 +22,18 @@ export type AlertKind =
     | 'question' | 'approval' | 'broken' | 'limited'
     | 'started' | 'replied' | 'finished' | 'thumbsup' | 'stopped' | 'resumed'
     | 'edits' | 'runs' | 'reads' | 'fetches' | 'plans'
-    | 'mail' | 'agentmail';
+    | 'mail' | 'agentmail'
+    | 'exits' | 'siteup' | 'sitedown' | 'serviceup' | 'flowdone';
 
 /** The headings the sound rows are shown under in Settings. */
-export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages';
+export type SoundGroup = 'needs-you' | 'turn' | 'work' | 'messages' | 'things';
 
 export const SOUND_GROUPS: ReadonlyArray<{ group: SoundGroup; label: string }> = [
     { group: 'needs-you', label: 'Needs you' },
     { group: 'turn', label: 'Its turn' },
     { group: 'work', label: 'Its work' },
     { group: 'messages', label: 'Messages' },
+    { group: 'things', label: 'Things it runs' },
 ];
 
 export interface AlertDef {
@@ -84,6 +86,12 @@ export const ALERT_KINDS: readonly AlertDef[] = [
     { kind: 'plans', group: 'work', label: 'An agent updates its plan', sound: 'off', motif: 'done', verb: 'Plans' },
     { kind: 'mail', group: 'messages', label: 'Mail arrives for you', sound: 'dingdongdoink', motif: 'done', verb: 'Mail' },
     { kind: 'agentmail', group: 'messages', label: 'An agent writes to another agent', sound: 'off', motif: 'done', verb: 'Writes' },
+    // What agents run through Genie (Tynn #766 C2b, core/thing-sounds.ts): something that STOPPED on its own knocks.
+    { kind: 'exits', group: 'things', label: 'A process exits', sound: 'off', motif: 'attention', verb: 'Exited' },
+    { kind: 'siteup', group: 'things', label: 'A site comes back up', sound: 'off', motif: 'done', verb: 'Up' },
+    { kind: 'sitedown', group: 'things', label: 'A site goes down', sound: 'off', motif: 'attention', verb: 'Down' },
+    { kind: 'serviceup', group: 'things', label: 'A service is started', sound: 'off', motif: 'done', verb: 'Started' },
+    { kind: 'flowdone', group: 'things', label: 'A flow finishes a run', sound: 'off', motif: 'done', verb: 'Ran' },
 ];
 
 const OPTION_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label]));

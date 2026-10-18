@@ -120,6 +120,7 @@ export class FlowStore {
     readonly #now: () => number;
     #data: FlowsFile;
     readonly #listeners = new Set<() => void>();
+    readonly #runListeners = new Set<(flowId: string, run: FlowRun) => void>();
 
     private constructor(file: string, data: FlowsFile, now: () => number) {
         this.#file = file;
@@ -137,6 +138,12 @@ export class FlowStore {
         // A document that moved into the canonical shape is written back now, so the file never holds two shapes.
         if (flows.some((f, i) => f.document !== raw[i]!.document)) await store.#flush();
         return store;
+    }
+
+    /** Fires with each run as it ends (`recordRun`): its flow and the run — a sound for it (Tynn #766 C2b). */
+    onRun(listener: (flowId: string, run: FlowRun) => void): () => void {
+        this.#runListeners.add(listener);
+        return () => this.#runListeners.delete(listener);
     }
 
     /** Fires after every change the scheduler should re-plan on. */
@@ -226,6 +233,7 @@ export class FlowStore {
             ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
         };
         await this.#replace({ ...flow, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });
+        for (const l of this.#runListeners) l(id, entry);
         return entry;
     }
 

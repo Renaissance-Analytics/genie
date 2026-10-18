@@ -12,10 +12,10 @@ const general = (values: Record<string, boolean | string>) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} group="general" />);
 
 describe('a sound per alert', () => {
-    it('each alert row offers the sounds by name — the Default chime first, Custom file…, None last; COUNTED: seventeen rows of eight choices', () => {
+    it('each alert row offers the sounds by name — the Default chime first, Custom file…, None last; COUNTED: twenty-two rows of eight choices', () => {
         const html = general({});
         const rows = html.match(/<li[^>]*data-setting="sound_[a-z]+"[\s\S]*?<\/li>/g) ?? [];
-        expect(rows).toHaveLength(17);
+        expect(rows).toHaveLength(22);
         for (const row of rows) {
             expect(row.match(/<option /g)).toHaveLength(8);
             expect(row).toMatch(/value="custom"[^>]*>Custom file…<\/option><option value="off"/);
@@ -25,19 +25,19 @@ describe('a sound per alert', () => {
         }
     });
 
-    it('each row has Preview — the sound it would play; None has nothing to preview (COUNTED: seventeen; disabled exactly where None)', () => {
+    it('each row has Preview — the sound it would play; None has nothing to preview (COUNTED: twenty-two; disabled exactly where None)', () => {
         const html = general({ sound_mail: 'off', sound_edits: 'sparkle' });
         const previews = html.match(/<button[^>]*data-sound-preview="sound_[a-z]+"[^>]*>/g) ?? [];
-        expect(previews).toHaveLength(17);
+        expect(previews).toHaveLength(22);
         const disabled = previews.filter((b) => / disabled=""/.test(b)).map((b) => b.match(/data-sound-preview="(sound_[a-z]+)"/)![1]).sort();
         // Mail set to None, and the new kinds that default to None — except edits, given Sparkle here.
-        expect(disabled).toEqual(['sound_agentmail', 'sound_fetches', 'sound_limited', 'sound_mail', 'sound_plans', 'sound_reads', 'sound_replied', 'sound_resumed', 'sound_runs', 'sound_started', 'sound_stopped', 'sound_thumbsup']);
+        expect(disabled).toEqual(['sound_agentmail', 'sound_exits', 'sound_fetches', 'sound_flowdone', 'sound_limited', 'sound_mail', 'sound_plans', 'sound_reads', 'sound_replied', 'sound_resumed', 'sound_runs', 'sound_serviceup', 'sound_sitedown', 'sound_siteup', 'sound_started', 'sound_stopped', 'sound_thumbsup']);
     });
 
     it('the sound rows are shown in their groups — Needs you, Its turn, Its work, Messages — each kind once (COUNTED)', () => {
         const html = general({});
         const groups = [...html.matchAll(/data-sound-group="([a-z-]+)"[\s\S]*?(?=data-sound-group=|$)/g)].map((m) => [m[1], (m[0].match(/<li[^>]*data-setting="sound_[a-z]+"/g) ?? []).length]);
-        expect(groups).toEqual([['needs-you', 4], ['turn', 6], ['work', 5], ['messages', 2]]);
+        expect(groups).toEqual([['needs-you', 4], ['turn', 6], ['work', 5], ['messages', 2], ['things', 5]]);
         expect(html).toMatch(/data-sound-group="needs-you"[^>]*>[\s\S]*?Needs you/);
     });
 
