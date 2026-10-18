@@ -116,6 +116,23 @@ export function dismissableStale(items: readonly DeckItem[]): readonly DeckItem[
 /** A day, in ms — "Dismiss all older than 1 day" on the Deck's questions band. */
 export const DAY_MS = 86_400_000;
 
+/** How much of an item's first line the closed row shows (the owner, 2026-10-18: "open up on click to read full context"). */
+export const PREVIEW_CHARS = 140;
+
+/**
+ * A Deck item's closed line: its first line, cut at a word near PREVIEW_CHARS with an ellipsis; `more` when there is
+ * anything the line does not show — then the row opens on click. A short, one-line item is whole, with nothing to open.
+ */
+export function deckPreview(text: string): { preview: string; more: boolean } {
+    const trimmed = text.trim();
+    const newline = trimmed.indexOf('\n');
+    const first = (newline === -1 ? trimmed : trimmed.slice(0, newline)).trim();
+    if (first.length <= PREVIEW_CHARS) return { preview: first, more: newline !== -1 };
+    const cut = first.slice(0, PREVIEW_CHARS);
+    const space = cut.lastIndexOf(' ');
+    return { preview: `${(space > PREVIEW_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`, more: true };
+}
+
 /**
  * An item the person may DISMISS without answering: an agent's ForceTheQuestion (a form). A tool approval (inline, its
  * id `approval:<agent>`) is answered by Allow/Deny; a forwarded question belongs to the host that raised it.

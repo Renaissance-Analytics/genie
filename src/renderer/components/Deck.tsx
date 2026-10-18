@@ -5,6 +5,7 @@ import {
     ageLabel,
     DAY_MS,
     deckBand,
+    deckPreview,
     deckSections,
     dismissableOlderThan,
     dismissableStale,
@@ -274,6 +275,8 @@ function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection 
 function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.
     const [opened, setOpened] = useState(false);
+    // A long to-do or message shows its first line; a click opens the whole text (the owner, 2026-10-18).
+    const [expanded, setExpanded] = useState(false);
     const stale = item.stale;
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const dismissable = onDismiss !== undefined && isDismissable(item);
@@ -302,7 +305,20 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
 
                 {/* An agent's question is titled by its header — short, plain — and set like a title. */}
                 {/* Anything else (a to-do, a message) is its own text: it wraps, read whole — the row is where it is read. */}
-                <span data-deck-title={item.id} className={`min-w-0 flex-1 ${questions ? 'truncate font-semibold text-[var(--fg-1)]' : 'break-words text-[var(--fg-2)]'}`}>{item.title}</span>
+                {questions ? (
+                    <span data-deck-title={item.id} className="min-w-0 flex-1 truncate font-semibold text-[var(--fg-1)]">{item.title}</span>
+                ) : (() => {
+                    const { preview, more } = deckPreview(item.title);
+                    if (!more) return <span data-deck-title={item.id} className="min-w-0 flex-1 break-words text-[var(--fg-2)]">{item.title}</span>;
+                    return (
+                        <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
+                            {expanded ? null : (
+                                <button type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)]">{preview}</button>
+                            )}
+                            <button type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)] hover:underline">{expanded ? 'Show less' : 'Show all'}</button>
+                        </span>
+                    );
+                })()}
 
                 {stale ? (
                     <span data-deck-stale-reason={stale} className="shrink-0">
@@ -326,6 +342,11 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     </button>
                 ) : null}
             </div>
+
+            {/* The whole text, opened (its line breaks kept): instructions read step by step, not as one run-on line. */}
+            {expanded && !questions ? (
+                <p data-deck-full={item.id} className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--fg-2)]">{item.title}</p>
+            ) : null}
 
             {/* Answered WHERE IT IS READ. Navigating away is what the acceptance test forbids. */}
             {/*
