@@ -33,16 +33,63 @@ function open() {
     const store = openDurableStore(dir);
     const id = mintAgentId();
     const reported: Array<{ readings: LimitReading[]; message: string | null }> = [];
-    const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: factory, processTree: noTree, onRateLimit: (readings, message) => reported.push({ readings: [...readings], message }) });
+    const breaches: string[] = [];
+    const session = new AgentSession({
+        agentId: id, cwd: dir, store, driverFactory: factory, processTree: noTree,
+        onRateLimit: (readings, message) => reported.push({ readings: [...readings], message }),
+        onLimitBreach: (reason) => breaches.push(reason),
+    });
     session.start();
     const limit = (status: string) => events.onUpdate?.({
         sessionUpdate: 'notice', notice: { level: 'info', message: status === 'allowed' ? 'rate limit ok' : 'You have hit your limit' },
         _meta: { 'particle.academy/rate_limit': { status, rateLimitType: 'five_hour', resetsAtMs: T0 + 3_600_000, windows: { five_hour: { utilization: 1, resetsAtMs: T0 + 3_600_000 } }, raw: {} } },
     });
     const endInError = () => events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution' });
+    // prism-acp 0.18 (#791): the provider's own reason for a failed turn, verbatim, with its kind.
+    const endFailing = (kind: string, reason: string) => events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution', failure: { kind, reason } });
     const rows = async () => (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; level?: string; message?: string; text?: string });
-    return { session, sent, reported, limit, endInError, rows };
+    return { session, sent, reported, breaches, limit, endInError, endFailing, rows };
 }
+
+/**
+ * THE TURN ITSELF SAYS IT WAS THE LIMIT (Tynn #791, prism-acp 0.18.0 `TurnOutcome.failure`). A turn can end on the
+ * provider's rate limit with no limit reading before it — Claude's assistant `error: 'rate_limit'`, codex's
+ * usageLimitExceeded. It is HELD all the same, and the breach is reported so the login's gate can hold the others and
+ * try again on its stated backoff (no reset is ever invented: the failure carries none of its own).
+ */
+describe('a turn that FAILED on the rate limit, with no reading before it', () => {
+    it('is HELD, says so, and reports the breach ONCE with the provider’s own reason', async () => {
+        const s = open();
+        s.session.prompt('build it', 'you');
+        s.endFailing('rate_limit', 'rate_limit');
+        expect(s.session.held).toBe(true);
+        expect(s.session.turnState).toBe('idle');
+        expect(s.session.failure).toBeNull();
+        expect(s.breaches).toEqual(['rate_limit']);
+        await s.session.settled();
+        expect((await s.rows()).filter((r) => r.kind === 'notice' && r.level === 'warning' && /rate limit/i.test(r.message ?? ''))).toHaveLength(1);
+    });
+
+    it('a reading earlier in the turn already told the gate: held, and NOT reported again as a breach', async () => {
+        const s = open();
+        s.session.prompt('build it', 'you');
+        await s.limit('rejected');
+        s.endFailing('rate_limit', 'rate_limit');
+        expect(s.session.held).toBe(true);
+        expect(s.reported).toHaveLength(1);
+        expect(s.breaches).toEqual([]);
+    });
+
+    it('CONTROL: any other failure FAILS, named by the provider’s own reason rather than the CLI’s generic one', () => {
+        const s = open();
+        s.session.prompt('build it', 'you');
+        s.endFailing('auth', 'authentication_failed');
+        expect(s.session.held).toBe(false);
+        expect(s.session.turnState).toBe('failed');
+        expect(s.session.failure).toBe('authentication_failed');
+        expect(s.breaches).toEqual([]);
+    });
+});
 
 describe('a turn the rate limit ended', () => {
     it('is HELD — idle, no failure — says so in the stream, and the reading reaches whoever keeps the gate', async () => {

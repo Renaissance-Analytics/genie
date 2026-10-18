@@ -375,15 +375,27 @@ export class SessionHost {
     /** A session's readings: the gate decides; a closed login holds every agent on it, and the wake is (re)scheduled. */
     #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
         const view = this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
-        if (view.state !== 'open') {
-            let first: AgentId | null = null;
-            for (const [id, entry] of this.#running) {
-                if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
-            }
-            // ONCE for the login, not once per agent it holds: one limit, one sound.
-            if (first !== null) this.#onAction?.(first, 'limited');
-        }
+        if (view.state !== 'open') this.#holdLogin(provider);
         this.#wake();
+    }
+
+    /**
+     * A turn the provider ended on its limit with no reading (Tynn #791): the gate holds the login on its stated
+     * backoff — there is no reset to wait for — and every agent on it is held.
+     */
+    #limitBreach(provider: string, reason: string): void {
+        this.#gate.breach(this.#loginOf(provider), this.#clock(), `The provider ended a turn on its rate limit (${reason}).`);
+        this.#holdLogin(provider);
+        this.#wake();
+    }
+
+    #holdLogin(provider: string): void {
+        let first: AgentId | null = null;
+        for (const [id, entry] of this.#running) {
+            if (entry.provider === provider && !entry.session.held) { entry.session.hold(); this.#emit(id); first ??= id; }
+        }
+        // ONCE for the login, not once per agent it holds: one limit, one sound.
+        if (first !== null) this.#onAction?.(first, 'limited');
     }
 
     /** Resume the logins whose hold has ended, and schedule the next wake at the earliest resume still ahead. */
@@ -525,6 +537,7 @@ export class SessionHost {
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
+            onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *

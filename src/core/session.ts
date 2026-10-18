@@ -76,6 +76,11 @@ export interface TurnOutcomeLike {
     readonly isError: boolean;
     /** The CLI's own reason string, kept even when it maps to nothing. */
     readonly raw: string | null;
+    /**
+     * Why a failed turn failed, in the provider's own words (prism-acp 0.18, Tynn #791): Claude's assistant `error`,
+     * codex's `codexErrorInfo`, verbatim as `reason`, sorted into a `kind`. `rate_limit` is a turn the limit ended.
+     */
+    readonly failure?: { readonly reason: string; readonly kind: string; readonly resetsAtMs?: number };
 }
 
 /** ACP's permission request, as the driver hands it over. Both fields are open records. */
@@ -219,6 +224,11 @@ export interface AgentSessionOptions {
      * `message` is the notice's own words, when it had any.
      */
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
+    /**
+     * A turn the provider ended on its rate limit with NO reading before it (Tynn #791): the gate has no reset to wait
+     * for and holds the login on its stated backoff. `reason` is the provider's own.
+     */
+    onLimitBreach?: (reason: string) => void;
     /**
      * How a session reaps what the driver leaves behind. Injected so a test can assert the
      * reap happened without killing anything on the machine running the test.
@@ -596,7 +606,9 @@ export class AgentSession {
                     // the human did, and painting it as a fault blames the agent for being
                     // stopped.
                     const crashed = outcome.stopReason === null || outcome.isError;
-                    const byLimit = crashed && this.#limitThisTurn;
+                    // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
+                    const readingSaidSo = this.#limitThisTurn;
+                    const byLimit = crashed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
                     this.#lastTurnEnd = byLimit ? 'held' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
@@ -607,9 +619,12 @@ export class AgentSession {
                         this.#failedAt = null;
                         this.#held = true;
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
+                        // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
+                        if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
                     } else if (crashed) {
                         this.#turnState = 'failed';
-                        this.#failure = outcome.raw;
+                        // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
+                        this.#failure = outcome.failure?.reason ?? outcome.raw;
                         this.#failedAt = this.#now();
                     } else {
                         this.#turnState = 'idle';
