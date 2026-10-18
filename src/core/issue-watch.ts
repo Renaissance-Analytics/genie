@@ -231,3 +231,47 @@ export function tynnProjectIdOf(manifest: string | null): string | null {
         return null;
     }
 }
+
+/** What IssueWatch knows of one workspace now: the client's state, whether it is linked to a Tynn project, its latest entry. */
+export interface IssueWatchSummary {
+    readonly state: 'signed-out' | 'connecting' | 'live' | 'reconnecting' | 'stopped';
+    /** Linked to a Tynn project (project.json `tynn.projectId`). */
+    readonly linked: boolean;
+    /** The latest entry Tynn sent for it; absent until one arrives. */
+    readonly entry?: IwEntry | undefined;
+}
+
+export interface IssueWatchCounts {
+    readonly issues: number;
+    readonly prs: number;
+    /** Dependabot, code scanning and secret scanning together. */
+    readonly security: number;
+    readonly feedback: number;
+}
+
+/** What is open in an entry, by family. */
+export function issueWatchCounts(entry: IwEntry): IssueWatchCounts {
+    let issues = 0;
+    let prs = 0;
+    let security = 0;
+    for (const i of entry.items) {
+        if (SECURITY.has(i.kind)) security++;
+        else if (i.kind === 'pr') prs++;
+        else issues++;
+    }
+    return { issues, prs, security, feedback: entry.feedback.length };
+}
+
+/** Genie 1's count line, word for word (`issues:3, PR:1, sec:3`); Tynn feedback is added only when there is some. */
+export function issueWatchCountLine(c: IssueWatchCounts): string {
+    return `issues:${c.issues}, PR:${c.prs}, sec:${c.security}${c.feedback > 0 ? `, feedback:${c.feedback}` : ''}`;
+}
+
+/** Why there is nothing to show, said plainly — or `null` when there is an entry to show. */
+export function issueWatchWhyNot(s: IssueWatchSummary): string | null {
+    if (!s.linked) return 'this workspace is not linked to a Tynn project (project.json tynn.projectId)';
+    if (s.state === 'signed-out') return 'not signed in to Tynn (Settings → General → Tynn token)';
+    if (s.state !== 'live' && s.entry === undefined) return 'IssueWatch is not connected to Tynn yet';
+    if (s.entry === undefined) return 'Tynn has sent nothing for this workspace yet';
+    return null;
+}

@@ -74,11 +74,11 @@ afterEach(async () => {
 });
 
 describe('the registrations', () => {
-    it('are five ToolDefinitions with the names the protocol uses, each with a stable digest', () => {
-        expect(tools.map((t) => t.definition.name).sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'imDone', 'lists', 'thumbsUp']);
-        // COUNTED: five definitions, five digests, all distinct. A digest is a pin's material.
+    it('are six ToolDefinitions with the names the protocol uses, each with a stable digest (checkIssues: Tynn #806)', () => {
+        expect(tools.map((t) => t.definition.name).sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'checkIssues', 'imDone', 'lists', 'thumbsUp']);
+        // COUNTED: six definitions, six digests, all distinct. A digest is a pin's material.
         for (const t of tools) expect(t.definition).toBeInstanceOf(ToolDefinition);
-        expect(new Set(tools.map((t) => t.definition.digest())).size).toBe(5);
+        expect(new Set(tools.map((t) => t.definition.digest())).size).toBe(6);
         expect(tools.find((t) => t.definition.name === 'imDone')!.definition.digest()).toBe(genieTools({} as GenieToolsDeps).find((t) => t.definition.name === 'imDone')!.definition.digest());
     });
 

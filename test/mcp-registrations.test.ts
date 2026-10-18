@@ -4,7 +4,7 @@ import { allGenieTools, type AllToolsDeps } from '../src/main/mcp-registrations.
 /**
  * EVERY GENIE TOOL, ONCE (§6.9). The seven tool modules (core, more, attention, sidecar, hosting, processes, plugins)
  * compose into one registration list for the server; names are unique or the server refuses to start, so the
- * composition is counted here: the thirteen Genie tools, plus one per enabled plugin tool under its plugin's
+ * composition is counted here: the fourteen Genie tools, plus one per enabled plugin tool under its plugin's
  * namespace. The deps are fakes with exactly the shape main.ts hands in — the composition is the subject,
  * not the tools.
  */
@@ -23,9 +23,9 @@ function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => [
 }
 
 describe('allGenieTools', () => {
-    it('is the thirteen Genie tools, unique, in a stable order', () => {
+    it('is the fourteen Genie tools, unique, in a stable order', () => {
         const names = allGenieTools(deps()).map((r) => r.definition.name);
-        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites', 'processes']);
+        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'submitFeedback', 'runAgent', 'services', 'sites', 'processes']);
         expect(new Set(names).size).toBe(names.length);
     });
 
@@ -33,7 +33,7 @@ describe('allGenieTools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
         const names = allGenieTools(deps(() => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }])).map((r) => r.definition.name);
-        expect(names).toHaveLength(14);
-        expect(names[13]).toBe('acme.lint.lint');
+        expect(names).toHaveLength(15);
+        expect(names[14]).toBe('acme.lint.lint');
     });
 });
