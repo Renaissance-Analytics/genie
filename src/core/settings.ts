@@ -40,6 +40,8 @@ export const SETTINGS: readonly SettingDef[] = [
     // draws them as recorders (core/hotkeys.ts reads them; a malformed one disables its binding).
     { key: 'command_window_hotkey', group: 'general', scope: 'host', label: 'Command Window key', description: 'Opens the Command Window. Empty: Ctrl+K (⌘K on macOS).', type: 'string', default: '', hidden: true },
     { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
+    // THE FEEDBACK KEY (Tynn #760; Genie 1's `global_hotkey`): a GLOBAL key, from anywhere on the computer. Empty: Genie 1's.
+    { key: 'feedback_hotkey', group: 'general', scope: 'host', label: 'Feedback key', description: 'Opens the Feedback window from anywhere on this computer. Empty: Ctrl+Shift+W (⌘⇧W on macOS).', type: 'string', default: '' },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
     // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON
@@ -112,6 +114,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     // Genie 1's two remappable keys (Tynn #759), as written: a malformed one disables its binding where it is read.
     command_window_hotkey: 'command_window_hotkey',
     ftq_nudge_hotkey: 'ftq_nudge_hotkey',
+    // Genie 1's global key opened its Feedback window (main/shortcuts.ts); Genie 2's does the same (Tynn #760).
+    global_hotkey: 'feedback_hotkey',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {

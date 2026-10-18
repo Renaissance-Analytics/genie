@@ -6,7 +6,11 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, globalShortcut, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { FEEDBACK_ROUTE, feedbackTargets } from '../core/feedback.js';
+import { workspaceLabel } from '../core/workspace-label.js';
+import { wireFeedbackHotkey } from './feedback-hotkey.js';
+import { sendFeedback } from './feedback-send.js';
 import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
@@ -1115,7 +1119,22 @@ async function boot(): Promise<void> {
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
     let processBook: ProcessBook | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
-    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels() });
+    // THE FEEDBACK WINDOW (Tynn #760): it can go to the workspaces linked to a Tynn project; it goes by Genie's own token.
+    const tynnCredentials = (): { host: string; token: string } | null => {
+        const values = composed.settings.snapshot();
+        const token = typeof values.tynn_token === 'string' ? values.tynn_token.trim() : '';
+        const tynnHost = typeof values.tynn_host === 'string' && values.tynn_host.trim().length > 0 ? values.tynn_host.trim() : 'https://tynn.ai';
+        return token.length > 0 ? { host: tynnHost, token } : null;
+    };
+    const feedbackPort: NonNullable<FeaturePorts['feedback']> = {
+        targets: (current) => {
+            const workspaces = registry?.snapshot().workspaces ?? [];
+            return feedbackTargets(workspaces.map((w) => ({ id: w.id, name: workspaceLabel(workspaces, w.id) })), tynnProjectFor, current);
+        },
+        signedIn: () => tynnCredentials() !== null,
+        send: (request) => sendFeedback({ credentials: tynnCredentials, fetch: (url, init) => fetch(url, init) }, { ...request, meta: { ...request.meta, genie_version: app.getVersion() } }),
+    };
+    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels(), feedback: feedbackPort });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1710,7 +1729,10 @@ async function boot(): Promise<void> {
         appImage: process.env.APPIMAGE ?? null,
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
     });
+    // The Feedback window (Tynn #760), over whatever page is showing: from the tray, and from the global key below.
+    const openFeedback = (): void => { revealMainWindow(); broadcast('genie:navigate', FEEDBACK_ROUTE); };
     trayHandlers = {
+        onFeedback: openFeedback,
         onOpen: revealMainWindow,
         onSettings: () => {
             revealMainWindow();
@@ -1721,6 +1743,12 @@ async function boot(): Promise<void> {
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
     };
     tray = createTray(trayHandlers, trayIconPath());
+    // THE FEEDBACK KEY (Tynn #760; Genie 1's global hotkey): from anywhere on the computer. The OS may refuse it — another
+    // application holds it — and that is logged, never thrown; it is released when Genie quits.
+    const feedbackKey = wireFeedbackHotkey({ get: () => composed.settings.get('feedback_hotkey'), onChange: (cb) => composed.settings.onChange(cb) }, { register: (acc, fn) => globalShortcut.register(acc, fn), unregister: (acc) => globalShortcut.unregister(acc) }, openFeedback);
+    const feedbackKeyStatus = feedbackKey();
+    if (feedbackKeyStatus.state !== 'registered') console.log(`[genie] the Feedback key ${feedbackKeyStatus.accelerator} is ${feedbackKeyStatus.state === 'taken' ? 'held by another application' : 'not a key Genie can read'}`);
+    app.on('will-quit', () => { globalShortcut.unregisterAll(); });
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {

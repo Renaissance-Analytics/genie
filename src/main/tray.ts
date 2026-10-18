@@ -19,6 +19,8 @@ export interface TrayHandlers {
     readonly onQuit: () => void;
     /** `Resume now` for a held provider login (Tynn #794): open it at once, its held agents go on. */
     readonly onResumeLimit?: (provider: string) => void;
+    /** Send feedback… (Tynn #760): opens the Feedback window. */
+    readonly onFeedback?: () => void;
 }
 
 /** A provider login the rate limit holds, in the words every other surface uses (core/limit-words.ts). */
@@ -53,6 +55,8 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         ...(limits.length > 0 ? [{ type: 'separator' as const }] : []),
         { label: 'Open Genie', click: handlers.onOpen },
         { label: 'Settings…', click: handlers.onSettings },
+        // Genie 1's tray had it (Tynn #760): the Feedback window, from wherever the person is.
+        ...(handlers.onFeedback ? [{ label: 'Send feedback…', click: handlers.onFeedback }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
         { label: 'Quit Genie', click: handlers.onQuit },
     ];
