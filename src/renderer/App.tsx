@@ -1,8 +1,6 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
-import { FeedbackWindow } from './components/FeedbackWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
-import { FEEDBACK_ROUTE } from '../core/feedback.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
@@ -85,20 +83,16 @@ function useRoute(): [string, (route: string) => void] {
  * never read (the owner's light desktop showed a dark Genie with a white composer); the tray's Settings… needs
  * a way to move this window. Both are effects of data the renderer already has.
  */
-function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null, onFeedback: () => void, onWhatsNew: () => void): void {
+function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Record<string, boolean | string>> | null, onWhatsNew: () => void): void {
     const theme = themePreferenceFrom(settings);
     useEffect(() => { if (theme) setThemePreference(theme); }, [theme]);
-    const feedback = useRef(onFeedback);
-    feedback.current = onFeedback;
     const whatsNew = useRef(onWhatsNew);
     whatsNew.current = onWhatsNew;
     useEffect(() => {
         if (!bridge?.onNavigate) return;
-        // The Feedback window (Tynn #760) opens OVER whatever page is showing — it is not a page of its own.
-        const onFeedback = () => feedback.current();
+        // What's new (Help → What's new, Tynn #762) opens OVER whatever page is showing — it is not a page of its own.
         const onWhatsNew = () => whatsNew.current();
         return bridge.onNavigate((route) => {
-            if (route === FEEDBACK_ROUTE) { onFeedback(); return; }
             if (route === WHATS_NEW_ROUTE) { onWhatsNew(); return; }
             window.location.hash = `#${route}`;
         });
@@ -412,14 +406,12 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
     }), [resolvedBridge]);
-    // The Feedback window opens for the workspace in front of the person (its project first in the picker).
-    const feedbackFrom = useRef<string | null>(null);
     const featureAct = (action: FeatureAction, what: string) => {
         void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
             console.error(`[genie] ${what}:`, (error as Error).message);
         });
     };
-    useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'feedback.open', ...(feedbackFrom.current ? { workspaceId: feedbackFrom.current } : {}) }, 'the Feedback window did not open'), () => featureAct({ kind: 'whatsNew.show' }, 'What’s new did not open'));
+    useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'whatsNew.show' }, 'What’s new did not open'));
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
@@ -450,7 +442,6 @@ function DesktopApp({ bridge }: AppProps) {
     const [addFromGit, setAddFromGit] = useState(false);
     // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
     const workspaceId = routeWorkspace(route, snapshot.agents);
-    feedbackFrom.current = workspaceId ?? null;
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
     // The repo registry (§6.1) of the workspace on screen: read once per workspace, re-read after an add or remove.
     const [repos, setRepos] = useState<readonly RepoEntry[] | null>(null);
@@ -1019,12 +1010,6 @@ function DesktopApp({ bridge }: AppProps) {
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
             />
         ) : null}
-        <FeedbackWindow
-            view={features.feedback}
-            onSend={(target, message) => featureAct({ kind: 'feedback.send', workspaceId: target, message }, 'feedback not sent')}
-            onClose={() => featureAct({ kind: 'feedback.close' }, 'the Feedback window did not close')}
-            onAgain={() => featureAct({ kind: 'feedback.again' }, 'the Feedback window did not reset')}
-        />
         </>
     );
 }
