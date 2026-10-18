@@ -73,7 +73,7 @@ const detail = (over: Partial<AgentDetail> = {}): AgentDetail => ({
 
 describe('MobileAgent', () => {
     const render = (over: Partial<Parameters<typeof MobileAgent>[0]> = {}) =>
-        renderToStaticMarkup(<MobileAgent detail={detail()} sending={false} onBack={() => {}} onSend={() => {}} onStart={() => {}} {...over} />);
+        renderToStaticMarkup(<MobileAgent detail={detail()} sending={false} onBack={() => {}} onSend={() => {}} onStart={() => {}} onResumeLimit={() => {}} {...over} />);
 
     it('names the agent, shows its activity as a ledger (newest last) and a composer to keep it going', () => {
         const html = render();
