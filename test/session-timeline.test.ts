@@ -32,8 +32,8 @@ describe('sessionTimeline', () => {
     it('segments per turn by start time, ticks per event by kind (usage, turns and dividers draw none), the head in the session’s state', () => {
         const tl = sessionTimeline(rows, session())!;
         expect(tl.segments).toEqual([
-            { label: 'T1', rowId: 't1', x: 0, w: 0.5 },
-            { label: 'T2', rowId: 't2', x: 0.5, w: 0.5 },
+            { label: 'T1', n: 1, showLabel: true, rowId: 't1', x: 0, w: 0.5 },
+            { label: 'T2', n: 2, showLabel: true, rowId: 't2', x: 0.5, w: 0.5 },
         ]);
         expect(tl.ticks).toEqual([
             { id: 'm1', x: 0.1, kind: 'message' },

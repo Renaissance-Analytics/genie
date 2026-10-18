@@ -358,6 +358,15 @@ export function AgentView({
     // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
     const activity = activityRows(rows);
     const timeline = active === 'stream' ? sessionTimeline(activity, session) : null;
+    // NEXT EDIT — `E` and the strip's button: a search ("find me the next one") that opens the edit it lands on, the
+    // cursor following. `false` when there is none.
+    const nextEdit = (): boolean => {
+        const next = nextEditAfter(rowsInRange(rows, range), selectedId);
+        if (!next) return false;
+        setCursorId(next);
+        onSelect(next);
+        return true;
+    };
     const chips = chipRow(rows, lanes);
     // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
     const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(activity, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
@@ -396,12 +405,7 @@ export function AgentView({
 
             switch (action) {
                 case 'next-edit': {
-                    // `E` is a search ("find me the next one"): it opens the edit it lands on, and the cursor follows.
-                    const next = nextEditAfter(rowsInRange(rows, range), selectedId);
-                    if (!next) return;
-                    e.preventDefault();
-                    setCursorId(next);
-                    onSelect(next);
+                    if (nextEdit()) e.preventDefault();
                     return;
                 }
                 case 'next-row':
@@ -766,6 +770,9 @@ export function AgentView({
                                     onOpenRow={(rowId) => onNavigate(`genie://agent/${agent.id}?tab=stream&at=${rowId}`)}
                                     layoutDoor={otherLayout}
                                     onNavigate={onNavigate}
+                                    onNextEdit={() => { nextEdit(); }}
+                                    filter={lanes}
+                                    onFilter={(next) => onLanes?.(next)}
                                 />
                             ) : null}
                             {/* The board's empty state draws no chips and no strip: counts over nothing are furniture. */}

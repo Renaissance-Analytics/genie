@@ -97,8 +97,11 @@ export type StreamEvent =
      * including anything from before Genie recorded it.
      */
     | { kind: 'run'; resumed: boolean }
-    /** The ledger's history was cut to its most recent rows: `count` earlier recorded rows are not shown. */
-    | { kind: 'earlier'; count: number }
+    /**
+     * The ledger's history was cut to its most recent rows: `count` earlier recorded rows are not shown, `turns` of them
+     * turn markers — what the turns shown number on from (core/turn-numbers.ts).
+     */
+    | { kind: 'earlier'; count: number; turns?: number }
     /**
      * A TURN STARTED — written by the session when a prompt goes in, not read off the wire (ACP reports turn ENDS,
      * and nothing a surface holds says where one began). `by` is whoever started it when the caller said so

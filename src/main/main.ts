@@ -5,6 +5,7 @@ import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
+import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
 import { guardWindowLinks } from './external-links.js';
@@ -476,7 +477,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         session: host.probe(record.id),
         // The agent's recorded history, then this run (Claude does not replay a resumed conversation).
         rows: host.ledgerFor(record.id),
-        turns: host.turnsFor(record.id),
+        // The number the Turns column shows for the latest turn, so the pill (`Turn 12 · running`) agrees with it.
+        turns: lastNumberedTurn(host.ledgerFor(record.id)) || host.turnsFor(record.id),
         // The engine's own recent words, for the process-ended block (the board's error state).
         log: host.recentStderrFor(record.id),
         // The session's running total, from the latest usage report (claude reports it; codex does not). `null` means
@@ -557,8 +559,8 @@ async function boot(): Promise<void> {
     theRegistry.setWorkspaceNamer(workspaceNameFor);
     host = new SessionHost({
         userData: genieHome(),
-        // Each turn's number is kept on the agent's record, so its next session numbers on at once (no "Turn 1").
-        onTurnEnded: (agentId, turns) => { void registry?.setLastTurn(agentId, turns); },
+        // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
+        onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
         onAction: (agentId, kind) => broadcast('genie:action', { agentId, kind }),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).

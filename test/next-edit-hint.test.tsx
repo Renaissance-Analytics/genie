@@ -25,13 +25,14 @@ const render = (rows: TimedEvent[]) =>
     renderToStaticMarkup(<AgentView agent={agent} session={working} rows={rows} tab="stream" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 3_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} />);
 
 describe('the E hint', () => {
+    // A BUTTON now, not a hint (the owner, 2026-10-18: "the next/edit labels don't even do anything"): `Next edit`, and its key.
     it('is on the strip when the session has an edit to jump to', () => {
-        expect(render(withEdit)).toMatch(/data-hint="next-edit"[^>]*>[^<]*E next edit/);
+        expect(render(withEdit)).toMatch(/<button[^>]*data-action="next-edit"[^>]*title="Next edit \(E\)"[^>]*>[\s\S]*?Next edit/);
     });
 
     it('is absent when there is no edit — a key that would do nothing gets no hint', () => {
         const html = render(noEdit);
         expect(html).toContain('data-session-timeline');
-        expect(html).not.toContain('data-hint="next-edit"');
+        expect(html).not.toContain('data-action="next-edit"');
     });
 });

@@ -76,7 +76,7 @@ describe('a prompt the provider refuses', () => {
 });
 
 describe('the count survives a relaunch', () => {
-    it('the host starts a session with the record’s last turn, and reports each turn that ends; the registry keeps it', async () => {
+    it('the host starts a session with the record’s last turn, and reports each turn as it is NUMBERED; the registry keeps it', async () => {
         const dir = tempDir();
         const registry = new Registry(new Store(dir));
         await registry.load({ name: 'example-host', healthy: true });
@@ -86,12 +86,14 @@ describe('the count survives a relaunch', () => {
         const d = fakeDriver();
         const driverFor: DriverFor = () => d.factory;
         const reported: number[] = [];
-        const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree, onTurnEnded: (_id, n) => { reported.push(n); } });
+        const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree, onTurnNumbered: (_id, n) => { reported.push(n); } });
         expect(host.start(registry.find(record.id)!, dir)).toEqual({ ok: true });
         host.prompt(record.id, 'hello');
+        // Reported when the turn is numbered, not when it ends: a turn cut off before its end is not numbered again.
+        expect(reported).toEqual([268]);
         d.endTurn();
         expect(reported).toEqual([268]);
-        // The registry keeps what its owner (main, on each reported turn end) writes, across a relaunch.
+        // The registry keeps what its owner (main, on each numbered turn) writes, across a relaunch.
         await registry.setLastTurn(record.id, 268);
         const reopened = new Registry(new Store(dir));
         await reopened.load({ name: 'example-host', healthy: true });

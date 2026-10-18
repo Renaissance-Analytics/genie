@@ -17,7 +17,14 @@ import { FACETS, LANES, activityRows, facetsOf, laneOf, type Facet, type StreamF
 export type TickKind = 'edit' | 'message' | 'thought' | 'tool';
 export type TimelineHead = 'ok' | 'warn' | 'bad';
 
-export interface TimelineSegment { label: string; rowId: string; x: number; w: number }
+/** `showLabel`: the label is drawn only where there is room for it (`LABEL_GAP`); every segment names its turn when pointed at. */
+export interface TimelineSegment { label: string; n: number; showLabel: boolean; rowId: string; x: number; w: number }
+
+/**
+ * The room a label needs, as a fraction of the strip: at most eight across it. Every segment used to print its label,
+ * so thirty turns were thirty labels drawn on top of each other (the owner, 2026-10-18: "not readable at all").
+ */
+export const LABEL_GAP = 1 / 8;
 export interface TimelineTick { id: string; x: number; kind: TickKind }
 
 export interface SessionTimeline {
@@ -48,11 +55,15 @@ export function sessionTimeline(rows: readonly TimedEvent[], session: LiveSessio
     const at = (t: number): number => (span === 0 ? 0.5 : round((t - start) / span));
 
     const turns = rows.filter((r) => r.event.kind === 'turn' && r.at !== null);
+    let lastLabel = -Infinity;
     const segments: TimelineSegment[] = turns.map((r, i) => {
         const x = at(r.at as number);
         const next = turns[i + 1];
         const w = round((next ? at(next.at as number) : 1) - x);
-        return { label: `T${(r.event as { n: number }).n}`, rowId: r.id, x, w };
+        const n = (r.event as { n: number }).n;
+        const showLabel = x - lastLabel >= LABEL_GAP - 1e-9;
+        if (showLabel) lastLabel = x;
+        return { label: `T${n}`, n, showLabel, rowId: r.id, x, w };
     });
 
     const ticks: TimelineTick[] = [];
