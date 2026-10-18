@@ -14,7 +14,7 @@ import {
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
-import { codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { closeCancelled, closeRequested, codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
 import { Badge, Button, Icon } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
@@ -247,6 +247,14 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
         [terminals],
     );
 
+    // A RUNNING terminal asks before it is closed (Tynn #763); one that already exited closes at once.
+    const requestClose = useCallback((id: string) => {
+        const r = closeRequested(state, id);
+        if (r.closeNow) closeTerminal(id);
+        else setState(r.state);
+    }, [state, closeTerminal]);
+    const closing = state.closing ? state.terminals.find((t) => t.id === state.closing) ?? (state.hidden ?? []).find((t) => t.id === state.closing) ?? null : null;
+
     const active = state.terminals.find((t) => t.id === state.active) ?? null;
     // LAYOUT (§6.5): the workspace's own setting decides how many panes show; the grid is for that count only.
     const layout = layoutModeFrom(ops?.settings?.values ?? {});
@@ -340,7 +348,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                 type="button"
                                 aria-label="Close terminal"
                                 data-terminal-close={t.id}
-                                onClick={() => closeTerminal(t.id)}
+                                onClick={() => requestClose(t.id)}
                                 className="rounded px-1 text-[var(--fg-4)] hover:bg-[var(--bg-3)] hover:text-[var(--fg-1)]"
                             >
                                 <Icon name="x" className="h-3 w-3" />
@@ -417,6 +425,13 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     </details>
                 ) : null}
             </div>
+            {closing ? (
+                <div data-terminal-close-confirm={closing.id} className="flex shrink-0 items-center gap-3 border-b border-[var(--warning)] bg-[var(--bg-1)] px-4 py-2 text-xs">
+                    <span><span className="font-semibold">Close {closing.shell.split(/[\\/]/).pop()}?</span> Its shell is ended — whatever is running in it stops.</span>
+                    <button type="button" data-action="confirm-close-terminal" onClick={() => closeTerminal(closing.id)} className="ml-auto rounded-lg bg-[var(--danger)] px-3 py-1 text-xs text-white">Close terminal</button>
+                    <button type="button" data-action="cancel-close-terminal" onClick={() => setState((s) => closeCancelled(s))} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-xs">Cancel</button>
+                </div>
+            ) : null}
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
             <div className="min-h-0 flex-1 bg-[var(--bg-0)]">

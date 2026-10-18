@@ -51,6 +51,8 @@ export interface WorkspaceState {
     output: Readonly<Record<string, string>>;
     /** Hidden terminals (§6.5): still running, off the strip, shown again on request. */
     hidden?: readonly TerminalTab[];
+    /** A RUNNING terminal whose close is waiting on the person's confirm (Tynn #763); absent/`null` = none. */
+    closing?: string | null;
 }
 
 /** What separates a restored snapshot from live output (§6.5): old above, live below, never confused. */
@@ -121,7 +123,23 @@ export function terminalExited(state: WorkspaceState, id: string, code: number):
 }
 
 /** The user closed a tab. The neighbour becomes active, so the panel never shows nothing while tabs remain. */
+/**
+ * CLOSING A TERMINAL (Tynn #763; Genie 1's delete confirm): a RUNNING shell asks first — one stray click on × used to end
+ * a build, a server or a REPL; one that has already exited closes at once, there is nothing left to lose.
+ */
+export function closeRequested(state: WorkspaceState, id: string): { state: WorkspaceState; closeNow: boolean } {
+    const tab = state.terminals.find((t) => t.id === id) ?? (state.hidden ?? []).find((t) => t.id === id);
+    if (!tab || tab.exited !== null) return { state: { ...state, closing: null }, closeNow: true };
+    return { state: { ...state, closing: id }, closeNow: false };
+}
+
+/** The person kept it: nothing closes. */
+export function closeCancelled(state: WorkspaceState): WorkspaceState {
+    return { ...state, closing: null };
+}
+
 export function terminalClosed(state: WorkspaceState, id: string): WorkspaceState {
+    if (state.closing === id) state = { ...state, closing: null };
     if ((state.hidden ?? []).some((t) => t.id === id)) {
         const { [id]: _droppedHidden, ...output } = state.output;
         return { ...state, hidden: (state.hidden ?? []).filter((t) => t.id !== id), output };
