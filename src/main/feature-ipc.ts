@@ -73,6 +73,8 @@ export interface FeaturePorts {
     readonly pickSound?: () => Promise<string | null>;
     /** The Feedback window (Tynn #760): where it can go, whether Genie is signed in to Tynn, and the send. Absent = none. */
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
+    /** The running version (Tynn #763: the header shows it). */
+    readonly appVersion?: () => string;
     readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     readonly feedback?: {
         targets(current: string | null): readonly FeedbackTarget[];
@@ -267,6 +269,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
+        version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
         feedback: {
             open: state.feedbackOpen === true,
