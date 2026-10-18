@@ -1,5 +1,6 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions } from '../core/identity.js';
+import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { TynnProject } from '../core/tynn.js';
@@ -72,7 +73,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -234,6 +235,8 @@ export interface GenieBridge {
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Autonomous (its services/processes/sites/terminals actions run without asking, recorded) or asked (Tynn #801). */
         setAutoApprove(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** What the agent hears from IssueWatch (Tynn #806). */
+        setIssueWatch(agentId: string, setting: IssueWatchSetting): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */
         /** `apply`: when the change takes effect on a running agent (`applyWhen`); absent from an older host. */
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<{ ok: true; apply?: ApplyWhen } | { ok: false; reason: string }>;

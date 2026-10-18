@@ -3,6 +3,7 @@ import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
+import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
 import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
 
@@ -28,6 +29,7 @@ export interface AgentOpsPorts {
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
+        setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
@@ -222,6 +224,19 @@ export async function setAutoApprove(ports: AgentOpsPorts, agentId: string, auto
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setAutoApprove(record.id, autoApprove);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/**
+ * What the agent hears from IssueWatch (Tynn #806): checked before it is kept — a delivery Genie knows and kinds it
+ * knows — and refused with the reason otherwise. Applies to the next thing IssueWatch has to say; nothing restarts.
+ */
+export async function setIssueWatch(ports: AgentOpsPorts, agentId: string, raw: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const setting = parseIssueWatchSetting(raw);
+    if (typeof setting === 'string') return { ok: false, reason: setting };
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setIssueWatch(record.id, setting);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

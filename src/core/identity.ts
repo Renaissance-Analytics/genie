@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { AcpProvider } from './engine.js';
+import type { IssueWatchSetting } from './issue-watch.js';
 
 /**
  * ONE ID, MINTED ONCE, USED BY EVERY SUBSYSTEM.
@@ -115,6 +116,11 @@ export interface AgentRecord {
      * approval, each one recorded. Absent = asked, as every agent was before this field existed.
      */
     readonly autoApprove?: boolean;
+    /**
+     * What this agent hears from IssueWatch (Tynn #806): how and which kinds. Absent = never set, and the default applies
+     * (`issueWatchPrefsFor`: the workspace's first agent hears new issues, PRs, security and feedback; the rest nothing).
+     */
+    readonly issueWatch?: IssueWatchSetting;
     /**
      * The model this agent's provider is started with — a name the provider accepts: Claude's `sonnet` / `opus` /
      * `haiku` or a full model id, Codex's model id. Absent = the provider's own default. Read when its session starts.

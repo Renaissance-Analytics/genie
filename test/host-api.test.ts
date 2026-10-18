@@ -72,6 +72,7 @@ function fakes() {
             setMode: async (id, mode) => { calls.push(`agent-mode:${id}:${mode}`); return { ok: true }; },
             setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },
             setAutoApprove: async (id, on) => { calls.push(`agent-auto:${id}:${on}`); return { ok: true }; },
+            setIssueWatch: async (id, setting) => { calls.push(`agent-issue-watch:${id}:${JSON.stringify(setting)}`); return { ok: true }; },
             setPermissions: async (id, permissions) => { calls.push(`agent-permissions:${id}:${permissions}`); return { ok: true }; },
             setModel: async (id, model) => { calls.push(`agent-model:${id}:${model}`); return { ok: true }; },
             diagnose: async () => ({ ok: true, diagnosis: { state: 'healthy', fault: false, cause: null, repair: null } }),

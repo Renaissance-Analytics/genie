@@ -19,7 +19,8 @@ import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/i
 import type { AgentDetail } from '../renderer/bridge.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { issueWatchPrefsFor } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
@@ -396,6 +397,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             mode: record.mode,
             accessScope: record.accessScope,
             autoApprove: record.autoApprove === true,
+            // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
+            issueWatch: issueWatchPrefsFor(record, registry?.listAgents() ?? []),
             permissions: record.permissions ?? 'all',
             // The model CHOSEN (null = the provider's default); the one IN USE is the session's, as reported.
             model: record.model ?? null,
@@ -761,6 +764,7 @@ async function boot(): Promise<void> {
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
             setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
+            setIssueWatch: (id, setting) => registry!.setIssueWatch(id, setting),
             setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
             setModel: (id, model) => registry!.setModel(id, model),
         },
@@ -817,6 +821,9 @@ async function boot(): Promise<void> {
     // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
     ipcMain.handle('genie:agent-set-auto-approve', (_event, raw: unknown, on: unknown) =>
         (typeof raw === 'string' && typeof on === 'boolean' ? setAutoApprove(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'autonomy is on or off' }));
+    // What it hears from IssueWatch (Tynn #806): the setting is checked in setIssueWatch, which says why it refuses one.
+    ipcMain.handle('genie:agent-set-issue-watch', (_event, raw: unknown, setting: unknown) =>
+        (typeof raw === 'string' ? setIssueWatch(agentOps, raw, setting).finally(() => registry?.touch()) : { ok: false, reason: 'unknown agent' }));
     ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
         (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
     ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
@@ -1195,6 +1202,7 @@ async function boot(): Promise<void> {
                 setMode: (id, mode) => setMode(agentOps, id, mode),
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
                 setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
+                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
                 setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
                 setModel: (id, model) => setModel(agentOps, id, model),
                 diagnose: (id) => diagnose(agentOps, id),
