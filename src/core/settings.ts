@@ -42,6 +42,8 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
     // THE FEEDBACK KEY (Tynn #760; Genie 1's `global_hotkey`): a GLOBAL key, from anywhere on the computer. Empty: Genie 1's.
     { key: 'feedback_hotkey', group: 'general', scope: 'host', label: 'Feedback key', description: 'Opens the Feedback window from anywhere on this computer. Empty: Ctrl+Shift+W (⌘⇧W on macOS).', type: 'string', default: '' },
+    // WHAT'S NEW (Tynn #762; Genie 1's): the version whose What's New the person has closed — shown once per version.
+    { key: 'whats_new_seen_version', group: 'general', scope: 'host', label: 'What’s new seen', description: 'The version whose What’s new was last closed.', type: 'string', default: '', hidden: true },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
     // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON

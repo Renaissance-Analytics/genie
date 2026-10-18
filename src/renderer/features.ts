@@ -190,6 +190,8 @@ export interface FeatureData {
     readonly issueWatch: Readonly<Record<string, IssueWatchPanelView>> | null;
     /** The Feedback window (Tynn #760). Absent = closed. */
     readonly feedback?: FeedbackView;
+    /** What's New for the running version, once (Tynn #762); `null`/absent = nothing to show. */
+    readonly whatsNew?: { version: string; notes: string } | null;
 }
 
 /** First paint: nothing has been asked yet. */
