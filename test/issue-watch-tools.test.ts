@@ -8,6 +8,7 @@ import { issueWatchCountLine, issueWatchCounts, parseIssueWatchEntry, type Issue
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
+import type { IssueWatchRefreshAnswer } from '../src/main/issue-watch-client.js';
 import { genieTools, type Caller } from '../src/main/mcp-tools.js';
 
 /**
@@ -77,10 +78,65 @@ describe('the tools', () => {
     });
 });
 
+describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
+    let dir: string;
+    let inbox: InboxStore;
+    let attention: AttentionStore;
+    const atlas = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+    const caller: Caller = { agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', workspacePath: '/w/tynn' };
+    beforeEach(async () => {
+        dir = await mkdtemp(join(tmpdir(), 'genie2-iw-refresh-'));
+        inbox = await InboxStore.open(dir);
+        attention = await AttentionStore.open(dir, inbox);
+    });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+    function rig(answer: IssueWatchRefreshAnswer) {
+        const asked: string[] = [];
+        let summary: IssueWatchSummary = { state: 'live', linked: true, entry: parseIssueWatchEntry({ projectId: 'proj_1', items: [item('issue', 1)], feedbackItems: [] })! };
+        const t = genieTools({
+            inbox, attention, roster: () => [atlas], resolveCaller: (id) => (id === 't-atlas' ? caller : null),
+            workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+            issueWatch: {
+                forWorkspace: () => summary,
+                // The refresh lands its snapshot before it answers: what checkIssues reads next is the fresh one.
+                refresh: async (workspaceId) => { asked.push(workspaceId); summary = { ...summary, entry: ENTRY }; return answer; },
+            },
+        });
+        const call = async (args: JsonObject) => JSON.parse((await t.find((x) => x.definition.name === 'checkIssues')!.handler(args, { server: 'genie', tool: 'checkIssues', headers: {} })).text) as Record<string, unknown>;
+        return { asked, call };
+    }
+
+    it('asks for the CALLER’s workspace, then answers with the fresh items and what the refresh did', async () => {
+        const r = rig({ ok: true, refreshed: true, reason: 'refreshed', nextIn: '3m' });
+        const out = await r.call({ terminalId: 't-atlas', refresh: true });
+        expect(r.asked).toEqual(['tynn']);
+        expect(out.refresh).toEqual({ ok: true, refreshed: true, reason: 'refreshed', nextIn: '3m' });
+        expect(out.counts).toEqual({ issues: 3, prs: 1, security: 3, feedback: 1 });
+    });
+
+    it('refused: the answer says when the next is allowed, with what is open now; and refresh is the caller’s choice (CONTROL: none asked)', async () => {
+        const refused = rig({ ok: true, refreshed: false, reason: 'cooldown', nextIn: '1m 12s' });
+        expect((await refused.call({ terminalId: 't-atlas', refresh: true })).refresh).toEqual({ ok: true, refreshed: false, reason: 'cooldown', nextIn: '1m 12s' });
+        const plain = rig({ ok: true, refreshed: true, reason: 'refreshed', nextIn: '3m' });
+        const out = await plain.call({ terminalId: 't-atlas' });
+        expect(plain.asked).toEqual([]);
+        expect(out).not.toHaveProperty('refresh');
+        expect(out.counts).toEqual({ issues: 1, prs: 0, security: 0, feedback: 0 });
+    });
+});
+
 describe('main keeps the latest entry per project and answers for a workspace', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
         expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); pushFeatures\(\); \}/);
-        expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\) \}/);
+        expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\) \}/);
+    });
+    it('a refresh goes to the workspace’s Tynn project through the running client; unlinked or not running says so', () => {
+        expect(src).toMatch(/async function issueWatchRefreshFor\(workspaceId: string\): Promise<IssueWatchRefreshAnswer> \{/);
+        expect(src).toMatch(/if \(projectId === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
+        expect(src).toMatch(/if \(!issueWatchRunning\) return \{ ok: false, reason: 'IssueWatch is not running' \};/);
+        expect(src).toMatch(/return issueWatchRunning\.refresh\(projectId\);/);
+        expect(src).toMatch(/issueWatchRunning = issueWatchClient;/);
     });
 });

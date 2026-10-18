@@ -46,6 +46,15 @@ export type IssueWatchState =
     | { readonly kind: 'reconnecting'; readonly reason?: string }
     | { readonly kind: 'stopped' };
 
+/**
+ * What a refresh did (Tynn's `POST /api/v1/issue-watch/refresh`): Tynn read GitHub now, or refused inside the window every
+ * caller of the workspace shares (`reason: 'cooldown'`), or could not (`'failed'` with Tynn's words, `'not-tracked'`);
+ * `nextIn` is when the next is allowed. `ok: false` = it never reached Tynn's answer.
+ */
+export type IssueWatchRefreshAnswer =
+    | { readonly ok: true; readonly refreshed: boolean; readonly reason: string; readonly nextIn: string | null; readonly error?: string }
+    | { readonly ok: false; readonly reason: string };
+
 /** How long a dropped or refused connection waits before it tries again. */
 export const RECONNECT_MS = 5_000;
 
@@ -81,6 +90,37 @@ export class IssueWatchClient {
         this.#socket = null;
         this.#set({ kind: 'stopped' });
         try { socket?.close(); } catch { /* already closing */ }
+    }
+
+    /**
+     * Ask Tynn to read one project's repos NOW. Its snapshot comes back in the same answer and goes through the feed like
+     * a push, so whatever is new is heard as events; a refusal still carries the current snapshot.
+     */
+    async refresh(projectId: string): Promise<IssueWatchRefreshAnswer> {
+        const creds = this.#ports.credentials();
+        if (creds === null) return { ok: false, reason: 'not signed in to Tynn' };
+        const base = creds.host.replace(/\/+$/, '');
+        let body: { refreshed?: unknown; reason?: unknown; error?: unknown; cooldown?: { label?: unknown }; workspace?: unknown };
+        try {
+            const res = await this.#ports.fetch(`${base}/api/v1/issue-watch/refresh`, {
+                method: 'POST',
+                headers: { ...this.#headers(creds.token), 'content-type': 'application/json' },
+                body: JSON.stringify({ project_id: projectId }),
+            });
+            if (!res.ok) return { ok: false, reason: `Tynn answered the refresh with HTTP ${res.status}` };
+            body = (await res.json()) as typeof body;
+        } catch (error) {
+            return { ok: false, reason: `Tynn could not be reached: ${(error as Error).message}` };
+        }
+        if (body.workspace !== undefined) this.#apply(body.workspace);
+        const error = typeof body.error === 'string' && body.error !== '' ? body.error : null;
+        return {
+            ok: true,
+            refreshed: body.refreshed === true,
+            reason: typeof body.reason === 'string' ? body.reason : 'unknown',
+            nextIn: typeof body.cooldown?.label === 'string' ? body.cooldown.label : null,
+            ...(error === null ? {} : { error }),
+        };
     }
 
     #set(state: IssueWatchState): void {

@@ -15,7 +15,7 @@ const PROJECT = 'proj_1';
 const item = (key: string, kind = 'issue', updatedAt = '2026-10-17T10:00:00Z') => ({ kind, key, number: 1, title: 't', url: 'u', createdAt: updatedAt, updatedAt, owner: 'acme', repo: 'app' });
 const entry = (items: unknown[]) => ({ workspaceId: PROJECT, projectId: PROJECT, counts: {}, items, feedbackItems: [], tracking: {} });
 
-function harness(opts: { credentials?: { host: string; token: string } | null; authStatus?: number } = {}) {
+function harness(opts: { credentials?: { host: string; token: string } | null; authStatus?: number; refresh?: { status?: number; json: unknown } } = {}) {
     const requests: Array<{ method: string; url: string; auth: string | null; body: unknown }> = [];
     const sockets: Array<SocketLike & { sent: string[]; url: string; closed: boolean; emit(frame: unknown): void; drop(): void }> = [];
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
@@ -27,8 +27,9 @@ function harness(opts: { credentials?: { host: string; token: string } | null; a
             requests.push({ method: init.method ?? 'GET', url, auth: init.headers.authorization ?? null, body: init.body ? JSON.parse(init.body) : null });
             const json = url.endsWith('/push-config') ? { key: 'pk_test', cluster: 'us2', channel: 'private-App.Models.User.42' }
                 : url.endsWith('/broadcasting-auth') ? { auth: 'pk_test:sig' }
+                : url.endsWith('/refresh') ? opts.refresh?.json
                 : reconcile;
-            const status = url.endsWith('/broadcasting-auth') ? (opts.authStatus ?? 200) : 200;
+            const status = url.endsWith('/broadcasting-auth') ? (opts.authStatus ?? 200) : url.endsWith('/refresh') ? (opts.refresh?.status ?? 200) : 200;
             return { ok: status < 300, status, json: async () => json };
         },
         socket: (url) => {
@@ -153,5 +154,52 @@ describe('the client', () => {
         expect(h.sockets[0]!.closed).toBe(true);
         expect(h.timers.filter((x) => !x.cancelled)).toEqual([]);
         expect(h.client.state()).toEqual({ kind: 'stopped' });
+    });
+});
+
+/**
+ * A REFRESH, ASKED FOR (Genie 1's `checkIssues(refresh: true)`): Tynn reads GitHub now rather than at its next poll. ONE
+ * window per workspace, shared by everyone who asks (Tynn's IssueWatchRefreshLimiter) — a refusal is an answer, with the
+ * current snapshot and when the next is allowed. The snapshot goes through the same feed as a push, so what is new is
+ * heard as events.
+ */
+describe('a refresh', () => {
+    const cooldown = (label: string) => ({ seconds: 1, nextAllowedAt: 't', label });
+
+    it('POSTs the project with the token Genie holds; the fresh snapshot is applied, so what is new is HEARD', async () => {
+        const h = harness({ refresh: { json: { refreshed: true, reason: 'refreshed', error: null, cooldown: cooldown('3m'), workspace: entry([item('a:issue:1'), item('b:pr:2', 'pr')]) } } });
+        h.client.start();
+        await h.settle();
+        await h.connect(h.sockets[0]!);
+
+        const answer = await h.client.refresh(PROJECT);
+
+        expect(answer).toEqual({ ok: true, refreshed: true, reason: 'refreshed', nextIn: '3m' });
+        const req = h.requests.find((r) => r.url.endsWith('/refresh'))!;
+        expect(req).toEqual({ method: 'POST', url: 'https://tynn.example/api/v1/issue-watch/refresh', auth: 'Bearer rpk_X.secret', body: { project_id: PROJECT } });
+        expect(h.heard.flatMap((x) => x.events.map((e) => e.kind))).toEqual(['pr.new']);
+    });
+
+    it('refused inside the window: says so and when the next is allowed; nothing is new (COUNTED: no events)', async () => {
+        const h = harness({ refresh: { json: { refreshed: false, reason: 'cooldown', error: null, cooldown: cooldown('1m 12s'), workspace: entry([item('a:issue:1')]) } } });
+        h.client.start();
+        await h.settle();
+        await h.connect(h.sockets[0]!);
+
+        expect(await h.client.refresh(PROJECT)).toEqual({ ok: true, refreshed: false, reason: 'cooldown', nextIn: '1m 12s' });
+        expect(h.heard).toEqual([]);
+    });
+
+    it('GitHub failed on Tynn’s side: Tynn’s own words come back', async () => {
+        const h = harness({ refresh: { json: { refreshed: false, reason: 'failed', error: 'GitHub answered 502', cooldown: cooldown('3m'), workspace: entry([]) } } });
+        expect(await h.client.refresh(PROJECT)).toEqual({ ok: true, refreshed: false, reason: 'failed', nextIn: '3m', error: 'GitHub answered 502' });
+    });
+
+    it('not signed in: says so and asks nothing; Tynn refuses: says the status', async () => {
+        const out = harness({ credentials: null });
+        expect(await out.client.refresh(PROJECT)).toEqual({ ok: false, reason: 'not signed in to Tynn' });
+        expect(out.requests).toEqual([]);
+        const refused = harness({ refresh: { status: 404, json: { message: 'No IssueWatch workspace with that id is available to you.' } } });
+        expect(await refused.client.refresh(PROJECT)).toEqual({ ok: false, reason: 'Tynn answered the refresh with HTTP 404' });
     });
 });
