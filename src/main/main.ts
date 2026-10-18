@@ -93,6 +93,9 @@ import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
+import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
+import { IssueWatchDelivery } from './issue-watch-delivery.js';
+import { tynnProjectIdOf } from '../core/issue-watch.js';
 
 /**
  * THE MAIN PROCESS.
@@ -1416,21 +1419,61 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
+    // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the notice waits.
+    // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
+    const wakeAgent = (agentId: string): boolean => {
+        const record = registry?.find(agentId as AgentId);
+        if (!record || !host) return false;
+        const refused = startRefusal(workspaceOps, record, {
+            running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
+        });
+        if (refused) { console.log(`[genie] a notice for ${record.name} waits: ${refused}`); return false; }
+        return host.start(record, cwdFor(record)).ok;
+    };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
     wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
-        // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the mail waits.
-        wake: (agentId) => {
-            const record = registry?.find(agentId);
-            if (!record || !host) return false;
-            const refused = startRefusal(workspaceOps, record, {
-                running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
-                cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
-            });
-            if (refused) { console.log(`[genie] mail for ${record.name} waits: ${refused}`); return false; }
-            return host.start(record, cwdFor(record)).ok;
+        wake: wakeAgent,
+    });
+    // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
+    // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
+    // the SAME delivery as mail — Genie's turn, told only when it ends — each agent by its own setting and in its mode.
+    const issueWatchDelivery = new IssueWatchDelivery({
+        agents: () => registry?.listAgents() ?? [],
+        workspaceFor: (projectId) => {
+            for (const w of registry?.snapshot().workspaces ?? []) {
+                let manifest: string | null = null;
+                try { manifest = readFileSync(join(w.path, 'project.json'), 'utf8'); } catch { manifest = null; }
+                if (tynnProjectIdOf(manifest) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
+            }
+            return null;
         },
     });
+    wireInboxPush({
+        inbox: { onSend: (listener) => issueWatchDelivery.onQueued(listener) },
+        host,
+        reminders: (input) => issueWatchDelivery.due(input),
+        settled: (agentId, delivered) => issueWatchDelivery.settled(agentId, delivered),
+        // `push` wakes a stopped agent as mail does; `next-turn` waits for it to be running.
+        wake: (agentId) => issueWatchDelivery.wakes(agentId) && wakeAgent(agentId),
+    });
+    const issueWatchClient = new IssueWatchClient({
+        credentials: () => {
+            const values = composed.settings.snapshot();
+            const token = typeof values.tynn_token === 'string' ? values.tynn_token.trim() : '';
+            const tynnHost = typeof values.tynn_host === 'string' && values.tynn_host.trim().length > 0 ? values.tynn_host.trim() : 'https://tynn.ai';
+            return token.length > 0 ? { host: tynnHost, token } : null;
+        },
+        fetch: (url, init) => fetch(url, init),
+        socket: (url) => new WebSocket(url) as unknown as SocketLike,
+        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        onEvents: (projectId, events) => issueWatchDelivery.onEvents(projectId, events),
+        onState: (state) => console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`),
+    });
+    issueWatchClient.start();
+    // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
+    composed.settings.onChange((key) => { if (key === 'tynn_token' || key === 'tynn_host') { issueWatchClient.stop(); issueWatchClient.start(); } });
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });
