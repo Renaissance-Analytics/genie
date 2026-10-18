@@ -7,6 +7,7 @@ import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, Menu, Notification, Tray, app, dialog, globalShortcut, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { guardWindowLinks } from './external-links.js';
 import { FEEDBACK_ROUTE, feedbackTargets } from '../core/feedback.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { wireFeedbackHotkey } from './feedback-hotkey.js';
@@ -269,6 +270,8 @@ function openTakeOverWindow(route: string): void {
         show: false,
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
+    // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     win.once('ready-to-show', () => win.show());
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
@@ -288,6 +291,8 @@ function openFilesWindow(route: string): void {
         show: false,
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
+    // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     win.once('ready-to-show', () => win.show());
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
@@ -402,6 +407,8 @@ function createWindow(show: boolean): BrowserWindow {
             sandbox: true,
         },
     });
+    // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
 
     // Paint when there is something to paint. A visible empty frame that then fills in is the
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
