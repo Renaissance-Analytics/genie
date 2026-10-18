@@ -28,7 +28,6 @@ const render = (snap: GenieSnapshot) =>
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}

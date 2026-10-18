@@ -76,7 +76,6 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}
@@ -168,7 +167,6 @@ describe('first paint, before the bridge has answered', () => {
                 onOpenPalette={() => {}}
                 onSelectRow={() => {}}
                 onSend={() => {}}
-                onTogglePin={() => {}}
                 onCloseChat={() => {}}
                 answeringApproval={null}
                 onAnswerApproval={() => {}}
@@ -288,22 +286,15 @@ const THREAD: ChatThread = {
 };
 
 describe('the dock geometry \u2014 three shipped failures live here', () => {
-    it('an unpinned flyout reserves nothing beyond the chat strip, and the panel overlays', () => {
-        /**
-         * **Unpinned means nothing underneath moves.** That is the entire difference between
-         * the two states and the reason a pin is worth having — a flyout that shoved the board
-         * sideways every time somebody glanced at a conversation would be unusable.
-         */
+    it('an open chat is never overlaid: it is in the dock, positioned in the row, not absolute (2026-10-17)', () => {
         const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
-
-        // The same reserve as with the chat closed: opening it moves nothing.
-        expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
+        expect(html).not.toContain('data-chat="overlay"');
+        expect(html).not.toMatch(/data-chat="pinned"[^>]*class="[^"]*absolute/);
+        // CONTROL: closed, the strip's reserve.
         expect(render({ route: 'genie://dashboard?group=workspace' })).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
-        expect(html).toContain('data-chat="overlay"');
-        expect(html).toMatch(/data-chat="overlay"[^>]*class="[^"]*absolute/);
     });
 
-    it('reserves exactly DOCK_WIDTH when pinned, from the SAME token the panel is sized by', () => {
+    it('reserves exactly the chat’s width when open, from the SAME number the panel is sized by', () => {
         /**
          * One number. **Two numbers is a panel overlapping the content by their difference** —
          * which shipped twice, and the second time it was a three-pixel overlap nobody could
@@ -314,7 +305,7 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
          * separately in `dock.test.ts`.
          */
         const html = render({
-            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
+            route: 'genie://dashboard?chat=kai', chatThread: THREAD,
         });
 
         // The pinned CHAT's width is its own (Tynn #798, default CHAT_DOCK_DEFAULT_WIDTH): reserve and panel, one number.
@@ -335,7 +326,7 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
          * the docked panel's frame starts at the header's measured height (56px until measured).
          */
         const html = render({
-            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
+            route: 'genie://dashboard?chat=kai', chatThread: THREAD,
         });
 
         expect(html.match(/data-view-header/g)).toHaveLength(1);
@@ -358,32 +349,15 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
         }
     });
 
-    it('reserves for a pinned panel that is not the chat, without the chat claiming the pin', () => {
-        // The slot is taken, so the reserve stands; but the chat must not read as pinned. Two
-        // separate readings, and conflating them is how a panel ends up overlapping content
-        // that already made room for a different one.
-        const html = render({
-            route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: 'files',
-        });
-
-        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
-        expect(html).toContain('data-chat="overlay"');
-        expect(html).not.toContain('data-chat="pinned"');
+    it('a pinned file panel: its reserve while the chat is closed; the chat’s own once it opens (one slot, one number)', () => {
+        expect(render({ route: 'genie://dashboard', pinned: 'files' })).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
+        expect(render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: 'files' })).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
     });
 
-    it('gives a pinned dock NO close button, and an unpinned one a close button', () => {
-        // `Esc` does not close a pinned dock, and neither does a button it does not have. A pin
-        // is a statement that this panel stays; unpinning is one click and reversible.
-        const pinnedHtml = render({
-            route: 'genie://dashboard?chat=kai&pin=right', chatThread: THREAD, pinned: 'chat',
-        });
-        expect(pinnedHtml).not.toContain('aria-label="Close chat"');
-        expect(pinnedHtml).toContain('data-chat-pin="on"');
-
-        // POSITIVE CONTROL: the unpinned one has it, so the absence above is a reading.
-        const overlay = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
-        expect(overlay).toContain('aria-label="Close chat"');
-        expect(overlay).toContain('data-chat-pin="off"');
+    it('the open chat has a close button and no pin (there is nothing to unpin it to)', () => {
+        const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD });
+        expect(html).toContain('aria-label="Close chat"');
+        expect(html).not.toContain('data-chat-pin');
     });
 
     it('shows no chat at all when the route names none', () => {
@@ -404,7 +378,7 @@ describe('the chat thread', () => {
         expect(html).not.toContain('data-chat-message');
         expect(html).not.toMatch(/How can I help|Hello|Hi there/i);
         // POSITIVE CONTROL: the panel IS rendered, so this is not an absent component.
-        expect(html).toContain('data-chat="overlay"');
+        expect(html).toContain('data-chat="pinned"');
     });
 
     it('marks an UNDELIVERED message rather than dropping it or pretending it sent', () => {

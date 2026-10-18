@@ -77,7 +77,7 @@ describe('the thread', () => {
                 { id: 'd2', who: 'you', from: 'you', text: 'later', delivered: false, at: 3 },
             ],
         };
-        const html = renderToStaticMarkup(<ChatFlyout thread={thread} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
         expect(html).toMatch(/data-chat-attachments="m1"[\s\S]*?shot\.png/);
         expect(html).toMatch(/data-chat-attachments="d1"[\s\S]*?data\.bin/);
         expect(html).toContain('Not delivered. data.bin is neither an image nor a text file');

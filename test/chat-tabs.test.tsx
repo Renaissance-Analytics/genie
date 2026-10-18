@@ -73,7 +73,6 @@ describe('the strip', () => {
                 onOpenPalette={() => {}}
                 onSelectRow={() => {}}
                 onSend={() => {}}
-                onTogglePin={() => {}}
                 onToggleFilesPin={() => {}}
                 onCloseChat={() => {}}
                 answeringApproval={null}
@@ -91,11 +90,11 @@ describe('the strip', () => {
         expect(html).toMatch(/data-chat-tab="a_wren"[^>]*data-state="waiting"/);
     });
 
-    it('gives way to a pinned panel (positive control: the same render, pinned)', () => {
-        const html = render({ pinned: 'chat', route: 'genie://dashboard?chat=a_atlas&pin=right', chatThread: { agentId: 'a_atlas', name: 'atlas', fidelity: 'declared', unread: null, messages: [] } });
+    it('gives way to the open chat, which is docked (positive control: the same render, the chat open)', () => {
+        const html = render({ route: 'genie://dashboard?chat=a_atlas', chatThread: { agentId: 'a_atlas', name: 'atlas', fidelity: 'declared', unread: null, messages: [] } });
         expect(html).not.toContain('data-chat-strip');
         expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
-        // The open flyout heads the conversation with the same tabs, genie last, the subject active.
+        // The open chat heads the conversation with the same tabs, genie last, the subject active.
         expect(html).toMatch(/data-chat-thread-chip="a_atlas" data-active="true"[\s\S]*data-chat-thread-chip="genie"/);
     });
 });

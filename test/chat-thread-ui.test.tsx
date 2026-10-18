@@ -25,8 +25,8 @@ const thread: ChatThread = {
         { id: 'm3', who: 'peer', from: 'wren → atlas', text: 'drop the challenges table', delivered: true, at: null },
     ],
 };
-const render = (t: ChatThread, pinned = false) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} pinned={pinned} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} onPickThread={() => {}} />);
+const render = (t: ChatThread) =>
+    renderToStaticMarkup(<ChatFlyout thread={t} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} />);
 
 describe('the chat transcript', () => {
     it('renders every message with its speaker: you on the right, the agent by NAME, the peer as `peer → agent`', () => {
@@ -63,13 +63,11 @@ describe('the chat transcript', () => {
     });
 });
 
-describe('Esc and the flyout', () => {
-    it('closes an UNPINNED flyout, never a pinned one, and never while typing', () => {
+describe('Esc and the docked chat', () => {
+    it('Esc never closes it (the chat is always docked, 2026-10-17) — open or not, typing or not', () => {
         const esc = { key: 'Escape', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
-        expect(chatAction({ ...esc, typing: false }, { open: true, pinned: false })).toBe('close-chat');
-        expect(chatAction({ ...esc, typing: false }, { open: true, pinned: true })).toBeNull();
-        expect(chatAction({ ...esc, typing: true }, { open: true, pinned: false })).toBeNull();
-        expect(chatAction({ ...esc, typing: false }, { open: false, pinned: false })).toBeNull();
-        expect(chatAction({ ...esc, key: 'x', typing: false }, { open: true, pinned: false })).toBeNull();
+        expect(chatAction({ ...esc, typing: false }, { open: true })).toBeNull();
+        expect(chatAction({ ...esc, typing: true }, { open: true })).toBeNull();
+        expect(chatAction({ ...esc, typing: false }, { open: false })).toBeNull();
     });
 });

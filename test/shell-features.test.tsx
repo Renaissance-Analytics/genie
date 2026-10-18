@@ -52,7 +52,6 @@ function render(route: string, features: Partial<FeatureData> = {}): string {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}

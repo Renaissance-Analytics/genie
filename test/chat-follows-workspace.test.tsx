@@ -95,7 +95,6 @@ describe('the composer on screen', () => {
                 onOpenPalette={() => {}}
                 onSelectRow={() => {}}
                 onSend={() => {}}
-                onTogglePin={() => {}}
                 onToggleFilesPin={() => {}}
                 onCloseChat={() => {}}
                 answeringApproval={null}

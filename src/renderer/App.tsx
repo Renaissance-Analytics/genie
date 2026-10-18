@@ -12,8 +12,7 @@ import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
 import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
-import type { DockPanel } from '../core/dock.js';
-import { pinPanel, routeAfterPin, type DockNotice } from '../core/dock.js';
+import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -573,14 +572,11 @@ function DesktopApp({ bridge }: AppProps) {
         : undefined;
 
     /**
-     * Which panel holds the single dock slot.
-     *
-     * View state, not route state, and deliberately: `?pin=right` in the route says a panel IS
-     * pinned, and this says WHICH — but at most one can be, so the route's `chat=<agent>` plus
-     * `pin=right` already describes a pinned chat completely. Keeping a second copy of "which
-     * panel" in the URL would let the two disagree.
+     * The panel pinned to the dock (the file panel, lists) — view state. The chat is not pinned: it is open while the route
+     * names it (`chat=`), and an open chat always holds the dock, over whatever is pinned (`dockHolder`; the owner,
+     * 2026-10-17: "make the pinned chat be the only chat ux").
      */
-    const [pinned, setPinned] = useState<DockPanel | null>(parsed.pin === 'right' ? 'chat' : null);
+    const [pinned, setPinned] = useState<PinnedPanel | null>(null);
     // The docked file panel's dirty buffers (§4.4): the one thing that makes a pin refuse. Reported by the panel.
     const [filesDirty, setFilesDirty] = useState(false);
     // The dock's notice (§4.4): a handoff or a refusal, said under the title bar for a few seconds.
@@ -610,12 +606,14 @@ function DesktopApp({ bridge }: AppProps) {
     };
     const toggleFilesPin = (id: string) => {
         // Pinning another workspace's panel while one is pinned moves the slot to it; the same one unpins.
-        const outcome = pinPanel(pinned === 'files' && filesWorkspaceId !== id ? null : pinned, 'files', filesDirty);
+        // An open chat holds the dock: pinning the file panel takes the slot from it, and the chat closes (one slot).
+        const holder = dockHolder(pinned, parsed.chat !== null);
+        const outcome = pinPanel(holder === 'files' && filesWorkspaceId !== id ? null : holder, 'files', filesDirty);
         if (outcome.refused !== null) { setDockNotice({ kind: 'refused', reason: outcome.refused, workspaceId: filesWorkspaceId }); return; }
-        setPinned(outcome.pinned);
+        setPinned(outcome.pinned === 'chat' ? null : outcome.pinned);
         setFilesWorkspaceId(outcome.pinned === 'files' ? id : null);
         if (outcome.replaced !== null) setDockNotice({ kind: 'replaced', replaced: outcome.replaced, pinned: outcome.pinned });
-        // A displaced chat must leave the route too, or `pin=right` reopens it pinned on the next navigation.
+        // A displaced chat must leave the route too, or `chat=` reopens it in the dock on the next navigation.
         const after = routeAfterPin(route, outcome);
         if (after !== route) navigate(after);
     };
@@ -645,15 +643,14 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
-    // The chat flyout's keys (§4.4, `core/keys.ts`): Esc closes an UNPINNED flyout; A / D answer the approval parked in
-    // the chat — the letters follow the composer. Never while typing.
+    // The chat's keys (§4.4, `core/keys.ts`): A / D answer the approval parked in the chat — the letters follow the
+    // composer. Never while typing. Esc does not close the docked chat.
     const chatApprovalHere = parsed.chat !== null ? chatDetail?.session?.pendingApproval ?? null : null;
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
-            const action = chatAction(press, { open: parsed.chat !== null, pinned: pinned === 'chat', approval: chatApprovalHere !== null });
+            const action = chatAction(press, { open: parsed.chat !== null, approval: chatApprovalHere !== null });
             if (action === null) return;
-            if (action === 'close-chat') { e.preventDefault(); navigate(route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '')); return; }
             const optionId = approvalChoice(chatApprovalHere, action);
             if (!optionId || parsed.chat === null) return;
             e.preventDefault();
@@ -662,7 +659,7 @@ function DesktopApp({ bridge }: AppProps) {
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [parsed, pinned, route, chatApprovalHere, resolvedBridge]);
+    }, [parsed, chatApprovalHere, resolvedBridge]);
 
     /**
      * The option id currently in flight, so the buttons refuse a second press.
@@ -918,18 +915,8 @@ function DesktopApp({ bridge }: AppProps) {
                         return;
                 }
             }}
-            onTogglePin={() => {
-                // The single slot's rule lives in `core/dock.ts`, including the file panel's refusal — real now:
-                // the docked panel reports its dirty buffers (§4.4), and a refusal is said under the title bar.
-                const outcome = pinPanel(pinned, 'chat', filesDirty);
-                if (outcome.refused !== null) { setDockNotice({ kind: 'refused', reason: outcome.refused, workspaceId: filesWorkspaceId }); return; }
-                setPinned(outcome.pinned);
-                if (outcome.replaced !== null) setDockNotice({ kind: 'replaced', replaced: outcome.replaced, pinned: outcome.pinned });
-            }}
             onCloseChat={() => {
-                // `Esc` and the close button drop the chat from the ROUTE, which is the one
-                // place its subject lives. A pinned dock has no close button and Esc does not
-                // close it — that is enforced in the component, not here.
+                // The close button drops the chat from the ROUTE, which is the one place its subject lives.
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}

@@ -58,7 +58,6 @@ function render(route: string, deckItems: DeckItem[], features: FeatureData = EM
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}

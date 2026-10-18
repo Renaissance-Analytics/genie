@@ -38,7 +38,6 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onToggleFilesPin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}

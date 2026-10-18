@@ -10,7 +10,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * it, and do not pretend to. Your own message stays exactly as you typed it.
  */
 const render = (messages: ChatThread['messages']) =>
-    renderToStaticMarkup(<ChatFlyout thread={{ agentId: 'moic', name: 'moic', fidelity: 'declared', unread: null, messages }} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={{ agentId: 'moic', name: 'moic', fidelity: 'declared', unread: null, messages }} onSend={() => {}} onClose={() => {}} />);
 
 describe('the agent\'s reply', () => {
     it('renders Markdown: bold, code and a list — no asterisks left on screen', () => {

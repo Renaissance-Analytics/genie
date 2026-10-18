@@ -76,7 +76,6 @@ const renderShell = (chatSession: LiveSession | null) => {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
             onAnswerApproval={() => {}}
@@ -101,7 +100,7 @@ const renderDoctor = (s: LiveSession | null, onSend: (text: string, files?: read
 
 const renderFlyout = (onSend: (text: string, files?: readonly Attachment[]) => void = () => {}) => {
     seen.length = 0;
-    const html = renderToStaticMarkup(<ChatFlyout thread={THREAD} pinned={false} onSend={onSend} onTogglePin={() => {}} onClose={() => {}} />);
+    const html = renderToStaticMarkup(<ChatFlyout thread={THREAD} onSend={onSend} onClose={() => {}} />);
     return { html, props: lastProps() };
 };
 
@@ -154,7 +153,7 @@ describe('every composer has the quiet footer and holds pastes as pills', () => 
 
     it('CONTROL: a blocked flyout has no composer, so the handle is absent with it', () => {
         seen.length = 0;
-        const html = renderToStaticMarkup(<ChatFlyout thread={THREAD} scope={{ kind: 'blocked', reason: 'No agent here to message.' }} pinned={false} onSend={() => {}} onTogglePin={() => {}} onClose={() => {}} />);
+        const html = renderToStaticMarkup(<ChatFlyout thread={THREAD} scope={{ kind: 'blocked', reason: 'No agent here to message.' }} onSend={() => {}} onClose={() => {}} />);
         expect(count(html, 'data-chat-blocked=""')).toBe(1);
         expect(count(html, 'data-chat-composer=""')).toBe(0);
         expect(count(html, 'contentEditable="true"')).toBe(0);

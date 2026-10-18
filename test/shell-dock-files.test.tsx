@@ -39,7 +39,6 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
             onOpenPalette={() => {}}
             onSelectRow={() => {}}
             onSend={() => {}}
-            onTogglePin={() => {}}
             onToggleFilesPin={() => {}}
             onCloseChat={() => {}}
             answeringApproval={null}
@@ -76,7 +75,7 @@ describe('the file panel in the dock', () => {
         expect(html).toContain('data-dock="files"');
     });
 
-    it('chat pinned: no files dock', () => {
-        expect(render({ pinned: 'chat', filesWorkspaceId: 'tynn' })).not.toContain('data-dock="files"');
+    it('nothing pinned: no files dock, even with a workspace remembered', () => {
+        expect(render({ pinned: null, filesWorkspaceId: 'tynn' })).not.toContain('data-dock="files"');
     });
 });

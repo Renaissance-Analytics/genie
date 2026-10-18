@@ -99,20 +99,19 @@ export function stepFocus(ids: readonly string[], current: string | null, delta:
     return ids[Math.min(ids.length - 1, Math.max(0, at + delta))] ?? null;
 }
 
-export type ChatAction = 'close-chat' | 'allow' | 'deny';
+export type ChatAction = 'allow' | 'deny';
 
 /**
- * The chat flyout's keys (§4.4). `Esc` closes an UNPINNED flyout — nothing underneath moved, so nothing has to move
- * back. **`Esc` does not close a pinned dock**: a pin says this panel stays. `A` / `D` answer the approval parked in
- * the chat — the letters follow the composer, so they act here only while the chat HOLDS the actionable approval (one
+ * The chat's keys (§4.4). The chat is docked, always (the owner, 2026-10-17), and a docked chat stays until it is
+ * closed — its close button, or ⌘J / Ctrl+J — so `Esc` does not close it. `A` / `D` answer the approval parked in the
+ * chat — the letters follow the composer, so they act here only while the chat HOLDS the actionable approval (one
  * actionable rendering, one marker). Never while typing: a letter in the composer is a letter.
  */
-export function chatAction(press: KeyPress, chat: { open: boolean; pinned: boolean; approval?: boolean | undefined }): ChatAction | null {
+export function chatAction(press: KeyPress, chat: { open: boolean; approval?: boolean | undefined }): ChatAction | null {
     if (!chat.open || press.typing) return null;
     const bare = !press.metaKey && !press.ctrlKey && !press.altKey && !press.shiftKey;
     if (chat.approval && bare && (press.key === 'a' || press.key === 'A')) return 'allow';
     if (chat.approval && bare && (press.key === 'd' || press.key === 'D')) return 'deny';
-    if (!chat.pinned && press.key === 'Escape' && bare) return 'close-chat';
     return null;
 }
 
