@@ -66,13 +66,12 @@ describe('chatThreadFrom — the transcript', () => {
         expect(at(null)).toEqual({ text: 'Not started', tone: 'muted' });
     });
 
-    it('the chips are the agents that share the subject\'s workspace — the subject marked active — each with its state; never an unread count Genie has not read', () => {
-        const rows = [rowOf({ id: 'a1', name: 'atlas', state: 'working' }), rowOf({ id: 'a2', name: 'wren', state: 'waiting' }), rowOf({ id: 'zz', name: 'far', workspaceId: 'fancy' })];
+    // No chips (the owner, 2026-10-18: no chat tabs): a thread is one conversation, and the view picks whose.
+    it('one conversation, no chips; never an unread count Genie has not read', () => {
+        const rows = [rowOf({ id: 'a1', name: 'atlas', state: 'working' }), rowOf({ id: 'a2', name: 'wren', state: 'waiting' })];
         const thread = chatThreadFrom(detail([]), 'a1', rows, () => 0);
-        expect(thread.chips).toEqual([
-            { agentId: 'a1', name: 'atlas', state: 'working', fidelity: 'declared', active: true, unread: null },
-            { agentId: 'a2', name: 'wren', state: 'waiting', fidelity: 'declared', active: false, unread: null },
-        ]);
+        expect(thread).not.toHaveProperty('chips');
+        expect(thread.name).toBe('atlas');
         expect(thread.unread).toBeNull();
     });
 

@@ -53,10 +53,10 @@ describe('the chat', () => {
     });
 
     it('Resume now sits on the context line when offered, once; absent otherwise', () => {
-        const base: ChatThread = { agentId: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'tynn', context: { text: `Paused · ${limitWords(paused)}`, tone: 'warn' }, messages: [], chips: [] } as unknown as ChatThread;
-        const html = renderToStaticMarkup(<ChatFlyout thread={base} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} onResumeLimit={() => {}} />);
+        const base: ChatThread = { agentId: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'tynn', context: { text: `Paused · ${limitWords(paused)}`, tone: 'warn' }, messages: [] } as unknown as ChatThread;
+        const html = renderToStaticMarkup(<ChatFlyout thread={base} onSend={() => {}} onClose={() => {}} onResumeLimit={() => {}} />);
         const line = html.slice(html.indexOf('data-chat-context="warn"'), html.indexOf('data-chat-scroll'));
         expect(line.split('data-action="resume-limit"').length - 1).toBe(1);
-        expect(renderToStaticMarkup(<ChatFlyout thread={base} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} />)).not.toContain('resume-limit');
+        expect(renderToStaticMarkup(<ChatFlyout thread={base} onSend={() => {}} onClose={() => {}} />)).not.toContain('resume-limit');
     });
 });

@@ -1,10 +1,9 @@
 import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
-import { formatRoute, parseRoute, pickThreadRoute, routeWorkspace } from '../core/route.js';
+import { formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
 import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockHolder, dockReserve, type DockPanel, type DockNotice, type PinnedPanel } from '../core/dock.js';
-import { chatThreads as threadsFor, type ChatChip } from '../core/chat-view.js';
-import { chatScope } from '../core/chat-scope.js';
+import { chatScope, followChat } from '../core/chat-scope.js';
 import { composerMeter } from '../core/composer.js';
 import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
@@ -18,7 +17,7 @@ import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view
 import { workspaceLabel } from '../core/workspace-label.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
 import { ChatFlyout, GenieMark, type ChatThread } from './components/ChatFlyout.js';
-import { Dashboard, FidelityDot } from './components/Dashboard.js';
+import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
@@ -89,8 +88,8 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
-    /** The chat's tabs (`core/chat-view.ts` `chatThreads`): on the strip while the chat is closed, and heading the chat. */
-    chatThreads?: readonly ChatChip[] | undefined;
+    /** The agents you last chatted with, newest first (`rememberThread`): a workspace's chat opens on the latest there. */
+    openedThreads?: readonly string[] | undefined;
     /** The chat subject's session (§4.4): its approval is answered where the composer is; its running turn gets `[Stop]`. */
     chatSession?: LiveSession | null | undefined;
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
@@ -213,7 +212,7 @@ export function Shell({
     agentResolved,
     selectedRowId,
     chatThread,
-    chatThreads,
+    openedThreads,
     chatSession = null,
     pinned,
     onNavigate,
@@ -340,8 +339,9 @@ export function Shell({
     // The chat is the composer for ITS subject wherever the view is, so the approval comes from the subject's own session
     // (the Agent view shows the marker) — not only when the routed agent happens to be the subject.
     const chatApproval = chatThread ? chatSession?.pendingApproval ?? (agentDetail?.agent.id === chatThread.agentId ? agentDetail.session?.pendingApproval ?? null : null) : null;
-    // The tabs, with the open conversation marked: the strip and the flyout show the same ones.
-    const tabs = (chatThreads ?? threadsFor(snapshot.agents, [], parsed.chat)).map((t) => (chatThread ? { ...t, active: t.agentId === chatThread.agentId } : t));
+    // Where the chat opens from here: the agent the view says (core/chat-scope.ts `followChat`) — never a tab to pick.
+    const openChatRoute = formatRoute({ ...parsed, chat: followChat(parsed.chat ?? 'genie', parsed, snapshot.agents, openedThreads ?? []) });
+    const openChatName = (() => { const to = parseRoute(openChatRoute).chat; return snapshot.agents.find((a) => a.id === to)?.name ?? to ?? 'genie'; })();
     // `Stop this turn` in the chat: only while its agent's turn runs AND can be stopped with the agent kept — the same
     // rule as the Agent view's header (`turnStopOffered`). Never the session's stop (the owner, 2026-10-15).
     const chatTurnStop = chatThread !== null && onCancelTurn !== undefined && turnStopOffered(chatSession);
@@ -675,27 +675,23 @@ export function Shell({
                     </aside>
                 ) : null}
                 {/*
-                 * THE CHAT STRIP (the owner: "a flyout that is always present with chat tabs"): with the chat closed and
-                 * nothing pinned, a tab per conversation on the right edge of every surface, in the width the reserve keeps
-                 * for it; a tab opens that conversation in the dock. A pinned panel takes the edge instead.
+                 * OPEN THE CHAT (the owner, 2026-10-18: no chat tabs — "the workspaces have agent tabs already. Any view that
+                 * is not a workspace view shows the genie agent chat"): with the chat closed and nothing pinned, ONE button on
+                 * the edge, in the width the reserve keeps, opens it on the agent the view says.
                  */}
                 {holder === null ? (
-                    <aside data-chat-strip="" aria-label="Chats" className="flex-col items-center gap-1 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] py-2" style={{ ...dockFrame, width: CHAT_STRIP_WIDTH, flexDirection: 'column' }}>
-                        {tabs.map((t) => (
-                            <button
-                                key={t.agentId}
-                                type="button"
-                                data-chat-tab={t.agentId}
-                                data-state={t.state ?? 'genie'}
-                                {...(t.active ? { 'data-active': 'true' } : {})}
-                                title={`Chat with ${t.name}`}
-                                onClick={() => onNavigate(formatRoute({ ...parsed, chat: t.agentId }))}
-                                className={`flex w-6 shrink-0 flex-col items-center gap-1.5 rounded-md py-1.5 text-[11px] ${t.active ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
-                            >
-                                {t.state === null ? <GenieMark /> : <FidelityDot fidelity={t.fidelity} state={t.state} />}
-                                <span className="max-h-24 overflow-hidden text-ellipsis whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>{t.name}</span>
-                            </button>
-                        ))}
+                    <aside data-chat-edge="" aria-label="Chat" className="flex-col items-center border-l border-[var(--border-1)] bg-[var(--bg-1)] py-2" style={{ ...dockFrame, width: CHAT_STRIP_WIDTH, flexDirection: 'column' }}>
+                        <button
+                            type="button"
+                            data-action="open-chat"
+                            data-nav={openChatRoute}
+                            title={`Chat with ${openChatName}`}
+                            onClick={() => onNavigate(openChatRoute)}
+                            className="flex w-6 shrink-0 flex-col items-center gap-1.5 rounded-md py-1.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
+                        >
+                            <GenieMark />
+                            <span className="max-h-24 overflow-hidden text-ellipsis whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>{openChatName}</span>
+                        </button>
                     </aside>
                 ) : null}
                 {/*
@@ -715,7 +711,7 @@ export function Shell({
                 {chatOpen ? (
                     <DockFrame style={dockFrame}>
                     <ChatFlyout
-                        thread={chatThread ? { ...chatThread, chips: tabs } : null}
+                        thread={chatThread}
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
@@ -726,7 +722,6 @@ export function Shell({
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
                         onClose={onCloseChat}
-                        onPickThread={(id) => onNavigate(pickThreadRoute(id))}
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}

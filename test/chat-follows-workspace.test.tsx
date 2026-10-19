@@ -9,12 +9,11 @@ import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/br
  * THE CHAT NEVER QUIETLY KEEPS ANOTHER WORKSPACE'S AGENT (the owner, beta.26: "I sent a chat to the wrong agent because
  * the navigation still doesn't sync — I navigated to the prism workspace but the chat stayed on moic").
  *
- * #258 made an open chat ride every navigation so the person can roam with one conversation open. That still holds
- * inside a workspace and on the surfaces that belong to none (the Dashboard, the Deck, Settings). Arriving at ANOTHER
- * workspace — its own route, or one of its agents — moves the chat to an agent of that workspace: the agent on screen,
- * else the one you last chatted with there, else its first. A workspace with no agent to message says so, and there is
- * nothing to type into. A chat deliberately pointed at another workspace's agent (its tab) names that workspace in the
- * composer, so it is never mistaken for the workspace on screen.
+ * #258 made an open chat ride every navigation. Arriving at ANOTHER workspace — its own route, or one of its agents —
+ * moves the chat to an agent of that workspace: the agent on screen, else the one you last chatted with there, else its
+ * first. (Since 2026-10-18 the chat follows EVERY view — chat-follows-view.test.tsx.) A workspace with no agent to
+ * message says so, and there is nothing to type into. A chat a route deliberately points at another workspace's agent
+ * names that workspace in the composer, so it is never mistaken for the workspace on screen.
  */
 function row(over: Partial<AgentRow>): AgentRow {
     return { id: 'x', name: 'x', provider: 'claude', workspaceId: 'ws_alpha', fidelity: 'declared', state: 'idle', duration: null, ask: null, reason: null, fixes: [], step: null, target: null, activity: null, delivery: null, collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null, ...over };
@@ -52,17 +51,7 @@ describe('navigating to ANOTHER workspace moves the chat to an agent of that wor
         expect(carryChat('genie://workspace/ws_beta', floatingOnAtlas, agents, [])).toBe('genie://workspace/ws_beta?chat=a_lark');
     });
 
-    it('CONTROL (#258): inside its own workspace, and on surfaces of no workspace, the chat stays on its agent', () => {
-        expect(chatOf(carryChat('genie://agent/a_wren?tab=stream', floatingOnAtlas, agents, []))).toBe('a_atlas');
-        expect(chatOf(carryChat('genie://workspace/ws_alpha', floatingOnAtlas, agents, []))).toBe('a_atlas');
-        expect(chatOf(carryChat('genie://deck', floatingOnAtlas, agents, []))).toBe('a_atlas');
-        expect(chatOf(carryChat('genie://dashboard?group=workspace', floatingOnAtlas, agents, []))).toBe('a_atlas');
-    });
 
-    it('CONTROL: genie, the OS agent, belongs to no project and is never swapped out', () => {
-        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://deck?chat=genie'), agents, []))).toBe('genie');
-        expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://deck?chat=a_genie'), agents, []))).toBe('a_genie');
-    });
 
     it('a chat named by its agent’s NAME (a link’s `chat=atlas`) is recognised and moved too', () => {
         expect(chatOf(carryChat('genie://workspace/ws_beta', parseRoute('genie://deck?chat=atlas'), agents, []))).toBe('a_lark');

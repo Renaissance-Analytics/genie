@@ -8,7 +8,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * `A` / `D` there too (the letters follow the composer — one actionable rendering); `Stop this turn` sits on the context
  * line while a turn runs that can be stopped (it used to sit under Send and end the agent); a broken session ends the transcript with the red error rule (`stream closed · exit 137 · 14:31`).
  */
-const base: ChatThread = { agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Working', tone: 'ok' }, chips: [], messages: [] };
+const base: ChatThread = { agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Working', tone: 'ok' }, messages: [] };
 const render = (t: ChatThread, extra: Partial<Parameters<typeof ChatFlyout>[0]> = {}) =>
     renderToStaticMarkup(<ChatFlyout thread={t} onSend={() => {}} onClose={() => {}} {...extra} />);
 

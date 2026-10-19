@@ -11,7 +11,7 @@ import { withDrafts, type Draft } from '../src/core/chat-view.js';
  * 2. **A pinned chat's subject does not follow the view.** The rail's routes are literals, so every navigation dropped
  *    `chat=&pin=` and the pinned flyout vanished. Navigation now carries a PINNED chat's subject onto the next route.
  */
-const thread = { agentId: 'a1', name: 'atlas', fidelity: 'declared' as const, unread: null, messages: [{ id: 'e1', who: 'you' as const, from: 'you', text: 'hi', delivered: true, at: 1_000 }], context: null, chips: [] };
+const thread = { agentId: 'a1', name: 'atlas', fidelity: 'declared' as const, unread: null, messages: [{ id: 'e1', who: 'you' as const, from: 'you', text: 'hi', delivered: true, at: 1_000 }], context: null };
 
 describe('withDrafts', () => {
     it('appends this agent’s undelivered drafts after the wire messages, as you, not delivered, with their time', () => {

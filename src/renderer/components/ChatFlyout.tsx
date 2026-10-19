@@ -3,14 +3,12 @@ import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fanc
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
-import { horizontalWheel } from '../../core/wheel.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
-import type { ChatChip, ChatContext, ChatMessage } from '../../core/chat-view.js';
+import type { ChatContext, ChatMessage } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
-import { FidelityDot } from './Dashboard.js';
 import { TurnStop } from './TurnStop.js';
 
 /**
@@ -45,10 +43,8 @@ export interface ChatThread {
     unread: number | null;
     /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
     messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason'>>)[];
-    /** The line under the chips — what the agent is doing, in the board's words; `null` = not read yet. */
+    /** The line under the header — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
-    /** The agents sharing the subject's workspace, the subject active; absent or empty = no chips row. */
-    chips?: readonly ChatChip[] | undefined;
 }
 
 const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
@@ -87,8 +83,6 @@ export interface ChatFlyoutProps {
     onClose?: (() => void) | undefined;
     /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
-    /** A thread chip was clicked: switch the conversation to that agent (the route's `chat=`). */
-    onPickThread?: ((agentId: string) => void) | undefined;
     /**
      * Present = a turn is running AND it can be stopped with the agent kept (`turnStopOffered`): `Stop this turn` sits on
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
@@ -125,7 +119,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onPickThread, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -245,31 +239,6 @@ export function ChatFlyout({
                 ) : null}
             </div>
 
-            {/* THREAD TABS (the board): your conversations, whoever waits on you, genie last; a click switches the thread.
-                One row, never wider than the panel (`min-w-0`); the mouse wheel scrolls it sideways (the owner, 2026-10-17),
-                so it draws no scrollbar across its chips and the line under it. */}
-            {thread?.chips && thread.chips.length > 0 ? (
-                <div
-                    data-chat-threads=""
-                    onWheel={(e) => { const dx = horizontalWheel(e); if (dx !== 0) e.currentTarget.scrollLeft += dx; }}
-                    className="flex min-w-0 shrink-0 gap-1.5 overflow-x-auto border-b border-[var(--border-1)] px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                >
-                    {thread.chips.map((c) => (
-                        <button
-                            key={c.agentId}
-                            type="button"
-                            data-chat-thread-chip={c.agentId}
-                            {...(c.active ? { 'data-active': 'true' } : {})}
-                            onClick={() => onPickThread?.(c.agentId)}
-                            className={`flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] ${c.active ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
-                        >
-                            {c.state === null ? <GenieMark /> : <FidelityDot fidelity={c.fidelity} state={c.state} />}
-                            <span>{c.name}</span>
-                            {c.unread !== null && c.unread > 0 ? <span className="rounded-full bg-[var(--violet-400)] px-1.5 font-mono text-[10px] text-white">{c.unread}</span> : null}
-                        </button>
-                    ))}
-                </div>
-            ) : null}
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
             {thread?.context || onStopTurn || onResumeLimit ? (
