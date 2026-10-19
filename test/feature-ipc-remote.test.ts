@@ -43,7 +43,12 @@ afterEach(async () => {
 describe('the remote section', () => {
     it('is MEASURED at boot: the host name, no URL until a transport listens, unlocked, no PIN, no devices, no links, nobody connected', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null });
+        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null });
+    });
+
+    it('carries this machine’s Tynn registration as main reads it (Tynn #836)', async () => {
+        const snap = await featureSnapshot(services, state(), { tynnWorkstation: () => ({ registered: true, host: 'https://tynn.example.com', workstationId: 'ws_1' }) });
+        expect(snap.remote!.tynnWorkstation).toEqual({ registered: true, host: 'https://tynn.example.com', workstationId: 'ws_1' });
     });
 
     it('remote.issuePin puts six digits on this screen with their expiry; lock and unlock flip the kill-switch', async () => {

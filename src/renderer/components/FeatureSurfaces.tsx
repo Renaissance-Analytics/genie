@@ -1706,6 +1706,18 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                             {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}
                         </div>
                     ) : null}
+                    {/* THE TYNN NETWORK (Tynn #836): this machine registered with Tynn as a workstation — what a share, the
+                        relay and the Tynn workstations list stand on — or why it is not. */}
+                    {remote.tynnWorkstation ? (
+                        <div data-tynn-workstation={remote.tynnWorkstation.registered ? 'registered' : 'unregistered'} className="flex flex-wrap items-center gap-3 text-sm">
+                            <span className="font-medium">Tynn</span>
+                            {remote.tynnWorkstation.registered ? (
+                                <span>This machine is registered with <span className="font-mono">{remote.tynnWorkstation.host.replace(/^https?:\/\//, '')}</span> as workstation <span className="font-mono text-xs">{remote.tynnWorkstation.workstationId}</span></span>
+                            ) : (
+                                <span className="text-[var(--fg-2)]">Not registered: {remote.tynnWorkstation.reason}.</span>
+                            )}
+                        </div>
+                    ) : null}
                     {!remote.enabled ? null : remote.url === null ? (
                         <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host}, so devices cannot connect yet: {remote.unavailable ?? 'no reason reported'}. The in-app surfaces are unaffected.</p>
                     ) : (
