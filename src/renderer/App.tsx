@@ -418,9 +418,18 @@ function DesktopApp({ bridge }: AppProps) {
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
     const { detail, resolved } = useAgentDetail(resolvedBridge, agentId);
-    // The chat subject's detail too: the flyout's transcript is derived from the same stream the Agent view reads
-    // (`core/chat-view.ts`), so a chat pinned to one agent while looking at another still shows its conversation.
-    const { detail: chatDetail } = useAgentDetail(resolvedBridge, parsed.chat, false);
+    // Every conversation you open is remembered, newest first (eight), across restarts: a workspace's chat opens on the latest.
+    const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
+        try { const v: unknown = JSON.parse(window.localStorage.getItem(THREADS_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+    });
+    // ALWAYS a chat, and the VIEW decides whose (the owner, 2026-10-19): an agent's tab → that agent; a workspace → its
+    // default agent; anything else → genie (core/chat-scope.ts chatSubjectFor).
+    const chatSubject = chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? []);
+    // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
+    // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
+    // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
+    // from the same stream the Agent view reads (`core/chat-view.ts`).
+    const { detail: chatDetail } = useAgentDetail(resolvedBridge, chatSubject, false);
 
     // The selected stream row — the Inspector's subject. Deliberately NOT in the URL: the
     // design says the Inspector is closed on arrival and does not remember being open across
@@ -673,21 +682,22 @@ function DesktopApp({ bridge }: AppProps) {
     }, [parsed, route]);
     // The chat's keys (§4.4, `core/keys.ts`): A / D answer the approval parked in the chat — the letters follow the
     // composer. Never while typing. Esc does not close the docked chat.
-    const chatApprovalHere = parsed.chat !== null ? chatDetail?.session?.pendingApproval ?? null : null;
+    // The chat is always open (on its subject), so its keys work on every page — not only one whose route names `chat=`.
+    const chatApprovalHere = chatDetail?.session?.pendingApproval ?? null;
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
-            const action = chatAction(press, { open: parsed.chat !== null, approval: chatApprovalHere !== null });
+            const action = chatAction(press, { open: true, approval: chatApprovalHere !== null });
             if (action === null) return;
             const optionId = approvalChoice(chatApprovalHere, action);
-            if (!optionId || parsed.chat === null) return;
+            if (!optionId || !chatDetail) return;
             e.preventDefault();
             setAnswering(optionId);
-            resolvedBridge?.answerApproval(parsed.chat, optionId);
+            resolvedBridge?.answerApproval(chatDetail.agent.id, optionId);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [parsed, chatApprovalHere, resolvedBridge]);
+    }, [chatDetail, chatApprovalHere, resolvedBridge]);
 
     /**
      * The option id currently in flight, so the buttons refuse a second press.
@@ -707,12 +717,6 @@ function DesktopApp({ bridge }: AppProps) {
      * it stays on its agent inside a workspace and across surfaces of no workspace, and moves to an agent of the
      * workspace you arrive at when that is another one (`core/chat-scope.ts`).
      */
-    // Every conversation you open is remembered, newest first (eight), across restarts: a workspace's chat opens on the latest.
-    const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
-        try { const v: unknown = JSON.parse(window.localStorage.getItem(THREADS_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
-    });
-    // ALWAYS a chat (the owner, 2026-10-19: "Chat cannot be closed PERIOD"): the route's, else the agent the view says.
-    const chatSubject = chatSubjectFor(parsed, snapshot.agents, openedThreads);
     useEffect(() => {
         if (chatSubject === null) return;
         setOpenedThreads((o) => {
@@ -750,7 +754,7 @@ function DesktopApp({ bridge }: AppProps) {
         const send = () => resolvedBridge.prompt(draft.agentId, draft.text, draft.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
         // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
         // one with no thread yet — a fresh install's genie).
-        const session = chatDetail?.agent.id === draft.agentId || parsed.chat === draft.agentId ? chatDetail?.session ?? null : null;
+        const session = chatDetail?.agent.id === draft.agentId ? chatDetail.session ?? null : null;
         if (draftSendVia(session) === 'restart') {
             void resolvedBridge.agents.restart(draft.agentId, 'graceful').then((r) => (r.ok ? send() : undefined));
         } else {
@@ -770,7 +774,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [promptPlatform, setPromptPlatform] = useState('generic');
     useEffect(() => { setPromptPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
     const sendToAgentInFront = (text: string): void => {
-        const to = promptTarget({ chat: parsed.chat, agentOnScreen: parsed.surface === 'agent' ? parsed.agentId : null });
+        const to = promptTarget({ chat: chatDetail?.agent.id ?? chatSubject, agentOnScreen: parsed.surface === 'agent' ? parsed.agentId : null });
         send(to, text);
         if (parsed.chat !== to) navigate(formatRoute({ ...parsed, chat: to }));
     };

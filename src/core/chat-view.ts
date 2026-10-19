@@ -67,6 +67,8 @@ export interface ChatThreadView {
     messages: readonly ChatMessage[];
     /** `null` until the agent's detail has been read — not "Idle". */
     context: ChatContext | null;
+    /** The subject's own conversation is loaded (the flyout's `data-chat-loaded`). `false` = nothing read for it yet. */
+    loaded: boolean;
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -112,7 +114,11 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
 }
 
 export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, rows: readonly AgentRow[], _now: () => number): ChatThreadView {
-    const row = rows.find((r) => r.id === subjectId);
+    const row = rows.find((r) => r.id === subjectId || r.name === subjectId) ?? null;
+    // Only the SUBJECT's detail is its conversation (a route may name it by id or, for genie, by name). A detail still
+    // loaded for another agent is never drawn under this one's name.
+    const own = detail !== null && (detail.agent.id === subjectId || detail.agent.id === row?.id || detail.agent.name === subjectId);
+    if (!own) detail = null;
     return {
         agentId: subjectId,
         name: detail?.agent.name ?? row?.name ?? subjectId,
@@ -120,6 +126,7 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         unread: null,
         messages: detail ? byTime(chatMessages(detail), commsRows(detail, rows)) : [],
         context: detail ? chatContext(detail) : null,
+        loaded: detail !== null,
     };
 }
 

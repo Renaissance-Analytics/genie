@@ -26,17 +26,24 @@ import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/br
 function row(over: Partial<AgentRow>): AgentRow {
     return { id: 'x', name: 'x', provider: 'claude', workspaceId: 'ws', fidelity: 'declared', state: 'idle', duration: null, ask: null, reason: null, fixes: [], step: null, target: null, activity: null, delivery: null, collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null, ...over };
 }
-const agents: AgentRow[] = [row({ id: 'a_atlas', name: 'atlas' }), row({ id: 'a_genie', name: 'genie', workspaceId: '__genie__' })];
+const agents: AgentRow[] = [row({ id: 'a_atlas', name: 'atlas' }), row({ id: 'a_wren', name: 'wren' }), row({ id: 'a_genie', name: 'genie', workspaceId: '__genie__' })];
+// wren is the workspace's DEFAULT agent — deliberately not the first, so "the first agent" cannot pass for it.
+const workspaces = [{ id: 'ws', defaultAgentId: 'a_wren' }];
 
-describe('there is always a chat', () => {
-    it('with no chat in the route: the agent the view says — Genie off a workspace, the agent on its page', () => {
-        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, [])).toBe('a_genie');
-        expect(chatSubjectFor(parseRoute('genie://agent/a_atlas?tab=stream'), agents, [])).toBe('a_atlas');
-        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, [])).toBe('a_atlas');
+describe('there is always a chat, and the VIEW decides whose (the owner, 2026-10-19: "the chat is always the workspace agent unless I click on another agents tab then the chat shows that agent’s chat")', () => {
+    it("a workspace's view: its DEFAULT agent; an agent's tab: that agent; off a workspace: genie", () => {
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, workspaces)).toBe('a_wren');
+        expect(chatSubjectFor(parseRoute('genie://agent/a_atlas?tab=stream'), agents, workspaces)).toBe('a_atlas');
+        expect(chatSubjectFor(parseRoute('genie://dashboard'), agents, workspaces)).toBe('a_genie');
     });
 
-    it('CONTROL: a route that names its chat keeps it', () => {
-        expect(chatSubjectFor(parseRoute('genie://dashboard?chat=a_atlas'), agents, [])).toBe('a_atlas');
+    it('a workspace with no default agent chosen: its first agent', () => {
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws'), agents, [{ id: 'ws' }])).toBe('a_atlas');
+    });
+
+    it('a chat named in the route does NOT override the view — the chat follows the view, nothing else', () => {
+        expect(chatSubjectFor(parseRoute('genie://dashboard?chat=a_atlas'), agents, workspaces)).toBe('a_genie');
+        expect(chatSubjectFor(parseRoute('genie://workspace/ws?chat=a_atlas'), agents, workspaces)).toBe('a_wren');
     });
 });
 

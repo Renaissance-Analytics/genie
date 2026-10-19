@@ -45,6 +45,8 @@ export interface ChatThread {
     messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason'>>)[];
     /** The line under the header — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
+    /** The subject's own conversation is loaded (`core/chat-view.ts`); absent = not said, drawn as not loaded. */
+    loaded?: boolean | undefined;
 }
 
 const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
@@ -189,6 +191,8 @@ export function ChatFlyout({
     return (
         <aside
             data-chat="pinned"
+            // Whether the subject's own conversation is loaded — the smoke reads it on a page reached without `chat=`.
+            data-chat-loaded={thread?.loaded ? 'true' : 'false'}
             style={{ width }}
             className="relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
         >
