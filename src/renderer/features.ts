@@ -122,7 +122,14 @@ export interface RemoteSection {
     readonly tailscale?: TailscaleStatus | null | undefined;
     /** What the last Connect or Install did, in words; absent = not tried. */
     readonly tailscaleOutcome?: string | null | undefined;
+    /** This machine on the Tynn network (main/workstation-identity.ts, Tynn #836); absent/`null` = not read yet. */
+    readonly tynnWorkstation?: TynnWorkstationState | null | undefined;
 }
+
+/** Whether this machine is registered with Tynn as a workstation, and with which Tynn; or why not. */
+export type TynnWorkstationState =
+    | { readonly registered: true; readonly host: string; readonly workstationId: string }
+    | { readonly registered: false; readonly reason: string };
 
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
 export interface IntegrationsSection {

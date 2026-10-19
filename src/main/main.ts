@@ -33,6 +33,8 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
+import { ensureWorkstation, workstationKeyStore } from './workstation-identity.js';
+import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -477,6 +479,8 @@ function revealMainWindow(): void {
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
 let tynnAccount: TynnAccount | null = null;
+/** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
+let tynnWorkstationNow: TynnWorkstationState | null = null;
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
 let afterTynnUrl: (() => void) | null = null;
 
@@ -1277,7 +1281,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), tynnWorkstation: () => tynnWorkstationNow, issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1484,6 +1488,33 @@ async function boot(): Promise<void> {
     });
     tynnAccount.onChange(pushFeatures);
     afterTynnUrl = pushFeatures;
+    // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
+    // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
+    // sign-in landing during the launch's own check cannot make two workstations.
+    const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (text) => safeStorage.encryptString(text),
+        decrypt: (bytes) => safeStorage.decryptString(bytes),
+    });
+    let registering: Promise<void> | null = null;
+    const registerWorkstation = (): Promise<void> => {
+        if (registering) return registering;
+        const account = tynnAccount;
+        if (!account) return Promise.resolve();
+        registering = (async () => {
+            const host = account.host();
+            if (!account.status().signedIn) {
+                tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine' };
+                return;
+            }
+            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities })
+                .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
+            tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId } : { registered: false, reason: result.reason };
+        })().finally(() => { registering = null; pushFeatures(); });
+        return registering;
+    };
+    tynnAccount.onChange(() => { void registerWorkstation(); });
+    void registerWorkstation();
     // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
     if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
     // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a

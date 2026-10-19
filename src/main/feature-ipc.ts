@@ -49,6 +49,8 @@ export interface FeaturePorts {
     };
     /** The listener following its switch (main/remote-access.ts, Tynn #820); absent = no host side (doctor mode). */
     readonly remoteAccess?: { apply(): Promise<void>; restart(): Promise<void> };
+    /** This machine's Tynn workstation registration, as main last read it (main/workstation-identity.ts, Tynn #836). */
+    readonly tynnWorkstation?: () => import('../renderer/features.js').TynnWorkstationState | null;
     /** Windows: add the firewall rule (main/remote-firewall.ts); absent elsewhere. */
     readonly allowFirewall?: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
     /** This Genie's Tynn account (main/tynn-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
@@ -313,6 +315,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             firewallOutcome: state.firewallOutcome ?? null,
             tailscale: ports.tailscale ? ports.tailscale.status() : null,
             tailscaleOutcome: state.tailscaleOutcome ?? null,
+            tynnWorkstation: ports.tynnWorkstation ? ports.tynnWorkstation() : null,
         },
     };
 }
