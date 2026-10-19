@@ -36,6 +36,7 @@ export const REMOTE_METHODS = [
     'workspaces.confirmAdd',
     'workspaces.previewAddFromGit',
     'workspaces.confirmAddFromGit',
+    'workspaces.tynnProjects',
     'workspaces.previewAddFromTynn',
     'workspaces.confirmAddFromTynn',
     'workspaces.hibernate',
@@ -111,6 +112,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.confirmAdd': 'write',
     'workspaces.previewAddFromGit': 'host-only',
     'workspaces.confirmAddFromGit': 'write',
+    // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.
+    'workspaces.tynnProjects': 'host-only',
     'workspaces.previewAddFromTynn': 'host-only',
     'workspaces.confirmAddFromTynn': 'write',
     'workspaces.hibernate': 'write',

@@ -196,9 +196,11 @@ export interface GenieBridge {
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
-        /** From Tynn (§6.1): the parent picked on the host, the project the token belongs to, the plan before anything is written. */
-        previewAddFromTynn(): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
-        confirmAddFromTynn(parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
+        /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"). */
+        tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[] } | { ok: false; reason: string }>;
+        /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
+        previewAddFromTynn(projectId: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Forgets the workspace and its agents. The folder on disk is never touched. */

@@ -3,8 +3,8 @@ import { planAdd, type PlanStep } from './workspace-model.js';
 /**
  * ADD A WORKSPACE FROM TYNN (§6.1) — the pure half.
  *
- * Tynn's REST API answers `GET /api/v1/project` for the project a PROJECT token belongs to — name,
- * slug, vision and more — and exposes no repositories. So "from Tynn" is the ENVELOPE from the
+ * Signed in (main/tynn-account.ts), Genie lists the person's projects (`GET /api/v1/genie/projects`) and the
+ * person picks one, as in Genie 1. Tynn exposes no repositories there. So "from Tynn" is the ENVELOPE from the
  * project: a folder named by the slug under the parent you pick, `project.json` carrying the
  * project's name, its vision as the description, and the `tynn` link the envelope schema defines
  * (`host`, `project`, `projectId`; `owner` only when known — never guessed). Repos follow through
@@ -32,9 +32,6 @@ export function parseTynnProject(raw: unknown): TynnProject | null {
     return { id, name, slug, vision };
 }
 
-export function tynnProjectUrl(host: string): string {
-    return `${host.replace(/\/+$/, '')}/api/v1/project`;
-}
 
 export interface TynnLink {
     readonly host: string;
