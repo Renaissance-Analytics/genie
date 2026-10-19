@@ -572,6 +572,8 @@ export function Shell({
                     {canServe && parsed.surface === 'workspace' && workspaceFor(parsed.workspaceId) ? (
                         <Workspace
                             key={parsed.workspaceId}
+                            // Settings → Hosting opens the same modals as the row's indicators.
+                            onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
                             terminals={terminals}
                             files={files}
