@@ -21,6 +21,9 @@ const remote: NonNullable<FeatureData['remote']> = {
     shares: [{ id: 'share_s', workspaceId: 'tynn', grantedTo: 'wren', expiresAt: 10, served: true, revoked: false }],
     connections: [{ id: 'conn_1', label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: true }],
     servedLink: null,
+    // The switch is on (Tynn #820): these describe a host that listens or tries to.
+    enabled: true,
+    firewall: false,
 };
 const render = (r: FeatureData['remote']) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);

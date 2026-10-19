@@ -101,6 +101,9 @@ describe('the surfaces draw names', () => {
             shares: [{ id: 'share_s', workspaceId: ID, grantedTo: 'wren', expiresAt: 10, served: true, revoked: false }],
             connections: [{ id: 'conn_2', label: 'wren’s laptop', isOwner: false, workspaceId: ID, driving: false }],
             servedLink: null,
+            // The switch is on (Tynn #820): these describe a host that listens or tries to.
+            enabled: true,
+            firewall: false,
         };
         const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={workspaces} />);
         // The page only: the Settings sidebar has its own "Tynn" link, which must not satisfy this.

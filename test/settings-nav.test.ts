@@ -29,8 +29,8 @@ describe('every setting has one place, or is deliberately not drawn', () => {
         for (const s of SETTINGS) if (sectionOf(s.key) !== null) expect(SECTIONS, s.key).toContain(sectionOf(s.key));
     });
 
-    it('not drawn: bookkeeping, one workspace’s own layout, and the raw GitHub flags (shown only through the GitHub card)', () => {
-        expect([...NOT_DRAWN].sort()).toEqual(['github_authorized', 'github_installed', 'panel_layout', 'panel_splits', 'tray_notice_shown', 'whats_new_seen_version', 'workspace_tabs']);
+    it('not drawn: bookkeeping, one workspace’s own layout, the raw GitHub flags (shown only through the GitHub card), and the remote-access switch (drawn by Remote access itself, Tynn #820)', () => {
+        expect([...NOT_DRAWN].sort()).toEqual(['github_authorized', 'github_installed', 'panel_layout', 'panel_splits', 'remote_access', 'tray_notice_shown', 'whats_new_seen_version', 'workspace_tabs']);
         for (const k of NOT_DRAWN) expect(sectionOf(k), k).toBeNull();
     });
 
