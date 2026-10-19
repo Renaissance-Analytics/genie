@@ -947,6 +947,41 @@ if (ch.overlay) {
     console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
 }
 
+// 51. A SOUND LOADS (the owner, 2026-10-19: "None of the sounds work at all"). The window's Content-Security-Policy named
+// no media-src, so every <audio> load was refused — and the player swallows a refused play. Here the window loads one
+// of its own bundled .wav files through an Audio element: it must load, with no policy violation. Loading does not need
+// a speaker, so this holds on a CI machine with none.
+{
+    const { readdirSync, existsSync } = await import('node:fs');
+    const assets = 'dist/renderer/assets';
+    const wav = existsSync(assets) ? readdirSync(assets).find((f) => f.endsWith('.wav')) ?? null : null;
+    if (!wav) {
+        check(false, '51. a bundled sound loads in the window — no media blocked by the security policy', `no .wav under ${assets}`);
+    } else {
+        const loaded = await cdp.evaluate(`(async () => {
+            const violations = [];
+            const onViolation = (e) => violations.push(e.violatedDirective + ' ' + e.blockedURI);
+            document.addEventListener('securitypolicyviolation', onViolation);
+            const url = new URL('assets/' + ${JSON.stringify(wav)}, document.baseURI).href;
+            const audio = new Audio();
+            audio.preload = 'auto';
+            const result = await new Promise((resolve) => {
+                audio.addEventListener('canplaythrough', () => resolve('loaded'), { once: true });
+                audio.addEventListener('error', () => resolve('error ' + (audio.error ? audio.error.code : '?')), { once: true });
+                setTimeout(() => resolve('timeout'), 8000);
+                audio.src = url;
+                audio.load();
+            });
+            document.removeEventListener('securitypolicyviolation', onViolation);
+            return JSON.stringify({ result, violations, url });
+        })()`);
+        const s = JSON.parse(loaded || '{}');
+        check(s.result === 'loaded' && (s.violations ?? []).length === 0,
+            '51. a bundled sound loads in the window — no media blocked by the security policy',
+            `${s.result} · ${(s.violations ?? []).join(' | ') || 'no violations'} · ${s.url}`);
+    }
+}
+
 // 11. Nothing threw on the way up.
 const errors = await cdp.evaluate('JSON.stringify(window.__smokeErrors ?? [])');
 const parsed = JSON.parse(errors || '[]');
