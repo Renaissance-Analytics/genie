@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
@@ -112,14 +112,17 @@ describe('the record’s last turn', () => {
         await registry.setLastTurn(record.id, 53);
 
         const numbered: number[] = [];
+        // The record's writes, AWAITED — never a guessed sleep: under a loaded machine (the Omarchy VM's full suite,
+        // 2026-10-18) a 20 ms sleep ran the assertion before the write had landed.
+        const writes: Promise<unknown>[] = [];
         const first = fakeDriver();
-        const host = new SessionHost({ userData: dir, driverFor: (() => first.factory) as DriverFor, processTree: noProcessTree, onTurnNumbered: (_id, n) => { numbered.push(n); void registry.setLastTurn(record.id, n); } });
+        const host = new SessionHost({ userData: dir, driverFor: (() => first.factory) as DriverFor, processTree: noProcessTree, onTurnNumbered: (_id, n) => { numbered.push(n); writes.push(registry.setLastTurn(record.id, n)); } });
         expect(host.start(registry.find(record.id)!, dir)).toEqual({ ok: true });
         host.prompt(record.id, 'start something long');
         expect(numbered).toEqual([54]); // at once, before the turn ends
         first.exit(); // cut off: the turn never ends
         host.stopAll();
-        await new Promise((r) => setTimeout(r, 20));
+        await Promise.all(writes);
         expect(registry.find(record.id)?.lastTurn).toBe(54);
 
         const second = fakeDriver();
@@ -152,7 +155,8 @@ describe('the host’s ledger', () => {
 
         const host = new SessionHost({ userData: dir, driverFor: (() => fakeDriver().factory) as DriverFor, processTree: noProcessTree });
         host.ledgerFor(record.id); // starts the read
-        await new Promise((r) => setTimeout(r, 50));
+        // The history is read asynchronously: wait for the READ, not for a guessed time.
+        await vi.waitFor(() => { expect(turnNs(host.ledgerFor(record.id))).toHaveLength(2); }, { timeout: 10_000, interval: 20 });
         expect(turnNs(host.ledgerFor(record.id))).toEqual([1, 2]);
     });
 });
