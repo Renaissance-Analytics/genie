@@ -91,7 +91,7 @@ export type Route =
           detached: boolean;
       } & Common)
     /** A Take Over window: one terminal, no chrome. `genie://takeover/<terminalId>`. */
-    | ({ surface: 'takeover'; terminalId: string } & Common)
+    | ({ surface: 'takeover'; terminalId: string; login?: string } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
     | ({ surface: 'files'; workspaceId: string } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
@@ -175,8 +175,9 @@ export function parseRoute(input: string): Route {
         case 'takeover': {
             // No id is not a window. Same honesty as an empty agent id: the Dashboard.
             if (!tail) return dashboard('workspace', common);
-            // No modifiers: a TUI window has no chat flyout to open and no pin to keep.
-            return { surface: 'takeover', terminalId: tail, chat: null, pin: null };
+            // No chat and no pin: a TUI window has no chat to open. `login` names a provider's login window (its notice).
+            const login = params.get('login');
+            return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}) };
         }
         case 'files': {
             // The popped-out panel (§4.3): no id is not a window; no modifiers either.
@@ -257,6 +258,7 @@ export function formatRoute(route: Route): string {
             if (route.view !== 'home') params.set('view', route.view);
             break;
         case 'takeover':
+            if (route.login) params.set('login', route.login);
             break;
         case 'files':
             break;

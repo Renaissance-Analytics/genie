@@ -39,6 +39,8 @@ export interface LiveSession {
      * retrying on a stated backoff, or waiting for the person. Absent = not reported (an older snapshot).
      */
     limit?: GateView | undefined;
+    /** Signed out of its provider (the login refused): `Log in` fixes it. Absent = not signed out, or not reported. */
+    signedOut?: boolean | undefined;
     running: boolean;
     turnState: TurnState;
     /** Epoch ms. `null` when the session never recorded a start. */

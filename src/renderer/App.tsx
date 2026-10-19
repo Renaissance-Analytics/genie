@@ -808,7 +808,7 @@ function DesktopApp({ bridge }: AppProps) {
     // A TAKE OVER WINDOW renders the terminal and nothing else: no rail, no bar, no Deck. The
     // TUI is the window (§1).
     if (parsed.surface === 'takeover') {
-        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} />;
+        return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
     }
     // THE FILE PANEL IN ITS OWN WINDOW (§4.3): the panel and nothing else; closing the window docks it back.
     if (parsed.surface === 'files') {
@@ -988,6 +988,7 @@ function DesktopApp({ bridge }: AppProps) {
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
+            onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
             onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.

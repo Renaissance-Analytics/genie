@@ -1,4 +1,5 @@
 import { readChatDockWidth } from '../core/chat-width.js';
+import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
@@ -158,6 +159,7 @@ export interface ShellProps {
     onCancelTurn?: ((agentId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
+    onProviderLogin?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
@@ -240,6 +242,7 @@ export function Shell({
     onStopAgent,
     onCancelTurn,
     onResumeLimit,
+    onProviderLogin,
     onStartAgent,
     onOpenPalette,
     onSelectRow,
@@ -550,6 +553,7 @@ export function Shell({
                                 onStop={onStopAgent}
                                 onCancelTurn={onCancelTurn}
                                 onResumeLimit={onResumeLimit}
+                                onProviderLogin={onProviderLogin}
                                 onStart={onStartAgent}
                                 terminals={terminals}
                             />
@@ -725,6 +729,7 @@ export function Shell({
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
+                        onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                     />
                     </DockFrame>
                 ) : null}

@@ -38,6 +38,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
+import { LoginHost } from './login-host.js';
+import { SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
@@ -865,6 +867,29 @@ async function boot(): Promise<void> {
     };
     // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
+    // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
+    // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
+    const logins = new LoginHost({
+        terminals: terminalsForTakeOver,
+        openWindow: (route) => openTakeOverWindow(route),
+        binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
+        runStatus: (command, cwd) => new Promise<number>((resolve) => {
+            execFileCb(command, { shell: true, cwd, timeout: 30_000, windowsHide: true }, (error) => {
+                resolve(error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? ((error as { code: number }).code) : 1);
+            });
+        }),
+        onSignedIn: (provider) => {
+            for (const id of host?.signedOutAgents(provider) ?? []) {
+                void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
+            }
+        },
+    });
+    ipcMain.handle('genie:provider-login', (_event, raw: unknown) => {
+        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
+        if (!record) return { ok: false, reason: 'No agent named.' };
+        const started = logins.start(record.provider);
+        return started.ok ? { ok: true } : started;
+    });
     ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
         if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
         return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());

@@ -90,6 +90,8 @@ export interface ChatFlyoutProps {
     onStopTurn?: (() => void) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
+    /** Signed out: `Log in` on the context line, with the provider's name. */
+    onProviderLogin?: { name: string; run: () => void } | undefined;
     /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
@@ -119,7 +121,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onRestartAndSend, onStopTurn, onResumeLimit, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onRestartAndSend, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -241,10 +243,21 @@ export function ChatFlyout({
 
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || onStopTurn || onResumeLimit ? (
+            {thread?.context || onStopTurn || onResumeLimit || onProviderLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.text ?? 'Working'}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
+                    {onProviderLogin ? (
+                        <button
+                            type="button"
+                            data-action="provider-login"
+                            title={`Open the ${onProviderLogin.name} login in a window of its own`}
+                            onClick={() => onProviderLogin.run()}
+                            className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            Log in to {onProviderLogin.name}
+                        </button>
+                    ) : null}
                     {onResumeLimit ? (
                         <button
                             type="button"

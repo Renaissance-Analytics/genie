@@ -37,6 +37,7 @@ describe('the capability table', () => {
         expect(capabilityOf('updates.install')).toBe('upgrade');
         expect(capabilityOf('addWorkspace')).toBe('host-only');
         expect(capabilityOf('takeOver')).toBe('host-only');
+        expect(capabilityOf('providerLogin')).toBe('host-only');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
         expect(new Set(REMOTE_METHODS).size).toBe(REMOTE_METHODS.length);
@@ -53,7 +54,8 @@ describe('the capability table', () => {
         // 55 since `resumeLimit` (`Resume now` while a provider's login is held for its rate limit, Tynn #794): a write, agent-scoped.
         // 56 since `agents.setAutoApprove` (an agent's autonomy, Tynn #801): a write, agent-scoped.
         // 57 since `agents.setIssueWatch` (what an agent hears from IssueWatch, Tynn #806): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(57);
+        // 58 since `providerLogin` (Log in to <provider>, 2026-10-18): host-only like takeOver — it opens a window on the host.
+        expect(REMOTE_METHODS.length).toBe(58);
         expect(capabilityOf('cancelTurn')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');

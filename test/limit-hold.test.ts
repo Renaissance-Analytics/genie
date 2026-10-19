@@ -83,10 +83,11 @@ describe('a turn that FAILED on the rate limit, with no reading before it', () =
     it('CONTROL: any other failure FAILS, named by the provider’s own reason rather than the CLI’s generic one', () => {
         const s = open();
         s.session.prompt('build it', 'you');
-        s.endFailing('auth', 'authentication_failed');
+        // `overloaded`, not `auth`: a login refusal is SIGNED OUT since 2026-10-18 (provider-login.test.tsx).
+        s.endFailing('overloaded', 'overloaded_error');
         expect(s.session.held).toBe(false);
         expect(s.session.turnState).toBe('failed');
-        expect(s.session.failure).toBe('authentication_failed');
+        expect(s.session.failure).toBe('overloaded_error');
         expect(s.breaches).toEqual([]);
     });
 });
