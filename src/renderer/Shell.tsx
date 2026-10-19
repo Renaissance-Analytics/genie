@@ -419,6 +419,8 @@ export function Shell({
                     {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
                         <Dashboard
                             rows={snapshot.agents}
+                            // Genie's own row, its group first (the design mockup).
+                            genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
                             // A WAITING row is a door to its Deck item (§4.1): the Deck resolves, the Dashboard shows.
                             onOpenAgent={(id) => {

@@ -197,6 +197,14 @@ export class Registry {
                     const observed = this.#observed(record.id);
                     return observed ? observedRowFor(record, observed, now()) : agentRowFor(record, this.#probe(record.id), now);
                 }),
+            // GENIE'S OWN ROW, beside the workspace agents (the design mockup's `genie · default agent · not in a workspace`
+            // group): the Dashboard draws it in a group of its own, so the census that counts it has its row.
+            osAgent: (() => {
+                const os = this.osAgent();
+                if (!os) return null;
+                const observed = this.#observed(os.id);
+                return observed ? observedRowFor(os, observed, now()) : agentRowFor(os, this.#probe(os.id), now);
+            })(),
             // `agentsKnown` is TRUE only once the store has actually been read. Before that the
             // rail must render no counts at all: a `0` on first paint says "this workspace is
             // empty" when the truth is "nobody has looked yet".
