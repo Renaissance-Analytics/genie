@@ -2,7 +2,7 @@ import { Icon } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 
 /**
- * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Agents · the agents you opened · the tabs you designed · + · Settings — +
+ * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Dashboard · the agents you opened · the tabs you designed · + · Settings — +
  * always just before Settings, Settings always last. The SAME strip on the workspace's own views and over an agent's
  * page: an agent opens INSIDE its workspace (the owner's choice, 2026-10-17 — as in Genie 1), so the workspace, its
  * tabs, Settings and the sibling agents are always one click away. Labelled tabs, never a shortcut-only door (§4.0).
@@ -57,11 +57,11 @@ export function WorkspaceTabs({ designed, openAgents, current, canDesign, hasSet
                         </span>
                     );
                 }
-                const view = t.kind === 'agents' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : `tab:${t.id}`;
+                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
                     <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
-                        {t.kind === 'designed' ? t.name : t.kind === 'agents' ? 'Agents' : t.kind === 'github' ? 'GitHub' : 'Settings'}
+                        {t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : 'Settings'}
                     </button>
                 );
             })}

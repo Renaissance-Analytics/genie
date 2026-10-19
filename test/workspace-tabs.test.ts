@@ -28,14 +28,14 @@ import {
 const empty: TabsState = { tabs: [] };
 
 describe('the strip', () => {
-    it('by default: Agents, +, Settings — Settings always last, + always just before it', () => {
-        expect(tabStrip(empty).map((t) => t.kind)).toEqual(['agents', 'add', 'settings']);
+    it('by default: Dashboard, +, Settings — Settings always last, + always just before it', () => {
+        expect(tabStrip(empty).map((t) => t.kind)).toEqual(['dashboard', 'add', 'settings']);
     });
 
-    it('designed tabs sit between Agents and +, in the order made', () => {
+    it('designed tabs sit between Dashboard and +, in the order made', () => {
         const a = addTab(empty, 'Ops').state;
         const b = addTab(a, 'Board').state;
-        expect(tabStrip(b).map((t) => (t.kind === 'designed' ? t.name : t.kind))).toEqual(['agents', 'Ops', 'Board', 'add', 'settings']);
+        expect(tabStrip(b).map((t) => (t.kind === 'designed' ? t.name : t.kind))).toEqual(['dashboard', 'Ops', 'Board', 'add', 'settings']);
     });
 });
 

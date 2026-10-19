@@ -33,7 +33,7 @@ const record = (v: unknown): Record<string, unknown> | null => (typeof v === 'ob
 const COMMIT_LINE = /\[[^\]\n]*?\s([0-9a-f]{7,40})\]\s+([^\n]+)/;
 
 /** The age as the roster writes it: `now` under a minute, `12m`, `1h 5m`; empty when the row carries no time. */
-function ageOf(at: number | null, now: number): string {
+export function ageOf(at: number | null, now: number): string {
     if (at === null) return '';
     const minutes = Math.floor((now - at) / 60_000);
     if (minutes < 1) return 'now';

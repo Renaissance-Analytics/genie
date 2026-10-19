@@ -29,10 +29,11 @@ import { reattachAll } from '../reattach.js';
 import { PluginPane, type PluginPanelView } from './PluginPane.js';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
-import { workspaceHome, type HomeFilesState } from '../../core/workspace-home.js';
+import { workspaceDashboard } from '../../core/workspace-dashboard.js';
+import type { DeckItem } from '../../core/deck.js';
 import { FidelityDot } from './Dashboard.js';
 import { repoChip } from '../../core/repo-status.js';
-import { WorkspaceHome } from './WorkspaceHome.js';
+import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -151,8 +152,12 @@ export interface WorkspaceProps {
      * agent lanes and all of the agents."
      */
     view?: WorkspaceView | undefined;
-    /** Every agent Genie knows of; the home view keeps this workspace's. Absent = none known. */
+    /** Every agent Genie knows of; the dashboard keeps this workspace's. Absent = none known. */
     rows?: readonly AgentRow[] | undefined;
+    /** The Deck's items; the dashboard shows what waits on you in this workspace. Absent = none known. */
+    deckItems?: readonly DeckItem[] | undefined;
+    /** Open a Deck item (a question or approval waiting on you). */
+    onOpenDeckItem?: ((itemId: string) => void) | undefined;
     onOpenAgent?: ((agentId: string) => void) | undefined;
     /** The agents open as tabs in this workspace's strip (Tynn #805), and closing one. */
     openAgents?: ReadonlyArray<{ id: string; name: string; state: string }> | undefined;
@@ -170,7 +175,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -178,18 +183,8 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     const canDesign = Boolean(ops?.settings && ops.settings.values !== null);
     const saveTabs = (next: TabsState): void => { ops?.settings?.onSet('workspace_tabs', serializeTabs(next)); };
     const [designNotice, setDesignNotice] = useState<string | null>(null);
-    // The file host's state for "Changes this session" (home view): read on mount and on every change the host
-    // reports; `null` until it answers, which the rail renders as an ABSENT section, not an empty one.
-    const [filesState, setFilesState] = useState<HomeFilesState | null>(null);
-    useEffect(() => {
-        if (view !== 'home' || !files) return;
-        let live = true;
-        const read = () => { void files.state(workspace.id).then((s) => { if (live) setFilesState(s); }); };
-        read();
-        const off = files.onChange((id) => { if (id === workspace.id) read(); });
-        return () => { live = false; off(); };
-    }, [view, files, workspace.id]);
-    const home = workspaceHome(rows, workspace.id, filesState);
+    // THE WORKSPACE DASHBOARD (q_09d1f4a0): what waits on you, the work in flight, the last finished — no file changes.
+    const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
     const label = workspace.name ?? workspace.id;
     /*
@@ -540,9 +535,9 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     );
                 }) : null}
                 {/* The agents strip (the board's header): a pill per agent — state dot, name — each opening the agent. */}
-                {home.agents.length > 0 ? (
+                {dashboard.strip.length > 0 ? (
                     <div data-agents-strip="" className="ml-2 flex min-w-0 items-center gap-1 overflow-x-auto">
-                        {home.agents.map((a) => (
+                        {dashboard.strip.map((a) => (
                             <button key={a.id} type="button" data-agent-pill={a.id} title={`${a.name} · ${a.word.toLowerCase()}`} onClick={() => onOpenAgent?.(a.id)} className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-1)] px-2 py-0.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
                                 <FidelityDot fidelity={a.fidelity} state={a.state} />
                                 <span>{a.name}</span>
@@ -760,7 +755,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-0.5 text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]">Bring back</button>
                 </div>
             ) : null}
-            {/* HOME — the board's workspace surface: the one file panel (when open) beside the agents rail. */}
+            {/* HOME — the workspace dashboard, with the one file panel (when open) beside it. */}
             {view === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
                     {filesInline && files ? (
@@ -768,7 +763,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
                         </div>
                     ) : null}
-                    <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide={!filesInline} onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />
+                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />
                 </div>
             ) : null}
             {view === 'terminals' && filesInline && files ? (
@@ -786,7 +781,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     return (
                         <div data-designed-tab-missing="" className="flex flex-1 flex-col items-center justify-center gap-2 text-[13px] text-[var(--fg-3)]">
                             <p>This tab is not in {label} any more.</p>
-                            <button type="button" onClick={() => onViewChange?.('home')} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Back to Agents</button>
+                            <button type="button" onClick={() => onViewChange?.('home')} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Back to the dashboard</button>
                         </div>
                     );
                 }
@@ -802,7 +797,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         renderPanel={(p) => {
                             if (p.kind === 'terminal') return terminalsBody;
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
-                            if (p.kind === 'widget') return <WorkspaceHome name={label} workspaceId={workspace.id} view={home} wide onOpenAgent={(id) => onOpenAgent?.(id)} onAddAgent={() => onAddAgent?.()} />;
+                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;

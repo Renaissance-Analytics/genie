@@ -1612,6 +1612,8 @@ async function boot(): Promise<void> {
     // A question asked or answered, a list item, a finished agent: the snapshot (and so the Deck, its badge and the
     // "an agent asks you something" alert) follows at once.
     composed.attention.onChange(() => registry?.touch());
+    // The workspace dashboard's "Last finished" (q_09d1f4a0): each agent's last handoff, from the same record.
+    registry.setHandoffProbe((id) => composed.attention.lastHandoff(id));
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());

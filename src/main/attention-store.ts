@@ -256,6 +256,22 @@ export class AttentionStore {
         return this.#data.finished;
     }
 
+    /**
+     * An agent's LAST handoff, read or not — the workspace dashboard's "Last finished" (q_09d1f4a0): its first line, and
+     * when. A finish without a handoff is skipped; none at all = `null`.
+     */
+    lastHandoff(agentId: AgentId): { text: string; at: number } | null {
+        for (let i = this.#data.finished.length - 1; i >= 0; i -= 1) {
+            const f = this.#data.finished[i]!;
+            if (f.agentId !== agentId || f.handoff === null) continue;
+            const text = f.handoff.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
+            const at = Date.parse(f.at);
+            if (text === undefined || Number.isNaN(at)) continue;
+            return { text: text.slice(0, 200), at };
+        }
+        return null;
+    }
+
     markSeen(id: string): void {
         this.#data.finished = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
         reportFlush(this.#flush(), 'the attention store');
