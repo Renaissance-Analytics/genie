@@ -859,7 +859,8 @@ if (!approvalEnabled) {
 {
     const takeoverTargets = async () => {
         const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-        return list.filter((t) => t.type === 'page' && String(t.url).includes('#genie://takeover/'));
+        // genie://takeover/<id>, or the address it is rewritten to, genie://{workstation}/takeover/<id> (Tynn #831).
+        return list.filter((t) => t.type === 'page' && /#genie:\/\/(?:[^/?#]+\/)?takeover\//.test(String(t.url)));
     };
     const before = (await takeoverTargets()).length;
     check(before === 0, '39. CONTROL: no take-over window exists before the click', `${before} target(s)`);
