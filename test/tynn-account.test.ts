@@ -18,12 +18,14 @@ const HOST = 'https://tynn.example';
 const CODE = 'aB3'.repeat(21) + 'x';
 const USER = { id: '7', name: 'Ada', email: 'ada@example.com' };
 
-function fakeTynn(opts: { reachable?: boolean } = {}) {
+function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
     const jar = new Map<string, string>();
     const calls: Array<{ method: string; path: string; headers: Record<string, string>; body?: unknown }> = [];
     let codeValid = true;
     let sessionLive = false;
-    const state = { reachable: opts.reachable ?? true };
+    // What Tynn answers a request it cannot authenticate: 401, or 404 since the owner's rule of 2026-10-19 (a failed auth
+    // is indistinguishable from a path that does not exist).
+    const state = { reachable: opts.reachable ?? true, authFail: opts.authFail ?? 401 };
     const ports: TynnAccountPorts = {
         host: () => HOST,
         cookies: {
@@ -39,9 +41,9 @@ function fakeTynn(opts: { reachable?: boolean } = {}) {
             if (path === '/api/v1/me') {
                 // Tynn's exchange: a valid genie_token becomes the session (laravel_session + XSRF-TOKEN cookies), once.
                 if (!sessionLive && jar.get('genie_token') === CODE && codeValid) { codeValid = false; sessionLive = true; jar.set('laravel_session', 'sess'); jar.set('XSRF-TOKEN', 'xsrf%3Dvalue'); }
-                return sessionLive && jar.get('laravel_session') === 'sess' ? ok(200, USER) : ok(401, { error: 'unauthenticated' });
+                return sessionLive && jar.get('laravel_session') === 'sess' ? ok(200, USER) : ok(state.authFail, { error: 'unauthenticated' });
             }
-            if (!sessionLive || jar.get('laravel_session') !== 'sess') return ok(401, { message: 'Unauthenticated.' });
+            if (!sessionLive || jar.get('laravel_session') !== 'sess') return ok(state.authFail, { message: 'Unauthenticated.' });
             if (init.method !== 'GET' && init.headers['X-XSRF-TOKEN'] !== 'xsrf=value') return ok(419, { message: 'CSRF token mismatch.' });
             if (path === '/logout') { sessionLive = false; return ok(204, undefined); }
             if (path === '/api/v1/projects') return ok(200, { data: [{ id: '42', name: 'Tynn.ai', slug: 'tynn' }] });
@@ -173,6 +175,30 @@ describe('TynnAccount.request — every call rides the session', () => {
         expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(401);
         expect(account.status()).toEqual({ signedIn: false });
         expect(changes).toEqual([false]);
+    });
+
+    it('Tynn answering 404 because the session is gone (a failed auth reads as Not Found, 2026-10-19): Genie asks /me and shows signed out', async () => {
+        const t = fakeTynn({ authFail: 404 });
+        const account = await TynnAccount.open(t.ports);
+        await account.signIn(CODE);
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
+        t.endSession();
+        expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(404);
+        expect(t.calls.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/me' });
+        expect(account.status()).toEqual({ signedIn: false });
+        expect(changes).toEqual([false]);
+    });
+
+    it('CONTROL: a 404 for a path that is not there, with the session live, leaves this Genie signed in', async () => {
+        const t = fakeTynn({ authFail: 404 });
+        const account = await TynnAccount.open(t.ports);
+        await account.signIn(CODE);
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
+        expect((await account.request('/api/v1/nothing-here', { method: 'GET' })).status).toBe(404);
+        expect(account.status().signedIn).toBe(true);
+        expect(changes).toEqual([]);
     });
 
     it('the person’s id for their own push channel — only while signed in', async () => {
