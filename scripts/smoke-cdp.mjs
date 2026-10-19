@@ -773,6 +773,24 @@ if (!approvalEnabled) {
     const chatState = await cdp.evaluate(`(() => ({ route: location.hash || location.href, loaded: document.querySelector('[data-chat]')?.getAttribute('data-chat-loaded') ?? null }))()`);
     check(chatHere, '61. a page reached without chat= still shows the chat with its loaded conversation', JSON.stringify(chatState));
 
+    // 62. THE FILE TREE LOADS A FOLDER WHEN IT IS OPENED, AND NOTHING OPENS BY ITSELF (the owner, 2026-10-19: "I can't load
+    // files below the 3rd layer and when it opens all folders are open at once"). Over this checkout: the panel opens with
+    // top-level rows only; opening `src` lists its children; a file named by the route reveals its folders and opens.
+    const rowIds = `[...document.querySelectorAll('[data-files-panel] [data-react-fancy-virtual-row-id]')].map((r) => r.getAttribute('data-react-fancy-virtual-row-id'))`;
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/tynn?files='; true`);
+    const treeUp = await waitFor(cdp, `${rowIds}.includes('src')`, 'the file tree’s top level');
+    const closedRows = treeUp ? await cdp.evaluate(rowIds) : [];
+    await cdp.evaluate(`[...document.querySelectorAll('[data-files-panel] [data-react-fancy-virtual-row-id="src"] button')][0]?.click(); true`);
+    const srcOpened = await waitFor(cdp, `${rowIds}.some((id) => id && id.startsWith('src/'))`, 'src’s children, loaded on open');
+    const deep = 'src/renderer/components/FilesPanel.tsx';
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/tynn?files=' + encodeURIComponent(${JSON.stringify(deep)}); true`);
+    // The tree is windowed, so the file's own row may sit below the fold: its FOLDER's row (revealed) and its open tab are the evidence.
+    const revealed = await waitFor(cdp, `${rowIds}.includes('src/renderer/components') && Boolean(document.querySelector('[data-file-tab=${JSON.stringify(deep)}]'))`, 'the routed file revealed and open');
+    const nested = Array.isArray(closedRows) ? closedRows.filter((id) => typeof id === 'string' && id.includes('/')).length : -1;
+    check(treeUp && nested === 0 && srcOpened && revealed, '62. the file tree opens with nothing expanded, lists a folder when opened, and reveals a routed file', JSON.stringify({ top: Array.isArray(closedRows) ? closedRows.length : null, nestedAtStart: nested, srcOpened, revealed }));
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the Workspace surface again');
+
     // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings";
     // and 2026-10-19: the first tab is the WORKSPACE DASHBOARD, not an agent list (q_09d1f4a0). The route opens on it —
     // the seeded agent in the header's strip, the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +

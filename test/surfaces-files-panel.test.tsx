@@ -37,12 +37,20 @@ const render = (p: Partial<FilesPanelProps>) => renderToStaticMarkup(<FilesPanel
 
 describe('FilesPanel', () => {
     it('one dot plus a count per touched file — never a dot per agent — violet in flight, green changed, neutral ? unreported', () => {
-        const html = render({});
+        // src opened, so its files are drawn (nothing is open by itself — core/files-tree-lazy.ts).
+        const html = render({ expanded: ['src'] });
         expect(html).toContain('data-file-marker="src/db.ts" data-count="20" data-tone="changed"');
         expect(html).toContain('data-file-marker="src/ipc.ts" data-count="1" data-tone="writing"');
         expect(html).toContain('data-file-marker="mystery.ts" data-tone="unreported"');
         expect((html.match(/data-file-marker="src\/db\.ts"/g) ?? []).length).toBe(1);
         expect(html).not.toContain('data-file-marker="README.md"');
+    });
+
+    it('NOTHING OPENS BY ITSELF (the owner, 2026-10-19): with no folder open, only the top level is drawn (COUNTED); CONTROL: src open draws its files', () => {
+        const closed = render({});
+        expect(closed).toContain('data-react-fancy-virtual-list-rows="3"');
+        expect(closed).not.toContain('data-react-fancy-virtual-row-id="src/db.ts"');
+        expect(render({ expanded: ['src'] })).toContain('data-react-fancy-virtual-row-id="src/db.ts"');
     });
 
     it('the footer names who is touching what and how many changed; the Changes section is ABSENT when nothing changed', () => {

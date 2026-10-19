@@ -289,6 +289,8 @@ export interface GenieBridge {
     files: {
         /** The workspace tree without .git or node_modules; `null` for an unknown workspace. */
         tree(workspaceId: string): Promise<readonly TreeNode[] | null>;
+        /** ONE folder's direct children (`''` = the root), listed when the panel opens it; `null` outside the workspace. Absent on an older host. */
+        children?(workspaceId: string, dir: string): Promise<readonly TreeNode[] | null>;
         open(workspaceId: string, path: string): Promise<OpenResult>;
         /** The file as of the last commit — `Show diff` on a change nobody reported. Absent on a bridge with no host files. */
         lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
@@ -383,6 +385,7 @@ export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'work
  */
 export const NO_FILES: GenieBridge['files'] = {
     tree: () => Promise.resolve(null),
+    children: () => Promise.resolve(null),
     open: (_w, path) => Promise.resolve({ ok: false as const, path, error: 'no files host is attached' }),
     state: () => Promise.resolve(null),
     watch: () => Promise.resolve(),

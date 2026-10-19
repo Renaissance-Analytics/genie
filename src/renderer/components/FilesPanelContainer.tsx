@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { reloadsOpenFile, routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import { openOrError, settle } from '../../core/files-reads.js';
+import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-lazy.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
 
@@ -40,7 +41,26 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     routeFilter?: 'changed' | null | undefined;
     onRouteChange?: ((file: string | null, filter: 'changed' | null) => void) | undefined;
 }) {
-    const [tree, setTree] = useState<readonly TreeNode[] | null>(null);
+    const [eagerTree, setTree] = useState<readonly TreeNode[] | null>(null);
+    /*
+     * THE TREE, A FOLDER AT A TIME (the owner, 2026-10-19: "I can't load files below the 3rd layer and when it opens all
+     * folders are open at once"): the host lists a folder when it is opened (`files.children`), nothing is open at start,
+     * and the route's file opens its folders (core/files-tree-lazy.ts). A host without `children` keeps its one walk.
+     */
+    const lazy = typeof files.children === 'function';
+    const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly TreeNode[]>>(() => new Map());
+    const [expanded, setExpanded] = useState<readonly string[]>(() => revealFor(routeFile ?? null, []));
+    const loadedRef = useRef(loaded);
+    loadedRef.current = loaded;
+    const loadDir = useCallback((dir: string) => {
+        void settle(() => files.children!(workspace.id, dir)).then((r) => {
+            if (!r.ok) { if (dir === '') setTreeError(r.error); return; }
+            if (r.value === null) return;
+            if (dir === '') setTreeError(null);
+            setLoaded((m) => new Map(m).set(dir, r.value!));
+        });
+    }, [files, workspace.id]);
+    const tree = lazy ? treeFromLoaded(loaded) : eagerTree;
     // The tree's read failed: the reason, shown in the tree's place (never skeletons forever).
     const [treeError, setTreeError] = useState<string | null>(null);
     // Every open SETTLES into something the panel can say — the file, or why not. A rejected ask left `open` as it was.
@@ -82,19 +102,40 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const refresh = useCallback(() => {
         // Single mode draws no tree (§4.6), so it does not walk one: on a large workspace that walk is the whole disk
         // under the root, re-run on every change the watcher sees.
-        if (!single) {
+        if (!single && lazy) {
+            // The root, and every folder already open, listed again — never a walk of the whole workspace.
+            for (const dir of new Set(['', ...loadedRef.current.keys()])) loadDir(dir);
+        } else if (!single) {
             void settle(() => files.tree(workspace.id)).then((r) => {
                 if (r.ok) { setTree(r.value); setTreeError(null); } else setTreeError(r.error);
             });
         }
         void files.state(workspace.id).then((s) => setState(s));
-    }, [files, workspace.id, single]);
+    }, [files, workspace.id, single, lazy, loadDir]);
 
     useEffect(() => {
         refresh();
         void files.watch(workspace.id);
-        return files.onChange((id) => { if (id === workspace.id) refresh(); });
-    }, [files, workspace.id, refresh]);
+        return files.onChange((id, paths) => {
+            if (id !== workspace.id) return;
+            if (!lazy || !paths || paths.length === 0) { refresh(); return; }
+            // Only the folders the changes are in, and only those already listed; the attribution state as before.
+            const dirs = new Set(paths.map((p) => ancestorsOf(p).at(-1) ?? ''));
+            for (const dir of dirs) if (loadedRef.current.has(dir)) loadDir(dir);
+            void files.state(workspace.id).then((s) => setState(s));
+        });
+    }, [files, workspace.id, refresh, lazy, loadDir]);
+
+    // Every folder that is open is listed (opening one is what loads it).
+    useEffect(() => {
+        if (!lazy || single) return;
+        for (const dir of expanded) if (!loadedRef.current.has(dir)) loadDir(dir);
+    }, [expanded, lazy, single, loadDir]);
+    // The route's file is shown in its place: its folders open, what was open stays open.
+    useEffect(() => {
+        if (routeFile === undefined || routeFile === null) return;
+        setExpanded((e) => revealFor(routeFile, e));
+    }, [routeFile]);
 
     // A dirty buffer is NEVER auto-reloaded (§4.3); a clean one follows the disk.
     useEffect(() => {
@@ -175,5 +216,5 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         : undefined;
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
 }

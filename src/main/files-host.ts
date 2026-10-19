@@ -8,6 +8,7 @@ import {
     activityFrom,
     attributionFrom,
     buildTree,
+    byName,
     changedGroups,
     confine,
     openRefusal,
@@ -125,6 +126,32 @@ export class FilesHost {
             }
         }
         return buildTree(entries);
+    }
+
+    /**
+     * ONE FOLDER'S DIRECT CHILDREN, when the panel opens it (the owner, 2026-10-19: "I can't load files below the 3rd
+     * layer"). No depth limit and no budget: a folder ten levels down is one more call. Folders carry no children —
+     * opening one is what lists it (core/files-tree-lazy.ts). The same never-walked names as `tree`; symlinks are
+     * leaves. `null` for an unknown workspace or a folder outside it; an unreadable folder lists as empty.
+     */
+    async children(workspaceId: string, dir: string): Promise<TreeNode[] | null> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return null;
+        const rel = dir === '' ? '' : confine(ws.path, dir);
+        if (rel === null) return null;
+        let dirents;
+        try { dirents = await readdir(rel ? join(ws.path, ...rel.split('/')) : ws.path, { withFileTypes: true }); } catch { return []; }
+        const nodes: TreeNode[] = [];
+        for (const d of dirents) {
+            if (SKIP.has(d.name)) continue;
+            const id = rel ? `${rel}/${d.name}` : d.name;
+            if (d.isDirectory()) nodes.push({ id, label: d.name, type: 'folder' });
+            else if (d.isFile() || d.isSymbolicLink()) {
+                const dot = d.name.lastIndexOf('.');
+                nodes.push({ id, label: d.name, type: 'file', ...(dot > 0 ? { ext: d.name.slice(dot + 1) } : {}) });
+            }
+        }
+        return nodes.sort(byName);
     }
 
     async open(workspaceId: string, path: string): Promise<OpenResult> {
