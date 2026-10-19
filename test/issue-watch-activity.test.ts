@@ -72,8 +72,8 @@ describe('the client hears them', () => {
         const sent: string[] = [];
         let emit: (frame: unknown) => void = () => {};
         const ports: IssueWatchClientPorts = {
-            credentials: () => ({ host: 'https://tynn.example', token: 't' }),
-            fetch: async (url) => ({ ok: true, status: 200, json: async () => (url.endsWith('/push-config') ? { key: 'k', cluster: 'us2', channel: 'private-App.Models.User.1' } : url.endsWith('/broadcasting-auth') ? { auth: 'k:s' } : { workspaces: [] }) }),
+            // The signed-in session (person 1) on Genie 1's routes.
+            tynn: () => ({ userId: '1', request: async (path) => ({ ok: true, status: 200, json: async () => (path === '/api/v1/broadcasting-config' ? { key: 'k', cluster: 'us2' } : path === '/api/v1/user/broadcasting-auth' ? { auth: 'k:s' } : { workspaces: [] }) }) }),
             socket: () => {
                 const l: Record<string, Array<(e: { data?: unknown }) => void>> = {};
                 emit = (frame) => { for (const f of l.message ?? []) f({ data: JSON.stringify(frame) }); };

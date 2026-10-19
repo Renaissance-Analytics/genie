@@ -7,7 +7,7 @@ import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, session, shell } from 'electron';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -32,7 +32,6 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
-import { encryptedFileStore } from './tynn-account-store.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -1394,15 +1393,28 @@ async function boot(): Promise<void> {
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
     // THIS GENIE'S TYNN ACCOUNT: the key encrypted by the OS in ~/.genie, for the host in settings (main/tynn-account.ts).
+    // Genie 1's Tynn session, in its own persistent partition: Chromium keeps its cookies on disk under the OS's own
+    // encryption, and nothing else Genie loads (the window, the Genie Browser) shares them.
+    const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
-        fetch: (url, init) => fetch(url, init),
-        store: encryptedFileStore(join(genieHome(), 'tynn-account.bin'), {
-            isAvailable: () => safeStorage.isEncryptionAvailable(),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        }),
         host: () => { const h = String(composed.settings.get('tynn_host') ?? '').trim(); return h.length > 0 ? h : 'https://tynn.ai'; },
-        device: () => hostname(),
+        cookies: {
+            // As Genie 1 set genie_token (v1 main/auth.ts redeemToken).
+            set: async (host, name, value) => {
+                const url = new URL(host);
+                await tynnSession.cookies.set({ url: host, name, value, domain: url.hostname, path: '/', secure: url.protocol === 'https:', httpOnly: false });
+            },
+            get: async (host, name) => (await tynnSession.cookies.get({ url: host, name }))[0]?.value ?? null,
+            // As Genie 1's signOut cleared them: every cookie for the Tynn origin.
+            clear: async (host) => {
+                for (const c of await tynnSession.cookies.get({ url: host })) {
+                    const cookieUrl = `${c.secure ? 'https' : 'http'}://${c.domain?.replace(/^\./, '') ?? new URL(host).host}${c.path ?? '/'}`;
+                    try { await tynnSession.cookies.remove(cookieUrl, c.name); } catch { /* best effort */ }
+                }
+            },
+        },
+        // Session-bound: the global fetch is Node's and ignores Electron's cookie store (Genie 1 learned this the hard way).
+        fetch: (url, init) => tynnSession.fetch(url, init),
         openExternal: (url) => shell.openExternal(url),
     });
     tynnAccount.onChange(pushFeatures);
@@ -1627,12 +1639,13 @@ async function boot(): Promise<void> {
         wake: (agentId) => issueWatchDelivery.wakes(agentId) && wakeAgent(agentId),
     });
     const issueWatchClient = new IssueWatchClient({
-        credentials: () => {
-            // The signed-in account's key, for the host that minted it (main/tynn-account.ts).
-            const token = tynnAccount?.token() ?? '';
-            return token.length > 0 && tynnAccount ? { host: tynnAccount.host(), token } : null;
+        // The signed-in Tynn SESSION (main/tynn-account.ts), on Genie 1's routes: the person's id and session-bound requests.
+        tynn: () => {
+            const account = tynnAccount;
+            const userId = tynnAccount?.userId() ?? null;
+            if (!account || userId === null) return null;
+            return { userId, request: (path, init) => account.request(path, init) };
         },
-        fetch: (url, init) => fetch(url, init),
         socket: (url) => new WebSocket(url) as unknown as SocketLike,
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onEvents: (projectId, events) => {
