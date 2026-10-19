@@ -73,6 +73,27 @@ describe('reading and writing', () => {
     });
 });
 
+describe('a retired secret is wiped from the file, not just forgotten', () => {
+    // Genie 2 used to keep a pasted Tynn token in settings.json in plain text. Sign-in now keeps its key encrypted
+    // (main/tynn-account.ts), so the old value must not survive on disk — dropping it from memory alone would leave it there.
+    it('a stored tynn_token is gone from settings.json after the store opens; the other values stay', async () => {
+        await mkdir(dirname(store.file), { recursive: true });
+        await writeFile(store.file, JSON.stringify({ theme: 'light', tynn_token: 'tok-example-not-real' }));
+        const reopened = await SettingsStore.open(dir);
+        expect(reopened.get('theme')).toBe('light');
+        expect('tynn_token' in reopened.snapshot()).toBe(false);
+        expect(JSON.parse((await readFile(store.file)).toString())).toEqual({ theme: 'light' });
+    });
+
+    it('CONTROL: a file with nothing retired in it is not rewritten', async () => {
+        const raw = '{"theme":"light"}';
+        await mkdir(dirname(store.file), { recursive: true });
+        await writeFile(store.file, raw);
+        await SettingsStore.open(dir);
+        expect((await readFile(store.file)).toString()).toBe(raw);
+    });
+});
+
 describe('the v1 carry-over — once, on first run', () => {
     it('applies what still exists, records the drops, and marks the carry-over done so it never runs twice', async () => {
         const result = await store.carryOverFromV1({ theme: 'light', update_channel: 'beta', agent_command: 'claude', track_cwd: 'off' });

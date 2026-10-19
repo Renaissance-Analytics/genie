@@ -110,6 +110,13 @@ publish:
   repo: genie
   releaseType: prerelease
 
+# genie:// — Tynn's sign-in hands its code back through it (main.ts openGenieUrl). Declared here so the installed app
+# owns the scheme: the AppImage's .desktop MimeType and the macOS Info.plist (Windows registers it at first launch).
+protocols:
+  - name: Genie
+    schemes:
+      - genie
+
 win:
   icon: build/icon.ico
   target:

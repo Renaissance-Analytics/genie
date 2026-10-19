@@ -12,7 +12,7 @@ export type FetchLike = (url: string, init: { headers: Record<string, string> })
 export function tynnClient(fetchImpl: FetchLike) {
     return {
         project: async (host: string, token: string): Promise<unknown> => {
-            if (token.trim().length === 0) throw new Error('sign in to Tynn first: no token is set (Settings → General → Tynn token)');
+            if (token.trim().length === 0) throw new Error('sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)');
             const res = await fetchImpl(tynnProjectUrl(host), { headers: { Authorization: `Bearer ${token.trim()}`, Accept: 'application/json' } });
             const text = await res.text();
             if (!res.ok) {

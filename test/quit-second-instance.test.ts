@@ -55,3 +55,30 @@ describe('answerSecondInstance — the quit waits until the notification is answ
         expect(h.deferred).toHaveLength(0);
     });
 });
+
+/**
+ * THE SIGN-IN COMING BACK (the owner, 2026-10-19: Tynn sign-in the way Genie 1 did). On Windows and Linux the browser's
+ * genie://oauth/callback?token=… arrives as a SECOND LAUNCH whose argv carries the URL. The first instance shows its
+ * window and hands the URL on — after the handler returns, like the quit: the sign-in makes a network call.
+ */
+describe('answerSecondInstance — a genie:// URL is handed on', () => {
+    const URL = `genie://oauth/callback?token=${'aB3'.repeat(21)}x`;
+
+    it('reveals at once and opens the URL once the handler has returned', () => {
+        const h = harness();
+        const opened: string[] = [];
+        expect(answerSecondInstance([...SECOND, URL], undefined, { ...h.act, open: (u) => { opened.push(u); } })).toBe('reveal');
+        expect(h.calls).toEqual(['reveal', 'defer']);
+        expect(opened).toEqual([]);
+        h.deferred[0]!();
+        expect(opened).toEqual([URL]);
+    });
+
+    it('CONTROL: a plain second launch opens nothing', () => {
+        const h = harness();
+        const opened: string[] = [];
+        answerSecondInstance(SECOND, undefined, { ...h.act, open: (u) => { opened.push(u); } });
+        expect(h.calls).toEqual(['reveal']);
+        expect(opened).toEqual([]);
+    });
+});
