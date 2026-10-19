@@ -30,6 +30,7 @@ import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProje
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
 import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
@@ -190,6 +191,23 @@ export interface ShellProps {
     onCancelAddGit?: (() => void) | undefined;
     onConfirmAdd?: ((path: string) => void) | undefined;
     onCancelAdd?: (() => void) | undefined;
+}
+
+/**
+ * The Providers page (Settings → Agents): each agent CLI Genie runs, installed or not (Toolchain), and the first of its
+ * agents that is signed out (#971) with that agent's Log in. `undefined` until Toolchain has looked.
+ */
+function providerStatuses(features: FeatureData, agents: readonly { id: string; name: string; provider: string; signedOut?: boolean | undefined }[], onLogin: ((agentId: string) => void) | undefined): ProviderStatus[] | undefined {
+    if (!features.toolchain) return undefined;
+    const tools = features.toolchain.tools;
+    return [
+        { provider: 'claude', name: 'Claude Code', tool: 'claude-code' },
+        { provider: 'codex', name: 'Codex', tool: 'codex' },
+    ].map(({ provider, name, tool }) => {
+        const t = tools.find((x) => x.tool === tool);
+        const out = agents.find((a) => a.provider === provider && a.signedOut === true);
+        return { provider, name, installed: t ? t.installed !== null : null, version: t?.installed ?? null, signedOut: out ? { agentId: out.id, agentName: out.name } : null, ...(onLogin ? { onLogin } : {}) };
+    });
 }
 
 export type ShellRemote = { host: string; driver: string | null; driving: boolean; locked: boolean } | null;
@@ -453,7 +471,7 @@ export function Shell({
                     {canServe && parsed.surface === 'hosting' ? <HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
                     {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} compose={inboxCompose} /> : null}
-                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} group={parsed.group} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /> : null}
+                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /> : null}
                     {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
 
                     {canServe && parsed.surface === 'deck' ? (

@@ -10,7 +10,7 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
  * default. The title bar's "Search, jump, run" names the key that actually opens it, remapped or not.
  */
 const general = (values: Record<string, string>) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} group="general" />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} section="keyboard" />);
 
 describe('Settings → General → Keyboard shortcuts', () => {
     it('both keys, each as a recorder with its current key; COUNTED', () => {

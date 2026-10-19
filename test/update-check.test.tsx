@@ -59,7 +59,7 @@ describe('the automatic check', () => {
 });
 
 const render = (update?: { state: UpdateState | null; onCheck: () => void }) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} } }} onAction={() => {}} onNavigate={() => {}} group="general" {...(update ? { update } : {})} />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} } }} onAction={() => {}} onNavigate={() => {}} section="general" {...(update ? { update } : {})} />);
 
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 

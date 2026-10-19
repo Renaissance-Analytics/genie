@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { SectionId } from '../src/core/settings-nav.js';
 import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 
@@ -18,8 +19,9 @@ const integrations: NonNullable<FeatureData['integrations']> = {
     lastSync: null,
     mcp: { url: null, verified: null },
 };
-const render = (i: FeatureData['integrations']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations: i }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
+// Genie 1's sidebar (core/settings-nav.ts): Tynn and GitHub are pages of their own (Accounts); the agent files are on Agent MCP.
+const render = (i: FeatureData['integrations'], section: SectionId = 'tynn') =>
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations: i }} onAction={() => {}} onNavigate={() => {}} section={section} workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
 
 describe('Integrations', () => {
     it('null draws a skeleton; signed out of Tynn shows the sign-in and the gated row ANNOTATED, not dropped', () => {
@@ -70,19 +72,19 @@ describe('Integrations', () => {
     });
 
     it('GitHub: two steps, the app URL in plain text, a confirm per step; a done step is marked and the next is the one offered', () => {
-        const html = render(integrations);
+        const html = render(integrations, 'github');
         expect(html).toContain('data-github-step="authorize"');
         expect(html).toContain('data-github-step="install"');
         expect(html).toMatch(/github\.com\/apps\/genie-aos/);
         expect(html).toContain('data-action="github-confirm-authorize"');
         expect(html).not.toContain('data-action="github-confirm-install"');
-        const authorized = render({ ...integrations, github: { ...integrations.github, blockedBy: 'install', steps: [{ id: 'authorize', done: true }, { id: 'install', done: false }] } });
+        const authorized = render({ ...integrations, github: { ...integrations.github, blockedBy: 'install', steps: [{ id: 'authorize', done: true }, { id: 'install', done: false }] } }, 'github');
         expect(authorized).toContain('data-github-done="authorize"');
         expect(authorized).toContain('data-action="github-confirm-install"');
     });
 
     it('config sync is not here: no Sync now and no results even after a sync — the note says each workspace’s Settings has it', () => {
-        const html = render({ ...integrations, lastSync: { workspaceId: 'tynn', results: [{ id: 'claude', label: 'Claude Code (.mcp.json)', ok: true }, { id: 'cursor', label: 'Cursor (.cursor/mcp.json)', ok: false, error: 'EACCES' }, { id: 'codex', label: 'Codex (.codex/config.toml)', ok: true }, { id: 'hooks', label: 'Claude Code Stop hook (.claude/settings.local.json)', ok: true }] } });
+        const html = render({ ...integrations, lastSync: { workspaceId: 'tynn', results: [{ id: 'claude', label: 'Claude Code (.mcp.json)', ok: true }, { id: 'cursor', label: 'Cursor (.cursor/mcp.json)', ok: false, error: 'EACCES' }, { id: 'codex', label: 'Codex (.codex/config.toml)', ok: true }, { id: 'hooks', label: 'Claude Code Stop hook (.claude/settings.local.json)', ok: true }] } }, 'agent-mcp');
         expect(html).not.toContain('data-action="sync-config"');
         expect(html).not.toContain('data-sync-result=');
         expect(html).toContain('data-workspace-files-note');

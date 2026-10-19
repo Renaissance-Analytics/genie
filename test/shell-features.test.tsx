@@ -86,9 +86,9 @@ describe('first paint — skeletons, never zeros or empty states', () => {
         expect(html).not.toMatch(/no results|nothing found/i);
     });
 
-    it('settings before values arrive shows the four group tabs and skeleton rows, never the defaults as if chosen', () => {
+    it('settings before values arrive shows Genie 1’s sidebar and skeleton rows, never the defaults as if chosen', () => {
         const html = render('genie://settings');
-        for (const g of ['General', 'Agents', 'Workstation', 'Appearance']) expect(html).toContain(g);
+        for (const g of ['Genie', 'Accounts', 'Agents', 'Network', 'System']) expect(html).toContain(`data-settings-nav-group="${g}"`);
         expect(html).toContain('data-skeleton');
     });
 
@@ -108,11 +108,13 @@ describe('measured empties are a different claim', () => {
         expect(render('genie://hosting', { hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } } })).toMatch(/Add a site/i);
     });
 
-    it('settings with values shows the chosen value for a setting and the four groups', () => {
-        const html = render('genie://settings?group=appearance', { settings: { values: { theme: 'light' } } });
+    it('settings with values shows the chosen value for a setting, on its page', () => {
+        const html = render('genie://settings/appearance', { settings: { values: { theme: 'light' } } });
         expect(html).toContain('data-surface="settings"');
+        expect(html).toContain('data-settings-page="appearance"');
         expect(html).toContain('data-setting="theme"');
-        expect(html).toContain('light');
+        // The CHOSEN value: every theme select contains the word "light" as an option.
+        expect(html).toMatch(/<option value="light" selected=""/);
     });
 
     it('the browser surface with no url shows the address bar only; with a url it names the page', () => {
