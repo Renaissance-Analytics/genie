@@ -35,6 +35,8 @@ export const ICON_NAMES: readonly string[] = [
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
     'server', 'mail', 'moon',
+    // The workspace row's background-process indicator (Genie 1's runtime pill, 2026-10-19).
+    'cpu',
     // A workspace's GitHub (IssueWatch) panel heading (Tynn #806).
     'git-pull-request',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.

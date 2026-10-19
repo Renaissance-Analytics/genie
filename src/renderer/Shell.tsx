@@ -27,6 +27,7 @@ import { addTab, parseTabs, serializeTabs, workspaceViewRoute } from '../core/wo
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProjectPicker.js';
+import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -271,6 +272,9 @@ export function Shell({
     const updateState = useUpdateState(updates);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
+    // A workspace row's process / site indicator opened that workspace's config (Genie 1's modals).
+    const [runtimeModal, setRuntimeModal] = useState<{ kind: 'processes' | 'sites'; workspaceId: string } | null>(null);
+    const runtimeWorkspace = runtimeModal ? (snapshot.workspaces ?? []).find((w) => w.id === runtimeModal.workspaceId) ?? null : null;
     // The native window buttons: the space they take, and the theme's colours on them (the owner: content covered, wrong colours).
     const controlsInset = useControlsInset(windowChrome?.overlay === true);
     useOverlayColors(windowChrome);
@@ -341,6 +345,10 @@ export function Shell({
                     }}
                 />
             ) : null}
+            {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
+            {runtimeModal && runtimeWorkspace ? (
+                <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />
+            ) : null}
 
             {/* THE DOCK'S NOTICE (§4.4): a second pin replaces the first VISIBLY; a refusal says why and offers pop-out. */}
             {dockNotice ? (
@@ -363,7 +371,10 @@ export function Shell({
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
-                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents)}
+                    // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
+                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] })}
+                    onOpenProcesses={(workspaceId) => setRuntimeModal({ kind: 'processes', workspaceId })}
+                    onOpenSites={(workspaceId) => setRuntimeModal({ kind: 'sites', workspaceId })}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
                     currentWorkspaceId={routeWorkspace(route, snapshot.agents)}
                     available={railSurfacesFor(servable)}

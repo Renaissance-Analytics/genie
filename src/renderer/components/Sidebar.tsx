@@ -58,6 +58,24 @@ export interface SidebarProps {
     currentWorkspaceId?: string | null | undefined;
     /** Where the collapsed state is remembered; `undefined` = the window's localStorage, `null` = nowhere (tests pass their own). */
     railStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
+    /** A row's process / site indicator opens that workspace's config (Genie 1's Processes and Site Manager modals). */
+    onOpenProcesses?: ((workspaceId: string) => void) | undefined;
+    onOpenSites?: ((workspaceId: string) => void) | undefined;
+}
+
+/** The indicators' colours (Genie 1's tones): nothing is grey, working is the accent, broken is danger, starting warns. */
+const TONE: Record<string, string> = {
+    none: 'text-[var(--fg-4)] opacity-50',
+    idle: 'text-[var(--fg-3)]',
+    running: 'text-[var(--success)]',
+    starting: 'text-[var(--warning)]',
+    crashed: 'text-[var(--danger)]',
+    failed: 'text-[var(--danger)]',
+};
+
+/** "2 agents working" — the pulse's words. */
+function workingLabel(n: number): string {
+    return `${n} agent${n === 1 ? '' : 's'} working`;
 }
 
 const ROW =
@@ -120,7 +138,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -185,6 +203,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     const route_ = `genie://workspace/${w.id}`;
                     const active = current === route_ || w.id === currentWorkspaceId;
                     const name = w.name ?? folderName(w.path);
+                    const working = (w.working ?? 0) > 0;
                     return (
                         <button
                             key={w.id}
@@ -194,10 +213,12 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
                             data-active={active ? 'true' : 'false'}
                             {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
+                            // THE PULSE (Genie 1's glow): its agents are mid-turn — their sessions say so, not a terminal.
+                            {...(working ? { 'data-agent-active': 'true' } : {})}
                             onClick={() => onNavigate(route_)}
-                            title={name}
+                            title={working ? `${name} · ${workingLabel(w.working ?? 0)}` : name}
                             aria-label={name}
-                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''}`}
+                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : ''}`}
                         >
                             {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
                             {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
@@ -316,10 +337,13 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         // "nothing in here needs you", which is a claim about a thing Genie has
                         // not looked at.
                         {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
+                        {...((w.working ?? 0) > 0 ? { 'data-agent-active': 'true' } : {})}
                         onClick={() => onNavigate(route_)}
-                        title={w.path}
-                        className={`${ROW} ${active ? ROW_ACTIVE : ''}`}
+                        title={(w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path}
+                        className={`${ROW} relative ${active ? ROW_ACTIVE : ''}`}
                     >
+                        {/* THE PULSE (Genie 1's): lit while this workspace's agents are mid-turn — by their sessions, never terminal output. */}
+                        {(w.working ?? 0) > 0 ? <span data-pulse="" aria-label={workingLabel(w.working ?? 0)} className="absolute inset-y-1 left-0 w-0.5 animate-pulse rounded-full bg-[var(--accent)]" /> : null}
                         <Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />
                         <span className="truncate">{w.name ?? folderName(w.path)}</span>
 
@@ -334,6 +358,22 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                              */}
                             {w.count !== null ? (
                                 <span className="font-mono text-[11px] tabular-nums text-[var(--fg-4)]">{w.count}</span>
+                            ) : null}
+                            {/* GENIE 1'S RUNTIME PILL: background processes and sites, always there (greyed when there is nothing);
+                                each opens this workspace's own config. Spans, not buttons: the row is the button. */}
+                            {w.processes !== undefined ? (
+                                <span role="button" tabIndex={-1} data-ws-processes={w.id} data-tone={w.processes} title={w.processesTitle} aria-label={w.processesTitle}
+                                    onClick={(e) => { e.stopPropagation(); onOpenProcesses?.(w.id); }}
+                                    className={`inline-flex ${TONE[w.processes] ?? ''}`}>
+                                    <Icon name="cpu" size="xs" />
+                                </span>
+                            ) : null}
+                            {w.sitesTitle !== undefined ? (
+                                <span role="button" tabIndex={-1} data-ws-sites={w.id} data-tone={w.sites ?? 'none'} title={w.sitesTitle} aria-label={w.sitesTitle}
+                                    onClick={(e) => { e.stopPropagation(); onOpenSites?.(w.id); }}
+                                    className={`inline-flex ${TONE[w.sites ?? 'none'] ?? ''}`}>
+                                    <Icon name="globe" size="xs" />
+                                </span>
                             ) : null}
                         </span>
                     </button>
