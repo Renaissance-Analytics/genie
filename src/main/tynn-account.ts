@@ -177,10 +177,21 @@ export class TynnAccount implements TynnAccountPort {
     /**
      * One call over the session, as Genie 1's TynnBackend.fetch made it. A 401 or 419 means Tynn no longer has this
      * session: this Genie shows signed out (the cookies stay; signing in again replaces them).
+     *
+     * A 404 is ambiguous ON PURPOSE: Tynn answers a failed auth exactly as it answers a path that is not there (the
+     * owner, 2026-10-19 — attackers must not learn what exists). So a 404 while signed in asks /api/v1/me once: it
+     * answers who this session belongs to, or this Genie shows signed out.
      */
     async request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<TynnResponse> {
         const res = await this.#raw(path, init);
         if (res.status === 401 || res.status === 419) this.#set(null);
+        else if (res.status === 404 && path !== '/api/v1/me' && this.status().signedIn) {
+            try {
+                await this.#whoami();
+            } catch {
+                // Tynn unreachable for the check: unchanged until it answers.
+            }
+        }
         return res;
     }
 
