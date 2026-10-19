@@ -53,7 +53,7 @@ import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
-import { planV1Import } from '../core/v1-import.js';
+import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
@@ -352,10 +352,12 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
     // Once — but beta.7's import did not carry v1's hibernation, so a marker without `hibernationApplied` gets
     // ONE amendment pass that puts v1-hibernated workspaces to sleep; after that the marker says so and nothing
     // here runs again (a person who wakes a workspace in Genie 2 must not find it asleep at the next boot).
-    let prior: { hibernationApplied?: boolean } | null = null;
+    // Genie 1's DEFAULT AGENTS (role = 'workspace') were not carried either: a marker without `defaultsApplied` gets ONE
+    // pass that designates them where a workspace has none — after that a default chosen in Genie 2 is never overwritten.
+    let prior: { hibernationApplied?: boolean; defaultsApplied?: boolean } | null = null;
     if (existsSync(marker)) {
-        try { prior = JSON.parse(readFileSync(marker, 'utf8')) as { hibernationApplied?: boolean }; } catch { prior = {}; }
-        if (prior?.hibernationApplied === true) return;
+        try { prior = JSON.parse(readFileSync(marker, 'utf8')) as { hibernationApplied?: boolean; defaultsApplied?: boolean }; } catch { prior = {}; }
+        if (prior?.hibernationApplied === true && prior.defaultsApplied === true) return;
     }
     const catalog = readV1Catalog(v1DatabaseFile());
     const plan = planV1Import(
@@ -367,8 +369,16 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
         for (const w of plan.workspaces) await theRegistry.addWorkspace({ id: w.id, path: w.path, ...(w.asleep ? { asleep: true } : {}) });
         for (const a of plan.agents) await theRegistry.register({ workspaceId: a.workspaceId, provider: a.provider, name: a.name, instructions: a.instructions });
     }
-    for (const id of plan.hibernate) await theRegistry.setAsleep(id, true);
-    const result = { at: new Date().toISOString(), sawV1: catalog !== null, workspaces: prior === null ? plan.workspaces.length : 0, agents: prior === null ? plan.agents.length : 0, hibernated: plan.workspaces.filter((w) => w.asleep).length + plan.hibernate.length, hibernationApplied: true, skipped: prior === null ? plan.skipped : [] };
+    const hibernate = prior?.hibernationApplied === true ? [] : plan.hibernate;
+    for (const id of hibernate) await theRegistry.setAsleep(id, true);
+    let defaults = 0;
+    if (prior?.defaultsApplied !== true && catalog !== null) {
+        for (const [workspaceId, agentId] of Object.entries(v1DefaultAgents(catalog.agents, theRegistry.listAgents()))) {
+            if (theRegistry.defaultAgentOf(workspaceId) !== null) continue;
+            if ((await theRegistry.setDefaultAgent(workspaceId, agentId)).ok) defaults += 1;
+        }
+    }
+    const result = { at: new Date().toISOString(), sawV1: catalog !== null, workspaces: prior === null ? plan.workspaces.length : 0, agents: prior === null ? plan.agents.length : 0, hibernated: plan.workspaces.filter((w) => w.asleep).length + hibernate.length, hibernationApplied: true, defaultsApplied: true, defaults, skipped: prior === null ? plan.skipped : [] };
     await writeFileText(marker, JSON.stringify(result, null, 2), 'utf8');
     console.log(`[genie] v1 import: ${catalog === null ? 'no v1 database' : `${plan.workspaces.length} workspaces, ${plan.agents.length} agents`}${plan.skipped.length ? `; skipped ${plan.skipped.length}: ${plan.skipped.join(' | ')}` : ''}`);
 }
@@ -502,7 +512,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             accessScope: record.accessScope,
             autoApprove: record.autoApprove === true,
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
-            issueWatch: issueWatchPrefsFor(record, registry?.listAgents() ?? []),
+            issueWatch: issueWatchPrefsFor(record, registry?.listAgents() ?? [], registry?.defaultAgentOf(record.workspaceId) ?? null),
             permissions: record.permissions ?? 'all',
             // The model CHOSEN (null = the provider's default); the one IN USE is the session's, as reported.
             model: record.model ?? null,
@@ -1146,6 +1156,9 @@ async function boot(): Promise<void> {
     // OPS PROJECTS (§6.1): which workspaces this one governs.
     ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
         (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
+    // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
+    ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
+        (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
     ipcMain.handle('genie:workspace-preview-add', async () => {
         if (!window) return { ok: false, reason: 'no window to pick a folder from' };
         const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
@@ -1347,6 +1360,7 @@ async function boot(): Promise<void> {
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
+                setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
             },
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),
@@ -1486,11 +1500,6 @@ async function boot(): Promise<void> {
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
-            sidecar: {
-                register: (input) => registry!.register(input),
-                start: (record, cwd) => host!.start(record, cwd),
-                running: (agentId) => host!.probe(agentId as AgentId)?.running === true,
-            },
             plugins: {
                 tools: () => composed.plugins.tools(),
                 guard: (id) => composed.plugins.guard(id),
@@ -1609,6 +1618,7 @@ async function boot(): Promise<void> {
     // the SAME delivery as mail — Genie's turn, told only when it ends — each agent by its own setting and in its mode.
     const issueWatchDelivery = new IssueWatchDelivery({
         agents: () => registry?.listAgents() ?? [],
+        defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
         workspaceFor: (projectId) => {
             for (const w of registry?.snapshot().workspaces ?? []) {
                 let manifest: string | null = null;

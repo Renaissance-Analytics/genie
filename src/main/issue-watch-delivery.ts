@@ -22,6 +22,8 @@ export interface IssueWatchDeliveryPorts {
     }>;
     /** The Genie workspace linked to a Tynn project, by its project.json `tynn.projectId`; `null` = none. */
     readonly workspaceFor: (projectId: string) => { id: string; name: string } | null;
+    /** The workspace's default agent (Genie 1's), which hears GitHub by default; absent or `null` = none designated. */
+    readonly defaultAgentOf?: (workspaceId: string) => string | null;
 }
 
 export class IssueWatchDelivery {
@@ -44,7 +46,7 @@ export class IssueWatchDelivery {
         const touched: string[] = [];
         for (const agent of agents) {
             if (agent.workspaceId !== workspace.id) continue;
-            const prefs = issueWatchPrefsFor(agent, agents);
+            const prefs = issueWatchPrefsFor(agent, agents, this.#ports.defaultAgentOf?.(agent.workspaceId) ?? null);
             const heard = events.filter((e) => wantsEvent(prefs, e.kind));
             if (heard.length === 0) continue;
             const waiting = this.#pending.get(agent.id) ?? { workspace: workspace.name, events: [] };
@@ -90,6 +92,6 @@ export class IssueWatchDelivery {
     wakes(agentId: string): boolean {
         const agents = this.#ports.agents();
         const agent = agents.find((a) => a.id === agentId);
-        return agent !== undefined && issueWatchPrefsFor(agent, agents).delivery === 'push';
+        return agent !== undefined && issueWatchPrefsFor(agent, agents, this.#ports.defaultAgentOf?.(agent.workspaceId) ?? null).delivery === 'push';
     }
 }

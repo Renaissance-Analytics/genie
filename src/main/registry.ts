@@ -204,7 +204,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}) }))
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}) }))
                 : null,
             /*
              * The attention band.
@@ -297,7 +297,7 @@ export class Registry {
      * nameable and persistable without anything running, so that a workspace can be set up
      * before anyone is ready to spend a provider turn on it.
      */
-    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null; sidecarOf?: AgentId }): Promise<AgentRecord> {
+    async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null }): Promise<AgentRecord> {
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
@@ -347,9 +347,9 @@ export class Registry {
         return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
     }
 
-    workspace(id: string): { id: string; path: string; asleep: boolean; governs: string[] } | null {
+    workspace(id: string): { id: string; path: string; asleep: boolean; governs: string[]; defaultAgentId: string | null } | null {
         const w = this.#workspaces.find((x) => x.id === id);
-        return w ? { id: w.id, path: w.path, asleep: w.asleep === true, governs: [...(w.governs ?? [])] } : null;
+        return w ? { id: w.id, path: w.path, asleep: w.asleep === true, governs: [...(w.governs ?? [])], defaultAgentId: w.defaultAgentId ?? null } : null;
     }
 
     /** OPS PROJECTS (§6.1): which workspaces `opsId` governs — known ids only, never itself. */
@@ -369,6 +369,32 @@ export class Registry {
 
     agentsOf(workspaceId: string): readonly AgentRecord[] {
         return this.#agents.filter((a) => a.workspaceId === workspaceId);
+    }
+
+    /** The workspace's default agent (Genie 1's), or `null` — none designated is a normal state. */
+    defaultAgentOf(workspaceId: string): string | null {
+        return this.#workspaces.find((w) => w.id === workspaceId)?.defaultAgentId ?? null;
+    }
+
+    /**
+     * Designate one of the workspace's OWN agents its default, or clear it with `null` (Genie 1's setWorkspaceDefaultAgent).
+     * An agent of another workspace is refused: it would be the default of a workspace it does not belong to.
+     */
+    async setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+        if (agentId !== null) {
+            const agent = this.#agents.find((a) => a.id === agentId);
+            if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+            if (agent.workspaceId !== workspaceId) return { ok: false, reason: `${agent.name} is an agent of ${agent.workspaceId}, not of ${workspaceId}` };
+        }
+        this.#workspaces = this.#workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { defaultAgentId: _previous, ...rest } = w;
+            return agentId === null ? rest : { ...rest, defaultAgentId: agentId };
+        });
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true };
     }
 
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
@@ -398,6 +424,15 @@ export class Registry {
         if (!this.#agents.some((a) => a.id === agentId)) return false;
         this.#agents = this.#agents.filter((a) => a.id !== agentId);
         await this.#store.writeAgents(this.#agents);
+        // A designation never points at nothing: the forgotten default leaves its workspace with none.
+        if (this.#workspaces.some((w) => w.defaultAgentId === agentId)) {
+            this.#workspaces = this.#workspaces.map((w) => {
+                if (w.defaultAgentId !== agentId) return w;
+                const { defaultAgentId: _gone, ...rest } = w;
+                return rest;
+            });
+            await this.#store.writeWorkspaces(this.#workspaces);
+        }
         this.#emit();
         return true;
     }

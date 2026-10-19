@@ -1,6 +1,6 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { Liveness } from '../core/liveness.js';
-import { addressOf, inboxSettingFrom } from '../core/inbox.js';
+import { inboxSettingFrom } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
@@ -13,13 +13,12 @@ import type { TerminalsPort } from './mcp-tools-more.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import type { AllToolsDeps } from './mcp-registrations.js';
 import type { Caller } from './mcp-tools.js';
-import type { SidecarToolsDeps } from './mcp-tools-sidecar.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
  * EVERY GENIE TOOL'S DEPENDENCIES, BUILT ONCE (the owner, 2026-10-13: doctor mode drives an agent with Genie's real
  * tools). Normal Genie and doctor mode both call `allGenieTools(genieToolDeps(parts))`: the parts differ — doctor has no
- * window, terminals or sidecars, and says so — and the wiring between them and the tools does not. Two copies of this
+ * window or terminals, and says so — and the wiring between them and the tools does not. Two copies of this
  * mapping would drift, and drift between copies is exactly what refused every Genie session's tool calls that day
  * (five copies of the caller check, mcp-callers `callerFrom`).
  */
@@ -55,7 +54,6 @@ export interface GenieToolParts {
     readonly processes?: ProcessesPort;
     /** Runs `services exec` commands (main/service-exec.ts). Absent = none (doctor mode), and the tool says so. */
     readonly serviceExec?: ServiceExec;
-    readonly sidecar: Pick<SidecarToolsDeps, 'register' | 'start' | 'running'>;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
 }
 
@@ -95,14 +93,6 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             processes: p.processes ?? null,
         },
         attention: { resolveCaller: p.resolveCaller, openFile: p.openFile },
-        sidecar: {
-            resolveCaller: p.resolveCaller,
-            roster: p.roster,
-            register: p.sidecar.register,
-            start: p.sidecar.start,
-            running: p.sidecar.running,
-            addressOf: (record) => addressOf(record, 'full'),
-        },
         plugins: {
             plugins: { tools: () => p.plugins.tools(), guard: (id) => p.plugins.guard(id) },
             run: p.plugins.run,

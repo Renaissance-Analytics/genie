@@ -40,6 +40,26 @@ export interface V1Agent {
     readonly name: string;
     readonly tui: string | null;
     readonly personaPath: string | null;
+    /** Genie 1's `role`: `'workspace'` marks the workspace's DEFAULT agent. Absent on a v1 database without the column. */
+    readonly role?: string | null;
+}
+
+/**
+ * GENIE 1'S DEFAULT AGENTS, CARRIED OVER (the owner, 2026-10-19). Genie 1 designated a workspace's default agent with
+ * `role = 'workspace'` on the agent row; Genie 2 keeps it on the workspace. Matched by (workspace, name), the identity
+ * both keep — a v1 default with no Genie 2 record is left out, never guessed.
+ */
+export function v1DefaultAgents(
+    v1: ReadonlyArray<{ readonly workspaceId: string; readonly name: string; readonly role?: string | null }>,
+    records: ReadonlyArray<{ readonly id: string; readonly workspaceId: string; readonly name: string }>,
+): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const a of v1) {
+        if (a.role !== 'workspace') continue;
+        const record = records.find((r) => r.workspaceId === a.workspaceId && r.name === a.name);
+        if (record) out[a.workspaceId] = record.id;
+    }
+    return out;
 }
 
 export interface V1Catalog {

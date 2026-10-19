@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_SCOPED_METHODS, capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, type WireMessage } from '../src/core/remote-protocol.js';
+import { AGENT_SCOPED_METHODS, capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, WORKSPACE_SCOPED_METHODS, type WireMessage } from '../src/core/remote-protocol.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie. One message shape both
@@ -57,7 +57,10 @@ describe('the capability table', () => {
         // 58 since `providerLogin` (Log in to <provider>, 2026-10-18): host-only like takeOver — it opens a window on the host.
         // 59 since `workspaces.tynnProjects` (From Tynn picks from the signed-in person's projects, 2026-10-19): host-only
         // like the preview it leads to — the folder picker after it is the host's.
-        expect(REMOTE_METHODS.length).toBe(59);
+        // 60 since `workspaces.setDefaultAgent` (Genie 1's default agent, 2026-10-19): a write, workspace-scoped like setGoverns.
+        expect(REMOTE_METHODS.length).toBe(60);
+        expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setDefaultAgent');
         expect(capabilityOf('workspaces.tynnProjects')).toBe('host-only');
         expect(capabilityOf('cancelTurn')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');

@@ -66,7 +66,6 @@ describe('manageTerminals create', () => {
         const tools = allGenieTools(genieToolDeps({
             inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'allowed', roster: () => [], resolveCaller: (id) => (id === 't-atlas' ? atlas : null),
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: t.port, terminalEnv: () => SERVICE_ENV,
-            sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },
         }));
         await create(tools, 'php artisan migrate');

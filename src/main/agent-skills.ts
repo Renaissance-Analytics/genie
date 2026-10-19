@@ -40,7 +40,6 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
 - \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
-- \`runAgent\` to start your sidecar, a review partner with its own context.
 - \`knowledge\` for the workstation's knowledge graph.
 - \`thumbsUp\` to say you are ready.
 
@@ -71,16 +70,14 @@ Use \`agentinbox\` to list peers, send a message, receive your mail and check re
     },
     {
         name: 'genie-terminals',
-        description: 'Use when you need a shell, a build, or your sidecar in Genie; something that must keep running goes to `processes`.',
-        body: `# Terminals and your sidecar
+        description: 'Use when you need a shell or a build in Genie; something that must keep running goes to `processes`.',
+        body: `# Terminals
 
 Use \`manageTerminals\` to list, create, write to and read the workspace's terminals. Creating one and writing to one may need the person's approval. Multi-line text is pasted as one block and Enter is sent separately. A read that says \`dropped: true\` was cut at the scrollback cap. Terminals are for shells and builds; no agent runs in one. A terminal already has the workspace's service variables.
 
 Services and sites are not terminal work: use \`services\` and \`sites\`, and Genie sets them up, starts and stops them. Never run docker yourself.
 
 Neither is a process that must keep running (a queue worker, a watcher): add it with \`processes\`, and Genie keeps it running and keeps its log.
-
-Use \`runAgent\` with action \`sidecar\` to start \`<your name>-slave\`, your review partner. If you already have one it is rejoined, never a second. Genie never stops it for you.
 `,
     },
     {

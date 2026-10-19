@@ -43,3 +43,30 @@ describe('workspace settings section', () => {
         expect(render({ ...ops, settings: { ...ops.settings!, values: null } })).toContain('data-ws-settings-skeleton');
     });
 });
+
+/**
+ * THE DEFAULT AGENT — GENIE 1'S DROPDOWN (the owner, 2026-10-19; approved FTQ q_09d1f4a0). One of THIS workspace's agents,
+ * or none; the agent an action uses when it names none. The provider setting is "Provider for new agents" — two rows
+ * called "Default agent" would be two different things under one name.
+ */
+describe('the default agent', () => {
+    const withDefault = (current: string | null) => ({ ...ops, defaultAgent: { agents: [{ id: 'a1', name: 'atlas' }, { id: 'a2', name: 'wren' }], current, onSet: () => {} } });
+
+    it('a dropdown of this workspace’s agents and None, the current one selected', () => {
+        const html = render(withDefault('a2'));
+        const select = html.match(/<select[^>]*data-default-agent[^>]*>[\s\S]*?<\/select>/)?.[0] ?? '';
+        expect(select).not.toBe('');
+        expect([...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(['', 'a1', 'a2']);
+        expect(select).toMatch(/<option value="a2" selected=""/);
+        expect(html).toMatch(/Default agent/);
+    });
+
+    it('none designated selects None', () => {
+        expect(render(withDefault(null))).toMatch(/<select[^>]*data-default-agent[^>]*>\s*<option value="" selected=""/);
+    });
+
+    it('the provider setting is named for what it is', () => {
+        const html = render(ops);
+        expect(html).toMatch(/data-ws-setting="default_agent"[\s\S]*?Provider for new agents/);
+    });
+});

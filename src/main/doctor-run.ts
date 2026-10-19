@@ -31,7 +31,7 @@ import { Store } from './store.js';
  * behind the session-key header, over real HTTP — so a fault in that wiring shows up here, where genie can see it.
  *
  * Nothing is opened until `startAgent` is called, and `startAgent` is refused while normal Genie runs: two Genies
- * driving one agent's thread is how a conversation forks. What doctor does not run — terminals, sidecars, a window to
+ * driving one agent's thread is how a conversation forks. What doctor does not run — terminals, a window to
  * open files in, a Deck to approve in — answers that it is not available here, never a quiet success.
  */
 const ASK_TIMEOUT_MS = 10 * 60_000;
@@ -144,7 +144,6 @@ export class DoctorRun {
                     scrollback: () => undefined,
                     scrollbackCap: 1_000_000,
                 },
-                sidecar: { register: unavailable('a sidecar') as never, start: unavailable('a sidecar') as never, running: () => false },
                 plugins: { tools: () => [], guard: () => null, run: unavailable('plugin tools') as never },
             }));
             const server = genieMcpServer({ registrations, port: 0 });

@@ -109,10 +109,31 @@ describe('readV1Catalog', () => {
                 { id: '01b', path: 'C:\\w\\second', name: 'Second', shape: 'agi', hibernated: true },
             ],
             agents: [
-                { id: 'b', workspaceId: '01b', name: 'nameless-tui', tui: null, personaPath: null },
-                { id: 'a', workspaceId: '01a', name: 'kai', tui: 'claude', personaPath: 'C:\\w\\first\\.agents\\kai\\AGENT.md' },
+                { id: 'b', workspaceId: '01b', name: 'nameless-tui', tui: null, personaPath: null, role: 'specialized' },
+                { id: 'a', workspaceId: '01a', name: 'kai', tui: 'claude', personaPath: 'C:\\w\\first\\.agents\\kai\\AGENT.md', role: 'specialized' },
             ],
         });
+    });
+
+    // Genie 1's DEFAULT AGENT is the row with role = 'workspace' (v1 main/db.ts workspaceDefaultAgent) — read so it carries.
+    it("reads v1's role: the workspace's default agent is marked 'workspace'; an older database without the column reads null", () => {
+        const file = join(dir, 'genie.db');
+        const db = new DatabaseSync(file);
+        db.exec(v1Workspaces);
+        db.exec(v1Agents);
+        db.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, project_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run('01a', 'p', 'First', 'agi', 'C:\\w\\first', 'First', 0);
+        db.prepare("INSERT INTO workspace_agents (id, workspace_id, tui, name, persona_path, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'workspace', ?, ?)").run('a', '01a', 'claude', 'kai', null, 1, 1);
+        db.close();
+        expect(readV1Catalog(file)!.agents.map((a) => a.role)).toEqual(['workspace']);
+
+        const old = join(dir, 'old.db');
+        const o = new DatabaseSync(old);
+        o.exec(v1Workspaces);
+        o.exec('CREATE TABLE workspace_agents ( id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, tui TEXT, name TEXT NOT NULL, persona_path TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )');
+        o.prepare("INSERT INTO workspaces (id, tynn_project_id, tynn_project_name, shape, path, project_name, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)").run('01a', 'p', 'First', 'agi', 'C:\\w\\first', 'First', 0);
+        o.prepare('INSERT INTO workspace_agents (id, workspace_id, tui, name, persona_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('a', '01a', 'claude', 'kai', null, 1, 1);
+        o.close();
+        expect(readV1Catalog(old)!.agents.map((a) => a.role)).toEqual([null]);
     });
 
     it('cannot-see is null: no file, or a database without the workspaces table; the tables with no rows is an empty catalog', () => {

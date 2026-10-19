@@ -149,7 +149,6 @@ describe('starting a loaded agent', () => {
         const normal = allGenieTools(genieToolDeps({
             inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
-            sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },
         })).map((r) => r.definition.name).sort();
         expect(normal.length).toBeGreaterThan(5);

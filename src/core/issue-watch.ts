@@ -215,15 +215,20 @@ export function parseIssueWatchSetting(raw: unknown): IssueWatchSetting | string
 }
 
 /**
- * The setting that applies to an agent. Its own, when it has one. Never set: the workspace's FIRST agent (the earliest
- * made) hears the default kinds pushed, and every other agent hears nothing — so five agents never all react to one
- * issue (Genie 1's reason for designated handlers; the owner's FTQ answer q_c78a4476).
+ * The setting that applies to an agent. Its own, when it has one. Never set: the workspace's DEFAULT agent (Genie 1's
+ * designation, Workspace settings) hears the default kinds pushed, and every other agent hears nothing — so five agents
+ * never all react to one issue (Genie 1's reason for designated handlers; the owner's FTQ answer q_c78a4476). With no
+ * default designated, the workspace's FIRST agent (the earliest made) does.
  */
 export function issueWatchPrefsFor(
     agent: { readonly id: string; readonly workspaceId: string; readonly createdAt: string; readonly issueWatch?: IssueWatchSetting | undefined },
     all: ReadonlyArray<{ readonly id: string; readonly workspaceId: string; readonly createdAt: string }>,
+    defaultAgentId: string | null = null,
 ): IssueWatchPrefs {
     if (agent.issueWatch) return { ...agent.issueWatch, chosen: true };
+    if (defaultAgentId !== null && all.some((a) => a.id === defaultAgentId && a.workspaceId === agent.workspaceId)) {
+        return { delivery: agent.id === defaultAgentId ? 'push' : 'off', kinds: DEFAULT_KINDS, chosen: false };
+    }
     const first = all
         .filter((a) => a.workspaceId === agent.workspaceId)
         .reduce<{ id: string; createdAt: string } | null>((best, a) => (best === null || a.createdAt < best.createdAt || (a.createdAt === best.createdAt && a.id < best.id) ? a : best), null);
