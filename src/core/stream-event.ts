@@ -204,6 +204,8 @@ function toolStatusOf(value: unknown): ToolStatus | null {
  * init notice; Codex after thread start or resume and on `model/rerouted`. No key = the provider did not say.
  */
 export const MODEL_META = 'particle.academy/model';
+/** Where prism-acp (0.19.0+) puts a compaction on a `notice` (its exported `META_COMPACTION`): trigger, pre/post tokens. */
+export const COMPACTION_META = 'particle.academy/compaction';
 
 function thinkingEstimateOf(update: Record<string, unknown>): number | null {
     const meta = update['_meta'];
@@ -294,6 +296,12 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
             };
 
         case 'notice': {
+            // A COMPACTION (prism-acp 0.19.0's `particle.academy/compaction`, from the CLI's compact_boundary): the divider,
+            // with the context before and after — `/compact` used to look like a failed turn with nothing to show.
+            const compaction = isRecord(update['_meta']) ? update['_meta'][COMPACTION_META] : undefined;
+            if (isRecord(compaction)) {
+                return { kind: 'divider', variant: 'compaction', before: numberOrNull(compaction['preTokens']), after: numberOrNull(compaction['postTokens']) };
+            }
             const notice = isRecord(update['notice']) ? update['notice'] : {};
             const tasks = backgroundTasksOf(update['_meta']);
             const task = taskEventOf(update['_meta']);
