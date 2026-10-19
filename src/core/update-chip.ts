@@ -1,4 +1,5 @@
 import type { SignalAction, UpdateSignalInput } from './deck.js';
+import type { UpdateChangelog } from './update-notes.js';
 
 /**
  * THE UPDATE, IN THE HEADER (the owner, 2026-10-13: "the update notice should be in the header, not buried in the deck
@@ -12,17 +13,17 @@ export interface UpdateChip {
     /** The next step, or `null` while one is already under way. */
     readonly action: SignalAction | null;
     readonly version: string;
-    /** What the version brings — its release notes' "What's new" (Tynn #762) — shown on hover; absent = none. */
-    readonly notes?: string;
+    /** What is in the update, for the update window (core/update-notes.ts); absent = not fetched. */
+    readonly changelog?: UpdateChangelog | 'unavailable' | null;
 }
 
 export function updateChip(u: UpdateSignalInput | null | undefined): UpdateChip | null {
     if (!u || !u.version) return null;
     const chip = phaseChip(u);
-    return chip ? { ...chip, version: u.version, ...(u.notes ? { notes: u.notes } : {}) } : null;
+    return chip ? { ...chip, version: u.version, ...(u.changelog !== undefined ? { changelog: u.changelog } : {}) } : null;
 }
 
-function phaseChip(u: UpdateSignalInput): Omit<UpdateChip, 'version' | 'notes'> | null {
+function phaseChip(u: UpdateSignalInput): Omit<UpdateChip, 'version' | 'changelog'> | null {
     switch (u.phase) {
         case 'available':
             return { phase: 'available', label: `Genie ${u.version} is available — download`, action: 'update-download' };

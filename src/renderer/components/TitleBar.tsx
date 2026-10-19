@@ -1,7 +1,5 @@
 import {
-    ContentRenderer,
     Icon,
-    Popover,
     Tooltip,
     browserPlatformHints,
     detectPlatform,
@@ -10,7 +8,6 @@ import {
 } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
-import type { SignalAction } from '../../core/deck.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
@@ -60,8 +57,8 @@ export interface TitleBarProps {
     update?: UpdateChip | null | undefined;
     /** The running version (Tynn #763; Genie 1's wordmark label), shown until there is an update to act on; `null` = not known yet. */
     version?: string | null | undefined;
-    /** Its next step: download, or restart to install. */
-    onUpdateAction?: ((action: SignalAction) => void) | undefined;
+    /** Opens the update window (what is in it, and its next step). */
+    onOpenUpdate?: (() => void) | undefined;
     /**
      * The platform, for the palette's key hint. Injected so a test can render both branches on
      * one machine; resolved from the browser after mount when it is not.
@@ -71,7 +68,7 @@ export interface TitleBarProps {
     paletteKey?: string | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onUpdateAction, paletteKey, version }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -192,14 +189,18 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
                 </div>
             ) : null}
-            {/* THE UPDATE (the owner: "in the header, not buried in the deck page"): a button when there is a next step. */}
-            {update ? (() => {
-                const chip = update.action && onUpdateAction ? (
+            {/*
+              * THE UPDATE (the owner: "in the header, not buried in the deck page"). The button opens the update window — what is
+              * in the update, every version since yours, and the step that takes it (Genie 1's header control; the owner,
+              * 2026-10-19). It replaced a hover popover that never showed notes for a real update.
+              */}
+            {update ? (
+                onOpenUpdate ? (
                     <button
                         type="button"
                         data-update-chip={update.phase}
-                        data-update-action={update.action}
-                        onClick={() => onUpdateAction(update.action!)}
+                        data-update-action={update.action ?? 'none'}
+                        onClick={() => onOpenUpdate()}
                         // no-drag: in the bar's drag region a click is the OS's, and this button never heard it (the owner, beta.21).
                         className="[-webkit-app-region:no-drag] flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--primary)]/15 px-2 py-0.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--primary)]/25"
                     >
@@ -211,17 +212,8 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                         <Icon name="download" size="xs" />
                         {update.label}
                     </span>
-                );
-                // What the version brings, on hover (Tynn #762; Genie 1's changelog popover on its upgrade pill).
-                return update.notes ? (
-                    <Popover hover placement="bottom">
-                        <Popover.Trigger>{chip}</Popover.Trigger>
-                        <Popover.Content>
-                            <UpdateNotes version={update.version} notes={update.notes} />
-                        </Popover.Content>
-                    </Popover>
-                ) : chip;
-            })() : null}
+                )
+            ) : null}
             {workstation ? (
                 <div
                     data-workstation-health={workstation.healthy ? 'healthy' : 'unhealthy'}
@@ -238,12 +230,3 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
     );
 }
 
-/** What an update brings (Tynn #762): the offered version's "What's new", rendered — the update chip's hover. */
-export function UpdateNotes({ version, notes }: { version: string; notes: string }) {
-    return (
-        <div data-update-notes={version} className="flex max-w-sm flex-col gap-2 p-3">
-            <span className="text-xs font-semibold">What’s new in Genie {version}</span>
-            <ContentRenderer value={notes} format="markdown" lineSpacing={1.4} className="max-h-72 overflow-auto text-xs text-[var(--fg-2)]" />
-        </div>
-    );
-}

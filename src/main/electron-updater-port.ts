@@ -3,7 +3,6 @@
 // window smoke caught it; `test/cjs-named-imports.test.ts` now guards the whole main process).
 import electronUpdater from 'electron-updater';
 import type { UpdaterPort } from './updater.js';
-import { releaseNotesText } from '../core/whats-new.js';
 
 const { autoUpdater } = electronUpdater;
 
@@ -43,7 +42,8 @@ export function realElectronUpdaterPort(): UpdaterPort {
             // `isUpdateAvailable` is the library's own verdict (version comparison included);
             // `result` is null when the updater is disabled (dev run without a feed).
             if (!result || !result.isUpdateAvailable) return null;
-            return { version: result.updateInfo.version, notes: releaseNotesText(result.updateInfo.releaseNotes, result.updateInfo.version) };
+            // The version only: its notes come from GitHub's releases API (core/update-notes.ts), not the feed's HTML.
+            return { version: result.updateInfo.version };
         },
 
         async download(onProgress) {

@@ -33,7 +33,7 @@ describe('the title bar', () => {
         it(`every control is clickable — counted, with the update chip ${phase}`, () => {
             const update = updateChip({ phase, version: '2.0.0-beta.21', percent: null } as never);
             const html = renderToStaticMarkup(
-                <TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onUpdateAction={() => {}} />,
+                <TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onOpenUpdate={() => {}} />,
             );
             const controls = clickability(html);
             // Positive control: the walk finds the controls, the update chip among them.

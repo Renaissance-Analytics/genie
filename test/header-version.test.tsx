@@ -10,7 +10,7 @@ import { TitleBar } from '../src/renderer/components/TitleBar.js';
  * update chip says what comes next instead. Not known yet: nothing, never a guess.
  */
 const bar = (version: string | null, update: ReturnType<typeof updateChip> = null) =>
-    renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onUpdateAction={() => {}} version={version} />);
+    renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onOpenUpdate={() => {}} version={version} />);
 
 describe('the header’s version', () => {
     it('the running version beside the wordmark', () => {

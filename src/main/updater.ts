@@ -1,11 +1,5 @@
 import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
-import { whatsNewSection } from '../core/whats-new.js';
-
-/** An update's notes as the state carries them: its "What's new" section, or no key at all (Tynn #762). */
-function notesOf(notes: string | null | undefined): { notes?: string } {
-    const section = notes ? whatsNewSection(notes) : null;
-    return section ? { notes: section } : {};
-}
+import { changelogBetween, type ReleaseLike, type UpdateChangelog } from '../core/update-notes.js';
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
 
 /**
@@ -54,8 +48,12 @@ export interface UpdateState {
     error: string | null;
     /** When the last check ANSWERED (not when it started). */
     checkedAt: number | null;
-    /** What the offered version brings: its release notes' "What's new" section (Tynn #762); absent/`null` = none. */
-    notes?: string | null;
+    /**
+     * What is in the update (Genie 1's upgrade window): every version after the running one up to the offered one, with
+     * its "What's new" — from GitHub's releases (core/update-notes.ts). `null` = still fetching; `'unavailable'` = could
+     * not be fetched (offline); absent = not asked (no releases source).
+     */
+    changelog?: UpdateChangelog | 'unavailable' | null;
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -66,7 +64,7 @@ export interface UpdaterPort {
      */
     configure(channel: { allowPrerelease: boolean; autoDownload: boolean }): void;
     /** Resolves the offered version, or `null` when there is none. Rejects on a library error. */
-    check(): Promise<{ version: string; notes?: string | null } | null>;
+    check(): Promise<{ version: string } | null>;
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
@@ -102,6 +100,10 @@ export interface UpdateHostOptions {
     agents?: DrainAgentsPort;
     /** The update channel at construction; `DEFAULT_UPDATE_CHANNEL` (dev) when absent. `setChannel` changes it later. */
     channel?: UpdateChannel;
+    /** The version running now — where "what is in this update" starts. */
+    runningVersion?: string;
+    /** Genie's published releases (GitHub's releases API); absent = no changelog is fetched. */
+    releases?: () => Promise<readonly ReleaseLike[]>;
 }
 
 /**
@@ -195,6 +197,19 @@ export class UpdateHost {
         return () => { this.listeners.delete(listener); };
     }
 
+    /** The release notes between the running version and `offered`; set on the state while `offered` is still on offer. */
+    #fetchChangelog(offered: string): void {
+        const releases = this.options.releases;
+        const running = this.options.runningVersion;
+        if (!releases || !running) return;
+        void releases().then(
+            (list) => changelogBetween(list, running, offered),
+            () => 'unavailable' as const,
+        ).then((changelog) => {
+            if (this.current.version === offered) this.set({ ...this.current, changelog });
+        });
+    }
+
     /** Ask the feed. Rejoins a check already in flight. Resolves to the resulting state. */
     check(): Promise<UpdateState> {
         if (this.inFlight) return this.inFlight;
@@ -202,7 +217,11 @@ export class UpdateHost {
         this.inFlight = this.options.port.check().then(
             (found) => {
                 const checkedAt = this.clock();
-                if (found) this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...notesOf(found.notes) });
+                if (found) {
+                    const fetching = this.options.releases && this.options.runningVersion ? { changelog: null } : {};
+                    this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...fetching });
+                    if ('changelog' in fetching) this.#fetchChangelog(found.version);
+                }
                 else this.set({ phase: 'none', version: null, percent: null, error: null, checkedAt });
                 return this.current;
             },
@@ -229,7 +248,7 @@ export class UpdateHost {
             this.set({ ...this.current, phase: 'error', error: message });
             return false;
         }
-        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.notes ? { notes: this.current.notes } : {}) });
+        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) });
         return true;
     }
 
