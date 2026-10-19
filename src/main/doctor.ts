@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentRecord, mintAgentId } from '../core/identity.js';
 import { osaHomeFiles, writeOsaHome, type OsaFacts } from '../core/osa-home.js';
+import { omarchyFacts } from './omarchy-skills.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import { doctorDataTools } from './doctor-data.js';
 import { DoctorRun } from './doctor-run.js';
@@ -48,7 +49,7 @@ export async function runDoctor(): Promise<void> {
     }
     await app.whenReady();
 
-    const facts: OsaFacts = { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: genieUserData };
+    const facts: OsaFacts = { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: genieUserData, omarchy: await omarchyFacts() };
     const osaDir = join(doctorDir, 'osa');
     await writeOsaHome({
         dir: osaDir,
