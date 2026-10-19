@@ -436,6 +436,11 @@ export class SessionHost {
         return out;
     }
 
+    /** The providers whose login signed out at least one running agent, once each (the tray names them). */
+    signedOutProviders(): string[] {
+        return [...new Set([...this.#running.values()].filter((e) => e.session.signedOut).map((e) => e.provider))].sort();
+    }
+
     /** The running agents a provider's login signed out — brought back once the person has signed in again. */
     signedOutAgents(provider: string): AgentId[] {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);

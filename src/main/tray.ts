@@ -26,6 +26,8 @@ export interface TrayHandlers {
     readonly onTaskManager?: () => void;
     /** New scratch terminal (Tynn #761): a shell in the home folder, in Genie's own workspace, in a window of its own. */
     readonly onScratchTerminal?: () => void;
+    /** `Log in to <provider>` for a signed-out login: the provider's own login, in a window of its own (#967). */
+    readonly onProviderLogin?: (provider: string) => void;
 }
 
 /** An update on offer, as the tray shows it. */
@@ -64,11 +66,18 @@ function loginName(provider: string): string {
  * The menu, as labels and handlers — pure enough for a test to hold the verbs. A held login (Tynn #794) leads: its line,
  * then Resume now for it — the tray is where Genie is seen when its window is not.
  */
-export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null): TrayItem[] {
-    const limits: TrayItem[] = held.flatMap((h) => [
-        { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
-        { label: `Resume ${loginName(h.provider)} now`, click: () => handlers.onResumeLimit?.(h.provider) },
-    ]);
+export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null, signedOut: readonly string[] = []): TrayItem[] {
+    const limits: TrayItem[] = [
+        ...held.flatMap((h) => [
+            { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
+            { label: `Resume ${loginName(h.provider)} now`, click: () => handlers.onResumeLimit?.(h.provider) },
+        ]),
+        // SIGNED OUT (the owner, 2026-10-18): the login named, and its own login one click away.
+        ...(handlers.onProviderLogin ? signedOut.flatMap((provider) => [
+            { label: `${loginName(provider)}: signed out`, enabled: false },
+            { label: `Log in to ${loginName(provider)}`, click: () => handlers.onProviderLogin?.(provider) },
+        ]) : []),
+    ];
     const offer: TrayItem[] = update && handlers.onUpdate ? [{ label: `⬆ Update to v${update.version}…`, click: handlers.onUpdate }, { type: 'separator' }] : [];
     return [
         ...offer,
@@ -84,8 +93,9 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
 }
 
 /** The tray's tooltip: what is held, or just Genie. */
-export function trayTooltip(held: readonly HeldLogin[]): string {
-    return held.length === 0 ? 'Genie' : `Genie — ${held.map((h) => `${loginName(h.provider)}: ${h.words}`).join('; ')}`;
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = []): string {
+    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`)];
+    return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 
 export function createTray(handlers: TrayHandlers, iconPath: string | null = null): Tray {
