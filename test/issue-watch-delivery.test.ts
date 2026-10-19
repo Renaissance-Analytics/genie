@@ -169,8 +169,10 @@ describe('main runs it', () => {
         expect(src.match(/new IssueWatchDelivery\(/g)).toHaveLength(1);
         expect(src).toMatch(/onEvents: \(projectId, events\) => \{[\s\S]{0,300}issueWatchDelivery\.onEvents\(projectId, events\);/);
         expect(src).toMatch(/wireInboxPush\(\{\s*inbox: \{ onSend: \(listener\) => issueWatchDelivery\.onQueued\(listener\) \}/);
-        // The key the sign-in made (main/tynn-account.ts), for the host that minted it — never a token from settings.
-        expect(src).toMatch(/credentials: \(\) => \{[\s\S]{0,300}tynnAccount\?\.token\(\)[\s\S]{0,200}host: tynnAccount\.host\(\)/);
+        // Over the signed-in SESSION (main/tynn-account.ts), as Genie 1 did — the person's id and session-bound requests;
+        // never a bearer token.
+        expect(src).toMatch(/tynn: \(\) => \{[\s\S]{0,200}tynnAccount\?\.userId\(\)[\s\S]{0,200}request: \(path, init\) => account\.request\(path, init\)/);
+        expect(src).not.toMatch(/credentials: \(\) =>/);
         expect(src).not.toMatch(/tynn_token/);
     });
 });

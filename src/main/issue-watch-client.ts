@@ -3,13 +3,14 @@ import { encodePong, encodeSubscribe, parsePusherFrame, pusherWsUrl, socketIdOf 
 
 /**
  * ISSUEWATCH, LISTENING TO TYNN (Tynn #806). Genie never polls GitHub: Tynn does, with its GitHub App, and pushes each
- * workspace's entry on the person's own private channel (`issuewatch.delta`). Genie reaches it with the Tynn token it
- * ALREADY holds (the owner, 2026-10-17: no new token to mint):
+ * workspace's entry on the person's own private channel (`issuewatch.delta`). Genie reaches it over its Tynn SESSION, on
+ * the routes Genie 1 used (main/tynn-account.ts; the owner, 2026-10-19: "everything was already working in genie 1"):
  *
- *   1. `GET  /api/v1/issue-watch/push-config`        — the public app key, the cluster, the person's channel;
- *   2. dial the socket; on `connection_established`, `POST /api/v1/issue-watch/broadcasting-auth` signs the channel
+ *   1. `GET  /api/v1/broadcasting-config`             — the public app key and the cluster; the channel is the person's
+ *      own, `private-App.Models.User.<id>`, by the id the session answered /api/v1/me with;
+ *   2. dial the socket; on `connection_established`, `POST /api/v1/user/broadcasting-auth` signs the channel
  *      for THIS socket, and Genie subscribes;
- *   3. subscribed: `GET /api/v1/issue-watch` reconciles every workspace — on EVERY (re)connect, so a delta missed while
+ *   3. subscribed: `GET /api/v1/user/issue-watch` reconciles every workspace — on EVERY (re)connect, so a delta missed while
  *      the socket was down is never lost;
  *   4. each entry, reconciled or pushed, goes through one IssueWatchFeed: the first after a boot is a baseline, after
  *      that what changed comes out as events.
@@ -25,9 +26,8 @@ export interface SocketLike {
 }
 
 export interface IssueWatchClientPorts {
-    /** The Tynn this Genie is signed in to, and its token; `null` = not signed in. */
-    readonly credentials: () => { host: string; token: string } | null;
-    readonly fetch: (url: string, init: { method?: string; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+    /** The Tynn this Genie is signed in to: the person's id, and requests that ride the session; `null` = signed out. */
+    readonly tynn: () => SignedInTynn | null;
     readonly socket: (url: string) => SocketLike;
     /** Run `fn` after `ms`; answers a cancel. */
     readonly schedule: (fn: () => void, ms: number) => () => void;
@@ -39,6 +39,11 @@ export interface IssueWatchClientPorts {
     readonly onEntry?: (entry: IwEntry) => void;
 }
 
+export interface SignedInTynn {
+    readonly userId: string;
+    request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+}
+
 export type IssueWatchState =
     | { readonly kind: 'signed-out' }
     | { readonly kind: 'connecting' }
@@ -47,7 +52,7 @@ export type IssueWatchState =
     | { readonly kind: 'stopped' };
 
 /**
- * What a refresh did (Tynn's `POST /api/v1/issue-watch/refresh`): Tynn read GitHub now, or refused inside the window every
+ * What a refresh did (Tynn's `POST /api/v1/user/issue-watch/refresh`): Tynn read GitHub now, or refused inside the window every
  * caller of the workspace shares (`reason: 'cooldown'`), or could not (`'failed'` with Tynn's words, `'not-tracked'`);
  * `nextIn` is when the next is allowed. `ok: false` = it never reached Tynn's answer.
  */
@@ -97,16 +102,11 @@ export class IssueWatchClient {
      * a push, so whatever is new is heard as events; a refusal still carries the current snapshot.
      */
     async refresh(projectId: string): Promise<IssueWatchRefreshAnswer> {
-        const creds = this.#ports.credentials();
-        if (creds === null) return { ok: false, reason: 'not signed in to Tynn' };
-        const base = creds.host.replace(/\/+$/, '');
+        const tynn = this.#ports.tynn();
+        if (tynn === null) return { ok: false, reason: 'not signed in to Tynn' };
         let body: { refreshed?: unknown; reason?: unknown; error?: unknown; cooldown?: { label?: unknown }; workspace?: unknown };
         try {
-            const res = await this.#ports.fetch(`${base}/api/v1/issue-watch/refresh`, {
-                method: 'POST',
-                headers: { ...this.#headers(creds.token), 'content-type': 'application/json' },
-                body: JSON.stringify({ project_id: projectId }),
-            });
+            const res = await tynn.request('/api/v1/user/issue-watch/refresh', { method: 'POST', body: { project_id: projectId } });
             if (!res.ok) return { ok: false, reason: `Tynn answered the refresh with HTTP ${res.status}` };
             body = (await res.json()) as typeof body;
         } catch (error) {
@@ -128,47 +128,37 @@ export class IssueWatchClient {
         this.#ports.onState?.(state);
     }
 
-    #headers(token: string): Record<string, string> {
-        return { authorization: `Bearer ${token}`, accept: 'application/json' };
-    }
-
     async #connect(): Promise<void> {
         if (this.#stopped) return;
-        const creds = this.#ports.credentials();
-        if (creds === null) { this.#set({ kind: 'signed-out' }); return; }
+        const tynn = this.#ports.tynn();
+        if (tynn === null) { this.#set({ kind: 'signed-out' }); return; }
         this.#set({ kind: 'connecting' });
-        const base = creds.host.replace(/\/+$/, '');
-        let config: { key?: unknown; cluster?: unknown; channel?: unknown };
+        let config: { key?: unknown; cluster?: unknown };
         try {
-            const res = await this.#ports.fetch(`${base}/api/v1/issue-watch/push-config`, { method: 'GET', headers: this.#headers(creds.token) });
+            const res = await tynn.request('/api/v1/broadcasting-config', { method: 'GET' });
             if (!res.ok) return this.#retry(`Tynn answered the push config with HTTP ${res.status}`);
             config = (await res.json()) as typeof config;
         } catch (error) {
             return this.#retry(`Tynn could not be reached: ${(error as Error).message}`);
         }
-        if (typeof config.key !== 'string' || config.key === '' || typeof config.channel !== 'string' || config.channel === '') {
-            return this.#retry('Tynn has no push configured');
-        }
+        if (typeof config.key !== 'string' || config.key === '') return this.#retry('Tynn has no push configured');
         if (this.#stopped) return;
-        this.#channel = config.channel;
+        // The person's own channel (Tynn's routes/channels.php `App.Models.User.{id}`).
+        this.#channel = `private-App.Models.User.${tynn.userId}`;
         const socket = this.#ports.socket(pusherWsUrl(config.key, typeof config.cluster === 'string' && config.cluster !== '' ? config.cluster : 'us2'));
         this.#socket = socket;
-        socket.addEventListener('message', (e) => { if (this.#socket === socket) void this.#onFrame(socket, String(e.data), base, creds.token); });
+        socket.addEventListener('message', (e) => { if (this.#socket === socket) void this.#onFrame(socket, String(e.data), tynn); });
         socket.addEventListener('close', () => { if (this.#socket === socket) this.#onDrop(); });
         socket.addEventListener('error', () => { /* a 'close' follows; the reconnect is scheduled there */ });
     }
 
-    async #onFrame(socket: SocketLike, raw: string, base: string, token: string): Promise<void> {
+    async #onFrame(socket: SocketLike, raw: string, tynn: SignedInTynn): Promise<void> {
         const frame = parsePusherFrame(raw);
         if (!frame) return;
         const socketId = socketIdOf(frame);
         if (socketId !== null) {
             try {
-                const res = await this.#ports.fetch(`${base}/api/v1/issue-watch/broadcasting-auth`, {
-                    method: 'POST',
-                    headers: { ...this.#headers(token), 'content-type': 'application/json' },
-                    body: JSON.stringify({ socket_id: socketId, channel_name: this.#channel }),
-                });
+                const res = await tynn.request('/api/v1/user/broadcasting-auth', { method: 'POST', body: { socket_id: socketId, channel_name: this.#channel } });
                 const body = res.ok ? ((await res.json()) as { auth?: unknown }) : null;
                 if (!body || typeof body.auth !== 'string' || body.auth === '') {
                     this.#closing = `Tynn refused to sign the channel: HTTP ${res.status}`;
@@ -186,7 +176,7 @@ export class IssueWatchClient {
         if (frame.channel !== this.#channel) return;
         if (frame.event === 'pusher_internal:subscription_succeeded') {
             this.#set({ kind: 'live' });
-            await this.#reconcile(base, token);
+            await this.#reconcile(tynn);
             return;
         }
         if (frame.event === 'issuewatch.delta') this.#apply(frame.data);
@@ -197,9 +187,9 @@ export class IssueWatchClient {
         }
     }
 
-    async #reconcile(base: string, token: string): Promise<void> {
+    async #reconcile(tynn: SignedInTynn): Promise<void> {
         try {
-            const res = await this.#ports.fetch(`${base}/api/v1/issue-watch`, { method: 'GET', headers: this.#headers(token) });
+            const res = await tynn.request('/api/v1/user/issue-watch', { method: 'GET' });
             if (!res.ok) return;
             const body = (await res.json()) as { workspaces?: unknown };
             for (const raw of Array.isArray(body.workspaces) ? body.workspaces : []) this.#apply(raw);

@@ -5,9 +5,9 @@ import { IssueWatchClient, type IssueWatchClientPorts, type SocketLike } from '.
 
 /**
  * ISSUEWATCH, LISTENING TO TYNN (Tynn #806). Genie never polls GitHub: Tynn does, and pushes each workspace's entry on
- * the person's own private channel (`issuewatch.delta`, Pusher protocol). Genie reaches it with the Tynn token it
- * already holds (the owner: no new token): it asks Tynn for the push config (the public key, the cluster, the person's
- * channel), dials, has Tynn sign its channel for this socket, subscribes — and on EVERY (re)connect reconciles the whole
+ * the person's own private channel (`issuewatch.delta`, Pusher protocol). Genie reaches it over its Tynn SESSION, on the
+ * routes Genie 1 used (the owner, 2026-10-19: "everything was already working in genie 1"): it asks Tynn for the push
+ * config (`/api/v1/broadcasting-config`: the public key, the cluster; the channel is the person's own, by id), dials, has Tynn sign its channel for this socket, subscribes — and on EVERY (re)connect reconciles the whole
  * feed, so a delta missed while offline is never lost. Each entry goes through the IssueWatchFeed: the first after a
  * boot is a baseline, after that what changed comes out as events. A drop reconnects; nothing polls.
  */
@@ -15,23 +15,26 @@ const PROJECT = 'proj_1';
 const item = (key: string, kind = 'issue', updatedAt = '2026-10-17T10:00:00Z') => ({ kind, key, number: 1, title: 't', url: 'u', createdAt: updatedAt, updatedAt, owner: 'acme', repo: 'app' });
 const entry = (items: unknown[]) => ({ workspaceId: PROJECT, projectId: PROJECT, counts: {}, items, feedbackItems: [], tracking: {} });
 
-function harness(opts: { credentials?: { host: string; token: string } | null; authStatus?: number; refresh?: { status?: number; json: unknown } } = {}) {
-    const requests: Array<{ method: string; url: string; auth: string | null; body: unknown }> = [];
+function harness(opts: { signedIn?: boolean; authStatus?: number; refresh?: { status?: number; json: unknown } } = {}) {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
     const sockets: Array<SocketLike & { sent: string[]; url: string; closed: boolean; emit(frame: unknown): void; drop(): void }> = [];
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
     const heard: Array<{ projectId: string; events: IwEvent[] }> = [];
     let reconcile: unknown = { workspaces: [entry([item('a:issue:1')])] };
     const ports: IssueWatchClientPorts = {
-        credentials: () => (opts.credentials === undefined ? { host: 'https://tynn.example', token: 'rpk_X.secret' } : opts.credentials),
-        fetch: async (url, init) => {
-            requests.push({ method: init.method ?? 'GET', url, auth: init.headers.authorization ?? null, body: init.body ? JSON.parse(init.body) : null });
-            const json = url.endsWith('/push-config') ? { key: 'pk_test', cluster: 'us2', channel: 'private-App.Models.User.42' }
-                : url.endsWith('/broadcasting-auth') ? { auth: 'pk_test:sig' }
-                : url.endsWith('/refresh') ? opts.refresh?.json
-                : reconcile;
-            const status = url.endsWith('/broadcasting-auth') ? (opts.authStatus ?? 200) : url.endsWith('/refresh') ? (opts.refresh?.status ?? 200) : 200;
-            return { ok: status < 300, status, json: async () => json };
-        },
+        // The signed-in Tynn (main/tynn-account.ts): the person's id, and requests that ride the session.
+        tynn: () => (opts.signedIn === false ? null : {
+            userId: '42',
+            request: async (path, init) => {
+                requests.push({ method: init.method, path, body: init.body ?? null });
+                const json = path === '/api/v1/broadcasting-config' ? { key: 'pk_test', cluster: 'us2' }
+                    : path === '/api/v1/user/broadcasting-auth' ? { auth: 'pk_test:sig' }
+                    : path === '/api/v1/user/issue-watch/refresh' ? opts.refresh?.json
+                    : reconcile;
+                const status = path === '/api/v1/user/broadcasting-auth' ? (opts.authStatus ?? 200) : path === '/api/v1/user/issue-watch/refresh' ? (opts.refresh?.status ?? 200) : 200;
+                return { ok: status < 300, status, json: async () => json };
+            },
+        }),
         socket: (url) => {
             const listeners: Record<string, Array<(e: { data?: unknown }) => void>> = {};
             const s = {
@@ -72,7 +75,7 @@ describe('the Pusher protocol', () => {
 
 describe('the client', () => {
     it('signed out of Tynn: it says so and asks nothing', async () => {
-        const h = harness({ credentials: null });
+        const h = harness({ signedIn: false });
         h.client.start();
         await h.settle();
         expect(h.client.state()).toEqual({ kind: 'signed-out' });
@@ -80,17 +83,18 @@ describe('the client', () => {
         expect(h.sockets).toEqual([]);
     });
 
-    it('connects with the token it holds: push config, the socket, the channel signed for THIS socket, subscribed, reconciled', async () => {
+    it('connects over the session, on Genie 1’s routes: push config, the socket, the channel signed for THIS socket, subscribed, reconciled', async () => {
         const h = harness();
         h.client.start();
         await h.settle();
-        expect(h.requests[0]).toMatchObject({ method: 'GET', url: 'https://tynn.example/api/v1/issue-watch/push-config', auth: 'Bearer rpk_X.secret' });
+        expect(h.requests[0]).toEqual({ method: 'GET', path: '/api/v1/broadcasting-config', body: null });
         expect(h.sockets).toHaveLength(1);
         expect(h.sockets[0]!.url).toBe('wss://ws-us2.pusher.com/app/pk_test?protocol=7&client=genie&version=2.0');
         await h.connect(h.sockets[0]!);
-        expect(h.requests[1]).toEqual({ method: 'POST', url: 'https://tynn.example/api/v1/issue-watch/broadcasting-auth', auth: 'Bearer rpk_X.secret', body: { socket_id: '123.456', channel_name: 'private-App.Models.User.42' } });
+        // The channel is the person's own, by the id the session answered /api/v1/me with.
+        expect(h.requests[1]).toEqual({ method: 'POST', path: '/api/v1/user/broadcasting-auth', body: { socket_id: '123.456', channel_name: 'private-App.Models.User.42' } });
         expect(h.sockets[0]!.sent.map((f) => JSON.parse(f))).toEqual([{ event: 'pusher:subscribe', data: { auth: 'pk_test:sig', channel: 'private-App.Models.User.42' } }]);
-        expect(h.requests[2]).toMatchObject({ method: 'GET', url: 'https://tynn.example/api/v1/issue-watch' });
+        expect(h.requests[2]).toEqual({ method: 'GET', path: '/api/v1/user/issue-watch', body: null });
         expect(h.client.state()).toEqual({ kind: 'live' });
         // The reconcile after a boot is the baseline: nothing heard.
         expect(h.heard).toEqual([]);
@@ -175,8 +179,8 @@ describe('a refresh', () => {
         const answer = await h.client.refresh(PROJECT);
 
         expect(answer).toEqual({ ok: true, refreshed: true, reason: 'refreshed', nextIn: '3m' });
-        const req = h.requests.find((r) => r.url.endsWith('/refresh'))!;
-        expect(req).toEqual({ method: 'POST', url: 'https://tynn.example/api/v1/issue-watch/refresh', auth: 'Bearer rpk_X.secret', body: { project_id: PROJECT } });
+        const req = h.requests.find((r) => r.path.endsWith('/refresh'))!;
+        expect(req).toEqual({ method: 'POST', path: '/api/v1/user/issue-watch/refresh', body: { project_id: PROJECT } });
         expect(h.heard.flatMap((x) => x.events.map((e) => e.kind))).toEqual(['pr.new']);
     });
 
@@ -196,7 +200,7 @@ describe('a refresh', () => {
     });
 
     it('not signed in: says so and asks nothing; Tynn refuses: says the status', async () => {
-        const out = harness({ credentials: null });
+        const out = harness({ signedIn: false });
         expect(await out.client.refresh(PROJECT)).toEqual({ ok: false, reason: 'not signed in to Tynn' });
         expect(out.requests).toEqual([]);
         const refused = harness({ refresh: { status: 404, json: { message: 'No IssueWatch workspace with that id is available to you.' } } });

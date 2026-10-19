@@ -1,31 +1,33 @@
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
 
 /**
- * THIS GENIE'S TYNN ACCOUNT (the owner, 2026-10-19: Tynn sign-in the way Genie 1 did).
+ * THIS GENIE'S TYNN ACCOUNT — GENIE 1'S SESSION, AS IT WAS (the owner, 2026-10-19: "tynn already had this half.
+ * everything was already working in genie 1").
  *
- * Genie 1 swapped the browser's single-use code for a browser SESSION. Genie 2 talks to Tynn's API with a bearer, so it
- * swaps the same code once (`POST /api/v1/genie/sign-in`) for an ACCOUNT KEY named for this computer — "Genie — Office
- * PC" on Tynn's Account → Tokens, revocable there. The key is kept only through the secret store (Electron's safeStorage,
- * main.ts) — never in settings.json — and only for the host that minted it. Sign out revokes it at Tynn with the key
- * itself, then forgets it; Tynn unreachable, it is still forgotten here and the person is told it is live at Tynn.
+ * Genie 1 (`v1:main/auth.ts` `redeemToken`, `main/backend/tynn.ts` `fetch`): the single-use code from /genie/callback
+ * is dropped as a `genie_token` cookie on the Tynn origin, and `GET /api/v1/me` swaps it for a real Tynn session —
+ * Tynn's GenieAuthController::exchange. Every call after that rides the session's cookies through a session-bound
+ * fetch; a write carries the `X-XSRF-TOKEN` Laravel checks, read from the `XSRF-TOKEN` cookie. Nothing on Tynn's side is
+ * Genie 2's own, and Genie keeps no key: the cookies live in Electron's persistent `persist:tynn` session, which the
+ * OS's own encryption protects (main.ts).
+ *
+ * Sign out ends the session at Tynn (`POST /logout`, Fortify's) and clears the cookies; Tynn unreachable, the cookies
+ * are cleared anyway and the person is told the Tynn session ends when it expires.
  */
 
-export type FetchInit = { method: 'GET' | 'POST'; headers: Record<string, string>; body?: string };
-export type AccountFetch = (url: string, init: FetchInit) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
-
-export interface SecretStore {
-    read(): Promise<string | null>;
-    write(value: string): Promise<void>;
-    clear(): Promise<void>;
-}
+export type SessionFetch = (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export interface TynnAccountPorts {
-    fetch: AccountFetch;
-    readonly store: SecretStore;
     /** The Tynn host from settings, read at call time. */
     readonly host: () => string;
-    /** What this computer is called on Tynn's token list. */
-    readonly device: () => string;
+    /** The session's cookie jar, for the Tynn origin. */
+    readonly cookies: {
+        set(host: string, name: string, value: string): Promise<void>;
+        get(host: string, name: string): Promise<string | null>;
+        clear(host: string): Promise<void>;
+    };
+    /** Fetch bound to that session: its cookies ride along, and a Set-Cookie lands in it. */
+    readonly fetch: SessionFetch;
     /** Opens the person's browser; absent, or failing, the link stays on screen to open elsewhere. */
     readonly openExternal?: (url: string) => Promise<void>;
 }
@@ -38,6 +40,7 @@ export interface TynnUser {
 export type TynnStatus = { readonly signedIn: false } | { readonly signedIn: true; readonly host: string; readonly user: TynnUser };
 export type SignInResult = { readonly ok: true; readonly user: TynnUser } | { readonly ok: false; readonly reason: string };
 export type SignOutResult = { readonly ok: true; readonly revoked: true } | { readonly ok: true; readonly revoked: false; readonly reason: string };
+export type TynnResponse = { ok: boolean; status: number; json(): Promise<unknown> };
 
 /** What the Settings surface and the IPC need — the account as a port, faked in tests. */
 export interface TynnAccountPort {
@@ -49,76 +52,46 @@ export interface TynnAccountPort {
     onChange(listener: () => void): () => void;
 }
 
-interface Stored {
-    readonly host: string;
-    readonly token: string;
-    readonly device: string;
+interface Me {
+    readonly id: string;
     readonly user: TynnUser;
 }
 
 const trimHost = (h: string) => h.trim().replace(/\/+$/, '');
-
-function parseStored(raw: string | null): Stored | null {
-    if (raw === null) return null;
-    try {
-        const v = JSON.parse(raw) as Partial<Stored>;
-        if (typeof v.host !== 'string' || typeof v.token !== 'string' || !v.token.startsWith('aak_') || typeof v.device !== 'string') return null;
-        if (typeof v.user?.name !== 'string' || typeof v.user.email !== 'string') return null;
-        return { host: v.host, token: v.token, device: v.device, user: { name: v.user.name, email: v.user.email } };
-    } catch {
-        return null;
-    }
-}
-
-async function tynnWords(res: { status: number; text(): Promise<string> }): Promise<string> {
-    const text = await res.text().catch(() => '');
-    let message = text.slice(0, 200);
-    try {
-        const body = JSON.parse(text) as { message?: unknown };
-        if (typeof body.message === 'string') message = body.message;
-    } catch {
-        // Not JSON: the raw text is the message.
-    }
-    return `Tynn answered ${res.status}: ${message}`;
-}
+const reach = (error: unknown) => `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`;
 
 export class TynnAccount implements TynnAccountPort {
     readonly #ports: TynnAccountPorts;
-    #stored: Stored | null;
+    #me: Me | null = null;
+    #meHost = '';
     readonly #listeners = new Set<() => void>();
 
-    private constructor(ports: TynnAccountPorts, stored: Stored | null) {
+    private constructor(ports: TynnAccountPorts) {
         this.#ports = ports;
-        this.#stored = stored;
     }
 
+    /** Asks Tynn who the session belongs to. Unreachable = signed out FOR NOW: the cookies are kept for `recheck`. */
     static async open(ports: TynnAccountPorts): Promise<TynnAccount> {
-        let raw: string | null = null;
+        const account = new TynnAccount(ports);
         try {
-            raw = await ports.store.read();
+            await account.#whoami();
         } catch {
-            // An unreadable store (a key the OS keychain no longer opens) is signed out, not a crash.
+            // Offline at launch: shown signed out; nothing is cleared.
         }
-        return new TynnAccount(ports, parseStored(raw));
+        return account;
     }
 
     host(): string {
         return trimHost(this.#ports.host());
     }
 
-    /** The stored key, only for the host that minted it: a key is never sent to another Tynn. */
-    #current(): Stored | null {
-        return this.#stored && this.#stored.host === this.host() ? this.#stored : null;
-    }
-
     status(): TynnStatus {
-        const s = this.#current();
-        return s ? { signedIn: true, host: s.host, user: s.user } : { signedIn: false };
+        return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false };
     }
 
-    /** The bearer for Tynn's API — '' when signed out. */
-    token(): string {
-        return this.#current()?.token ?? '';
+    /** The person's id — their own push channel is `private-App.Models.User.<id>` — only while signed in. */
+    userId(): string | null {
+        return this.status().signedIn ? this.#me!.id : null;
     }
 
     onChange(listener: () => void): () => void {
@@ -126,8 +99,35 @@ export class TynnAccount implements TynnAccountPort {
         return () => { this.#listeners.delete(listener); };
     }
 
-    #changed(): void {
-        for (const l of this.#listeners) l();
+    #set(me: Me | null): void {
+        const was = this.status().signedIn;
+        this.#me = me;
+        this.#meHost = me ? this.host() : '';
+        if (was !== this.status().signedIn) for (const l of this.#listeners) l();
+    }
+
+    /** GET /api/v1/me over the session: who it belongs to, or null. Throws only when Tynn cannot be reached. */
+    async #whoami(): Promise<Me | null> {
+        const res = await this.#raw('/api/v1/me', { method: 'GET' });
+        let me: Me | null = null;
+        if (res.ok) {
+            const body = (await res.json().catch(() => null)) as { id?: unknown; name?: unknown; email?: unknown } | null;
+            if (body && (typeof body.id === 'string' || typeof body.id === 'number') && typeof body.name === 'string' && typeof body.email === 'string') {
+                me = { id: String(body.id), user: { name: body.name, email: body.email } };
+            }
+        }
+        this.#set(me);
+        return me;
+    }
+
+    /** Ask Tynn again (after being offline at launch). */
+    async recheck(): Promise<TynnStatus> {
+        try {
+            await this.#whoami();
+        } catch {
+            // Still unreachable: unchanged.
+        }
+        return this.status();
     }
 
     async startSignIn(): Promise<{ url: string }> {
@@ -140,68 +140,78 @@ export class TynnAccount implements TynnAccountPort {
         return { url };
     }
 
+    /** Genie 1's redeemToken: the code as `genie_token` on the Tynn origin, then /api/v1/me swaps it for the session. */
     async signIn(input: string): Promise<SignInResult> {
         const code = signInCodeFrom(input);
         if (code === null) return { ok: false, reason: 'That is not a Tynn sign-in code. Paste the code Tynn shows after you sign in — 64 letters and digits.' };
         const host = this.host();
-        const device = this.#ports.device().trim().slice(0, 100);
-        let res: Awaited<ReturnType<AccountFetch>>;
+        await this.#ports.cookies.set(host, 'genie_token', code);
+        let me: Me | null;
         try {
-            res = await this.#ports.fetch(`${host}/api/v1/genie/sign-in`, {
-                method: 'POST',
-                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, device }),
-            });
+            me = await this.#whoami();
         } catch (error) {
-            return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
+            return { ok: false, reason: reach(error) };
         }
-        if (!res.ok) return { ok: false, reason: await tynnWords(res) };
-        let body: { token?: unknown; user?: { name?: unknown; email?: unknown } };
-        try {
-            body = JSON.parse(await res.text()) as typeof body;
-        } catch {
-            return { ok: false, reason: 'Tynn’s answer was not JSON' };
+        if (!me) {
+            // Spent or expired: no dead code is left in the jar to be sent again.
+            await this.#ports.cookies.clear(host);
+            return { ok: false, reason: 'Tynn did not accept that code. Codes work once and expire 5 minutes after the Tynn page opens — open Tynn again for a fresh one.' };
         }
-        if (typeof body.token !== 'string' || !body.token.startsWith('aak_') || typeof body.user?.name !== 'string' || typeof body.user.email !== 'string') {
-            return { ok: false, reason: 'Tynn answered without a key — nothing was stored' };
-        }
-        const stored: Stored = { host, token: body.token, device, user: { name: body.user.name, email: body.user.email } };
-        try {
-            await this.#ports.store.write(JSON.stringify(stored));
-        } catch (error) {
-            // Never kept in the clear instead: no encrypted store, no sign-in (the key Tynn just made is unused; it lists on Account → Tokens).
-            return { ok: false, reason: `the key could not be kept safely on this machine (${error instanceof Error ? error.message : String(error)}) — nothing was stored; revoke “Genie — ${device}” on Tynn under Account → Tokens` };
-        }
-        this.#stored = stored;
-        this.#changed();
-        return { ok: true, user: stored.user };
+        return { ok: true, user: me.user };
     }
 
     async signOut(): Promise<SignOutResult> {
-        const s = this.#stored;
-        if (!s) return { ok: true, revoked: true };
-        let unrevoked: string | null = null;
+        const host = this.host();
+        let unreached: string | null = null;
         try {
-            const res = await this.#ports.fetch(`${s.host}/api/v1/genie/sign-out`, { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${s.token}` } });
-            // 401/403: Tynn no longer accepts the key (revoked on Account → Tokens already) — there is nothing left to revoke.
-            if (!res.ok && res.status !== 401 && res.status !== 403) unrevoked = await tynnWords(res);
+            await this.#raw('/logout', { method: 'POST' });
         } catch (error) {
-            unrevoked = `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`;
+            unreached = reach(error);
         }
-        await this.#ports.store.clear();
-        this.#stored = null;
-        this.#changed();
-        if (unrevoked === null) return { ok: true, revoked: true };
-        return { ok: true, revoked: false, reason: `${unrevoked} — the key “Genie — ${s.device}” is still listed on Tynn under Account → Tokens; revoke it there.` };
+        await this.#ports.cookies.clear(host);
+        this.#set(null);
+        if (unreached === null) return { ok: true, revoked: true };
+        return { ok: true, revoked: false, reason: `${unreached} — this Genie is signed out; the Tynn session ends when it expires.` };
     }
 
-    /** The person's projects, as Tynn's browser surface lists them. Signed out is refused before any request. */
+    /**
+     * One call over the session, as Genie 1's TynnBackend.fetch made it. A 401 or 419 means Tynn no longer has this
+     * session: this Genie shows signed out (the cookies stay; signing in again replaces them).
+     */
+    async request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<TynnResponse> {
+        const res = await this.#raw(path, init);
+        if (res.status === 401 || res.status === 419) this.#set(null);
+        return res;
+    }
+
+    async #raw(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<TynnResponse> {
+        const host = this.host();
+        const headers: Record<string, string> = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+        if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+        if (init.method !== 'GET') {
+            const xsrf = await this.#ports.cookies.get(host, 'XSRF-TOKEN');
+            if (xsrf) headers['X-XSRF-TOKEN'] = decodeURIComponent(xsrf);
+        }
+        const res = await this.#ports.fetch(`${host}${path}`, { method: init.method, headers, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
+        return {
+            ok: res.ok,
+            status: res.status,
+            json: async () => {
+                const text = await res.text();
+                return text === '' ? null : (JSON.parse(text) as unknown);
+            },
+        };
+    }
+
+    /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */
     async projects(): Promise<unknown[]> {
-        const s = this.#current();
-        if (!s) throw new Error('Sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)');
-        const res = await this.#ports.fetch(`${s.host}/api/v1/genie/projects`, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${s.token}` } });
-        if (!res.ok) throw new Error(await tynnWords(res));
-        const body = JSON.parse(await res.text()) as { data?: unknown };
+        if (!this.status().signedIn) throw new Error('Sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)');
+        const res = await this.request('/api/v1/projects', { method: 'GET' });
+        if (!res.ok) {
+            const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+            throw new Error(`Tynn answered ${res.status}${typeof body?.message === 'string' ? `: ${body.message}` : ''}`);
+        }
+        const body = (await res.json()) as { data?: unknown };
         return Array.isArray(body.data) ? body.data : [];
     }
 }

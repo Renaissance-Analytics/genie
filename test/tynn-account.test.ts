@@ -2,160 +2,202 @@ import { describe, expect, it } from 'vitest';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
 
 /**
- * THIS GENIE'S TYNN ACCOUNT. The code from the browser is swapped once (POST /api/v1/genie/sign-in) for an account key
- * named for this computer; the key is kept ONLY through the secret store (Electron's safeStorage in the app) and never in
- * settings, and Sign out revokes it at Tynn before forgetting it. The network and the store are ports: no Tynn here.
+ * THIS GENIE'S TYNN ACCOUNT — GENIE 1'S SESSION, AS IT WAS (the owner, 2026-10-19: "tynn already had this half.
+ * everything was already working in genie 1").
+ *
+ * Genie 1's `redeemToken`: the single-use code from /genie/callback is dropped as a `genie_token` cookie on the Tynn
+ * origin, then `GET /api/v1/me` swaps it for a real Tynn session (Tynn's GenieAuthController::exchange). From then on
+ * every call rides that session's cookies; a write carries the `X-XSRF-TOKEN` Laravel checks. Sign out ends the session
+ * at Tynn (`POST /logout`) and clears the cookies. Nothing new on Tynn's side, and no key of Genie's own anywhere.
+ *
+ * The cookie jar and the session-bound fetch are ports (Electron's persistent `persist:tynn` session in the app); here a
+ * fake Tynn that behaves like the real one: the code works once, the session is a cookie, /logout needs the XSRF token.
  */
 
+const HOST = 'https://tynn.example';
 const CODE = 'aB3'.repeat(21) + 'x';
-const KEY = 'aak_01JABCDEFGHJKMNPQRSTVWXYZ0.secret';
+const USER = { id: '7', name: 'Ada', email: 'ada@example.com' };
 
-function fakes(answer: (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => { status: number; body: string }) {
-    const calls: Array<{ url: string; method: string; headers: Record<string, string>; body?: unknown }> = [];
-    let stored: string | null = null;
-    const writes: string[] = [];
+function fakeTynn(opts: { reachable?: boolean } = {}) {
+    const jar = new Map<string, string>();
+    const calls: Array<{ method: string; path: string; headers: Record<string, string>; body?: unknown }> = [];
+    let codeValid = true;
+    let sessionLive = false;
+    const state = { reachable: opts.reachable ?? true };
     const ports: TynnAccountPorts = {
+        host: () => HOST,
+        cookies: {
+            set: async (host, name, value) => { expect(host).toBe(HOST); jar.set(name, value); },
+            get: async (host, name) => { expect(host).toBe(HOST); return jar.get(name) ?? null; },
+            clear: async (host) => { expect(host).toBe(HOST); jar.clear(); },
+        },
         fetch: async (url, init) => {
-            calls.push({ url, method: init.method, headers: init.headers, ...(init.body !== undefined ? { body: JSON.parse(init.body) } : {}) });
-            const a = answer(url, init);
-            return { ok: a.status >= 200 && a.status < 300, status: a.status, text: async () => a.body };
+            if (!state.reachable) throw new Error('getaddrinfo ENOTFOUND tynn.example');
+            const path = url.slice(HOST.length);
+            calls.push({ method: init.method, path, headers: init.headers, ...(init.body !== undefined ? { body: JSON.parse(init.body) } : {}) });
+            const ok = (status: number, body: unknown) => ({ ok: status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)) });
+            if (path === '/api/v1/me') {
+                // Tynn's exchange: a valid genie_token becomes the session (laravel_session + XSRF-TOKEN cookies), once.
+                if (!sessionLive && jar.get('genie_token') === CODE && codeValid) { codeValid = false; sessionLive = true; jar.set('laravel_session', 'sess'); jar.set('XSRF-TOKEN', 'xsrf%3Dvalue'); }
+                return sessionLive && jar.get('laravel_session') === 'sess' ? ok(200, USER) : ok(401, { error: 'unauthenticated' });
+            }
+            if (!sessionLive || jar.get('laravel_session') !== 'sess') return ok(401, { message: 'Unauthenticated.' });
+            if (init.method !== 'GET' && init.headers['X-XSRF-TOKEN'] !== 'xsrf=value') return ok(419, { message: 'CSRF token mismatch.' });
+            if (path === '/logout') { sessionLive = false; return ok(204, undefined); }
+            if (path === '/api/v1/projects') return ok(200, { data: [{ id: '42', name: 'Tynn.ai', slug: 'tynn' }] });
+            if (path === '/api/v1/user/issue-watch/refresh') return ok(200, { refreshed: true });
+            return ok(404, { message: 'Not Found' });
         },
-        store: {
-            read: async () => stored,
-            write: async (s) => { writes.push(s); stored = s; },
-            clear: async () => { stored = null; },
-        },
-        host: () => 'https://tynn.ai',
-        device: () => 'Office PC',
     };
-    return { ports, calls, writes, stored: () => stored };
+    return { ports, jar, calls, state, endSession: () => { sessionLive = false; } };
 }
 
-const signedIn = () => fakes((url) => url.endsWith('/sign-in')
-    ? { status: 200, body: JSON.stringify({ token: KEY, user: { id: '7', name: 'Ada', email: 'ada@example.com' } }) }
-    : { status: 204, body: '' });
-
-describe('TynnAccount.signIn', () => {
-    it('swaps the code at /api/v1/genie/sign-in, naming this computer, and keeps the key in the secret store', async () => {
-        const f = signedIn();
-        const account = await TynnAccount.open(f.ports);
+describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
+    it('drops the code as genie_token on the Tynn origin and asks /api/v1/me, which swaps it for a session', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        expect(account.status()).toEqual({ signedIn: false });
 
         expect(await account.signIn(CODE)).toEqual({ ok: true, user: { name: 'Ada', email: 'ada@example.com' } });
-        expect(f.calls).toEqual([{ url: 'https://tynn.ai/api/v1/genie/sign-in', method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: { code: CODE, device: 'Office PC' } }]);
-        expect(account.status()).toEqual({ signedIn: true, host: 'https://tynn.ai', user: { name: 'Ada', email: 'ada@example.com' } });
-        expect(account.token()).toBe(KEY);
-        expect(f.writes).toHaveLength(1);
+        expect(account.status()).toEqual({ signedIn: true, host: HOST, user: { name: 'Ada', email: 'ada@example.com' } });
+        expect(t.jar.get('laravel_session')).toBe('sess');
+        // The ONLY requests: /me at open (signed out) and /me with the code. No endpoint of Genie 2's own.
+        expect(t.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v1/me', 'GET /api/v1/me']);
     });
 
     it('a pasted genie:// URL works as well as the bare code', async () => {
-        const f = signedIn();
-        const account = await TynnAccount.open(f.ports);
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
         expect((await account.signIn(`genie://oauth/callback?token=${CODE}`)).ok).toBe(true);
-        expect(f.calls[0]?.body).toEqual({ code: CODE, device: 'Office PC' });
     });
 
-    it('Tynn’s refusal is reported in its words and nothing is stored', async () => {
-        const f = fakes(() => ({ status: 422, body: JSON.stringify({ message: 'That sign-in code is not valid.' }) }));
-        const account = await TynnAccount.open(f.ports);
-        expect(await account.signIn(CODE)).toEqual({ ok: false, reason: 'Tynn answered 422: That sign-in code is not valid.' });
+    it('a code Tynn does not take (spent, expired) says so; signed out, and the dead code is not left in the jar', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        expect((await account.signIn(CODE)).ok).toBe(true);
+        await account.signOut();
+        const again = await account.signIn(CODE);
+        expect(again).toEqual({ ok: false, reason: 'Tynn did not accept that code. Codes work once and expire 5 minutes after the Tynn page opens — open Tynn again for a fresh one.' });
         expect(account.status()).toEqual({ signedIn: false });
-        expect(account.token()).toBe('');
-        expect(f.writes).toEqual([]);
+        expect(t.jar.has('genie_token')).toBe(false);
     });
 
     it('something that is not a code is refused before any request', async () => {
-        const f = signedIn();
-        const account = await TynnAccount.open(f.ports);
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        const before = t.calls.length;
         expect((await account.signIn('my-password')).ok).toBe(false);
-        expect(f.calls).toEqual([]);
+        expect(t.calls.length).toBe(before);
     });
 
-    it('a 200 without a key in it is not a sign-in', async () => {
-        const f = fakes(() => ({ status: 200, body: '{"user":{"name":"Ada"}}' }));
-        const account = await TynnAccount.open(f.ports);
-        expect((await account.signIn(CODE)).ok).toBe(false);
-        expect(f.writes).toEqual([]);
-    });
-});
-
-describe('TynnAccount — a key that cannot be kept safely is not kept', () => {
-    it('the secret store refusing (no OS encryption) fails the sign-in in words; nothing is held, nothing in the clear', async () => {
-        const f = signedIn();
-        f.ports.store.write = async () => { throw new Error('encryption is not available'); };
-        const account = await TynnAccount.open(f.ports);
-        const r = await account.signIn(CODE);
-        expect(r.ok).toBe(false);
-        expect(!r.ok && r.reason).toMatch(/could not be kept safely on this machine \(encryption is not available\)/);
+    it('Tynn unreachable: said in words, nothing pretends', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        t.state.reachable = false;
+        expect(await account.signIn(CODE)).toEqual({ ok: false, reason: 'Tynn could not be reached (getaddrinfo ENOTFOUND tynn.example)' });
         expect(account.status()).toEqual({ signedIn: false });
-        expect(account.token()).toBe('');
     });
 });
 
 describe('TynnAccount across launches', () => {
-    it('a later launch reads the stored key back: still signed in, same person', async () => {
-        const f = signedIn();
-        await (await TynnAccount.open(f.ports)).signIn(CODE);
-        const next = await TynnAccount.open(f.ports);
-        expect(next.status()).toEqual({ signedIn: true, host: 'https://tynn.ai', user: { name: 'Ada', email: 'ada@example.com' } });
-        expect(next.token()).toBe(KEY);
+    it('a later launch is still signed in: the session cookie answers /api/v1/me', async () => {
+        const t = fakeTynn();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const next = await TynnAccount.open(t.ports);
+        expect(next.status()).toEqual({ signedIn: true, host: HOST, user: { name: 'Ada', email: 'ada@example.com' } });
     });
 
-    it('a key minted by another Tynn host is not sent to this one', async () => {
-        const f = signedIn();
-        await (await TynnAccount.open(f.ports)).signIn(CODE);
-        const elsewhere = await TynnAccount.open({ ...f.ports, host: () => 'https://tynn.example.com' });
-        expect(elsewhere.status()).toEqual({ signedIn: false });
-        expect(elsewhere.token()).toBe('');
+    it('CONTROL: a session Tynn ended (expired, signed out elsewhere) opens signed out', async () => {
+        const t = fakeTynn();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        t.endSession();
+        expect((await TynnAccount.open(t.ports)).status()).toEqual({ signedIn: false });
     });
 
-    it('CONTROL: an unreadable store is signed out, not a crash', async () => {
-        const f = signedIn();
-        await f.ports.store.write('not json');
-        const account = await TynnAccount.open(f.ports);
-        expect(account.status()).toEqual({ signedIn: false });
+    it('Tynn unreachable at launch: signed out for now, and the session cookies are KEPT for when it answers', async () => {
+        const t = fakeTynn();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        t.state.reachable = false;
+        const offline = await TynnAccount.open(t.ports);
+        expect(offline.status()).toEqual({ signedIn: false });
+        expect(t.jar.get('laravel_session')).toBe('sess');
+        t.state.reachable = true;
+        expect(await offline.recheck()).toEqual({ signedIn: true, host: HOST, user: { name: 'Ada', email: 'ada@example.com' } });
     });
 });
 
 describe('TynnAccount.signOut', () => {
-    it('revokes the key at Tynn with the key itself, then forgets it', async () => {
-        const f = signedIn();
-        const account = await TynnAccount.open(f.ports);
+    it('ends the session at Tynn (POST /logout with its XSRF token), then clears the cookies', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
         const changes: boolean[] = [];
         account.onChange(() => changes.push(account.status().signedIn));
 
         expect(await account.signOut()).toEqual({ ok: true, revoked: true });
-        expect(f.calls[1]).toEqual({ url: 'https://tynn.ai/api/v1/genie/sign-out', method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${KEY}` } });
+        expect(t.calls.at(-1)).toMatchObject({ method: 'POST', path: '/logout', headers: { 'X-XSRF-TOKEN': 'xsrf=value', 'X-Requested-With': 'XMLHttpRequest' } });
+        expect(t.jar.size).toBe(0);
         expect(account.status()).toEqual({ signedIn: false });
-        expect(f.stored()).toBeNull();
         expect(changes).toEqual([false]);
     });
 
-    it('Tynn unreachable: this Genie still forgets the key, and says the key is still live at Tynn', async () => {
-        const f = signedIn();
-        const account = await TynnAccount.open(f.ports);
+    it('Tynn unreachable: this Genie is still signed out (cookies cleared), and says the Tynn session ends on its own', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
-        f.ports.fetch = async () => { throw new Error('getaddrinfo ENOTFOUND tynn.ai'); };
-
-        expect(await account.signOut()).toEqual({ ok: true, revoked: false, reason: 'Tynn could not be reached (getaddrinfo ENOTFOUND tynn.ai) — the key “Genie — Office PC” is still listed on Tynn under Account → Tokens; revoke it there.' });
-        expect(f.stored()).toBeNull();
+        t.state.reachable = false;
+        expect(await account.signOut()).toEqual({ ok: true, revoked: false, reason: 'Tynn could not be reached (getaddrinfo ENOTFOUND tynn.example) — this Genie is signed out; the Tynn session ends when it expires.' });
+        expect(t.jar.size).toBe(0);
     });
 });
 
-describe('TynnAccount.projects', () => {
-    it('lists the person’s projects with the key', async () => {
-        const f = fakes((url) => url.endsWith('/sign-in')
-            ? { status: 200, body: JSON.stringify({ token: KEY, user: { name: 'Ada', email: 'ada@example.com' } }) }
-            : { status: 200, body: JSON.stringify({ data: [{ id: 42, name: 'Tynn.ai', slug: 'tynn', vision: 'PM.' }] }) });
-        const account = await TynnAccount.open(f.ports);
+describe('TynnAccount.request — every call rides the session', () => {
+    it('a write carries X-XSRF-TOKEN (decoded) and the JSON body; a read carries none', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
-        expect(await account.projects()).toEqual([{ id: 42, name: 'Tynn.ai', slug: 'tynn', vision: 'PM.' }]);
-        expect(f.calls[1]).toEqual({ url: 'https://tynn.ai/api/v1/genie/projects', method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${KEY}` } });
+        const res = await account.request('/api/v1/user/issue-watch/refresh', { method: 'POST', body: { project_id: 'p1' } });
+        expect(res.status).toBe(200);
+        expect(t.calls.at(-1)).toEqual({ method: 'POST', path: '/api/v1/user/issue-watch/refresh', headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json', 'X-XSRF-TOKEN': 'xsrf=value' }, body: { project_id: 'p1' } });
+        await account.request('/api/v1/projects', { method: 'GET' });
+        expect(t.calls.at(-1)!.headers).toEqual({ Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' });
+    });
+
+    it('Tynn answering 401 means the session is gone: this Genie shows signed out', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        await account.signIn(CODE);
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
+        t.endSession();
+        expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(401);
+        expect(account.status()).toEqual({ signedIn: false });
+        expect(changes).toEqual([false]);
+    });
+
+    it('the person’s id for their own push channel — only while signed in', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        expect(account.userId()).toBeNull();
+        await account.signIn(CODE);
+        expect(account.userId()).toBe('7');
+    });
+});
+
+describe('TynnAccount.projects — Genie 1’s GET /api/v1/projects', () => {
+    it('lists the person’s projects over the session', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        await account.signIn(CODE);
+        expect(await account.projects()).toEqual([{ id: '42', name: 'Tynn.ai', slug: 'tynn' }]);
+        expect(t.calls.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/projects' });
     });
 
     it('signed out is refused before any request', async () => {
-        const f = signedIn();
-        await expect((await TynnAccount.open(f.ports)).projects()).rejects.toThrow(/Sign in to Tynn first/);
-        expect(f.calls).toEqual([]);
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        const before = t.calls.length;
+        await expect(account.projects()).rejects.toThrow(/Sign in to Tynn first/);
+        expect(t.calls.length).toBe(before);
     });
 });

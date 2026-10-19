@@ -3,7 +3,7 @@ import { addWorkspaceFromTynn, listTynnProjects, previewAddFromTynn, type Worksp
 
 /**
  * ADD A WORKSPACE FROM TYNN (§6.1) — the host half. Signed in (main/tynn-account.ts), Genie lists the person's own
- * projects (GET /api/v1/genie/projects) and the person picks one, as in Genie 1; the preview shows the plan for THAT
+ * projects (Genie 1's GET /api/v1/projects, over the session) and the person picks one, as in Genie 1; the preview shows the plan for THAT
  * project and nothing is written until the person confirms. Confirm creates the
  * folder, writes the manifest the plan showed (name, vision, the `tynn` link), lays out the envelope and
  * registers it — through the same `addWorkspace` every other source uses. Tynn's refusal, a token that is
