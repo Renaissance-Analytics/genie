@@ -397,11 +397,13 @@ if (typeof agentRow === 'string') {
 
         // 50. THE FLYOUT IS A CONVERSATION, NOT A SHELL (board audit, 2026-10-12: `messages: []` was hard-coded). With the
         // agent's detail read, the flyout carries the context line (what the agent is doing, in the board's words) and
-        // the thread chips with this agent active. Messages are counted when there are any; an empty thread says nothing.
+        // NO thread chips: there are no chat tabs (the owner, 2026-10-18) — the view picks the agent. The context line is
+        // the positive control: the chat IS drawn, so zero chips is a count, not a corpse. Messages are counted when there
+        // are any; an empty thread says nothing.
         const conversation = await waitFor(
             cdp,
-            `Boolean(document.querySelector('[data-chat-context]')) && Boolean(document.querySelector('[data-chat-thread-chip][data-active="true"]'))`,
-            'the chat context line and the active thread chip',
+            `Boolean(document.querySelector('[data-chat-context]'))`,
+            'the chat context line',
         );
         const chatShape = await cdp.evaluate(`JSON.stringify({
             context: document.querySelector('[data-chat-context]')?.textContent ?? null,
@@ -410,7 +412,7 @@ if (typeof agentRow === 'string') {
             greeting: /How can I help|Hello|Hi there/i.test(document.querySelector('[data-chat]')?.textContent ?? ''),
         })`);
         const shape = JSON.parse(chatShape || '{}');
-        check(conversation && shape.chips >= 1 && shape.greeting === false, '50. the flyout shows the agent\'s context line and thread chips, and no fake greeting', chatShape);
+        check(conversation && shape.chips === 0 && shape.greeting === false, '50. the chat shows the agent\'s context line, no thread chips, and no fake greeting', chatShape);
     }
 
     // A screenshot of the AGENT VIEW, while we are on it. The Dashboard one is taken at the
