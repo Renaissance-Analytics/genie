@@ -22,6 +22,7 @@ import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
+import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
 import { addTab, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
@@ -271,6 +272,8 @@ export function Shell({
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
+    // The update window (what is in the update): open from the header's update button until closed.
+    const [updateOpen, setUpdateOpen] = useState(false);
     // The native window buttons: the space they take, and the theme's colours on them (the owner: content covered, wrong colours).
     const controlsInset = useControlsInset(windowChrome?.overlay === true);
     useOverlayColors(windowChrome);
@@ -364,11 +367,19 @@ export function Shell({
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
                 update={updateChip(updateState)}
                 version={features.version ?? null}
-                onUpdateAction={(action) => {
-                    if (action === 'update-download') void updates.download();
-                    else if (action === 'update-install') void updates.install();
-                }}
+                onOpenUpdate={() => setUpdateOpen(true)}
             />
+            {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
+            {updateOpen && updateChip(updateState) ? (
+                <UpdateWindow
+                    update={updateChip(updateState)!}
+                    onClose={() => setUpdateOpen(false)}
+                    onAction={(action) => {
+                        if (action === 'update-download') void updates.download();
+                        else if (action === 'update-install') void updates.install();
+                    }}
+                />
+            ) : null}
 
             {/* THE DOCK'S NOTICE (§4.4): a second pin replaces the first VISIBLY; a refusal says why and offers pop-out. */}
             {dockNotice ? (

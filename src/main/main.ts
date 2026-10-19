@@ -698,6 +698,17 @@ async function boot(): Promise<void> {
      */
     updates = new UpdateHost({
         port: realElectronUpdaterPort(),
+        // What is in an update (core/update-notes.ts): GitHub's releases, whose bodies are our own Markdown notes. The repo
+        // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
+        runningVersion: app.getVersion(),
+        releases: async () => {
+            const res = await fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
+                headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
+                signal: AbortSignal.timeout(10_000),
+            });
+            if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+            return (await res.json()) as import('../core/update-notes.js').ReleaseLike[];
+        },
         installDir: dirname(process.execPath),
         ownPid: process.pid,
         processes: listProcesses,

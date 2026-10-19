@@ -306,8 +306,8 @@ export interface UpdateSignalInput {
     phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
-    /** What the offered version brings (Tynn #762): its "What's new". */
-    notes?: string | null;
+    /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
+    changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
 }
 
 export interface SignalState {

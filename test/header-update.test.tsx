@@ -14,7 +14,7 @@ import { TitleBar } from '../src/renderer/components/TitleBar.js';
  */
 const u = (phase: string, version: string | null = '2.0.0-beta.20', percent: number | null = null) => ({ phase, version, percent, error: null, checkedAt: null }) as never;
 const bar = (update: ReturnType<typeof updateChip>) =>
-    renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onUpdateAction={() => {}} />);
+    renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onOpenUpdate={() => {}} />);
 
 describe('the chip', () => {
     it('available → download; downloading → its progress; downloaded → restart to install; installing → said so', () => {
