@@ -33,6 +33,13 @@ describe('allGenieTools', () => {
         expect(new Set(names).size).toBe(names.length);
     });
 
+    it('with the agents part (normal Genie, not doctor): createAgent after processes — the ONLY tool that is not for every caller', () => {
+        const withAgents: AllToolsDeps = { ...deps(), agents: { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], approve: async () => 'denied', register: (() => { throw new Error('x'); }) as never, addressOf: () => '' } };
+        const regs = allGenieTools(withAgents);
+        expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'services', 'sites', 'processes', 'createAgent']);
+        expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual(['createAgent']);
+    });
+
     it('adds every enabled plugin tool under its plugin’s namespace, after the Genie tools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };

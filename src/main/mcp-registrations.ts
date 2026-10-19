@@ -2,6 +2,7 @@ import { genieTools, type GenieToolsDeps, type Registration } from './mcp-tools.
 import { attentionTools, type AttentionToolsDeps } from './mcp-tools-attention.js';
 import { hostingTools, type HostingToolsDeps } from './mcp-tools-hosting.js';
 import { moreGenieTools, type MoreToolsDeps } from './mcp-tools-more.js';
+import { agentTools, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { pluginTools, type PluginToolsDeps } from './mcp-tools-plugins.js';
 import { processTools, type ProcessToolsDeps } from './mcp-tools-processes.js';
 
@@ -18,8 +19,10 @@ export interface AllToolsDeps {
     readonly hosting: HostingToolsDeps;
     readonly processes: ProcessToolsDeps;
     readonly plugins: PluginToolsDeps;
+    /** `createAgent`, visible to a workspace's default agent only (mcp-tools-agents.ts). Absent = not registered (doctor mode). */
+    readonly agents?: AgentToolsDeps;
 }
 
 export function allGenieTools(deps: AllToolsDeps): Registration[] {
-    return [...genieTools(deps.genie), ...moreGenieTools(deps.more), ...attentionTools(deps.attention), ...hostingTools(deps.hosting), ...processTools(deps.processes), ...pluginTools(deps.plugins)];
+    return [...genieTools(deps.genie), ...moreGenieTools(deps.more), ...attentionTools(deps.attention), ...hostingTools(deps.hosting), ...processTools(deps.processes), ...(deps.agents ? agentTools(deps.agents) : []), ...pluginTools(deps.plugins)];
 }

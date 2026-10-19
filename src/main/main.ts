@@ -1488,6 +1488,11 @@ async function boot(): Promise<void> {
             approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
             roster,
             resolveCaller,
+            // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
+            agents: {
+                defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+                register: (input) => registry!.register(input),
+            },
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
