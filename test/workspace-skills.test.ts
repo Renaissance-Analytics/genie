@@ -24,8 +24,9 @@ function memFs(files: Record<string, string>) {
 const W = '/w/moic';
 const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20261012' });
 
-// The thirteen tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
-const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'runAgent', 'services', 'sites', 'processes'];
+// The twelve tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
+// No runAgent: the sidecar is gone (the owner, 2026-10-19).
+const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'services', 'sites', 'processes'];
 const V1_ONLY = ['connectToGenie', 'genieGuide', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
 
 describe('Genie 2\'s skills', () => {

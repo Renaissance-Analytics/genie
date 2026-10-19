@@ -26,7 +26,9 @@ export function readV1Catalog(dbFile: string): V1Catalog | null {
         }
         const agents: V1Agent[] = [];
         if (has('workspace_agents')) {
-            for (const row of db.prepare('SELECT id, workspace_id, tui, name, persona_path FROM workspace_agents ORDER BY created_at, rowid').all() as Record<string, unknown>[]) {
+            // `role` ('workspace' = the default agent) is read only where the column exists: older v1 databases lack it.
+            const hasRole = (db.prepare("SELECT 1 FROM pragma_table_info('workspace_agents') WHERE name = 'role'").get()) !== undefined;
+            for (const row of db.prepare(`SELECT id, workspace_id, tui, name, persona_path${hasRole ? ', role' : ''} FROM workspace_agents ORDER BY created_at, rowid`).all() as Record<string, unknown>[]) {
                 if (typeof row.id !== 'string' || typeof row.workspace_id !== 'string' || typeof row.name !== 'string') continue;
                 agents.push({
                     id: row.id,
@@ -34,6 +36,7 @@ export function readV1Catalog(dbFile: string): V1Catalog | null {
                     name: row.name,
                     tui: typeof row.tui === 'string' ? row.tui : null,
                     personaPath: typeof row.persona_path === 'string' && row.persona_path ? row.persona_path : null,
+                    role: typeof row.role === 'string' ? row.role : null,
                 });
             }
         }

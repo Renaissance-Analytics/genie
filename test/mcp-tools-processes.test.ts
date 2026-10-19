@@ -238,7 +238,6 @@ describe('processes: wiring', () => {
             inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'denied', roster: () => [], resolveCaller: (id) => callers[id] ?? null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
             processes: { book, logs: (id, lines) => services.supervisor.readLog(id, lines) },
-            sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },
         }));
         const r = await call('t-example', { action: 'list' }, wired);

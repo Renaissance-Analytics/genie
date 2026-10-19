@@ -531,6 +531,12 @@ function DesktopApp({ bridge }: AppProps) {
                   onSet: (key, value) => { void resolvedBridge.workspaces.setSetting(workspaceId, key, value).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                   onReset: (key) => { void resolvedBridge.workspaces.resetSetting(workspaceId, key).then((r) => { if (r.ok) reloadWsSettings(resolvedBridge, workspaceId); else setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               },
+              // Genie 1's default agent: this workspace's agents, the designated one, and the registry's answer (the snapshot redraws).
+              defaultAgent: {
+                  agents: snapshot.agents.filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name })),
+                  current: workspaceRow.defaultAgentId ?? null,
+                  onSet: (agentId) => { void resolvedBridge.workspaces.setDefaultAgent(workspaceId, agentId).then((r) => { if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              },
               governs: {
                   children: workspaceRow.governs ?? [],
                   candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id, name: workspaceLabel(snapshot.workspaces, w.id) })),

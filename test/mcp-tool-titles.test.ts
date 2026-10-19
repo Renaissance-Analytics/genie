@@ -41,7 +41,6 @@ describe('every tool Genie serves', () => {
         ['normal Genie', () => allGenieTools(genieToolDeps({
             inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,
-            sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },
         }))],
         ['the doctor channel', () => doctorTools(osa, facts)],

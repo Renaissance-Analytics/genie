@@ -636,7 +636,6 @@ describe('who is calling, and where', () => {
         const wired = allGenieTools(genieToolDeps({
             inbox: never, attention: never, knowledge: never, settings: never, approve: async () => 'denied', roster: () => [], resolveCaller: (id) => callers[id] ?? null,
             userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never, hosting: services,
-            sidecar: { register: never, start: never, running: () => false },
             plugins: { tools: () => [], guard: () => null, run: never },
         }));
         const r = await call('services', 't-example', { action: 'list' }, wired);

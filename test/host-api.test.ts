@@ -53,6 +53,7 @@ function fakes() {
             confirmAddFromGit: async (url, parent) => { calls.push(`ws-add-git:${url}:${parent}`); return { ok: true }; },
             confirmAddFromTynn: async (parent, projectId) => { calls.push(`ws-add-tynn:${parent}:${projectId}`); return { ok: true }; },
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
+            setDefaultAgent: async (id, agentId) => { calls.push(`ws-default:${id}:${agentId}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
             listRepos: async (id) => { calls.push(`ws-repos:${id}`); return { ok: true, repos: [] }; },
@@ -149,6 +150,14 @@ describe('invoke', () => {
         await expect(api.invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
         await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
+    });
+
+    it('the default agent reaches the registry with the agent; an empty choice is none (null)', async () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        await api.invoke('workspaces.setDefaultAgent', ['tynn', 'a1']);
+        await api.invoke('workspaces.setDefaultAgent', ['tynn', '']);
+        expect(f.calls).toEqual(['ws-default:tynn:a1', 'ws-default:tynn:null']);
     });
 
     it('From Tynn’s confirm carries the CHOSEN project with the parent folder', async () => {

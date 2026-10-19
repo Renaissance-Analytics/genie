@@ -83,6 +83,15 @@ export interface WorkspaceOpsProps {
         readonly candidates: readonly { id: string; name?: string | undefined }[];
         readonly onSet: (childIds: string[]) => void;
     } | undefined;
+    /**
+     * Its DEFAULT AGENT (Genie 1's dropdown; the owner, 2026-10-19): one of THIS workspace's agents, or none — the agent an
+     * action uses when it names none. Absent = not offered.
+     */
+    readonly defaultAgent?: {
+        readonly agents: readonly { readonly id: string; readonly name: string }[];
+        readonly current: string | null;
+        readonly onSet: (agentId: string | null) => void;
+    } | undefined;
     /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
     readonly settings?: {
         readonly values: Readonly<Record<string, boolean | string>> | null;
@@ -627,6 +636,18 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                         </div>
                     ) : (
                         <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.defaultAgent ? (
+                                <li data-ws-default-agent="" className="flex items-center gap-3 py-1.5">
+                                    <div className="flex-1">
+                                        <div className="font-medium">Default agent</div>
+                                        <div className="text-[var(--fg-3)]">The agent here that an action uses when it names none, and the one that hears GitHub by default.</div>
+                                    </div>
+                                    <select data-default-agent="" aria-label="Default agent" value={ops.defaultAgent.current ?? ''} onChange={(e) => ops.defaultAgent!.onSet(e.target.value === '' ? null : e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+                                        <option value="">None</option>
+                                        {ops.defaultAgent.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                    </select>
+                                </li>
+                            ) : null}
                             {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
                                 const values = ops.settings!.values!;
                                 const value = values[def.key] ?? def.default;

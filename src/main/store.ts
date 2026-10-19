@@ -34,6 +34,8 @@ export interface WorkspaceRecord {
     asleep?: boolean;
     /** Ops project (§6.1): the workspace ids this one GOVERNS. A Genie-side relation; the envelope schema has no such field. */
     governs?: string[];
+    /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
+    defaultAgentId?: string;
 }
 
 export async function readJson<T>(file: string, fallback: T): Promise<T> {

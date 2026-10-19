@@ -221,6 +221,8 @@ export interface GenieBridge {
         resetSetting(workspaceId: string, key: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Ops projects (§6.1): which other workspaces this one governs; known ids only, never itself. */
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }>;
+        /** Genie 1's default agent: one of this workspace's agents, or `null` for none. */
+        setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */

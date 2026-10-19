@@ -39,6 +39,8 @@ export interface RailWorkspace {
     /** Ops projects (§6.1): the workspaces this one governs, and the one that governs this one. */
     governs?: readonly string[];
     governedBy?: string | null;
+    /** Its default agent (Genie 1's), when one is designated. */
+    defaultAgentId?: string;
 }
 
 export interface RailItem {
