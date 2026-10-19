@@ -258,7 +258,9 @@ export class AgentSession {
      * number, so the next turn numbers on from here, not from the turns that ended — which used to number it again.
      */
     #marked = 0;
-    #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | null = null;
+    #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null = null;
+    /** The provider said this login is not signed in (prism-acp `failure.kind: 'auth'`): a login fixes it, not a restart. */
+    #signedOut = false;
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
      * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
@@ -370,6 +372,8 @@ export class AgentSession {
      * waits here — a provider at its limit would only refuse it. `resumeAfterLimit` sends what waited.
      */
     get held(): boolean { return this.#held; }
+    /** Signed out of its provider: the person logs in (the header's `Log in`), and Genie brings it back. */
+    get signedOut(): boolean { return this.#signedOut; }
 
     /** Hold an agent whose LOGIN is at its limit (another agent hit it): its next prompts wait too. */
     hold(): void {
@@ -476,7 +480,7 @@ export class AgentSession {
     }
 
     /** How the last turn ended — a reply, stopped by someone, failed, or held by a rate limit — `null` before any has. */
-    get lastTurnEnd(): 'replied' | 'stopped' | 'failed' | 'held' | null {
+    get lastTurnEnd(): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null {
         return this.#lastTurnEnd;
     }
 
@@ -625,7 +629,9 @@ export class AgentSession {
                     // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
                     const readingSaidSo = this.#limitThisTurn;
                     const byLimit = crashed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
-                    this.#lastTurnEnd = byLimit ? 'held' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
+                    const bySignOut = crashed && !byLimit && outcome.failure?.kind === 'auth';
+                    this.#lastTurnEnd = byLimit ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -637,6 +643,14 @@ export class AgentSession {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
                         // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
                         if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
+                    } else if (bySignOut) {
+                        // SIGNED OUT, not Broken: nothing about the agent is wrong; its provider's login is. The header and
+                        // the chat offer `Log in`, and a successful login brings it back (main/login-host.ts).
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                        this.#signedOut = true;
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `Signed out: the provider refused this login (${outcome.failure?.reason ?? 'auth'}). Use "Log in" above; Genie brings this agent back once you are signed in.` });
                     } else if (crashed) {
                         this.#turnState = 'failed';
                         // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
@@ -646,6 +660,8 @@ export class AgentSession {
                         this.#turnState = 'idle';
                         this.#failure = null;
                         this.#failedAt = null;
+                        // A turn that went through: whatever login it ran on is signed in.
+                        this.#signedOut = false;
                     }
                     // A STOPPED TURN SAYS SO, in the ledger and the chat: `Stopped by you`. ACP reports a cancelled turn
                     // and nothing more, so without this row a stopped turn read exactly like one that finished — the

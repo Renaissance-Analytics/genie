@@ -436,6 +436,11 @@ export class SessionHost {
         return out;
     }
 
+    /** The running agents a provider's login signed out — brought back once the person has signed in again. */
+    signedOutAgents(provider: string): AgentId[] {
+        return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
+    }
+
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
     resumeLimit(provider: string): void {
         this.#gate.resumeNow(this.#loginOf(provider));
@@ -885,6 +890,7 @@ export class SessionHost {
 
         return {
             limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
+            signedOut: entry.session.signedOut,
             running: session.running,
             turnState: session.turnState,
             startedAt,

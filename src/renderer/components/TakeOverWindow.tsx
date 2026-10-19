@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
+import { providerLogin } from '../../core/provider-login.js';
 
 /**
  * THE TAKE OVER WINDOW — one terminal, nothing else (§1).
@@ -20,9 +21,38 @@ import type { TerminalPaneProps } from './TerminalPane.js';
 export interface TakeOverWindowProps {
     terminalId: string;
     terminals: GenieBridge['terminals'];
+    /** A provider's LOGIN window (main/login-host.ts): the provider, for the notice that says what to do. */
+    login?: string | undefined;
 }
 
-export function TakeOverWindow({ terminalId, terminals }: TakeOverWindowProps) {
+/**
+ * THE LOGIN NOTICE (the owner, 2026-10-18: "make sure the window … includes a loud notice that tells the user what to do"):
+ * what is running in the terminal below, and every step. A provider Genie has no login for gets the steps by hand.
+ */
+function LoginNotice({ provider }: { provider: string }) {
+    const known = providerLogin(provider);
+    return (
+        <section data-login-notice={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">
+            <h1 className="text-base font-semibold">Log in to {known?.name ?? provider}</h1>
+            {known ? (
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[13px]">
+                    <li>Genie is running <code className="font-mono">{known.login}</code> in the terminal below, in a scratch folder of its own.</li>
+                    <li>Follow its prompts. A browser may open: sign in there, then come back to this window.</li>
+                    <li>If it asks you to paste a code, paste it into the terminal below and press Enter.</li>
+                    <li>When it says you are signed in, close this window. Genie checks the login and brings your {known.name} agents back.</li>
+                </ol>
+            ) : (
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[13px]">
+                    <li>Genie has opened {provider} in the terminal below, in a scratch folder of its own. Genie does not know its login command.</li>
+                    <li>Type {provider}&apos;s login command into the terminal (its documentation names it), and follow its prompts.</li>
+                    <li>When it says you are signed in, close this window, then restart your {provider} agents from their header.</li>
+                </ol>
+            )}
+        </section>
+    );
+}
+
+export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowProps) {
     const [output, setOutput] = useState('');
     const [exited, setExited] = useState<number | null>(null);
     const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
@@ -52,7 +82,9 @@ export function TakeOverWindow({ terminalId, terminals }: TakeOverWindowProps) {
     }, [terminals, terminalId]);
 
     return (
-        <main data-surface="takeover" data-terminal={terminalId} className="h-screen w-screen bg-[var(--bg-0)]">
+        <main data-surface="takeover" data-terminal={terminalId} className="flex h-screen w-screen flex-col bg-[var(--bg-0)]">
+            {login ? <LoginNotice provider={login} /> : null}
+            <div className="relative min-h-0 flex-1">
             {Pane ? (
                 <Pane
                     paneId={terminalId}
@@ -75,6 +107,7 @@ export function TakeOverWindow({ terminalId, terminals }: TakeOverWindowProps) {
                     the TUI exited with code {exited} — close this window when you are done reading
                 </div>
             ) : null}
+            </div>
         </main>
     );
 }

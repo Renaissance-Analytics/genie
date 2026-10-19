@@ -112,6 +112,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     if (limit && limit.state === 'paused') return { word: `Paused · rate limit · resumes ${hhmm(limit.resumeAtMs)}`, elapsed: limitCountdown(limit.resumeAtMs, now()), tone: 'warn' };
     if (limit && limit.state === 'retrying') return { word: `Paused · rate limit · next try ${hhmm(limit.nextTryAtMs)}`, elapsed: limitCountdown(limit.nextTryAtMs, now()), tone: 'warn' };
     if (limit && limit.state === 'needs-person') return { word: `Paused · rate limit · needs you${limit.message ? `: ${limit.message}` : ''}`, elapsed: null, tone: 'warn' };
+    // SIGNED OUT of its provider (the owner, 2026-10-18): what to do, never Broken — the header's `Log in` fixes it.
+    if (session.signedOut) return { word: 'Signed out · log in to continue', elapsed: null, tone: 'warn' };
     if (session.failure !== null) {
         const when = session.failure.at == null ? '' : ` ${hhmm(session.failure.at)}`;
         return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };
@@ -157,6 +159,8 @@ export interface HeaderActions {
     openTerminal: boolean;
     /** While the provider's login is held for its limit (Tynn #794): the person's Resume now. */
     resumeLimit: boolean;
+    /** Signed out of its provider: `Log in to <provider>` opens the provider's own login in a window of its own. */
+    login: boolean;
     /** A declared agent that is not running, and not broken (broken has its restart): start it. */
     start: boolean;
     takeOver: boolean;
@@ -169,7 +173,8 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity): 
     const broken = managed && session.failure !== null;
     const start = fidelity === 'declared' && !broken && (session === null || !session.running);
     const held = managed && session.limit !== undefined && session.limit.state !== 'open';
-    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, start, takeOver: true, chat: true };
+    const login = managed && session.signedOut === true;
+    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, login, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

@@ -216,6 +216,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
                 throw new Error('takeOver opens a window on the host; do it there');
+            case 'providerLogin':
+                throw new Error('providerLogin opens the provider login in a window on the host; do it there');
             case 'features.setBrowserBounds':
                 throw new Error("features.setBrowserBounds places a view on the host's own window; nothing to do remotely");
             case 'terminals.open': {

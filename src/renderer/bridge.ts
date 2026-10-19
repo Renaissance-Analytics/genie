@@ -151,6 +151,8 @@ export interface GenieBridge {
     cancelTurn(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
+    providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.

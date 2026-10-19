@@ -1,4 +1,5 @@
 import { activityRows } from '../../core/stream-view.js';
+import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomOf } from '../../core/headroom.js';
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
@@ -205,6 +206,8 @@ export interface AgentViewProps {
     onCancelTurn?: ((agentId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
+    /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
+    onProviderLogin?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
 }
@@ -243,7 +246,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -535,6 +538,18 @@ export function AgentView({
                     {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
                         session is "Stop agent" in the operations menu. */}
                     {actions.stop && onCancelTurn ? <TurnStop onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : null}
+                    {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
+                    {actions.login && onProviderLogin ? (
+                        <button
+                            type="button"
+                            data-action="provider-login"
+                            title={`Open the ${providerLogin(agent.provider)?.name ?? agent.provider} login in a window of its own; your agents come back once you are signed in`}
+                            onClick={() => onProviderLogin(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            Log in to {providerLogin(agent.provider)?.name ?? agent.provider}
+                        </button>
+                    ) : null}
                     {actions.resumeLimit && onResumeLimit ? (
                         <button
                             type="button"
