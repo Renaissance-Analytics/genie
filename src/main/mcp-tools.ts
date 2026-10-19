@@ -50,6 +50,12 @@ export type ToolHandler = (args: JsonObject, context: ToolContext) => McpToolRes
 export interface Registration {
     readonly definition: ToolDefinition;
     readonly handler: ToolHandler;
+    /**
+     * Who may SEE this tool (prism-mcp-server 0.3.0): `true` only for the callers it is for. Hidden from everyone else's
+     * tools/list and refused to them as an unknown tool is — the owner: never list a tool an agent cannot use. Absent =
+     * every caller. Headers arrive lower-cased, without authorization or cookie.
+     */
+    readonly visible?: (context: { headers: Readonly<Record<string, string>> }) => boolean | Promise<boolean>;
 }
 
 /** Who is calling: the agent in the terminal `GENIE_TERMINAL_ID` names. */

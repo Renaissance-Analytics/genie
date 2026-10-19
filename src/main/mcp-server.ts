@@ -40,7 +40,11 @@ const NOT_LISTENING = 'the MCP server is not listening';
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
     const build = (options: { port: number; token?: string }): Server => {
         const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport(options) });
-        for (const r of input.registrations) s.register(r.definition, r.handler as never);
+        for (const r of input.registrations) {
+            const visible = r.visible;
+            if (visible) s.register(r.definition, r.handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
+            else s.register(r.definition, r.handler as never);
+        }
         return s;
     };
     const remembered = input.remember?.read() ?? null;

@@ -49,6 +49,9 @@ const VERBS: Record<string, string> = {
     'processes.remove': 'remove a background process',
 };
 
+/** Actions an agent's autonomy never approves for it: each waits for the person. */
+export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create'];
+
 export class ApprovalQueue {
     readonly #now: () => number;
     readonly #timeoutMs: number;
@@ -93,7 +96,8 @@ export class ApprovalQueue {
     }
 
     gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
-        if (this.#autoApproved?.(caller, action) === true) {
+        // NEVER AUTO-APPROVED, whatever the agent's autonomy: creating an agent is the person's decision (the owner, 2026-10-19).
+        if (!PERSON_ONLY_ACTIONS.includes(action) && this.#autoApproved?.(caller, action) === true) {
             this.#auto = [...this.#auto, { agentId: caller.agentId, agentName: caller.agentName, action, detail, at: this.#now() }].slice(-50);
             this.#changed();
             return Promise.resolve('allowed');

@@ -1,6 +1,7 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { Liveness } from '../core/liveness.js';
-import { inboxSettingFrom } from '../core/inbox.js';
+import { addressOf, inboxSettingFrom } from '../core/inbox.js';
+import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
@@ -28,7 +29,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
@@ -55,6 +56,8 @@ export interface GenieToolParts {
     /** Runs `services exec` commands (main/service-exec.ts). Absent = none (doctor mode), and the tool says so. */
     readonly serviceExec?: ServiceExec;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
+    /** A workspace's default agent and registering a new agent (`createAgent`, the default agent's only). Absent = no such tool (doctor mode). */
+    readonly agents?: { defaultAgentOf(workspaceId: string): string | null; register: AgentToolsDeps['register'] };
 }
 
 export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
@@ -99,5 +102,15 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             resolveCaller: p.resolveCaller,
         },
+        ...(p.agents ? {
+            agents: {
+                resolveCaller: p.resolveCaller,
+                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
+                roster: p.roster,
+                approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string) => p.approve(caller, action, detail),
+                register: p.agents.register,
+                addressOf: (record: AgentRecord) => addressOf(record, 'full'),
+            },
+        } : {}),
     };
 }
