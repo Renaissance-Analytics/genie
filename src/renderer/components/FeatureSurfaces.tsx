@@ -11,6 +11,8 @@ import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKin
 import { playAlertSound } from '../alert-sound.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
+import type { KnownHost } from '../remote-session.js';
+import { agoText } from '../../core/remote-window.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
@@ -1324,13 +1326,23 @@ export interface RemoteConnectProps {
     readonly remembered: readonly string[];
     readonly onConnect: (input: { host: string; pin: string; label: string }) => void;
     readonly onDisconnect: () => void;
+    /** The hosts this device has connected to (Tynn #819), newest first; absent or empty = no list. */
+    readonly known?: readonly KnownHost[] | undefined;
+    /** Open a known host IN ITS OWN WINDOW (Genie 1's remote.open) — the local Genie stays open. */
+    readonly onOpenHost?: ((url: string) => void) | undefined;
+    /** Forget a host and its token: the next connection needs the PIN again. */
+    readonly onForgetHost?: ((url: string) => void) | undefined;
+    /** This window's link to its host dropped: connect again with the token it holds. */
+    readonly onReconnect?: (() => void) | undefined;
+    /** The clock "last connected" is read against (tests pass a fixed one). */
+    readonly now?: number | undefined;
 }
 
 /**
  * "DRIVE ANOTHER MACHINE" — a host, a PIN (or a remembered token), a label for this screen. While
  * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
  */
-function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteConnectProps) {
+export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now() }: RemoteConnectProps) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     if (state?.connected && state.host) {
         return (
@@ -1340,7 +1352,28 @@ function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteCon
             </div>
         );
     }
+    // The link to a host dropped (Genie 1's remote.reconnect): one click back, with the token this device holds.
+    const reconnect = state !== null && !state.connected && state.host && onReconnect ? (
+        <button type="button" data-action="reconnect" onClick={onReconnect} className={button}>Reconnect to {state.host}</button>
+    ) : null;
+    // THE KNOWN HOSTS (Genie 1's remote.known): each opens in its own window; Forget drops it and its token.
+    const list = known.length > 0 ? (
+        <ul data-known-hosts="" className="flex flex-col gap-1">
+            {known.map((h) => (
+                <li key={h.url} data-known-host={h.url} className="flex items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[13px]">
+                    <span className="font-medium">{h.name ?? h.url.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')}</span>
+                    <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{h.url}</span>
+                    <span className="ml-auto shrink-0 text-[11px] text-[var(--fg-3)]">{h.lastConnectedAt !== null ? agoText(h.lastConnectedAt, now) : h.paired ? 'paired' : ''}</span>
+                    {onOpenHost ? <button type="button" data-action="open-host" onClick={() => onOpenHost(h.url)} className={button}>Open</button> : null}
+                    {onForgetHost ? <button type="button" data-action="forget-host" onClick={() => onForgetHost(h.url)} className={button}>Forget</button> : null}
+                </li>
+            ))}
+        </ul>
+    ) : null;
     return (
+        <div className="flex flex-col gap-3">
+        {reconnect}
+        {list}
         <form
             data-form="connect-remote"
             className="flex flex-wrap items-end gap-2"
@@ -1370,6 +1403,7 @@ function ConnectRemote({ state, remembered, onConnect, onDisconnect }: RemoteCon
             <button type="submit" className={button}>Connect</button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
         </form>
+        </div>
     );
 }
 

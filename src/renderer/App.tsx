@@ -27,7 +27,8 @@ import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
-import { remoteUrl, rememberedTokens } from './remote-session.js';
+import { knownHosts, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
+import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { webSocketTransport } from './ws-transport.js';
 import { bytesToBase64, mobileEntry, mobileView, uploadRefusal, type MobileEntry } from '../core/mobile.js';
 import { MobileAgent, MobilePair, MobileShell } from './components/MobileShell.js';
@@ -189,11 +190,16 @@ function useAgentDetail(
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; connect: (input: { host: string; pin: string; label: string }) => void; disconnect: () => void } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => void; disconnect: () => void; reconnect: () => void; forget: (url: string) => void } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
+    const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage);
     const [remembered, setRemembered] = useState<string[]>(() => tokens?.hosts() ?? []);
+    // The hosts this device has connected to (Tynn #819), and the host THIS window is bound to (a remote host's window).
+    const [known, setKnown] = useState<KnownHost[]>(() => hosts?.list() ?? []);
+    const [bound] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteFromSearch(window.location.search)));
+    const last = useRef<{ url: string; label: string } | null>(null);
 
     useEffect(() => {
         if (!client) return;
@@ -207,11 +213,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         return off;
     }, [client, tokens]);
 
-    return {
-        client,
-        state,
-        remembered,
-        connect: ({ host, pin, label }) => {
+    const connectWith = ({ host, pin, label }: { host: string; pin: string; label: string }): void => {
             const url = remoteUrl(host);
             if (!url.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: url.reason })); return; }
             client?.close();
@@ -219,14 +221,33 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
             const auth = pin.trim() ? { kind: 'pin' as const, code: pin.trim(), label } : token ? { kind: 'token' as const, token, label } : null;
             if (!auth) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'type the PIN shown on that machine — this device has not paired with it yet' })); return; }
             const next = connectRemote(webSocketTransport(url.url), auth, label || 'another screen');
+            last.current = { url: url.url, label };
             setClient(next);
             setState(next.state());
             void next.ready.then((r) => {
-                if (r.ok) { const t = next.state().token; if (t && tokens) { tokens.remember(url.url, t); setRemembered(tokens.hosts()); } }
+                if (r.ok) {
+                    const t = next.state().token;
+                    if (t && tokens) { tokens.remember(url.url, t); setRemembered(tokens.hosts()); }
+                    // A known host, with its own name and when (Genie 1's remote.known).
+                    if (hosts) { hosts.noteConnected(url.url, next.state().host, Date.now()); setKnown(hosts.list()); }
+                }
                 else setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: r.reason }));
             });
-        },
+    };
+    const connectTo = (url: string, label: string): void => connectWith({ host: url, pin: '', label });
+    // A remote host's window connects on open, with the token this device holds (no PIN: it was paired before).
+    useEffect(() => { if (bound) connectTo(bound, ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return {
+        client,
+        state,
+        remembered,
+        connect: connectWith,
         disconnect: () => { client?.close(); setClient(null); setState(null); },
+        known,
+        bound,
+        // The link dropped (Genie 1's remote.reconnect): the same host again, with the token this device holds.
+        reconnect: () => { const l = last.current ?? (bound ? { url: bound, label: '' } : null); if (l) connectTo(l.url, l.label); },
+        forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(tokens?.hosts() ?? []); },
     };
 }
 
@@ -881,6 +902,16 @@ function DesktopApp({ bridge }: AppProps) {
         }),
     ];
 
+    // A remote host's window (Tynn #819) shows its host's Genie or nothing of this machine's: until connected, only its
+    // connecting screen — Reconnect, or the PIN when this device is not paired.
+    if (remote.bound && !remote.state?.connected) {
+        return (
+            <div data-remote-window={remote.bound} className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--bg-0)] p-8 text-[var(--fg-1)]">
+                <h1 className="text-sm font-semibold">Connecting to {remote.bound.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')}…</h1>
+                <ConnectRemote state={remote.state} remembered={[remote.bound]} onConnect={remote.connect} onDisconnect={remote.disconnect} onReconnect={remote.reconnect} />
+            </div>
+        );
+    }
     return (
         <>
         <Shell
@@ -891,7 +922,12 @@ function DesktopApp({ bridge }: AppProps) {
             onLocateRepo={locateRepo}
             servable={SERVABLE}
             remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
-            remoteConnect={{ state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect }}
+            remoteConnect={{
+                state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect,
+                known: remote.known, onForgetHost: remote.forget, onReconnect: remote.reconnect,
+                // Its own window when this Genie can open one (Genie 1's remote.open); else this window connects.
+                onOpenHost: (url: string) => { if (bridge?.remoteWindows) void bridge.remoteWindows.open(url); else remote.connect({ host: url, pin: '', label: '' }); },
+            }}
             agentOps={agentOps}
             workspaceOps={workspaceOps}
             addPreview={addPreview}

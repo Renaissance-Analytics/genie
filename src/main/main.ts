@@ -1,6 +1,7 @@
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -403,7 +404,7 @@ async function reapV1Runtime(includeShells: boolean): Promise<void> {
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
-function createWindow(show: boolean): BrowserWindow {
+function createWindow(show: boolean, search?: string): BrowserWindow {
     const win = new BrowserWindow({
         // The frame — hidden OS title bar, the native window buttons drawn over our 36 px bar on
         // Windows/Linux, a minimum size — is core/window.ts, where a test holds it. The owner's
@@ -431,8 +432,29 @@ function createWindow(show: boolean): BrowserWindow {
     // keeps it in the tray: the tray's Open shows it.
     if (show) win.once('ready-to-show', () => win.show());
 
-    void win.loadFile(join(here, '../renderer/index.html'));
+    // A remote host's window carries the host in its query (core/remote-window.ts); the main window carries none.
+    void win.loadFile(join(here, '../renderer/index.html'), search ? { search } : undefined);
     return win;
+}
+
+/**
+ * A WINDOW PER REMOTE HOST (Genie 1's remote.open; Tynn #819): the host's own window, so the local Genie stays open. One
+ * per host — asking again brings it to the front. Only a ws:// or wss:// URL is a host; anything else opens nothing.
+ */
+const remoteWindows = new Map<string, BrowserWindow>();
+function openRemoteWindow(url: string): void {
+    const search = remoteWindowSearch(url);
+    if (remoteFromSearch(search) === null) return;
+    const open = remoteWindows.get(url);
+    if (open && !open.isDestroyed()) {
+        if (open.isMinimized()) open.restore();
+        open.show();
+        open.focus();
+        return;
+    }
+    const win = createWindow(true, search);
+    remoteWindows.set(url, win);
+    win.on('closed', () => { if (remoteWindows.get(url) === win) remoteWindows.delete(url); });
 }
 
 /**
@@ -1065,6 +1087,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
     ipcMain.handle('genie:files-write', (_event, workspaceId: unknown, path: unknown, text: unknown, expectedSha: unknown) =>
