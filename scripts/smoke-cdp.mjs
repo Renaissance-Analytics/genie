@@ -943,13 +943,13 @@ if (ch.overlay) {
     })()`);
     const t = JSON.parse(themed);
     check(t.first.got === t.first.want && t.flipped.got === t.flipped.want && t.back.got === t.back.want && t.first.want !== t.flipped.want,
-        '50. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
+        '59. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
         `first ${t.first.got}/${t.first.want} · flipped ${t.flipped.got}/${t.flipped.want} · back ${t.back.got}/${t.back.want}`);
 } else {
     console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
 }
 
-// 52. A SOUND LOADS (the owner, 2026-10-19: "None of the sounds work at all"). The window's Content-Security-Policy named
+// 58. A SOUND LOADS (the owner, 2026-10-19: "None of the sounds work at all"). The window's Content-Security-Policy named
 // no media-src, so every <audio> load was refused — and the player swallows a refused play. Here the window loads one
 // of its own bundled .wav files through an Audio element: it must load, with no policy violation. Loading does not need
 // a speaker, so this holds on a CI machine with none.
@@ -958,7 +958,7 @@ if (ch.overlay) {
     const assets = 'dist/renderer/assets';
     const wav = existsSync(assets) ? readdirSync(assets).find((f) => f.endsWith('.wav')) ?? null : null;
     if (!wav) {
-        check(false, '52. a bundled sound loads in the window — no media blocked by the security policy', `no .wav under ${assets}`);
+        check(false, '58. a bundled sound loads in the window — no media blocked by the security policy', `no .wav under ${assets}`);
     } else {
         const loaded = await cdp.evaluate(`(async () => {
             const violations = [];
@@ -979,7 +979,7 @@ if (ch.overlay) {
         })()`);
         const s = JSON.parse(loaded || '{}');
         check(s.result === 'loaded' && (s.violations ?? []).length === 0,
-            '52. a bundled sound loads in the window — no media blocked by the security policy',
+            '58. a bundled sound loads in the window — no media blocked by the security policy',
             `${s.result} · ${(s.violations ?? []).join(' | ') || 'no violations'} · ${s.url}`);
     }
 }
