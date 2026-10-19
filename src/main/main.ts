@@ -175,11 +175,13 @@ function refreshTray(): void {
     const held = (host?.heldLogins() ?? []).flatMap((l) => { const words = limitWords(l.view); return words ? [{ provider: l.provider, words }] : []; });
     // An update on offer leads the menu (Tynn #761).
     const update = trayUpdate(updates?.state() ?? null);
-    const key = JSON.stringify({ held, update });
+    // Signed-out logins (#967): named in the tray with their own `Log in to …`.
+    const signedOut = host?.signedOutProviders() ?? [];
+    const key = JSON.stringify({ held, update, signedOut });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update)));
-    tray.setToolTip(trayTooltip(held));
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut)));
+    tray.setToolTip(trayTooltip(held, signedOut));
 }
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let autoCheckStop: (() => void) | null = null;
@@ -223,6 +225,8 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}) };
 }
 let terminals: TerminalHost | null = null;
+/** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
+let loginHost: LoginHost | null = null;
 let filesHost: FilesHost | null = null;
 let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
@@ -885,6 +889,7 @@ async function boot(): Promise<void> {
             }
         },
     });
+    loginHost = logins;
     ipcMain.handle('genie:provider-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
@@ -1758,6 +1763,11 @@ async function boot(): Promise<void> {
         onUpdate: revealMainWindow,
         onTaskManager: () => { revealMainWindow(); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
         // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
+        // A signed-out login named in the tray (#967): its own login, in a window of its own.
+        onProviderLogin: (provider) => {
+            const r = loginHost?.start(provider);
+            if (r && !r.ok) console.error('[genie] provider login:', r.reason);
+        },
         onScratchTerminal: () => {
             if (!terminals) return;
             const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route), home: homedir() });

@@ -171,5 +171,6 @@ export function agentRowFor(
         contextUsed: session?.contextUsed ?? null,
         contextSize: session?.contextSize ?? null,
         limit: session?.limit ?? null,
+        signedOut: session?.signedOut === true,
     };
 }

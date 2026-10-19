@@ -51,6 +51,8 @@ export interface Delivery {
 export interface AgentRow {
     /** Its provider login's rate-limit gate (Tynn #794); absent/`null` = not reported. */
     limit?: GateView | null | undefined;
+    /** Signed out of its provider (the login refused, #967): `Log in` fixes it. Absent = not reported. */
+    signedOut?: boolean | undefined;
     id: string;
     name: string;
     provider: string;
@@ -128,6 +130,8 @@ export function statusOf(row: AgentRow): StatusCell {
     // HELD FOR ITS PROVIDER'S LIMIT (Tynn #794): Paused, with until when — a waiting question still comes first.
     const held = row.state === 'waiting' ? null : limitWords(row.limit);
     if (held) return { word: 'Paused', detail: held, tone: 'warn' };
+    // SIGNED OUT of its provider (the owner, 2026-10-18): what to do; the Agent view, the chat and the tray offer `Log in`.
+    if (row.signedOut && row.state !== 'waiting') return { word: 'Signed out', detail: 'log in to continue', tone: 'warn' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };
