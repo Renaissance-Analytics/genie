@@ -17,7 +17,7 @@ import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
 import { FilesWindows } from './files-windows.js';
 import { homedir, hostname } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
@@ -30,6 +30,9 @@ import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
+import { genieUrlIn, signInCodeFrom } from '../core/tynn-sign-in.js';
+import { TynnAccount } from './tynn-account.js';
+import { encryptedFileStore } from './tynn-account-store.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -434,6 +437,34 @@ function revealMainWindow(): void {
     window.focus();
 }
 
+/*
+ * TYNN SIGN-IN COMING BACK (the owner, 2026-10-19: the way Genie 1 did it). Genie registers genie:// with the OS; the
+ * browser's genie://oauth/callback?token=… arrives as a second launch's argv (Windows, Linux), as `open-url` (macOS), or
+ * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
+ */
+let tynnAccount: TynnAccount | null = null;
+let pendingGenieUrl: string | null = genieUrlIn(process.argv);
+let afterTynnUrl: (() => void) | null = null;
+
+function registerGenieProtocol(): void {
+    // The entry path must be absolute for a dev launch (`electron .`), or the OS resolves it against its own cwd.
+    if (process.defaultApp) {
+        if (process.argv.length >= 2 && process.argv[1]) app.setAsDefaultProtocolClient('genie', process.execPath, [resolvePath(process.argv[1])]);
+    } else {
+        app.setAsDefaultProtocolClient('genie');
+    }
+}
+
+function openGenieUrl(url: string): void {
+    if (!tynnAccount) { pendingGenieUrl = url; return; }
+    if (signInCodeFrom(url) === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
+    revealMainWindow();
+    void tynnAccount.signIn(url).then((r) => {
+        featureState = { ...featureState, tynnSignInUrl: r.ok ? null : featureState.tynnSignInUrl ?? null, tynnMessage: r.ok ? null : r.reason };
+        afterTynnUrl?.();
+    });
+}
+
 /** The OS side of "launch at sign-in" (main/tray-residence.ts holds the decisions). */
 const loginItemPort: LoginItemPort = {
     setLoginItemSettings: (s) => app.setLoginItemSettings({ openAtLogin: s.openAtLogin, ...(s.path !== undefined ? { path: s.path } : {}), ...(s.args !== undefined ? { args: [...s.args] } : {}) }),
@@ -551,6 +582,8 @@ let questionWindow: QuestionWindow | null = null;
 const featureListeners = new Set<(data: FeatureData) => void>();
 
 async function boot(): Promise<void> {
+    // genie:// — Tynn's sign-in hands its code back through it (openGenieUrl above).
+    registerGenieProtocol();
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
@@ -1064,8 +1097,8 @@ async function boot(): Promise<void> {
         tynn: {
             get host() { const h = services?.settings.snapshot().tynn_host; return typeof h === 'string' && h.trim().length > 0 ? h.trim() : 'https://tynn.ai'; },
             project() {
-                const token = services?.settings.snapshot().tynn_token;
-                return tynnClient((url, init) => fetch(url, init)).project(this.host, typeof token === 'string' ? token : '');
+                const token = tynnAccount?.token() ?? '';
+                return tynnClient((url, init) => fetch(url, init)).project(this.host, token);
             },
         },
     };
@@ -1176,7 +1209,8 @@ async function boot(): Promise<void> {
         const host = composed.settings.get('tynn_host');
         return typeof host === 'string' && host.trim().length > 0 ? host.trim() : 'https://tynn.ai';
     };
-    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // Every snapshot — pushed or answered — carries the Tynn account (late-bound: it opens once the services are composed).
+    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1355,6 +1389,22 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
+    // THIS GENIE'S TYNN ACCOUNT: the key encrypted by the OS in ~/.genie, for the host in settings (main/tynn-account.ts).
+    tynnAccount = await TynnAccount.open({
+        fetch: (url, init) => fetch(url, init),
+        store: encryptedFileStore(join(genieHome(), 'tynn-account.bin'), {
+            isAvailable: () => safeStorage.isEncryptionAvailable(),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        }),
+        host: () => { const h = String(composed.settings.get('tynn_host') ?? '').trim(); return h.length > 0 ? h : 'https://tynn.ai'; },
+        device: () => hostname(),
+        openExternal: (url) => shell.openExternal(url),
+    });
+    tynnAccount.onChange(pushFeatures);
+    afterTynnUrl = pushFeatures;
+    // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
+    if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
     // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a
     // site's own server is the site's), a site up or down, a service started, a flow run finished.
     const things = new ThingSounds();
@@ -1574,10 +1624,9 @@ async function boot(): Promise<void> {
     });
     const issueWatchClient = new IssueWatchClient({
         credentials: () => {
-            const values = composed.settings.snapshot();
-            const token = typeof values.tynn_token === 'string' ? values.tynn_token.trim() : '';
-            const tynnHost = typeof values.tynn_host === 'string' && values.tynn_host.trim().length > 0 ? values.tynn_host.trim() : 'https://tynn.ai';
-            return token.length > 0 ? { host: tynnHost, token } : null;
+            // The signed-in account's key, for the host that minted it (main/tynn-account.ts).
+            const token = tynnAccount?.token() ?? '';
+            return token.length > 0 && tynnAccount ? { host: tynnAccount.host(), token } : null;
         },
         fetch: (url, init) => fetch(url, init),
         socket: (url) => new WebSocket(url) as unknown as SocketLike,
@@ -1599,7 +1648,9 @@ async function boot(): Promise<void> {
     issueWatchRunning = issueWatchClient;
     issueWatchClient.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
-    composed.settings.onChange((key) => { if (key === 'tynn_token' || key === 'tynn_host') { issueWatchClient.stop(); issueWatchClient.start(); } });
+    const restartIssueWatch = () => { issueWatchClient.stop(); issueWatchClient.start(); };
+    composed.settings.onChange((key) => { if (key === 'tynn_host') restartIssueWatch(); });
+    tynnAccount.onChange(restartIssueWatch);
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });
@@ -1708,6 +1759,7 @@ async function boot(): Promise<void> {
     ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
         const action = raw as FeatureAction;
         const data = await handleFeatureAction(composed, action, featureState, featurePorts);
+        if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
         if (action.kind === 'browser.navigate') featureState = { ...featureState, browserUrl: data.browser.url };
@@ -1827,8 +1879,14 @@ async function boot(): Promise<void> {
 // A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead,
 // run AFTER this handler returns (core/quit-flag.ts `answerSecondInstance`): its question is a synchronous modal, and
 // asked in here it left the asking launch unanswered until it had Genie terminated as hung (exit code 2, no shutdown).
+// macOS hands a genie:// URL to the running app as open-url, not as a second launch.
+app.on('open-url', (event, url) => {
+    event.preventDefault();
+    openGenieUrl(url);
+});
+
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: revealMainWindow, defer: (run) => { setImmediate(run); } });
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: revealMainWindow, defer: (run) => { setImmediate(run); }, open: openGenieUrl });
 });
 
 /**

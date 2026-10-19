@@ -3,7 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
 import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
-import type { SyncResult } from '../core/integrations.js';
+import { tynnGate, type SyncResult } from '../core/integrations.js';
+import type { TynnAccountPort } from './tynn-account.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
@@ -40,6 +41,8 @@ import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, Tool
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** This Genie's Tynn account (main/tynn-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
+    readonly tynnAccount?: TynnAccountPort;
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
@@ -98,6 +101,9 @@ export async function customSoundData(settings: { get(key: string): unknown }, k
 
 export interface FeatureState {
     toolStatuses: readonly ToolStatus[] | null;
+    /** Tynn sign-in under way: the link opened (kept on screen for a machine without a browser), and Tynn's last word. */
+    tynnSignInUrl?: string | null;
+    tynnMessage?: string | null;
     knowledgeQuery: string;
     browserUrl?: string | null;
     /** The Genie Browser's history as its view last reported it (main/browser-pane.ts). */
@@ -235,6 +241,24 @@ function withLogTails(services: ComposedServices, rows: readonly HostedProcess[]
     });
 }
 
+/** The account, or a refusal in words: without one nothing pretends to sign in. */
+function tynnAccountOf(ports: FeaturePorts): TynnAccountPort {
+    if (!ports.tynnAccount) throw new Error('this Genie cannot sign in to Tynn here: it has no Tynn account (doctor mode)');
+    return ports.tynnAccount;
+}
+
+/** Tynn in Settings → Integrations: who is signed in where, the sign-in under way, and the rows Tynn gates. */
+function tynnIntegration(services: ComposedServices, state: FeatureState, account: TynnAccountPort | undefined) {
+    const status = account?.status() ?? { signedIn: false as const };
+    const configured = String(services.settings.snapshot().tynn_host ?? '').trim();
+    const host = account ? account.host() : configured.length > 0 ? configured.replace(/\/+$/, '') : 'https://tynn.ai';
+    return {
+        tynnSignedIn: status.signedIn,
+        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? null },
+        gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: status.signedIn }),
+    };
+}
+
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
@@ -255,7 +279,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
-        integrations: { ...services.integrations(), lastSync: state.lastSync ?? null },
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), ...services.integrations(), lastSync: state.lastSync ?? null },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -766,9 +790,24 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.servedLink = { id: m.link.id, url: m.url };
             break;
         }
-        case 'integrations.tynnToken':
-            await services.settings.set('tynn_token', action.token.trim());
+        // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
+        case 'integrations.tynnSignIn': {
+            const { url } = await tynnAccountOf(ports).startSignIn();
+            next.tynnSignInUrl = url;
+            next.tynnMessage = null;
             break;
+        }
+        case 'integrations.tynnCode': {
+            const r = await tynnAccountOf(ports).signIn(action.code);
+            if (r.ok) { next.tynnSignInUrl = null; next.tynnMessage = null; } else next.tynnMessage = r.reason;
+            break;
+        }
+        case 'integrations.tynnSignOut': {
+            const r = await tynnAccountOf(ports).signOut();
+            next.tynnSignInUrl = null;
+            next.tynnMessage = r.revoked ? null : r.reason;
+            break;
+        }
         case 'integrations.githubConfirm': {
             const values = services.settings.snapshot();
             if (action.step === 'install' && values.github_authorized !== true) throw new Error('authorize first: the GitHub App must be authorized for your account before it can be installed on repositories');

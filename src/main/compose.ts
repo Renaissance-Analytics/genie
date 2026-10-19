@@ -23,7 +23,7 @@ import { runV1ScheduleImport } from './v1-schedules.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
-import { configSync, githubAppStatus, tynnGate, type AnnotatedRow, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { configSync, githubAppStatus, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
@@ -249,7 +249,8 @@ export interface ComposedServices {
     /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
     inboxNoticeSettled(agentId: string, delivered: boolean): void;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
-    integrations(): { tynnSignedIn: boolean; github: GithubAppStatus; gated: AnnotatedRow[]; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
+    /** GitHub, Genie's MCP server and the agent files. Tynn is the account's (main/tynn-account.ts), added by feature-ipc. */
+    integrations(): { github: GithubAppStatus; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
     syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
@@ -907,9 +908,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         integrations: () => {
             const values = settings.snapshot();
             return {
-                tynnSignedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0,
                 github: githubAppStatus({ authorized: values.github_authorized === true, installedRepos: values.github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }),
-                gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: typeof values.tynn_token === 'string' && values.tynn_token.length > 0 }),
                 mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: input.mcpTools?.() ?? [] },
                 agentFiles: agentFiles.list(),
             };

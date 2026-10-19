@@ -1367,6 +1367,47 @@ export function mcpToolsList(tools: readonly { name: string; description: string
     );
 }
 
+/**
+ * SIGN IN TO TYNN — Genie 1's card (the owner, 2026-10-19: "this is not how we handle tynn logins. Look at Genie 1").
+ * One button opens Tynn in the browser; the host is shown; the code comes back by itself (genie://) or is pasted. The
+ * link stays on screen for a machine without a browser. There is no token to type. Signed in: who, and Sign out.
+ */
+function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integrations']>['tynn']; onAction: SurfaceProps['onAction'] }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <div data-tynn-sign-in="" className="flex flex-col gap-2 text-sm">
+            <div className="flex min-w-0 items-center gap-1.5">
+                <span data-tynn-host={tynn.host} className="flex-1 truncate font-mono text-xs text-[var(--fg-3)]" title={tynn.host}>{tynn.host}</span>
+            </div>
+            {tynn.user ? (
+                <div className="flex items-center gap-2">
+                    <span className="flex-1">Signed in as <strong>{tynn.user.name}</strong> <span className="text-[var(--fg-3)]">{tynn.user.email}</span></span>
+                    <Button type="button" data-action="tynn-sign-out" variant="ghost" size="sm" onClick={() => onAction({ kind: 'integrations.tynnSignOut' })}>Sign out</Button>
+                </div>
+            ) : (
+                <>
+                    <span className="text-[var(--fg-3)]">Genie is fully usable signed out; Tynn adds identity and work-item sync. Rows that need it are listed below, annotated, never hidden.</span>
+                    <div><Button type="button" data-action="tynn-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.tynnSignIn' })}>Open Tynn in your browser</Button></div>
+                    {tynn.signInUrl ? (
+                        <div data-tynn-sign-in-url={tynn.signInUrl} className="flex flex-col gap-1.5 rounded-md border border-[var(--border-1)] p-2.5">
+                            <span className="text-xs text-[var(--fg-3)]">No browser on this machine? Copy this link, open it on any device, sign in, then paste the code below.</span>
+                            <div className="flex min-w-0 items-center gap-1.5">
+                                <span className="flex-1 truncate font-mono text-xs text-[var(--fg-3)]" title={tynn.signInUrl}>{tynn.signInUrl}</span>
+                                <Button type="button" variant="ghost" size="xs" onClick={() => { void navigator.clipboard?.writeText(tynn.signInUrl ?? ''); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? 'Copied' : 'Copy'}</Button>
+                            </div>
+                        </div>
+                    ) : null}
+                    <form data-form="tynn-code" className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); const form = e.currentTarget; onAction({ kind: 'integrations.tynnCode', code: String(new FormData(form).get('code') ?? '') }); form.reset(); }}>
+                        <Input name="code" autoComplete="off" spellCheck={false} placeholder="Paste sign-in code from Tynn" aria-label="Sign-in code" />
+                        <Button type="submit" size="sm">I have a code</Button>
+                    </form>
+                </>
+            )}
+            {tynn.message ? <span data-tynn-message="" className="text-xs text-[var(--danger)]">{tynn.message}</span> : null}
+        </div>
+    );
+}
+
 function Integrations({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     return (
@@ -1406,18 +1447,7 @@ function Integrations({ integrations, onAction }: { integrations: FeatureData['i
                     </div>
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
-                        {integrations.tynnSignedIn ? (
-                            <div className="flex items-center gap-3 text-sm">
-                                <span>Signed in to Tynn.</span>
-                                <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'integrations.tynnToken', token: '' })}>Sign out</button>
-                            </div>
-                        ) : (
-                            <form data-form="tynn-sign-in" className="flex flex-wrap items-end gap-2 text-sm" onSubmit={(e) => { e.preventDefault(); onAction({ kind: 'integrations.tynnToken', token: String(new FormData(e.currentTarget).get('token') ?? '') }); }}>
-                                <span className="basis-full text-[var(--fg-3)]">Genie is fully usable signed out; Tynn adds identity and work-item sync. Rows that need it are listed below, annotated, never hidden.</span>
-                                <Input name="token" type="password" placeholder="Tynn API token" />
-                                <button type="submit" className={button}>Sign in</button>
-                            </form>
-                        )}
+                        <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
                                 <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">

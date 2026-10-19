@@ -39,6 +39,9 @@ export type CarryOverResult = CarryOver & { alreadyDone?: true; noV1?: true };
 
 const BY_KEY: ReadonlyMap<string, SettingDef> = new Map(SETTINGS.map((s) => [s.key, s]));
 
+/** Settings that held a secret and no longer exist: removed from settings.json on open. */
+const RETIRED_SECRETS: readonly string[] = ['tynn_token'];
+
 export class SettingsStore {
     readonly file: string;
     #values: Record<string, Value>;
@@ -79,7 +82,12 @@ export class SettingsStore {
             // A renamed value (a stored `update_channel: beta`) is read as its new name, not kept as an option that no longer exists.
             if (BY_KEY.has(k) && (typeof v === 'boolean' || typeof v === 'string')) clean[k] = migrateLegacyValue(k, v);
         }
-        return new SettingsStore(file, { values: clean, carriedOver: __carriedOver ?? null }, now, workspaces);
+        const store = new SettingsStore(file, { values: clean, carriedOver: __carriedOver ?? null }, now, workspaces);
+        // A RETIRED SECRET is wiped from the file, not just left unread: Genie 2 once kept a pasted Tynn token here in
+        // plain text, and sign-in now keeps its key encrypted (main/tynn-account.ts). Only when one is present — a file
+        // without one is not rewritten.
+        if (RETIRED_SECRETS.some((k) => k in values)) await store.#flush();
+        return store;
     }
 
     get(key: string): Value {

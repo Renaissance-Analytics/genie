@@ -116,6 +116,8 @@ export interface RemoteSection {
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
 export interface IntegrationsSection {
     readonly tynnSignedIn: boolean;
+    /** This Genie's Tynn account: where, who (null signed out), the sign-in link kept on screen, and Tynn's last word. */
+    readonly tynn: { readonly host: string; readonly user: { readonly name: string; readonly email: string } | null; readonly signInUrl: string | null; readonly message: string | null };
     readonly github: GithubAppStatus;
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
@@ -322,7 +324,9 @@ export type FeatureAction =
     | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
     | { kind: 'remote.revokeShare'; shareId: string }
     /** Sign in to Tynn with a token; an empty token signs out. */
-    | { kind: 'integrations.tynnToken'; token: string }
+    | { kind: 'integrations.tynnSignIn' }
+    | { kind: 'integrations.tynnCode'; code: string }
+    | { kind: 'integrations.tynnSignOut' }
     /** The person confirms a GitHub App step they did in the browser; install needs authorize first. */
     | { kind: 'integrations.githubConfirm'; step: 'authorize' | 'install' }
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }

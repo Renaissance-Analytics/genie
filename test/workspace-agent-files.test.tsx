@@ -113,6 +113,7 @@ describe('the workspace’s Settings', () => {
 describe('Workstation settings', () => {
     const integrations: NonNullable<FeatureData['integrations']> = {
         tynnSignedIn: false,
+        tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
         github: { steps: [{ id: 'authorize', done: true }, { id: 'install', done: true }], blocking: false, blockedBy: null, missingRepos: [], signal: null },
         gated: [],
         lastSync: { workspaceId: 'moic', results: [{ id: 'claude', label: 'Claude Code (.mcp.json)', ok: true }] },

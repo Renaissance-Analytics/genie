@@ -14,6 +14,8 @@
  * A plain second launch is unchanged: it reveals the first one's window (hidden in the tray included).
  */
 
+import { genieUrlIn } from './tynn-sign-in.js';
+
 export const QUIT_ARG = '--quit';
 
 /** What a `--quit` launch hands the first instance beside its argv (`app.requestSingleInstanceLock(additionalData)`). */
@@ -59,10 +61,17 @@ export function secondInstanceAction(argv: readonly string[], additionalData: un
 export function answerSecondInstance(
     argv: readonly string[],
     additionalData: unknown,
-    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void },
+    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void },
 ): 'quit' | 'reveal' {
     const action = secondInstanceAction(argv, additionalData);
     if (action === 'quit') act.defer(act.quit);
-    else act.reveal();
+    else {
+        act.reveal();
+        // A genie:// URL (the browser handing Tynn's sign-in back, Windows and Linux): opened after the handler returns,
+        // like the quit — the sign-in makes a network call.
+        const url = genieUrlIn(argv);
+        const open = act.open;
+        if (url !== null && open) act.defer(() => { open(url); });
+    }
     return action;
 }
