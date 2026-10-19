@@ -1209,13 +1209,13 @@ export function AgentView({
                         <span className="sr-only">{railText}</span>
                     </div>
                 ) : null}
-                {showColumn && (inspector || plan || ended || termBlock) ? (
+                {showColumn && (inspector || ended || termBlock) ? (
                 <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
                 {railModeNow === 'strip' ? (
                     <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
                 ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
-                {plan || ended || termBlock ? (
+                {ended || termBlock ? (
                 <div data-rail-column className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-xs">
                     {/* THE PERSONA (the board's empty state): the one thing known before the first turn, so it is on screen. */}
                     {termBlock ? (
@@ -1256,20 +1256,27 @@ export function AgentView({
                             </div>
                         </section>
                     ) : null}
-                    {/*
-                     * Plan and Budget are ABSENT before the first turn, not empty. An empty plan
-                     * panel reads as an agent working without a plan; the truth is that it has
-                     * not said what its plan is yet.
-                     */}
-                    {plan ? (
-                        <section data-rail="plan">
-                            <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                Plan
-                            </h2>
-                            <p className="font-mono text-[11px] text-[var(--fg-3)]">
-                                {plan.step}/{plan.of}
-                            </p>
-                            {steps ? (
+
+
+                </div>
+                ) : null}
+                </aside>
+                ) : null}
+                {/*
+                 * THE ACTIVE PLAN COLUMN (the owner, 2026-10-19: "Genie needs to include an Active Plan column in the agent
+                 * view to the left of the chat"): its own column, the view's LAST — directly left of the docked chat — and
+                 * always there for an agent that reports plans. Before any plan it says so; an agent seen only through its
+                 * terminal reports none, so it has no column.
+                 */}
+                {agent.fidelity !== 'observed' ? (
+                    <aside data-plan-column="" className="flex min-h-0 w-[260px] shrink-0 flex-col gap-1.5 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-xs">
+                        <h2 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Active plan</h2>
+                        {plan ? (
+                            <>
+                                <p className="font-mono text-[11px] text-[var(--fg-3)]">
+                                    {plan.step}/{plan.of}
+                                </p>
+                                {steps ? (
                                 <ol className="mt-1.5 flex flex-col gap-1">
                                     {steps.map((step, i) => (
                                         <li key={i} data-plan-step={step.status} {...(step.current ? { 'data-current': 'true' } : {})} className={`flex items-start gap-1.5 text-[12px] ${step.current ? 'font-semibold text-[var(--fg-1)]' : step.status === 'completed' ? 'text-[var(--fg-3)]' : 'text-[var(--fg-2)]'}`}>
@@ -1281,13 +1288,11 @@ export function AgentView({
                             ) : (
                                 <p className="mt-1 text-[var(--fg-2)]">{plan.doing}</p>
                             )}
-                        </section>
-                    ) : null}
-
-
-                </div>
-                ) : null}
-                </aside>
+                            </>
+                        ) : (
+                            <p className="text-[12px] leading-normal text-[var(--fg-3)]">{agent.name} has not reported a plan yet.</p>
+                        )}
+                    </aside>
                 ) : null}
             </div>
         </div>

@@ -154,15 +154,17 @@ describe('the right rail', () => {
          */
         const html = render({ session: null });
 
-        expect(html).not.toContain('data-rail="plan"');
+        // The Active Plan column (2026-10-19) is ALWAYS there for a declared agent — and before any plan it SAYS there is
+        // none, which is not an empty panel: no step, no figure.
+        expect(html).toMatch(/data-plan-column[\s\S]*?has not reported a plan yet/);
+        expect(html).not.toContain('data-plan-step=');
         expect(html).not.toContain('data-rail="budget"');
 
         // POSITIVE CONTROL: with a plan and a context figure, both appear — the plan in the rail, the budget on the
         // Settings tab (Tynn #800: agent settings are a tab, not the rail).
         const known = session({ plan: { step: 3, of: 7, doing: 'Passkey enrolment endpoint' }, contextUsed: 38_000, contextSize: 200_000 });
         const full = render({ session: known });
-        expect(full).toContain('data-rail="plan"');
-        expect(full).toContain('3/7');
+        expect(full).toMatch(/data-plan-column[\s\S]*?3\/7/);
         expect(render({ session: known, tab: 'settings' })).toContain('data-rail="budget"');
     });
 
@@ -242,8 +244,7 @@ describe('found by looking at the running Agent view', () => {
         const withPlan = render({
             session: session({ plan: { step: 3, of: 7, doing: 'Passkey enrolment endpoint' } }),
         });
-        expect(withPlan).toContain('data-rail-column');
-        expect(withPlan).toContain('data-rail="plan"');
+        expect(withPlan).toMatch(/data-plan-column[\s\S]*?3\/7/);
     });
 
     it('a budget alone is on the Settings tab, and no longer pulls the rail into the Stream (Tynn #800)', () => {
