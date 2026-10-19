@@ -15,7 +15,7 @@ import {
     type WorkspaceState,
 } from '../../core/workspace-view.js';
 import { closeCancelled, closeRequested, codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
-import { Badge, Button, Icon } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
 import type { GenieBridge } from '../bridge.js';
@@ -113,6 +113,8 @@ export interface WorkspaceOpsProps {
 }
 
 export interface WorkspaceProps {
+    /** Open this workspace's Background processes or Sites (Genie 1's modals) — the Settings page's Hosting card. Absent = no card. */
+    onOpenRuntime?: ((kind: 'processes' | 'sites') => void) | undefined;
     /** The registry's workspace row. `name` is optional there, so the id stands in — never an invented label. */
     workspace: { id: string; name?: string; path: string };
     terminals: GenieBridge['terminals'];
@@ -168,7 +170,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -598,35 +600,10 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                 </div>
             ) : null}
 
-            {view === 'settings' && ops?.governs ? (
-                <section data-governs className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
-                    <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Governs</h2>
-                        <span className="text-[var(--fg-4)]">An ops project governs other workspaces: they sit under it in the rail and the Dashboard, and its agents reach theirs as if from inside. Nothing is written into their folders.</span>
-                    </div>
-                    {ops.governs.candidates.length === 0 ? (
-                        <p className="mt-1 text-[var(--fg-3)]">No other workspaces to govern.</p>
-                    ) : (
-                        <ul className="mt-1 flex flex-wrap gap-3">
-                            {ops.governs.candidates.map((c) => {
-                                const on = ops.governs!.children.includes(c.id);
-                                return (
-                                    <li key={c.id}>
-                                        <label className="flex items-center gap-1.5">
-                                            <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
-                                            <span>{c.name ?? c.id}</span>
-                                        </label>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </section>
-            ) : null}
             {view === 'settings' && ops?.settings ? (
-                <section data-workspace-settings className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+                <section data-workspace-settings data-ws-card="general" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Workspace settings</h2>
+                        <h2 className="text-sm font-semibold">General</h2>
                         <span className="text-[var(--fg-4)]">these apply to {workspace.name ?? workspace.id} only; an override replaces the workstation value</span>
                     </div>
                     {ops.settings.values === null ? (
@@ -642,10 +619,7 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                         <div className="font-medium">Default agent</div>
                                         <div className="text-[var(--fg-3)]">The agent here that an action uses when it names none, and the one that hears GitHub by default.</div>
                                     </div>
-                                    <select data-default-agent="" aria-label="Default agent" value={ops.defaultAgent.current ?? ''} onChange={(e) => ops.defaultAgent!.onSet(e.target.value === '' ? null : e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                        <option value="">None</option>
-                                        {ops.defaultAgent.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                                    </select>
+                                    <Select data-default-agent="" aria-label="Default agent" list={[{ value: '', label: 'None' }, ...ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name }))]} value={ops.defaultAgent.current ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
                                 </li>
                             ) : null}
                             {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
@@ -659,11 +633,9 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                                             <div className="text-[var(--fg-3)]">{def.description}</div>
                                         </div>
                                         {def.type === 'boolean' ? (
-                                            <input type="checkbox" checked={value === true} onChange={(e) => ops.settings!.onSet(def.key, e.target.checked)} />
+                                            <Switch checked={value === true} onCheckedChange={(checked) => ops.settings!.onSet(def.key, checked)} aria-label={def.label} />
                                         ) : def.type === 'enum' ? (
-                                            <select value={String(value)} onChange={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                                            </select>
+                                            <Select value={String(value)} list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} onValueChange={(v) => ops.settings!.onSet(def.key, v)} aria-label={def.label} />
                                         ) : (
                                             <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
                                         )}
@@ -675,10 +647,54 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     )}
                 </section>
             ) : null}
-            {view === 'settings' && ops?.agentFiles ? (
-                <section data-ws-agent-files="" className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+            {view === 'settings' && onOpenRuntime ? (
+                <section data-ws-card="hosting" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+                    <div>
+                        <h2 className="text-sm font-semibold">Hosting</h2>
+                        <p className="text-xs text-[var(--fg-3)]">What keeps running for {workspace.name ?? workspace.id}: its background processes and its sites.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <Button type="button" size="sm" data-action="ws-open-processes" onClick={() => onOpenRuntime('processes')}>Background processes</Button>
+                        <Button type="button" size="sm" data-action="ws-open-sites" onClick={() => onOpenRuntime('sites')}>Sites</Button>
+                    </div>
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.repos ? (
+                <section data-repos data-ws-card="repos" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Agent files</h2>
+                        <h2 className="text-sm font-semibold">Repos</h2>
+                        <span className="text-[var(--fg-4)]">the envelope's repositories; the host repo is the envelope itself</span>
+                    </div>
+                    {ops.repos.list === null ? (
+                        <div data-repos-skeleton className="mt-2 flex flex-col gap-1">
+                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
+                            <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--bg-2)]" />
+                        </div>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.repos.list.map((r) => (
+                                <li key={r.slug} data-repo={r.slug} {...(r.host ? { 'data-repo-host': '' } : {})} className="flex items-center gap-3 py-1">
+                                    <span className="font-medium">{r.slug}</span>
+                                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.path}</span>
+                                    {r.host ? <span className="rounded bg-[var(--bg-2)] px-1 text-[10px] uppercase tracking-wide text-[var(--fg-3)]">host</span> : null}
+                                    <span className="ml-auto" />
+                                    <button type="button" data-action="open-repo" onClick={() => ops.repos!.onOpen(r.path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Open</button>
+                                    {!r.host ? <button type="button" data-action="remove-repo" data-repo-slug={r.slug} onClick={() => ops.repos!.onRemove(r.slug)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Remove</button> : null}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    <form data-form="add-repo" className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); ops.repos!.onAdd({ name: String(d.get('name') ?? ''), path: String(d.get('path') ?? '') }); e.currentTarget.reset(); }}>
+                        <input name="name" placeholder="Name" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                        <input name="path" placeholder="repos/<folder>" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono" />
+                        <button type="submit" className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Add repo</button>
+                    </form>
+                </section>
+            ) : null}
+            {view === 'settings' && ops?.agentFiles ? (
+                <section data-ws-agent-files="" data-ws-card="agent-files" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-sm font-semibold">Agent files</h2>
                         <span className="text-[var(--fg-4)]">Genie’s instructions for agents here, and its MCP endpoint in this workspace’s Claude Code, Cursor and Codex configs; Genie syncs them when it starts</span>
                         <span className="ml-auto" />
                         <Button data-action="ws-sync-agent-files" size="sm" onClick={ops.agentFiles.onSync}>Sync now</Button>
@@ -708,36 +724,29 @@ export function Workspace({ workspace, terminals, ops, initialState, files, pane
                     ) : null}
                 </section>
             ) : null}
-            {view === 'settings' && ops?.repos ? (
-                <section data-repos className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs">
+            {view === 'settings' && ops?.governs ? (
+                <section data-governs data-ws-card="governs" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
-                        <h2 className="font-semibold">Repos</h2>
-                        <span className="text-[var(--fg-4)]">the envelope's repositories; the host repo is the envelope itself</span>
+                        <h2 className="text-sm font-semibold">Governs</h2>
+                        <span className="text-[var(--fg-4)]">An ops project governs other workspaces: they sit under it in the rail and the Dashboard, and its agents reach theirs as if from inside. Nothing is written into their folders.</span>
                     </div>
-                    {ops.repos.list === null ? (
-                        <div data-repos-skeleton className="mt-2 flex flex-col gap-1">
-                            <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--bg-2)]" />
-                            <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--bg-2)]" />
-                        </div>
+                    {ops.governs.candidates.length === 0 ? (
+                        <p className="mt-1 text-[var(--fg-3)]">No other workspaces to govern.</p>
                     ) : (
-                        <ul className="mt-1 divide-y divide-[var(--border-1)]">
-                            {ops.repos.list.map((r) => (
-                                <li key={r.slug} data-repo={r.slug} {...(r.host ? { 'data-repo-host': '' } : {})} className="flex items-center gap-3 py-1">
-                                    <span className="font-medium">{r.slug}</span>
-                                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.path}</span>
-                                    {r.host ? <span className="rounded bg-[var(--bg-2)] px-1 text-[10px] uppercase tracking-wide text-[var(--fg-3)]">host</span> : null}
-                                    <span className="ml-auto" />
-                                    <button type="button" data-action="open-repo" onClick={() => ops.repos!.onOpen(r.path)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Open</button>
-                                    {!r.host ? <button type="button" data-action="remove-repo" data-repo-slug={r.slug} onClick={() => ops.repos!.onRemove(r.slug)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Remove</button> : null}
-                                </li>
-                            ))}
+                        <ul className="mt-1 flex flex-wrap gap-3">
+                            {ops.governs.candidates.map((c) => {
+                                const on = ops.governs!.children.includes(c.id);
+                                return (
+                                    <li key={c.id}>
+                                        <label className="flex items-center gap-1.5">
+                                            <input type="checkbox" data-govern-child={c.id} checked={on} onChange={(e) => ops.governs!.onSet(e.target.checked ? [...ops.governs!.children, c.id] : ops.governs!.children.filter((id) => id !== c.id))} />
+                                            <span>{c.name ?? c.id}</span>
+                                        </label>
+                                    </li>
+                                );
+                            })}
                         </ul>
                     )}
-                    <form data-form="add-repo" className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const d = new FormData(e.currentTarget); ops.repos!.onAdd({ name: String(d.get('name') ?? ''), path: String(d.get('path') ?? '') }); e.currentTarget.reset(); }}>
-                        <input name="name" placeholder="Name" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
-                        <input name="path" placeholder="repos/<folder>" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono" />
-                        <button type="submit" className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">Add repo</button>
-                    </form>
                 </section>
             ) : null}
             {panel === 'files' && files && !filesPinned && filesPopped ? (
