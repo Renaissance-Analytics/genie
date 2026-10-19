@@ -110,11 +110,26 @@ export function chatScope(route: Route, roster: readonly ChatRosterAgent[], work
     return { kind: 'elsewhere', workspace: theirs };
 }
 
+/** The slice of a workspace the chat's subject reads: its chosen default agent (Workspace settings). */
+export interface ChatSubjectWorkspace {
+    readonly id: string;
+    readonly defaultAgentId?: string | undefined;
+}
+
 /**
- * THE CHAT IS ALWAYS OPEN (the owner, 2026-10-19: "Chat cannot be closed PERIOD"): its subject is the route's `chat=` when
- * a link names one, else the agent the view says (`followChat` from Genie) — Genie off a workspace, the agent on its page,
- * an agent of the workspace on screen.
+ * THE CHAT IS ALWAYS OPEN, AND THE VIEW DECIDES WHOSE IT IS (the owner, 2026-10-19: "Chat cannot be closed PERIOD"; "the
+ * chat is always the workspace agent unless I click on another agents tab then the chat shows that agent's chat"):
+ *  - an agent's tab → that agent;
+ *  - a workspace's view → its DEFAULT agent (Workspace settings), else its first agent;
+ *  - any other view → genie.
+ * Nothing else moves it: a `chat=` in a route is not read here (the address is losing it, Tynn #831).
  */
-export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], opened: readonly string[]): string {
-    return route.chat ?? followChat('genie', route, roster, opened);
+export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], workspaces: readonly ChatSubjectWorkspace[]): string {
+    if (route.surface === 'agent') return resolveChatAgent(route.agentId, roster)?.id ?? route.agentId;
+    const screen = workspaceOnScreen(route, roster);
+    if (screen === null) return genieOf(roster);
+    const chosen = workspaces.find((w) => w.id === screen)?.defaultAgentId;
+    const here = roster.filter((r) => r.workspaceId === screen);
+    if (chosen !== undefined && here.some((r) => r.id === chosen)) return chosen;
+    return here[0]?.id ?? genieOf(roster);
 }
