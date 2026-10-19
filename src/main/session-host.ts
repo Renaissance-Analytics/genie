@@ -1,4 +1,5 @@
 import type { McpServer } from '@particle-academy/prism-acp';
+import { deliveryFrom } from '../core/delivery.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
@@ -912,7 +913,8 @@ export class SessionHost {
             failure,
             contextUsed,
             contextSize,
-            lastDelivery: null,
+            // The Dashboard's Latest delivery (core/delivery.ts): its own commit, file, handoff or answer, newest first.
+            lastDelivery: deliveryFrom(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: planFrom(rows),
             model: modelFrom(rows),

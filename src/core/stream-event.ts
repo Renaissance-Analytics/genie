@@ -70,6 +70,11 @@ export type StreamEvent =
            */
           toolKind: ToolKind | null;
           rawInput: unknown;
+          /**
+           * What the tool answered (ACP `rawOutput`, else its text `content` blocks), capped at 4000 characters; ABSENT
+           * when the update carries none. The Dashboard reads a commit's sha from git's own output here (core/delivery.ts).
+           */
+          output?: string;
       }
     | {
           kind: 'usage';
@@ -207,6 +212,26 @@ function thinkingEstimateOf(update: Record<string, unknown>): number | null {
     return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+/** A tool's answer as text: `rawOutput` (a string, or `{ output | stdout }`), else the text of its `content` blocks. */
+function outputField(update: Record<string, unknown>): { output?: string } {
+    const raw = update['rawOutput'];
+    let text: string | null = null;
+    if (typeof raw === 'string') text = raw;
+    else if (typeof raw === 'object' && raw !== null) {
+        const r = raw as Record<string, unknown>;
+        text = typeof r['output'] === 'string' ? r['output'] : typeof r['stdout'] === 'string' ? r['stdout'] : null;
+    }
+    if (text === null && Array.isArray(update['content'])) {
+        const parts = (update['content'] as unknown[]).flatMap((c) => {
+            if (typeof c !== 'object' || c === null) return [];
+            const inner = (c as Record<string, unknown>)['content'];
+            return typeof inner === 'object' && inner !== null && typeof (inner as Record<string, unknown>)['text'] === 'string' ? [(inner as Record<string, unknown>)['text'] as string] : [];
+        });
+        if (parts.length > 0) text = parts.join('\n');
+    }
+    return text === null ? {} : { output: text.slice(0, 4000) };
+}
+
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {
     const kind = update['sessionUpdate'];
     if (typeof kind !== 'string') return null;
@@ -238,6 +263,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 status: toolStatusOf(update['status']),
                 toolKind: toolKindOf(update['kind']),
                 rawInput: update['rawInput'] ?? null,
+                ...outputField(update),
             };
 
         case 'usage_update': {

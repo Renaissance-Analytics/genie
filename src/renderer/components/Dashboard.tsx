@@ -436,6 +436,8 @@ export interface DashboardProps {
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
     /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
     onFix?: ((route: FixRoute) => void) | undefined;
+    /** Genie's own agent's row (the design mockup's first group, `default agent · not in a workspace`); `null` = none. */
+    genie?: AgentRow | null | undefined;
     /** `Chat ⌘J` — the composer, on genie, one click from the board. */
     onChat?: (() => void) | undefined;
     /** The row cursor (`J`/`K`), controlled — for tests that render server-side. Otherwise the board keeps its own. */
@@ -448,7 +450,7 @@ export interface DashboardProps {
     onNavigate?: ((route: string) => void) | undefined;
 }
 
-export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
+export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -466,8 +468,10 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
-    const statusGroupsForOrder = groupByStatus(rows);
-    const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : groups.flatMap((g) => g.rows.map((r) => r.id));
+    // EVERY ROW DRAWN — genie's own, then the workspace agents: what the census counts and the cursor walks.
+    const all = genie ? [genie, ...rows] : rows;
+    const statusGroupsForOrder = groupByStatus(all);
+    const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : [...(genie ? [genie.id] : []), ...groups.flatMap((g) => g.rows.map((r) => r.id))];
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const action = dashboardAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
@@ -483,13 +487,14 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [visibleIds, focused, onOpenAgent, onGroup, group]);
-    const statusGroups = groupByStatus(rows);
+    const statusGroups = groupByStatus(all);
     // The board's lines in document order (rows and group headers), for the reveal's lanes.
     const lines = group === 'status'
         ? statusGroups.flatMap((g) => [`head:${g.state}`, ...g.rows.map((r) => r.id)])
-        : groups.flatMap((g) => [`head:${g.workspaceId}`, ...g.rows.map((r) => r.id)]);
+        : [...(genie ? ['head:genie', genie.id] : []), ...groups.flatMap((g) => [`head:${g.workspaceId}`, ...g.rows.map((r) => r.id)])];
     const lanes = reveal ? lanesFor(lines, reveal) : null;
-    const chips = summaryChips(rows);
+    // The census counts every row drawn, genie's included — each count has its row (the mockup's header).
+    const chips = summaryChips(all);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
     // The rail's rule: the envelope's name, else the folder, never the id when a name is known.
     const nameOf = (id: string): string => { const w = workspaces?.find((x) => x.id === id); return w?.name ?? (w?.path ? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? id : id); };
@@ -646,7 +651,22 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                         </div>
                     ))}
                 </div>
-            ) : groups.map((group) => (
+            ) : (
+            <>
+            {/* GENIE'S OWN GROUP (the design mockup): first, `genie · default agent · not in a workspace · 1 agent`. */}
+            {genie ? (
+                <div data-genie-group="">
+                    <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                        <Lanes segments={lanes?.['head:genie']} />
+                        <span className="font-semibold">genie</span>
+                        <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">default agent · not in a workspace</span>
+                        <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">1 agent</span>
+                    </div>
+                    <AgentRowView row={genie} onOpen={onOpenAgent} onFix={onFix} focused={genie.id === focused} reveal={reveal} lanes={lanes?.[genie.id]} onReveal={setOwnReveal} />
+                    {openTray === genie.id ? <RowTrayView row={genie} onNavigate={go} /> : null}
+                </div>
+            ) : null}
+            {groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
                     <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
@@ -657,6 +677,8 @@ export function Dashboard({ rows, workspaces, onOpenAgent, onAddAgent, onAddWork
                     ))}
                 </div>
             ))}
+            </>
+            )}
         </div>
     );
 }

@@ -40,6 +40,8 @@ import type { RepoCommit } from '../core/commits.js';
  */
 export interface GenieSnapshot {
     agents: readonly AgentRow[];
+    /** Genie's own agent's row (not a workspace agent): the Dashboard's first group. Absent/`null` = none. */
+    osAgent?: AgentRow | null;
     /**
      * `null` until the store has actually been read.
      *
