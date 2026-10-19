@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardE
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
+import { fileLinkTarget, linkFileRefs } from '../../core/chat-file-links.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
@@ -76,6 +77,11 @@ export interface ChatFlyoutProps {
      * decision (`approvalPlacement`) and not a property of the conversation.
      */
     approval?: Approval | null | undefined;
+    /**
+     * Open a file the chat names, in the agent's workspace (core/chat-file-links.ts). Absent = nowhere to open it (genie's
+     * own chat), and file references stay plain text.
+     */
+    onOpenFile?: ((path: string, line: number | null) => void) | undefined;
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
     commands?: readonly ProviderCommand[] | null | undefined;
     answeringApproval?: string | null | undefined;
@@ -123,7 +129,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onRestartAndSend, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onRestartAndSend, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -289,7 +295,18 @@ export function ChatFlyout({
                 onScroll={(e) => { const el = e.currentTarget; followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight); }}
                 className="min-h-0 flex-1 overflow-y-auto"
             >
-            <div data-chat-log="" className="flex min-h-full flex-col justify-end gap-3 px-3 py-3">
+            <div
+                data-chat-log=""
+                className="flex min-h-full flex-col justify-end gap-3 px-3 py-3"
+                // A file link (`#file:…`) opens the file in the agent's workspace, its tree revealed — never navigates the window.
+                onClick={onOpenFile ? (e) => {
+                    const a = (e.target as HTMLElement).closest?.('a');
+                    const target = a ? fileLinkTarget(a.getAttribute('href') ?? '') : null;
+                    if (!target) return;
+                    e.preventDefault();
+                    onOpenFile(target.path, target.line);
+                } : undefined}
+            >
                 {/*
                  * An empty thread says NOTHING. No fake greeting, no system line, no "how can I
                  * help" — every one of those is a message the agent did not send, attributed to
@@ -367,7 +384,7 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
                             {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ContentRenderer value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+                            <ContentRenderer value={onOpenFile ? linkFileRefs(m.text) : m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
                         </div>
                     );
                 })}

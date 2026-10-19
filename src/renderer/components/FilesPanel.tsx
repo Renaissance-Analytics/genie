@@ -73,6 +73,9 @@ export interface FilesPanelProps {
     readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;
     /** The tree could not be read: the reason, said in the tree's place instead of skeletons that never end. */
     readonly treeError?: string | null | undefined;
+    /** The folders open in the tree (controlled; nothing is open at start — core/files-tree-lazy.ts). */
+    readonly expanded?: readonly string[] | undefined;
+    readonly onExpandedChange?: ((ids: readonly string[]) => void) | undefined;
     /** The line the open file lands on (the route's `line=`, openFileForUser's) — Fancy's FileViewer scrolls to it and highlights it. */
     readonly line?: number | null | undefined;
 }
@@ -132,7 +135,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange }: FilesPanelProps) {
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -212,7 +215,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-3 animate-pulse rounded bg-[var(--bg-2)]" style={{ width: `${55 + ((i * 17) % 40)}%` }} />)}
                         </div>
                     ) : (
-                        <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} defaultExpandAll virtualize height="100%" rowHeight={26} />
+                        <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
                     )}
                 </aside>
                 )}

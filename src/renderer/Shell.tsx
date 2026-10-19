@@ -337,6 +337,11 @@ export function Shell({
     // Which workspace the chat talks to, against the one on screen (core/chat-scope.ts; the owner's beta.26 report): another
     // workspace's agent is NAMED in the composer, and a workspace with no agent to message has no composer at all.
     const scope = chatScope({ ...parsed, chat: chatThread?.agentId ?? parsed.chat }, snapshot.agents, snapshot.workspaces);
+    // The chat agent's workspace — where a file it names lives. Genie's own chat has none (`__genie__`).
+    const chatWorkspaceId = ((): string | null => {
+        const ws = snapshot.agents.find((a) => a.id === chatThread?.agentId)?.workspaceId ?? null;
+        return ws && ws !== '__genie__' ? ws : null;
+    })();
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -678,6 +683,8 @@ export function Shell({
                         onAnswerApproval={onAnswerApproval}
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
+                        // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
+                        {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}

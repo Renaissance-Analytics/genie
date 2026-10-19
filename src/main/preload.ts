@@ -166,6 +166,7 @@ const bridge: GenieBridge = {
      */
     files: {
         tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
+        children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
         open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
         lastCommitted: (workspaceId, path) => ipcRenderer.invoke('genie:files-last-committed', workspaceId, path) as Promise<string | null>,
         state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,

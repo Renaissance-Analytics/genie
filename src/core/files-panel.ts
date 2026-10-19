@@ -101,7 +101,8 @@ export function confine(root: string, path: string): string | null {
     return full.startsWith(prefix) ? full.slice(prefix.length) : null;
 }
 
-const byName = (a: TreeNode, b: TreeNode) => (a.type === b.type ? a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }) : a.type === 'folder' ? -1 : 1);
+/** Folders first, then by name (case-insensitive) — the tree's one order. */
+export const byName = (a: TreeNode, b: TreeNode) => (a.type === b.type ? a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }) : a.type === 'folder' ? -1 : 1);
 
 /**
  * Whether the open file is re-read after a batch of changes (genie#921): only when it is one of them — Genie 1 reloaded

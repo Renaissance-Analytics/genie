@@ -1059,6 +1059,7 @@ async function boot(): Promise<void> {
     // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
     ipcMain.handle('genie:files-last-committed', (_event, workspaceId: unknown, path: unknown) => (typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.lastCommitted(workspaceId, path) ?? null : null));
     ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
+    ipcMain.handle('genie:files-children', (_event, workspaceId: unknown, dir: unknown) => (typeof workspaceId === 'string' && typeof dir === 'string' ? filesHost?.children(workspaceId, dir) ?? null : null));
     ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
