@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * THE GENIE ICON, EVERYWHERE A PERSON SEES ONE. 2.0.0-beta.7 shipped with electron-builder's default icon on the
- * window, the taskbar and the installer, and a generated gradient square in the tray. The icon is Genie 1's own
- * (`icon.ico` 7 sizes, `icon.png` 1024², `tray-icon.png` 32²), in `build/`, named by the builder config and shipped
- * for the tray as an extra resource.
+ * window, the taskbar and the installer, and a generated gradient square in the tray. The icon is Genie's logo — since
+ * 2026-10-18 the genie-logo-white art (test/genie-logo-white.test.ts holds that) — as `icon.ico` 7 sizes, `icon.png`
+ * 1024², `tray-icon.png` 32², in `build/`, named by the builder config and shipped for the tray as an extra resource.
  */
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 

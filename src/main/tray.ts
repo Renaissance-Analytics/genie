@@ -5,11 +5,11 @@ import type { UpdateState } from './updater.js';
  * THE TRAY — the one place Genie is reachable when its window is hidden behind thirty others,
  * and the one place it can always be quit from. v1 had one; the owner's first run of 2.0.0-beta.5
  * had no tray and a window with no close button, so Genie could not be closed at all except by
- * Alt+F4. A 16 px brand-gradient mark, generated once (`.ai/sandbox/test-vm/make-tray-png.mjs`)
- * and embedded so the tray never depends on a file electron-builder may or may not have packed.
+ * Alt+F4. A 16 px copy of Genie's logo (`.ai/design/genie-logo-white.png`, 2026-10-18)
+ * embedded so the tray never depends on a file electron-builder may or may not have packed.
  */
 export const TRAY_ICON_PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAArElEQVR4nKXTOwrCQBRG4bvxzEwKGwlKUAmEQEQMPkCRgKRIk0IbCxs3M6/wyxVXkLuA73SHkk+k5B1JvQLUM0ANAaoP0J2Hbj30xUMfPczewdQOpnQwG4c0t5RmlqZipJnFbGlJgjHPHUiCF2sOCPCq4IAAF6UHSXBVcUCAtzUHBLjZBZAEn5oAkuDrgQMC3J4jSIK7CwcEuL9F0P+qSXhoR/otyVdNwY/7SF963xi/oZXk8wAAAABJRU5ErkJggg==';
+    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAB20lEQVR42pWTS2sTURiGn+/MpJhJqzSEQIrU4qJolaJINsWFO3+Daxdu/A26dOfO2y9QXLrQhYi7UqwXRMRLxaKRGko7lOhkZjKZ87mYMyRWK/XAuX68532/m1hrlX0OKReFEmT4j5EADwaQjFHu6wN1xKnCSh/ifOx9LxfUTePAPQuJhYMCaQS1ADz/HwqMgCfFOQemPHiVwssMJlMQb5cL1jGW+4cUXsfOpoWKGvC0C6u9EdKUcj0pLqoF+7sMnscg7j3P4WwAl1rwI1KW71sA/FLuSgYtA0c8uNmH26Gi3yGuCpcXR641DsDSNKz5LrW5Wr0eQWRhcwATBmYMNBLQHtBVFgzMzwmdNeXNQ8v8KeHEeUNQB+kMrF7bghsteLxTBCsIIBM44/wMN5TOCwi3Fcnh3MXCoAqm6UGtp9z9AsO+0q4WoCs7yucYtgZFDOJQmTspLF0wqIJ1tWAqAlePCuFPuLMMT9aV7RTu1YVvFXjmgfGFycPCVBMq1YJZnDqx1qq4fL/fBCuwuq68/QqzQ5gOldNtodkS6jMOJKOg+mWercKxJmTArU/w6CMsdJXjG8rirNBog7W/g9ldyqowVIgtHKqMKiyJYKL2J5i/9cJ4yzIG0D2a/hfGmcdNK3moQQAAAABJRU5ErkJggg==';
 
 export interface TrayHandlers {
     readonly onOpen: () => void;
