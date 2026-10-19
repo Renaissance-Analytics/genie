@@ -22,6 +22,24 @@ export interface OsaFacts {
     readonly genieHome: string;
     /** Electron's per-user folder (the window's cache, the runtime directory, the v1 database). */
     readonly userData: string;
+    /**
+     * OMARCHY (main/omarchy-skills.ts): the agent skills Omarchy ships, by skill name then file — `null` / absent when
+     * this is not an Omarchy host, and then genie is told nothing about Omarchy.
+     */
+    readonly omarchy?: { readonly skills: Readonly<Record<string, Readonly<Record<string, string>>>> } | null;
+}
+
+/** What genie is told on an Omarchy host: the machine, its skills, and the command center that drives it. */
+function omarchyBlock(o: NonNullable<OsaFacts['omarchy']>): string {
+    const names = Object.keys(o.skills).map((n) => `\`${n}\``).join(', ');
+    return [
+        '',
+        '## This machine runs Omarchy',
+        '',
+        `Omarchy's own agent skills are in your skills: ${names}. Use them to tailor and repair this system, and to make sense of a crash.`,
+        '',
+        'The `omarchy` command center drives the system: `omarchy commands --json` lists every command, and `omarchy <group> --help` explains a group. Plan a system change before you make it; `omarchy reinstall configs` restores the defaults.',
+    ].join('\n');
 }
 
 function factsBlock(f: OsaFacts): string {
@@ -30,7 +48,7 @@ function factsBlock(f: OsaFacts): string {
         `- Installed in: ${f.installDir}`,
         `- Genie's data (workspaces, agents, settings, knowledge, MCP endpoint): ${f.genieHome}`,
         `- Per-user app folder (window cache, runtime directory, v1 database): ${f.userData}`,
-    ].join('\n');
+    ].join('\n') + (f.omarchy ? `\n${omarchyBlock(f.omarchy)}` : '');
 }
 
 export function osaInstructions(mode: OsaMode, facts: OsaFacts): string {
@@ -113,12 +131,20 @@ function skillFile(): string {
 /** The OSA's home: workspace-relative path → content. */
 export function osaHomeFiles(mode: OsaMode, facts: OsaFacts): Record<string, string> {
     const instructions = osaInstructions(mode, facts);
-    return {
+    const files: Record<string, string> = {
         'CLAUDE.md': instructions,
         'AGENTS.md': instructions,
         '.claude/skills/genie-diagnostics/SKILL.md': skillFile(),
         '.agents/skills/genie-diagnostics/SKILL.md': skillFile(),
     };
+    // OMARCHY'S SKILLS, copied in (every file of each), for both harnesses — refreshed every start, so Omarchy's updates reach genie.
+    for (const [name, skill] of Object.entries(facts.omarchy?.skills ?? {})) {
+        for (const [rel, text] of Object.entries(skill)) {
+            files[`.claude/skills/${name}/${rel}`] = text;
+            files[`.agents/skills/${name}/${rel}`] = text;
+        }
+    }
+    return files;
 }
 
 /** Write the home, each file only where it differs. */

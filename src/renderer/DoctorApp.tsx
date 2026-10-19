@@ -38,7 +38,9 @@ export interface DoctorBridge {
     onChange(listener: () => void): () => void;
 }
 
-const FACT_LABEL: Readonly<Record<keyof OsaFacts, string>> = {
+/** The facts drawn as text (Omarchy's skills are genie's, not a line on this screen). */
+type TextFact = Exclude<keyof OsaFacts, 'omarchy'>;
+const FACT_LABEL: Readonly<Record<TextFact, string>> = {
     version: 'Genie',
     platform: 'Platform',
     installDir: 'Installed in',
@@ -71,7 +73,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
             </header>
             <section data-doctor-facts="" className="flex shrink-0 flex-wrap gap-x-6 gap-y-1 border-b border-[var(--border-1)] px-4 py-2 text-[12px]">
                 {facts
-                    ? (Object.keys(FACT_LABEL) as (keyof OsaFacts)[]).map((k) => (
+                    ? (Object.keys(FACT_LABEL) as TextFact[]).map((k) => (
                           <span key={k}><span className="text-[var(--fg-4)]">{FACT_LABEL[k]}</span> <span className="font-mono text-[var(--fg-2)]">{facts[k]}</span></span>
                       ))
                     : <Skeleton className="h-4 w-96" />}
