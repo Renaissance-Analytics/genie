@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('genieQuestion', {
     dismiss: (notes: string[], id?: string) => ipcRenderer.invoke('question:dismiss', ...withId([notes], id)),
     select: (id: string) => ipcRenderer.invoke('question:select', id),
     draft: (id: string, draft: { selections: string[][]; notes: string[]; revision?: number }) => ipcRenderer.invoke('question:draft', id, draft),
+    // Genie 1's file drawer: which named files are there, one file's text, and the window widening for it.
+    files: (id: string, paths: string[]) => ipcRenderer.invoke('question:files', id, paths),
+    file: (id: string, path: string) => ipcRenderer.invoke('question:file', id, path),
+    drawer: (open: boolean) => ipcRenderer.invoke('question:drawer', open),
     onShow: (listener: (view: unknown) => void) => {
         const handler = (_e: unknown, view: unknown) => listener(view);
         ipcRenderer.on('question:show', handler);

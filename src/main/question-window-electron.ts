@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain, screen, shell } from 'electron';
 import { join } from 'node:path';
 import type { QuestionView, QuestionWindow, QuestionWindowPort } from './question-window.js';
 import { genieWindowIcon } from './app-identity.js';
+import { askWindowBounds } from '../core/question-drawer.js';
+import { existingFiles, readQuestionFile } from './question-files.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW — the Electron half of `question-window.ts`. Genie 1's window, carried over (genie
@@ -14,7 +16,7 @@ import { genieWindowIcon } from './app-identity.js';
 const WIDTH = 560;
 const HEIGHT = 520;
 
-export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null }): (onClosed: () => void) => QuestionWindowPort {
+export function electronQuestionWindow(input: { here: string; preload: string; controller: () => QuestionWindow | null; workspacePath?: (workspaceId: string) => string | null }): (onClosed: () => void) => QuestionWindowPort {
     // The page's calls, registered once: what to show (asked on load), an answer, Later, Dismiss — an answer and a
     // Dismiss name the question they are for (any question in the window's queue, in any order) — a pick from the
     // queue, and the draft being written (kept in main, so a closed window loses nothing).
@@ -48,6 +50,36 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         const revision = typeof d.revision === 'number' && Number.isFinite(d.revision) ? d.revision : 0;
         input.controller()?.draft(id, { selections, notes: notesOf(d.notes), revision });
     });
+    // GENIE 1'S FILE DRAWER (the owner, 2026-10-19). The files a question names are read from ITS workspace only — the
+    // question is looked up in what this window holds, never taken from the page — and only inside it (question-files.ts).
+    const rootOf = (rawId: unknown): string | null => {
+        const id = idOf(rawId);
+        const held = last ? (last.queue && last.queue.length > 0 ? last.queue : [last.item]) : [];
+        const item = held.find((q) => q.id === id);
+        return item?.workspaceId ? input.workspacePath?.(item.workspaceId) ?? null : null;
+    };
+    ipcMain.handle('question:files', async (_e, rawId: unknown, paths: unknown) => {
+        const root = rootOf(rawId);
+        if (root === null || !Array.isArray(paths)) return null;
+        return [...(await existingFiles(root, paths.filter((x): x is string => typeof x === 'string').slice(0, 16)))];
+    });
+    ipcMain.handle('question:file', async (_e, rawId: unknown, path: unknown) => {
+        const root = rootOf(rawId);
+        if (root === null) return { ok: false, reason: 'Genie does not know this question’s workspace' };
+        return typeof path === 'string' ? readQuestionFile(root, path) : { ok: false, reason: 'no such file' };
+    });
+    // The window WIDENS for the drawer and back (Genie 1's askWindowBounds): the width it had before is what it returns to.
+    let current: BrowserWindow | null = null;
+    let baseWidth: number | null = null;
+    ipcMain.handle('question:drawer', (_e, open: unknown) => {
+        const win = current;
+        if (!win || win.isDestroyed()) return;
+        const bounds = win.getBounds();
+        if (open === true && baseWidth === null) baseWidth = bounds.width;
+        const workArea = screen.getDisplayMatching(bounds).workArea;
+        win.setBounds(askWindowBounds({ current: bounds, workArea, drawerOpen: open === true, baseWidth: baseWidth ?? bounds.width }));
+        if (open !== true) baseWidth = null;
+    });
 
     return (onClosed) => {
         const area = screen.getPrimaryDisplay().workArea;
@@ -78,7 +110,8 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         win.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; });
         win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); void shell.openExternal(url).catch(() => {}); });
         win.once('ready-to-show', () => win.showInactive());
-        win.on('closed', onClosed);
+        current = win;
+        win.on('closed', () => { if (current === win) { current = null; baseWidth = null; } onClosed(); });
         void win.loadFile(join(input.here, '../renderer/question.html'));
         return {
             show: (view) => {
