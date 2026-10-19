@@ -447,23 +447,17 @@ if (typeof agentRow === 'string') {
      * saying plainly, because "the back button is broken" was the easier conclusion and the
      * wrong one.
      */
-    // Since 2026-10-19 the chat CANNOT close (the owner: "Chat cannot be closed PERIOD"): Back steps the route back and
-    // leaves you on the agent — with the chat still there, a column beside the page.
-    await cdp.evaluate('history.back(); true');
-    const chatStays = await waitFor(
-        cdp,
-        `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat]'))`,
-        'the agent on screen after Back, the chat still open beside it',
-    );
-    check(chatStays, '23. Back leaves you on the agent, and the chat stays open (it cannot be closed)');
-
+    // Since 2026-10-19 the chat CANNOT close and is not in the address (the owner: "the chat is always the workspace agent
+    // unless I click on another agents tab"; Tynn #831): opening it is NOT a navigation, so one Back leaves the agent for
+    // where you came from — the Dashboard — with the chat still docked beside it.
     await cdp.evaluate('history.back(); true');
     const backHome = await waitFor(
         cdp,
-        `Boolean(document.querySelector('[data-surface="dashboard"]'))`,
-        'the Dashboard after Back',
+        `Boolean(document.querySelector('[data-surface="dashboard"]')) && Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat]'))`,
+        'the Dashboard after Back, the chat still docked',
     );
-    check(backHome, '24. Back again returns to the Dashboard');
+    check(backHome, '23. Back leaves the agent for the Dashboard (opening the chat is no history entry), the chat still docked');
+    check(backHome, '24. Back returns to the Dashboard');
 
     // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
     // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
