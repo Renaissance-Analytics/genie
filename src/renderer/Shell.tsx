@@ -77,6 +77,8 @@ function useUpdateState(updates: GenieBridge['updates']): UpdateState | null {
 
 export interface ShellProps {
     route: string;
+    /** What the title bar shows: the ADDRESS (genie://{workstation}/{workspace-slug}/{tab}, core/address.ts); the route when absent. */
+    address?: string | undefined;
     snapshot: GenieSnapshot;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
@@ -220,6 +222,7 @@ const NO_DECK_ITEMS: readonly DeckItem[] = [];
 
 export function Shell({
     route,
+    address,
     snapshot,
     workspaceFaults,
     onLocateRepo,
@@ -346,7 +349,7 @@ export function Shell({
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <TitleBar
-                route={route}
+                route={address ?? route}
                 controlsInset={controlsInset}
                 workstation={snapshot.workstation}
                 remote={remote}

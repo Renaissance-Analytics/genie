@@ -179,8 +179,11 @@ const onDashboard = await waitFor(cdp, 'Boolean(document.querySelector(\'[data-s
 check(onDashboard, '2. the Dashboard is the landing surface, with nothing typed or clicked');
 
 // 3. The chrome rendered: the route, the four feature icons, the rail.
+// The address is genie://{workstation}/… (the owner, 2026-10-19; Tynn #831) — written once the snapshot names the workstation.
+const ADDRESS = { dashboard: '^genie://[^/?]+/dashboard(\\?|$)', dashboardExact: '^genie://[^/?]+/dashboard$', workspace: '^genie://[^/?]+/[^/?]+/dashboard$', settings: '^genie://[^/?]+/settings' };
+await waitFor(cdp, `new RegExp(${JSON.stringify(ADDRESS.dashboard)}).test(document.querySelector('[data-route]')?.textContent ?? '')`, 'the address genie://{workstation}/dashboard');
 const route = await cdp.evaluate('document.querySelector("[data-route]")?.textContent ?? null');
-check(typeof route === 'string' && route.startsWith('genie://dashboard'), '3. the title bar shows the route', String(route));
+check(typeof route === 'string' && new RegExp(ADDRESS.dashboard).test(route), '3. the title bar shows the address, genie://{workstation}/dashboard', String(route));
 
 const features = await cdp.evaluate('document.querySelectorAll("[data-feature]").length');
 check(features === 4, '4. the four feature icons are in the title bar', `found ${features}`);
@@ -429,7 +432,8 @@ if (typeof agentRow === 'string') {
 
     // The route followed the click, which is what makes the place linkable.
     const routeNow = await cdp.evaluate('document.querySelector("[data-route]")?.textContent ?? ""');
-    check(routeNow.startsWith('genie://agent/'), '22. the route names the agent', routeNow);
+    // An agent's address is genie://{workstation}/{workspace-slug}/{agent} — by NAME: no ULID, no chat= (Tynn #831).
+    check(/^genie:\/\/[^/?]+\/[^/?]+\/[^/?]+/.test(routeNow) && !/agent_|chat=|genie:\/\/agent\//.test(routeNow), '22. the address names the agent by workspace and name', routeNow);
 
     /*
      * BACK, twice, and both steps mean something.
@@ -443,23 +447,17 @@ if (typeof agentRow === 'string') {
      * saying plainly, because "the back button is broken" was the easier conclusion and the
      * wrong one.
      */
-    // Since 2026-10-19 the chat CANNOT close (the owner: "Chat cannot be closed PERIOD"): Back steps the route back and
-    // leaves you on the agent — with the chat still there, a column beside the page.
-    await cdp.evaluate('history.back(); true');
-    const chatStays = await waitFor(
-        cdp,
-        `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat]'))`,
-        'the agent on screen after Back, the chat still open beside it',
-    );
-    check(chatStays, '23. Back leaves you on the agent, and the chat stays open (it cannot be closed)');
-
+    // Since 2026-10-19 the chat CANNOT close and is not in the address (the owner: "the chat is always the workspace agent
+    // unless I click on another agents tab"; Tynn #831): opening it is NOT a navigation, so one Back leaves the agent for
+    // where you came from — the Dashboard — with the chat still docked beside it.
     await cdp.evaluate('history.back(); true');
     const backHome = await waitFor(
         cdp,
-        `Boolean(document.querySelector('[data-surface="dashboard"]'))`,
-        'the Dashboard after Back',
+        `Boolean(document.querySelector('[data-surface="dashboard"]')) && Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat]'))`,
+        'the Dashboard after Back, the chat still docked',
     );
-    check(backHome, '24. Back again returns to the Dashboard');
+    check(backHome, '23. Back leaves the agent for the Dashboard (opening the chat is no history entry), the chat still docked');
+    check(backHome, '24. Back returns to the Dashboard');
 
     // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
     // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
@@ -692,7 +690,7 @@ if (!approvalEnabled) {
     check(listed, '55a. "w>" lists the workspaces and nothing else — the prefix narrows; Fancy’s own filter does not hide them', counts);
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-    const landed = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://workspace/') && !document.querySelector('${PALETTE_INPUT}')`, 'Enter to open the workspace');
+    const landed = await waitFor(cdp, `new RegExp(${JSON.stringify(ADDRESS.workspace)}).test(document.querySelector('[data-route]')?.textContent ?? '') && !document.querySelector('${PALETTE_INPUT}')`, 'Enter to open the workspace');
     check(landed, '55b. Enter opens the chosen workspace and closes the window');
 }
 
@@ -772,6 +770,12 @@ if (!approvalEnabled) {
     const chatHere = await waitFor(cdp, `Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat][data-chat-loaded="true"]'))`, 'the chat to show its conversation');
     const chatState = await cdp.evaluate(`(() => ({ route: location.hash || location.href, loaded: document.querySelector('[data-chat]')?.getAttribute('data-chat-loaded') ?? null }))()`);
     check(chatHere, '61. a page reached without chat= still shows the chat with its loaded conversation', JSON.stringify(chatState));
+
+    // 63. ADDRESSES ARE genie://{workstation}/{workspace-slug}/{tab} (the owner, 2026-10-19; Tynn #831): an OLD address with
+    // a chat= in it is rewritten in place — the workspace by its slug, no id, no chat=.
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/tynn?chat=genie'; true`);
+    const rewritten = await waitFor(cdp, `(() => { const a = document.querySelector('[data-route]')?.textContent ?? ''; return new RegExp(${JSON.stringify(ADDRESS.workspace)}).test(a) && !a.includes('chat=') && !a.includes('workspace/'); })()`, 'the old address rewritten to the new form');
+    check(rewritten, '63. an old address is rewritten to genie://{workstation}/{workspace-slug}/dashboard — no id, no chat=', await cdp.evaluate(`document.querySelector('[data-route]')?.textContent ?? null`));
 
     // 62. THE FILE TREE LOADS A FOLDER WHEN IT IS OPENED, AND NOTHING OPENS BY ITSELF (the owner, 2026-10-19: "I can't load
     // files below the 3rd layer and when it opens all folders are open at once"). Over this checkout: the panel opens with
@@ -855,7 +859,8 @@ if (!approvalEnabled) {
 {
     const takeoverTargets = async () => {
         const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-        return list.filter((t) => t.type === 'page' && String(t.url).includes('#genie://takeover/'));
+        // genie://takeover/<id>, or the address it is rewritten to, genie://{workstation}/takeover/<id> (Tynn #831).
+        return list.filter((t) => t.type === 'page' && /#genie:\/\/(?:[^/?#]+\/)?takeover\//.test(String(t.url)));
     };
     const before = (await takeoverTargets()).length;
     check(before === 0, '39. CONTROL: no take-over window exists before the click', `${before} target(s)`);
@@ -926,9 +931,9 @@ if (!approvalEnabled) {
     const key = (k, code, vk, type, modifiers) => cdp.send('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers });
     const press = async (k, code, vk, modifiers) => { await key(k, code, vk, 'rawKeyDown', modifiers); await key(k, code, vk, 'keyUp', modifiers); };
     await cdp.evaluate(`document.activeElement?.blur?.(); window.location.hash = '#genie://dashboard'; true`);
-    await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '') === 'genie://dashboard'`, 'the Dashboard');
+    await waitFor(cdp, `new RegExp(${JSON.stringify(ADDRESS.dashboardExact)}).test(document.querySelector('[data-route]')?.textContent ?? '')`, 'the Dashboard');
     await press(',', 'Comma', 188, 2);
-    const toSettings = await waitFor(cdp, `(document.querySelector('[data-route]')?.textContent ?? '').startsWith('genie://settings')`, 'Ctrl+, to open Settings');
+    const toSettings = await waitFor(cdp, `new RegExp(${JSON.stringify(ADDRESS.settings)}).test(document.querySelector('[data-route]')?.textContent ?? '')`, 'Ctrl+, to open Settings');
     check(toSettings, '57. Ctrl+, opens Settings', await cdp.evaluate(`document.querySelector('[data-route]')?.textContent ?? null`));
 
     const size = () => cdp.evaluate(`window.innerWidth + 'x' + window.innerHeight`);

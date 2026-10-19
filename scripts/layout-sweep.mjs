@@ -52,7 +52,8 @@ const say = (what) => console.log(`  … ${what}`);
 say(`listing CDP targets on :${PORT}`);
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 // The smoke may have opened a Take Over window; the sweep measures the MAIN window.
-const pages = list.filter((t) => t.type === 'page' && !String(t.url).includes('#genie://takeover/'));
+// A Take Over window: genie://takeover/<id>, or its address genie://{workstation}/takeover/<id> (Tynn #831).
+const pages = list.filter((t) => t.type === 'page' && !/#genie:\/\/(?:[^/?#]+\/)?takeover\//.test(String(t.url)));
 say(`${list.length} target(s), ${pages.length} page(s): ${pages.map((p) => p.url).join(' | ') || '(none)'}`);
 const page = pages[0];
 if (!page) {
