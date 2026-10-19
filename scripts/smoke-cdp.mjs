@@ -440,13 +440,15 @@ if (typeof agentRow === 'string') {
      * saying plainly, because "the back button is broken" was the easier conclusion and the
      * wrong one.
      */
+    // Since 2026-10-19 the chat CANNOT close (the owner: "Chat cannot be closed PERIOD"): Back steps the route back and
+    // leaves you on the agent — with the chat still there, a column beside the page.
     await cdp.evaluate('history.back(); true');
-    const chatClosed = await waitFor(
+    const chatStays = await waitFor(
         cdp,
-        `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-chat]')`,
-        'the flyout closing on Back',
+        `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat]'))`,
+        'the agent on screen after Back, the chat still open beside it',
     );
-    check(chatClosed, '23. Back closes the chat and leaves you on the agent');
+    check(chatStays, '23. Back leaves you on the agent, and the chat stays open (it cannot be closed)');
 
     await cdp.evaluate('history.back(); true');
     const backHome = await waitFor(
