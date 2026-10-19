@@ -19,12 +19,13 @@ describe('the right column below 1100px', () => {
         expect(html).toMatch(/data-right-column="strip"[^>]*class="[^"]*h-8/);
         expect(html).toContain('3/6 · 89% ctx');
         expect(html).toContain('data-action="expand-rail"');
-        expect(html).not.toContain('data-rail="plan"');
+        // The plan is not the rail's: its own column stays, whatever the rail does.
+        expect(html).toContain('data-plan-column');
     });
 
     it('at 1100px and above, and when unmeasured, it is the column', () => {
-        expect(render(1100)).toContain('data-rail="plan"');
-        expect(render(null)).toContain('data-rail="plan"');
+        expect(render(1100)).toContain('data-plan-column');
+        expect(render(null)).toContain('data-plan-column');
         expect(render(1440)).not.toContain('data-right-column="strip"');
     });
 });

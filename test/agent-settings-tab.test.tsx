@@ -52,9 +52,8 @@ describe('the Settings tab', () => {
         expect(html).not.toContain('data-right-column=""');
     });
 
-    it('CONTROL: what is LIVE stays in the rail on the Stream — the plan', () => {
+    it('CONTROL: what is LIVE stays on the Stream — the plan, in its own Active Plan column', () => {
         const html = render('stream', { session: session({ plan: { step: 2, of: 4, doing: 'write the tests' } }) });
-        expect(html).toContain('data-right-column=""');
-        expect(html).toContain('data-rail="plan"');
+        expect(html).toMatch(/data-plan-column[\s\S]*?2\/4/);
     });
 });

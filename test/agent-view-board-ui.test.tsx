@@ -53,10 +53,11 @@ describe('the right column', () => {
         expect((withInspector.match(/data-right-column/g) ?? []).length).toBe(1);
         expect(withInspector).toMatch(/data-right-column[^>]*class="[^"]*w-\[380px\]/);
         expect(withInspector).not.toMatch(/w-\[420px\]/);
-        expect(withInspector).not.toMatch(/w-\[260px\]/);
-        expect(withInspector).toMatch(/data-right-column[^]*data-inspector=[^]*data-rail="plan"/);
+        expect(withInspector).not.toMatch(/data-right-column[^>]*w-\[260px\]/);
+        // The plan is its own column (2026-10-19), AFTER the rail: the Inspector in the rail, then the Active Plan column.
+        expect(withInspector).toMatch(/data-right-column[^]*data-inspector=[^]*data-plan-column/);
         const plain = render();
-        expect(plain).toContain('data-rail="plan"');
+        expect(plain).toContain('data-plan-column');
         expect(plain).not.toContain('data-inspector=');
         expect(render({ session: null, turns: 0 })).not.toContain('data-right-column');
     });

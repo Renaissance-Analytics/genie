@@ -26,7 +26,7 @@ const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
 describe('the plan panel', () => {
     it('lists the steps with their marks, the current one bold, under the step/of line', () => {
         const html = render();
-        expect(html).toMatch(/data-rail="plan"[\s\S]*?1\/3/);
+        expect(html).toMatch(/data-plan-column[\s\S]*?1\/3/);
         expect(html).toMatch(/data-plan-step="completed"[^>]*><span[^>]*>✓/);
         expect(html).toMatch(/data-plan-step="in_progress"[^>]*data-current="true"[^>]*><span[^>]*>◐/);
         expect(html).toMatch(/data-plan-step="pending"[^>]*><span[^>]*>○/);
@@ -36,7 +36,7 @@ describe('the plan panel', () => {
 
     it('without a readable plan event the panel keeps its step/of line and lists nothing', () => {
         const html = render({ rows: [rows[0]!] });
-        expect(html).toContain('data-rail="plan"');
+        expect(html).toContain('data-plan-column');
         expect(html).not.toContain('data-plan-step=');
     });
 });
