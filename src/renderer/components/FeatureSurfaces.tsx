@@ -13,6 +13,7 @@ import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditi
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
+import type { HostUpgradeStep } from '../../core/host-upgrade.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
@@ -1336,19 +1337,43 @@ export interface RemoteConnectProps {
     readonly onReconnect?: (() => void) | undefined;
     /** The clock "last connected" is read against (tests pass a fixed one). */
     readonly now?: number | undefined;
+    /** Upgrade the connected host (Genie 1's remote.upgradeHost, Tynn #822) — offered to its OWNER only. */
+    readonly onUpgradeHost?: (() => void) | undefined;
+    /** Where an upgrade stands (core/host-upgrade.ts); absent = none running. */
+    readonly upgrade?: HostUpgradeStep | null | undefined;
+}
+
+/** An upgrade's step, in words, for the host it is upgrading. */
+function upgradeWords(step: HostUpgradeStep, host: string): string {
+    switch (step.kind) {
+        case 'checking': return `Asking ${host} for an update…`;
+        case 'up-to-date': return `${host} is up to date.`;
+        case 'downloading': return `${host} is downloading ${step.version}…`;
+        case 'installing': return `${host} is installing ${step.version}…`;
+        case 'reconnecting': return `${host} is restarting on ${step.version} — reconnecting…`;
+        case 'done': return `${host} is on ${step.version}.`;
+        case 'lost': return `${host} did not come back after installing ${step.version}. Check that machine.`;
+        case 'failed': return `Not upgraded: ${step.reason}.`;
+    }
 }
 
 /**
  * "DRIVE ANOTHER MACHINE" — a host, a PIN (or a remembered token), a label for this screen. While
  * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
  */
-export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now() }: RemoteConnectProps) {
+export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null }: RemoteConnectProps) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    // An upgrade in flight is said in place of its button — connected or not: the link DROPS while the host restarts.
+    const upgrading = upgrade !== null && upgrade.kind !== 'up-to-date' && upgrade.kind !== 'done' && upgrade.kind !== 'failed' && upgrade.kind !== 'lost';
+    const upgradeLine = upgrade && state?.host ? <span data-host-upgrade={upgrade.kind} className="text-xs text-[var(--fg-3)]">{upgradeWords(upgrade, state.host)}</span> : null;
     if (state?.connected && state.host) {
         return (
-            <div data-remote-connected className="flex items-center gap-3 text-sm">
+            <div data-remote-connected className="flex flex-wrap items-center gap-3 text-sm">
                 <span>Driving {state.host} — {state.locked ? 'locked' : state.driving ? 'you hold the baton' : state.driver ? `${state.driver} is driving` : 'nobody is driving'}</span>
-                <button type="button" className={`ml-auto ${button}`} onClick={onDisconnect}>Disconnect</button>
+                {upgradeLine}
+                {/* The host's OWNER only: a shared workspace cannot change the host itself (main/remote-host.ts refuses it). */}
+                {onUpgradeHost && state.isOwner && !upgrading ? <button type="button" data-action="upgrade-host" className={`ml-auto ${button}`} onClick={onUpgradeHost}>Upgrade {state.host}</button> : null}
+                <button type="button" className={`${onUpgradeHost && state.isOwner && !upgrading ? '' : 'ml-auto '}${button}`} onClick={onDisconnect}>Disconnect</button>
             </div>
         );
     }
@@ -1372,7 +1397,8 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
     ) : null;
     return (
         <div className="flex flex-col gap-3">
-        {reconnect}
+        {upgradeLine}
+        {upgrading ? null : reconnect}
         {list}
         <form
             data-form="connect-remote"
