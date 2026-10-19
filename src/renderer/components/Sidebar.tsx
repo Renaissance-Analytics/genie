@@ -221,12 +221,19 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             aria-label="Genie"
             className="flex w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
         >
-            {/* THE TOOLS (Genie 1's rail header, Tynn #282/#799): collapse and System; hibernated and + sit by Workspaces. */}
+            {/* THE TOOLS, all at the top (Genie 1's rail header; the owner, 2026-10-19: "Move these icons to the top"): collapse,
+                System, hibernated workspaces and add. */}
             <div data-rail-tools="" className="flex items-center gap-0.5">
                 <button type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
                     <Icon name="panel-left" size="sm" />
                 </button>
                 {systemTool}
+                {has('workspace') ? (
+                    <span className="ml-auto flex items-center gap-0.5">
+                        {asleepTool}
+                        {addTool}
+                    </span>
+                ) : null}
             </div>
             {has('deck') ? (
                 <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate}>
@@ -280,13 +287,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
              */}
             {has('workspace') ? (
                 <>
-                    <div className="mt-2 flex items-center px-2 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                        Workspaces
-                        <span className="ml-auto flex items-center gap-0.5 normal-case tracking-normal">
-                            {asleepTool}
-                            {addTool}
-                        </span>
-                    </div>
+                    {/* A bar, not a heading (the owner, 2026-10-19: "Get rid of the workspaces label, just use a bar"). */}
+                    <div data-rail-divider="" role="separator" className="mx-2 mt-2 border-t border-[var(--border-1)]" />
                     <input
                         type="search"
                         data-rail-filter=""

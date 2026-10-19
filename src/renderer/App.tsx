@@ -7,7 +7,7 @@ import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, t
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
-import { followChat } from '../core/chat-scope.js';
+import { chatSubjectFor } from '../core/chat-scope.js';
 import { openAgentTabs as nextOpenAgentTabs } from '../core/workspace-tabs.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
@@ -647,8 +647,9 @@ function DesktopApp({ bridge }: AppProps) {
                 return;
             }
             if (action === 'toggle-chat') {
+                // The chat cannot close (2026-10-19): its key takes you TO it — the composer, ready to type.
                 e.preventDefault();
-                navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: followChat('genie', parsed, snapshot.agents, openedThreads) }));
+                document.querySelector<HTMLElement>('[data-chat-composer] [contenteditable="true"], [data-chat-composer] textarea, [data-chat-composer] [role="textbox"]')?.focus();
                 return;
             }
             if (action !== 'toggle-files') return;
@@ -697,11 +698,12 @@ function DesktopApp({ bridge }: AppProps) {
      * it stays on its agent inside a workspace and across surfaces of no workspace, and moves to an agent of the
      * workspace you arrive at when that is another one (`core/chat-scope.ts`).
      */
-    const chatSubject = parsed.chat;
-    // The chat's tabs: every conversation you open is remembered, newest first (eight), across restarts.
+    // Every conversation you open is remembered, newest first (eight), across restarts: a workspace's chat opens on the latest.
     const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
         try { const v: unknown = JSON.parse(window.localStorage.getItem(THREADS_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
     });
+    // ALWAYS a chat (the owner, 2026-10-19: "Chat cannot be closed PERIOD"): the route's, else the agent the view says.
+    const chatSubject = chatSubjectFor(parsed, snapshot.agents, openedThreads);
     useEffect(() => {
         if (chatSubject === null) return;
         setOpenedThreads((o) => {

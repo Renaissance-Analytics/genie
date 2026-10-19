@@ -162,7 +162,7 @@ export function genieKeyProblem(accelerator: string, bindings: HotkeyBindings, e
     for (const useCtrl of [true, false]) {
         const press: KeyPress = { key: chord.key, ctrlKey: chord.ctrl || (chord.primary && useCtrl), metaKey: chord.meta || (chord.primary && !useCtrl), altKey: chord.alt, shiftKey: chord.shift, typing: false };
         const fixed = globalAction(press);
-        if (fixed === 'toggle-chat') return 'Genie uses that key to open and close the chat.';
+        if (fixed === 'toggle-chat') return 'Genie uses that key to go to the chat.';
         if (fixed === 'toggle-files') return 'Genie uses that key for the file panel.';
         if (fixed === 'open-settings') return 'Genie uses that key for Settings.';
         if (agentViewAction(press) === 'take-over') return 'Genie uses that key for Take Over.';

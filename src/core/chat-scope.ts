@@ -109,3 +109,12 @@ export function chatScope(route: Route, roster: readonly ChatRosterAgent[], work
     if (!roster.some((r) => r.workspaceId === screen)) return { kind: 'blocked', reason: `${here} has no agent to message. ${agent.name} is in ${theirs}.` };
     return { kind: 'elsewhere', workspace: theirs };
 }
+
+/**
+ * THE CHAT IS ALWAYS OPEN (the owner, 2026-10-19: "Chat cannot be closed PERIOD"): its subject is the route's `chat=` when
+ * a link names one, else the agent the view says (`followChat` from Genie) — Genie off a workspace, the agent on its page,
+ * an agent of the workspace on screen.
+ */
+export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], opened: readonly string[]): string {
+    return route.chat ?? followChat('genie', route, roster, opened);
+}

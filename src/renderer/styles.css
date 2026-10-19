@@ -117,16 +117,6 @@ nav,
 }
 
 /*
- * THE DOCK GUTTER STARTS BELOW THE VIEW HEADER (§4.4). A pinned panel's width arrives as `--dock-reserve` on the
- * shell's content row; every child of a surface takes it as a right margin EXCEPT the surface's own header, which
- * keeps its width and position while the body reflows. A margin, not padding (borders would run under the panel).
- * Outside the shell (a popped-out file window) the variable is unset and the margin is 0.
- */
-[data-surface] > :not([data-view-header]) {
-    margin-right: var(--dock-reserve, 0px);
-}
-
-/*
  * THIN SCROLLBARS, everywhere (the owner, 2026-10-14: "We should be using thin scroll bars"). One rule for the whole
  * app rather than per-scroller classes, so a scroller added later is thin too. The thumb is a token, the track is
  * transparent: the bar is there to be found, not to be looked at.
