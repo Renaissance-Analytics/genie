@@ -315,14 +315,17 @@ check(
  */
 const agentRow = await cdp.evaluate(`
     (() => {
-        const row = document.querySelector('[data-agent]');
+        // A WORKSPACE agent's row: genie's own group comes first on the Dashboard (the design mockup, 2026-10-19).
+        const row = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]');
         return row ? JSON.stringify({ id: row.getAttribute('data-agent'), text: row.textContent }) : null;
     })()
 `);
 check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboard', String(agentRow));
+// 60. GENIE'S OWN GROUP, FIRST (the design mockup): `genie · default agent · not in a workspace`, above every workspace.
+check(await cdp.evaluate(`(() => { const g = document.querySelector('[data-genie-group]'); const w = document.querySelector('[data-surface="dashboard"] div[data-workspace]'); return Boolean(g && w && (g.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING) && /default agent · not in a workspace/.test(g.textContent ?? '')); })()`), '60. the Dashboard opens with genie’s own group, above the workspaces', await cdp.evaluate(`document.querySelector('[data-genie-group]')?.textContent?.slice(0, 80) ?? null`));
 
 if (typeof agentRow === 'string') {
-    await cdp.evaluate(`document.querySelector('[data-agent]').click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]').click(); true`);
 
     const opened = await waitFor(
         cdp,
@@ -829,7 +832,7 @@ if (!approvalEnabled) {
 
     await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
-    await cdp.evaluate(`document.querySelector('[data-agent]')?.click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.click(); true`);
     const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
     if (onAgent) {
         await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);
