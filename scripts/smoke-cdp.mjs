@@ -766,6 +766,13 @@ if (!approvalEnabled) {
     const onWorkspace = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the Workspace surface');
     check(onWorkspace, '35. the rail reaches the Workspace surface');
 
+    // 61. THE CHAT NEVER CLOSES — AND SHOWS ITS CONVERSATION ON EVERY PAGE (the owner, 2026-10-19, said three times). The
+    // page was reached with no `chat=` in the route: the chat still holds its subject's LOADED conversation, not an empty
+    // panel that reads as closed (the conversation used to load for the route's `chat=` only).
+    const chatHere = await waitFor(cdp, `Boolean(document.querySelector('[data-dock-frame="chat"] [data-chat][data-chat-loaded="true"]'))`, 'the chat to show its conversation');
+    const chatState = await cdp.evaluate(`(() => ({ route: location.hash || location.href, loaded: document.querySelector('[data-chat]')?.getAttribute('data-chat-loaded') ?? null }))()`);
+    check(chatHere, '61. a page reached without chat= still shows the chat with its loaded conversation', JSON.stringify(chatState));
+
     // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings";
     // and 2026-10-19: the first tab is the WORKSPACE DASHBOARD, not an agent list (q_09d1f4a0). The route opens on it —
     // the seeded agent in the header's strip, the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
