@@ -102,9 +102,11 @@ describe('the surfaces draw names', () => {
             connections: [{ id: 'conn_2', label: 'wren’s laptop', isOwner: false, workspaceId: ID, driving: false }],
             servedLink: null,
         };
-        const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={workspaces} />);
-        expect(textOf(html)).toMatch(/shared: Tynn/);
-        expect(html).toContain('>Tynn<');
+        const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={workspaces} />);
+        // The page only: the Settings sidebar has its own "Tynn" link, which must not satisfy this.
+        const page = html.slice(html.indexOf('data-settings-page='));
+        expect(textOf(page)).toMatch(/shared: Tynn/);
+        expect(page).toContain('>Tynn<');
         noIdsShown(html);
     });
 });

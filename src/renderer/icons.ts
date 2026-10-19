@@ -1,6 +1,7 @@
 import { registerIcons } from '@particle-academy/react-fancy';
 import * as lucide from '@particle-academy/react-fancy/icons';
 import { FEATURE_ICONS } from '../core/rail-view.js';
+import { NAV_GROUPS } from '../core/settings-nav.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -49,6 +50,8 @@ export const ICON_NAMES: readonly string[] = [
     'square',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
+    // the Settings sidebar (Genie 1's, core/settings-nav.ts) — named in data, so registered from it
+    ...NAV_GROUPS.flatMap((g) => g.items.map((i) => i.icon)),
     // dashboard rows
     'users', 'plus',
     // delivery kinds

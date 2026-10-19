@@ -47,8 +47,8 @@ describe('the Agent view rail', () => {
         expect(render(null)).not.toContain('data-rail-mcp');
     });
 
-    it('the door is the Settings group that lists the tools', () => {
-        expect(parseRoute('genie://settings/mcp')).toMatchObject({ surface: 'settings', group: 'workstation' });
+    it('the door is the Settings page that lists the tools', () => {
+        expect(parseRoute('genie://settings/mcp')).toMatchObject({ surface: 'settings', section: 'agent-mcp' });
     });
 });
 

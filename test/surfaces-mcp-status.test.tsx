@@ -19,7 +19,7 @@ const integrations = (mcp: NonNullable<FeatureData['integrations']>['mcp']): Non
     mcp,
 });
 const render = (mcp: NonNullable<FeatureData['integrations']>['mcp']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations: integrations(mcp) }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[]} />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations: integrations(mcp) }} onAction={() => {}} onNavigate={() => {}} section="agent-mcp" workspaces={[]} />);
 
 describe('the MCP server line', () => {
     it('verified: the URL and the revision the probe answered', () => {

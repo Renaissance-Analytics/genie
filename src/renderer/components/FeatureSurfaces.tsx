@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Icon, Input, QrCode, Skeleton, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel } from '../../core/toolchain.js';
-import type { SettingsGroup } from '../../core/route.js';
-import { SETTINGS, searchSettings, settingGroups, type SettingDef } from '../../core/settings.js';
+import { NAV_GROUPS, sectionOf, type SectionId } from '../../core/settings-nav.js';
+import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
@@ -921,22 +921,17 @@ export function InboxSurface({ data, onAction, compose }: SurfaceProps & { compo
     );
 }
 
-const GROUP_LABEL: Record<SettingsGroup, string> = { general: 'General', agents: 'Agents', workstation: 'Workstation', appearance: 'Appearance' };
 
 function SettingControl({ def, value, onAction, customPath }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined }) {
     if (value === null) return <Skeleton shape="text" width={80} />;
     if (def.type === 'boolean') {
-        return (
-            <input type="checkbox" checked={value === true} onChange={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.checked })} aria-label={def.label} />
-        );
+        return <Switch checked={value === true} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: def.key, value: checked })} aria-label={def.label} />;
     }
     if (def.type === 'enum') {
         const select = (
             // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
-            <select value={String(value)} onChange={(e) => onAction(isAlertSoundKey(def.key) && e.target.value === 'custom' ? { kind: 'settings.pickSound', key: def.key } : { kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-                {/* By name when the setting has names for its options (a sound is "Wind Down", not `winddown`). */}
-                {def.options.map((o) => <option key={o} value={o}>{def.optionLabels?.[o] ?? o}</option>)}
-            </select>
+            // By name when the setting has names for its options (a sound is "Wind Down", not `winddown`).
+            <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => onAction(isAlertSoundKey(def.key) && v === 'custom' ? { kind: 'settings.pickSound', key: def.key } : { kind: 'settings.set', key: def.key, value: v })} aria-label={def.label} />
         );
         if (!isAlertSoundKey(def.key)) return select;
         // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
@@ -960,69 +955,151 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, onNavigate, group, workspaces = [], remoteConnect, query, update }: SurfaceProps & { group: SettingsGroup | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined }) {
     const values = data.settings.values;
-    const active = group ?? 'general';
-    // SEARCH across the four groups (§6.9). Transient view state: a query is not a place, so it is not in the route.
+    const active: SectionId = section ?? 'general';
+    // SEARCH across every page (§6.9). Transient view state: a query is not a place, so it is not in the route.
     const [q, setQ] = useState(query ?? '');
-    const results = q.trim() ? searchSettings(q.trim()) : null;
+    const results = q.trim() ? searchSettings(q.trim()).filter((def) => sectionOf(def.key) !== null) : null;
+    const row = (def: SettingDef) => (
+        <li key={def.key} data-setting={def.key} className="flex items-center gap-4 py-2.5">
+            <div className="flex-1">
+                <div className="text-sm font-medium">{def.label}</div>
+                <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
+            </div>
+            <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+        </li>
+    );
+    // The settings a page draws as rows: its keys, in the registry's order. Internal (`hidden`) keys and the alert sounds
+    // have their own blocks.
+    const rows = (s: SectionId) => {
+        const defs = SETTINGS.filter((def) => sectionOf(def.key) === s && !def.hidden && !isAlertSoundKey(def.key));
+        return defs.length === 0 ? null : <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>{defs.map(row)}</ul>;
+    };
+    const label = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === active)?.label ?? 'General';
     return (
         <div data-surface="settings" className="flex h-full min-h-0 flex-col">
             <Header title="Settings" />
-            <div className="px-5 pb-2">
-                <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings across all groups" leading={<Icon name="search" size="xs" />} />
-            </div>
-            {results !== null ? (
-                results.length === 0 ? (
-                    <p className="px-5 py-3 text-sm text-[var(--fg-3)]">No setting matches “{q.trim()}”.</p>
-                ) : (
-                    <ul data-settings-results className="min-h-0 flex-1 divide-y divide-[var(--border-1)] overflow-auto" data-skeleton={values === null ? '' : undefined}>
-                        {results.map((def) => (
-                            <li key={def.key} data-setting={def.key} data-setting-group={def.group} className="flex items-center gap-4 px-5 py-3">
-                                <div className="flex-1">
-                                    <div className="flex items-center gap-2 text-sm font-medium">{def.label}<Badge variant="soft" size="sm">{GROUP_LABEL[def.group]}</Badge></div>
-                                    <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
-                                </div>
-                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
-                            </li>
-                        ))}
-                    </ul>
-                )
-            ) : (
-            // The tab IS the route's group: a click navigates there (Fancy's controlled Tabs changes only through onTabChange).
-            <Tabs activeTab={active} onTabChange={(g) => onNavigate(`genie://settings?group=${g}`)} variant="underline" className="flex min-h-0 flex-1 flex-col">
-                <Tabs.List className="px-5">
-                    {settingGroups().map((g) => <Tabs.Tab key={g} value={g}>{GROUP_LABEL[g]}</Tabs.Tab>)}
-                </Tabs.List>
-                <Tabs.Panels className="min-h-0 flex-1 overflow-auto">
-                    {settingGroups().map((g) => (
-                        <Tabs.Panel key={g} value={g}>
-                            {g === 'general' && update ? <UpdatesBlock {...update} /> : null}
-                            {g === 'general' ? <AlertSounds values={values} onAction={onAction} /> : null}
-                            {g === 'general' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
-                            <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>
-                                {/* An INTERNAL setting (`hidden`) is remembered, never drawn — the tabs honour it as search does. */}
-                                {/* The alert sounds are drawn below, under their own headings (Tynn #766 C). */}
-                                {SETTINGS.filter((s) => s.group === g && !s.hidden && !isAlertSoundKey(s.key)).map((def) => (
-                                    <li key={def.key} data-setting={def.key} className="flex items-center gap-4 px-5 py-3">
-                                        <div className="flex-1">
-                                            <div className="text-sm font-medium">{def.label}</div>
-                                            <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
-                                        </div>
-                                        <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
-                                    </li>
-                                ))}
-                            </ul>
-                            {g === 'agents' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
-                            {g === 'workstation' ? <Plugins plugins={data.plugins} onAction={onAction} /> : null}
-                            {g === 'workstation' ? <Integrations integrations={data.integrations} onAction={onAction} /> : null}
-                            {g === 'workstation' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
-                        </Tabs.Panel>
+            <div className="flex min-h-0 flex-1">
+                {/* GENIE 1'S SIDEBAR: grouped sections, one page each (core/settings-nav.ts). */}
+                <nav data-settings-sidebar="" aria-label="Settings sections" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
+                    <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />
+                    {NAV_GROUPS.map((g) => (
+                        <div key={g.label} data-settings-nav-group={g.label} className="flex flex-col gap-0.5">
+                            <div className="px-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-4)]">{g.label}</div>
+                            {g.items.map((i) => {
+                                const on = i.id === active && results === null;
+                                return (
+                                    <button key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
+                                        onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
+                                        className={`flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                        <Icon name={i.icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
+                                        <span className="truncate">{i.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     ))}
-                </Tabs.Panels>
-            </Tabs>
-            )}
+                </nav>
+                <div className="min-w-0 flex-1 overflow-auto">
+                    {results !== null ? (
+                        results.length === 0 ? (
+                            <p className="px-6 py-4 text-sm text-[var(--fg-3)]">No setting matches “{q.trim()}”.</p>
+                        ) : (
+                            <ul data-settings-results className="divide-y divide-[var(--border-1)] px-6" data-skeleton={values === null ? '' : undefined}>
+                                {results.map((def) => {
+                                    const at = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === sectionOf(def.key));
+                                    return (
+                                        <li key={def.key} data-setting={def.key} data-setting-section={at?.id} className="flex items-center gap-4 py-2.5">
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2 text-sm font-medium">{def.label}{at ? <Badge variant="soft" size="sm">{at.label}</Badge> : null}</div>
+                                                <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
+                                            </div>
+                                            <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        )
+                    ) : (
+                        <div data-settings-page={active}>
+                            <h1 className="px-6 pt-4 text-base font-semibold">{label}</h1>
+                            {active === 'general' ? (
+                                <>
+                                    {update ? <UpdatesBlock {...update} /> : null}
+                                    <SetSection title="Startup and focus" desc="What Genie does when it starts, and Do not disturb.">{rows('general')}</SetSection>
+                                </>
+                            ) : null}
+                            {active === 'notifications' ? (
+                                <>
+                                    <SetSection title="Notifications" desc="The master switch for every sound.">{rows('notifications')}</SetSection>
+                                    <AlertSounds values={values} onAction={onAction} />
+                                </>
+                            ) : null}
+                            {active === 'keyboard' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
+                            {active === 'appearance' ? <SetSection title="Appearance" desc="How Genie looks on this device.">{rows('appearance')}</SetSection> : null}
+                            {active === 'tynn' ? <SetSection title="Tynn" desc="Optional: identity, your projects, and IssueWatch. Genie is fully usable signed out." data-settings-tynn=""><TynnBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
+                            {active === 'github' ? <SetSection title="GitHub App" desc="Two steps, each confirmed here after you do it in the browser." data-settings-github=""><GithubBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
+                            {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} /></SetSection> : null}
+                            {active === 'workspace-defaults' ? <SetSection title="Defaults for workspaces" desc="What every workspace uses unless its own Settings override it.">{rows('workspace-defaults')}</SetSection> : null}
+                            {active === 'prompts' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
+                            {active === 'agent-mcp' ? (
+                                <>
+                                    <SetSection title="Genie’s MCP server" desc="What every agent session is given." data-settings-mcp=""><McpServerBlock integrations={data.integrations} /></SetSection>
+                                    <SetSection title="Agent files in workspaces" desc="Which harness configs Genie writes into every workspace when it starts and when one is added. Each workspace’s status, and a Sync now, are in that workspace’s Settings." data-workspace-files-note="">{rows('agent-mcp')}</SetSection>
+                                </>
+                            ) : null}
+                            {active === 'plugins' ? (
+                                <>
+                                    <SetSection title="Developer mode" desc="Unsigned local plugins, labelled as such.">{rows('plugins')}</SetSection>
+                                    <Plugins plugins={data.plugins} onAction={onAction} />
+                                </>
+                            ) : null}
+                            {active === 'remote' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
+                            {active === 'terminals' ? <SetSection title="Terminals" desc="Shells and builds in your workspaces.">{rows('terminals')}</SetSection> : null}
+                            {active === 'toolchain' ? (
+                                <SetSection title="Toolchain" desc="The languages, tools and agent CLIs installed on this machine.">
+                                    <div><Button type="button" size="sm" data-action="open-toolchain" onClick={() => onNavigate('genie://toolchain')}>Open Toolchain</Button></div>
+                                </SetSection>
+                            ) : null}
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
+    );
+}
+
+/** A provider as the Providers page shows it: installed (Toolchain), and an agent of it that is signed out (#971), if any. */
+export interface ProviderStatus {
+    readonly provider: string;
+    readonly name: string;
+    readonly installed: boolean | null;
+    readonly version: string | null;
+    readonly signedOut: { readonly agentId: string; readonly agentName: string } | null;
+    readonly onLogin?: ((agentId: string) => void) | undefined;
+}
+
+function ProvidersBlock({ providers, onNavigate }: { providers: readonly ProviderStatus[] | undefined; onNavigate: SurfaceProps['onNavigate'] }) {
+    if (providers === undefined) return <Skeletons rows={2} />;
+    return (
+        <ul className="divide-y divide-[var(--border-1)]">
+            {providers.map((p) => {
+                const out = p.signedOut;
+                const login = p.onLogin;
+                return (
+                    <li key={p.provider} data-provider={p.provider} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                        <span className="font-medium">{p.name}</span>
+                        {p.installed === null ? <span className="text-[var(--fg-3)]">not checked yet</span> : p.installed ? <Badge variant="soft" size="sm">{p.version ?? 'installed'}</Badge> : <span className="text-[var(--warning)]">not installed</span>}
+                        {out ? <span data-provider-signed-out={p.provider} className="text-[var(--danger)]">signed out ({out.agentName})</span> : null}
+                        <span className="ml-auto flex items-center gap-2">
+                            {out && login ? <Button type="button" size="sm" data-action={`provider-login-${p.provider}`} onClick={() => login(out.agentId)}>Log in</Button> : null}
+                            {p.installed === false ? <Button type="button" size="sm" variant="ghost" onClick={() => onNavigate('genie://toolchain')}>Install in Toolchain</Button> : null}
+                        </span>
+                    </li>
+                );
+            })}
+        </ul>
     );
 }
 
@@ -1408,15 +1485,24 @@ function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integra
     );
 }
 
-function Integrations({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
-    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+/** The Settings pages' card: a titled block, one per concern (Genie 1's SetSection). */
+function SetSection({ title, desc, children, ...rest }: { title: string; desc?: string; children: React.ReactNode } & Record<`data-${string}`, string>) {
     return (
-        <section data-integrations className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
-            <h2 className="text-sm font-semibold">Integrations</h2>
-            {integrations === null ? (
-                <Skeletons rows={3} />
-            ) : (
-                <>
+        <section {...rest} className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4">
+            <div>
+                <h2 className="text-sm font-semibold">{title}</h2>
+                {desc ? <p className="text-xs text-[var(--fg-3)]">{desc}</p> : null}
+            </div>
+            {children}
+        </section>
+    );
+}
+
+/** AGENT MCP (§6.4, §6.9): where Genie's own MCP server listens, whether the boot probe answered, the tools every agent gets. */
+function McpServerBlock({ integrations }: { integrations: FeatureData['integrations'] }) {
+    if (integrations === null) return <div data-integrations=""><Skeletons rows={3} /></div>;
+    return (
+        <div data-integrations="" className="flex flex-col gap-3">
                     {/* THE TRANSPORT, VERIFIED AT BOOT (§6.4, §6.9): where Genie's own MCP server listens and whether a real server/discover answered. */}
                     <div>
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Genie’s MCP server</h3>
@@ -1445,9 +1531,29 @@ function Integrations({ integrations, onAction }: { integrations: FeatureData['i
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Workspace agent files</h3>
                         <p className="text-sm text-[var(--fg-3)]">Genie writes its MCP endpoint and its agent instructions into every workspace when it starts and when a workspace is added; the switches above choose which harness configs it writes. Each workspace’s status, and a Sync now for it, are in each workspace’s own Settings.</p>
                     </div>
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Tynn</h3>
-                        <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
+        </div>
+    );
+}
+
+/**
+ * TYNN — the sign-in card (Genie 1's), the rows Tynn gates, and the host behind a Change (only a self-hosted Tynn
+ * changes it; a bare text row on General was the wrong place for it).
+ */
+function TynnBlock({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
+    const [editing, setEditing] = useState(false);
+    if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
+    return (
+        <div data-integrations="" className="flex flex-col gap-2">
+            <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
+            {editing ? (
+                <form data-form="tynn-host" className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const host = String(new FormData(e.currentTarget).get('host') ?? '').trim(); if (host) onAction({ kind: 'settings.set', key: 'tynn_host', value: host }); setEditing(false); }}>
+                    <Input name="host" type="url" defaultValue={integrations.tynn.host} aria-label="Tynn host" />
+                    <Button type="submit" size="sm">Save</Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+                </form>
+            ) : (
+                <div><Button type="button" size="xs" variant="ghost" data-action="tynn-host-change" onClick={() => setEditing(true)}>Change Tynn host</Button></div>
+            )}
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
                                 <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
@@ -1456,8 +1562,16 @@ function Integrations({ integrations, onAction }: { integrations: FeatureData['i
                                 </li>
                             ))}
                         </ul>
-                    </div>
-                    <div>
+        </div>
+    );
+}
+
+/** GITHUB — the App's two steps, each confirmed after doing it in the browser. The raw flags are this card's data, never rows. */
+function GithubBlock({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
+    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
+    return (
+        <div data-integrations="">
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">GitHub App — two steps</h3>
                         <p className="text-sm text-[var(--fg-3)]">Open <span className="font-mono">{GITHUB_APP_URL}</span>, do each step there, then confirm it here.</p>
                         <ol className="mt-1 flex flex-col gap-1 text-sm">
@@ -1475,10 +1589,7 @@ function Integrations({ integrations, onAction }: { integrations: FeatureData['i
                             })}
                         </ol>
                         {integrations.github.signal ? <p className="mt-1 text-xs text-[var(--warning)]">{integrations.github.signal.label}</p> : null}
-                    </div>
-                </>
-            )}
-        </section>
+        </div>
     );
 }
 

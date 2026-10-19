@@ -21,7 +21,7 @@ const plugins: NonNullable<FeatureData['plugins']> = {
     ],
 };
 const render = (p: FeatureData['plugins']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, plugins: p }} onAction={() => {}} onNavigate={() => {}} group="workstation" />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, plugins: p }} onAction={() => {}} onNavigate={() => {}} section="plugins" />);
 
 describe('Plugins panel', () => {
     it('lists every entry with state, label and reason; nothing refused or invalid vanishes', () => {

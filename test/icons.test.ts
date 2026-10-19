@@ -116,3 +116,15 @@ describe('the icons the ledger chooses at RUNTIME', () => {
         expect(icons.filter((name) => resolveIcon(name) === null)).toEqual([]);
     });
 });
+
+describe('icons named in DATA, not JSX', () => {
+    // The Settings sidebar's icons come from core/settings-nav.ts, which no JSX literal scan sees (2026-10-19: ten of
+    // thirteen were unregistered and would have drawn as empty spans on a green suite).
+    it('every Settings sidebar icon is registered and resolves', async () => {
+        const { NAV_GROUPS } = await import('../src/core/settings-nav.js');
+        registerAppIcons();
+        const names = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.icon));
+        expect(names.filter((n) => !ICON_NAMES.includes(n))).toEqual([]);
+        expect(names.filter((n) => !resolveIcon(n))).toEqual([]);
+    });
+});

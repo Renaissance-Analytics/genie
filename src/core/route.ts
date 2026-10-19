@@ -1,5 +1,6 @@
 import { formatRange, parseRange, type TimeRange } from './lanes.js';
 import { followChat, type ChatRosterAgent } from './chat-scope.js';
+import { sectionFromRoute, type SectionId } from './settings-nav.js';
 /**
  * ROUTES — the application's state, written down.
  *
@@ -56,8 +57,6 @@ function workspaceViewOf(raw: string | null): WorkspaceView {
     if (raw !== null && DESIGNED_TAB.test(raw)) return raw as WorkspaceView;
     return WORKSPACE_VIEWS.includes(raw as WorkspaceView) ? (raw as WorkspaceView) : 'home';
 }
-/** The settings surface's four groups (`core/settings.ts` owns the registry; this is the URL's view of it). */
-export type SettingsGroup = 'general' | 'agents' | 'workstation' | 'appearance';
 /** The Stream's two layouts (the board): the ledger, or one card per turn. */
 export type StreamLayout = 'ledger' | 'turns';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
@@ -97,17 +96,15 @@ export type Route =
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
     | ({ surface: 'hosting'; tab?: HostingTab } & Common)
-    | ({ surface: 'settings'; group: SettingsGroup | null } & Common)
+    /** Genie 1's sidebar (core/settings-nav.ts): the page shown; `null` = none asked for (General). */
+    | ({ surface: 'settings'; section: SectionId | null } & Common)
     /** The Genie browser; the page it shows rides the URL so back and deep links work. */
     | ({ surface: 'browser'; url: string | null } & Common);
 
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
-const SETTINGS_GROUPS: readonly SettingsGroup[] = ['general', 'agents', 'workstation', 'appearance'];
 const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'toolchain', 'inbox'];
-/** The sub-routes lines and signals point at (`genie://settings/github`) → the group that holds them. */
-const SETTINGS_ALIASES: Readonly<Record<string, SettingsGroup>> = { github: 'workstation', tynn: 'general', agents: 'agents', updates: 'general', mcp: 'workstation' };
 
 function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };
@@ -207,9 +204,9 @@ export function parseRoute(input: string): Route {
             return dashboard(params.get('group') === 'status' ? 'status' : 'workspace', common);
 
         case 'settings': {
-            const asked = tail ? SETTINGS_ALIASES[tail] ?? null : params.get('group');
-            const group = SETTINGS_GROUPS.includes(asked as SettingsGroup) ? (asked as SettingsGroup) : null;
-            return { surface: 'settings', group, ...common };
+            // `genie://settings/<section>`; an older `?group=` link lands where its settings went.
+            const asked = tail || params.get('group');
+            return { surface: 'settings', section: asked ? sectionFromRoute(asked) : null, ...common };
         }
 
         case 'browser':
@@ -231,7 +228,6 @@ export function formatRoute(route: Route): string {
 
     switch (route.surface) {
         case 'settings':
-            if (route.group !== null) params.set('group', route.group);
             break;
         case 'browser':
             if (route.url !== null) params.set('url', route.url);
@@ -275,6 +271,7 @@ export function formatRoute(route: Route): string {
         : route.surface === 'workspace' ? `workspace/${route.workspaceId}`
         : route.surface === 'takeover' ? `takeover/${route.terminalId}`
         : route.surface === 'files' ? `files/${route.workspaceId}`
+        : route.surface === 'settings' && route.section !== null ? `settings/${route.section}`
         : route.surface;
 
     // No trailing `?` when there is nothing to say. Small, but it is the difference between

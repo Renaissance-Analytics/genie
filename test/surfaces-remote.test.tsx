@@ -23,7 +23,7 @@ const remote: NonNullable<FeatureData['remote']> = {
     servedLink: null,
 };
 const render = (r: FeatureData['remote']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
 
 describe('Remote access', () => {
     it('null draws a skeleton inside the section; nothing is claimed', () => {

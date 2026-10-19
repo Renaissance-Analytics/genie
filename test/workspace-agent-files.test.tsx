@@ -123,7 +123,7 @@ describe('Workstation settings', () => {
             { workspacePath: '/w/fancy', at: at(11, 54), source: 'start', changed: ['CLAUDE.md'], failed: [] },
         ],
     };
-    const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[{ id: 'moic', path: '/w/moic' }, { id: 'fancy', path: '/w/fancy' }]} />);
+    const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: null, integrations }} onAction={() => {}} onNavigate={() => {}} section="agent-mcp" workspaces={[{ id: 'moic', path: '/w/moic' }, { id: 'fancy', path: '/w/fancy' }]} />);
 
     it('has no workspace picker, no Sync now and no per-workspace list — it says where each workspace’s status is', () => {
         expect(html).toContain('data-integrations'); // positive control: the section rendered

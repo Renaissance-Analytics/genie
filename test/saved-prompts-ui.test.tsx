@@ -17,7 +17,7 @@ const library: SavedPrompt[] = [
 
 const render = (raw: string | undefined) =>
     renderToStaticMarkup(
-        <SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: raw === undefined ? {} : { saved_prompts: raw } } }} onAction={() => {}} onNavigate={() => {}} group="agents" />,
+        <SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: raw === undefined ? {} : { saved_prompts: raw } } }} onAction={() => {}} onNavigate={() => {}} section="prompts" />,
     );
 
 describe('the prompts in Settings → Agents', () => {

@@ -9,7 +9,7 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
  * reads as words — "Wind Down", not `winddown` — with the person's choice selected, and None last.
  */
 const general = (values: Record<string, boolean | string>) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} group="general" />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} section="notifications" />);
 
 describe('a sound per alert', () => {
     it('each alert row offers the sounds by name — the Default chime first, Custom file…, None last; COUNTED: twenty-six rows of eight choices', () => {

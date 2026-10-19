@@ -22,7 +22,7 @@ const remote: NonNullable<FeatureData['remote']> = {
     servedLink: null,
 };
 const render = (r: FeatureData['remote']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} group="workstation" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote: r }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
 
 describe('pairing QR', () => {
     it('with a PIN the panel draws an SVG QR carrying the PAGE a phone opens (§6.8) and the PIN, labelled for the destination, value beside it as text', () => {

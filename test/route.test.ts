@@ -108,15 +108,17 @@ describe('routes are the application’s state, so they parse exactly', () => {
 });
 
 describe('the feature surfaces — every v1 feature has a place in the URL', () => {
-    it('parses and round-trips knowledge, flows, hosting, toolchain, inbox, settings (with a group) and browser (with a url)', () => {
+    it('parses and round-trips knowledge, flows, hosting, toolchain, inbox, settings (with a section) and browser (with a url)', () => {
         const cases: Array<[string, Record<string, unknown>]> = [
             ['genie://knowledge', { surface: 'knowledge' }],
             ['genie://flows', { surface: 'flows' }],
             ['genie://hosting', { surface: 'hosting' }],
             ['genie://toolchain', { surface: 'toolchain' }],
             ['genie://inbox', { surface: 'inbox' }],
-            ['genie://settings', { surface: 'settings', group: null }],
-            ['genie://settings?group=agents', { surface: 'settings', group: 'agents' }],
+            ['genie://settings', { surface: 'settings', section: null }],
+            // GENIE 1'S SIDEBAR (core/settings-nav.ts): one page per section, the section in the path.
+            ['genie://settings/remote', { surface: 'settings', section: 'remote' }],
+            ['genie://settings/workspace-defaults', { surface: 'settings', section: 'workspace-defaults' }],
             ['genie://browser', { surface: 'browser', url: null }],
             ['genie://browser?url=http%3A%2F%2Ftynn.gen%2F', { surface: 'browser', url: 'http://tynn.gen/' }],
         ];
@@ -127,8 +129,8 @@ describe('the feature surfaces — every v1 feature has a place in the URL', () 
         }
     });
 
-    it('a settings group the registry does not have is dropped to null, not kept as a mystery tab', () => {
-        expect(parseRoute('genie://settings?group=nope')).toMatchObject({ surface: 'settings', group: null });
+    it('a section Settings does not have lands on General, not on a mystery page', () => {
+        expect(parseRoute('genie://settings/nope')).toMatchObject({ surface: 'settings', section: 'general' });
     });
 
     it('a feature surface carries the chat flyout and its pin like any other', () => {
@@ -137,9 +139,11 @@ describe('the feature surfaces — every v1 feature has a place in the URL', () 
         expect(formatRoute(route)).toBe('genie://flows?chat=atlas&pin=right');
     });
 
-    it('the settings sub-routes the lines and signals point at resolve to the settings surface with that group', () => {
-        expect(parseRoute('genie://settings/github')).toMatchObject({ surface: 'settings', group: 'workstation' });
-        expect(parseRoute('genie://settings/tynn')).toMatchObject({ surface: 'settings', group: 'general' });
-        expect(parseRoute('genie://settings/agents')).toMatchObject({ surface: 'settings', group: 'agents' });
+    it('the links lines, signals and older builds point at land on the page their settings moved to', () => {
+        expect(parseRoute('genie://settings/github')).toMatchObject({ surface: 'settings', section: 'github' });
+        expect(parseRoute('genie://settings/tynn')).toMatchObject({ surface: 'settings', section: 'tynn' });
+        expect(parseRoute('genie://settings/agents')).toMatchObject({ surface: 'settings', section: 'workspace-defaults' });
+        expect(parseRoute('genie://settings?group=workstation')).toMatchObject({ surface: 'settings', section: 'agent-mcp' });
+        expect(parseRoute('genie://settings?group=general')).toMatchObject({ surface: 'settings', section: 'general' });
     });
 });

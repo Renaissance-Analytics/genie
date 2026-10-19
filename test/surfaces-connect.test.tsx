@@ -12,7 +12,7 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
 
 const remote = { host: 'alphar', url: null, unavailable: 'not started', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null };
 const render = (connect: Parameters<typeof SettingsSurface>[0]['remoteConnect']) =>
-    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} group="workstation" remoteConnect={connect} />);
+    renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values: {} }, remote }} onAction={() => {}} onNavigate={() => {}} section="remote" remoteConnect={connect} />);
 
 describe('Drive another machine', () => {
     it('is absent without the prop; present with host, PIN and label fields and a Connect', () => {

@@ -700,9 +700,13 @@ if (!approvalEnabled) {
  * provider, and the send itself is the chat's own path (unit-tested in test/prompt-library.test.ts for where it goes).
  */
 {
-    await cdp.evaluate(`window.location.hash = '#genie://settings?group=agents'; true`);
-    const onSettings = await waitFor(cdp, `Boolean(document.querySelector('[data-saved-prompts] [data-action="prompt-add"]'))`, 'Settings → Agents to show Saved prompts');
-    check(onSettings, '56. Settings → Agents offers Saved prompts, with Add');
+    // GENIE 1'S SIDEBAR (2026-10-19): open Settings, then CLICK the sidebar's Saved prompts — the click navigating is
+    // the thing proven here (the unit tests have no DOM to click in).
+    await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
+    const sidebar = await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="prompts"]'))`, 'the Settings sidebar');
+    if (sidebar) await cdp.evaluate(`document.querySelector('[data-settings-nav="prompts"]').click(); true`);
+    const onSettings = sidebar && await waitFor(cdp, `Boolean(document.querySelector('[data-settings-page="prompts"] [data-saved-prompts] [data-action="prompt-add"]'))`, 'the sidebar to open Saved prompts');
+    check(onSettings, '56. Settings → the sidebar’s Saved prompts opens its page, with Add', await cdp.evaluate(`window.location.hash`));
     /*
      * THE PROMPT THIS RUN MAKES, named uniquely and found by its row (beta.30's Windows VM check, 2026-10-17): the VM runs
      * this smoke twice on ONE profile (from dist/, then the installed app), so the second run started with the first's
