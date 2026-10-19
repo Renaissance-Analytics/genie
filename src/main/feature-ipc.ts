@@ -41,6 +41,12 @@ import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, Tool
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** Tailscale on this machine (main/tailscale-cli.ts, Tynn #821): its cached status, up, install. */
+    readonly tailscale?: {
+        status(): import('./tailscale-cli.js').TailscaleStatus | null;
+        up(): Promise<import('./tailscale-cli.js').TailscaleUpResult>;
+        install(): Promise<{ started: boolean; url?: string; message?: string }>;
+    };
     /** The listener following its switch (main/remote-access.ts, Tynn #820); absent = no host side (doctor mode). */
     readonly remoteAccess?: { apply(): Promise<void>; restart(): Promise<void> };
     /** Windows: add the firewall rule (main/remote-firewall.ts); absent elsewhere. */
@@ -138,6 +144,8 @@ export interface FeatureState {
     servedLink?: { id: string; url: string } | null;
     /** What the last Allow through the firewall did (Tynn #820), in words. */
     firewallOutcome?: string | null;
+    /** What the last Tailscale Connect or Install did (Tynn #821), in words. */
+    tailscaleOutcome?: string | null;
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
@@ -303,6 +311,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             enabled: services.settings.snapshot().remote_access === true,
             firewall: ports.allowFirewall !== undefined,
             firewallOutcome: state.firewallOutcome ?? null,
+            tailscale: ports.tailscale ? ports.tailscale.status() : null,
+            tailscaleOutcome: state.tailscaleOutcome ?? null,
         },
     };
 }
@@ -798,6 +808,18 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'remote.restart':
             await ports.remoteAccess?.restart();
             break;
+        case 'tailscale.up': {
+            if (!ports.tailscale) throw new Error('Tailscale is not available here');
+            const r = await ports.tailscale.up();
+            next.tailscaleOutcome = r.ok ? 'Connected to your tailnet.' : r.authUrl ? 'Tailscale needs you to sign in: the sign-in page opened in your browser.' : (r.message ?? 'Tailscale could not connect.');
+            break;
+        }
+        case 'tailscale.install': {
+            if (!ports.tailscale) throw new Error('Tailscale is not available here');
+            const r = await ports.tailscale.install();
+            next.tailscaleOutcome = r.started ? 'Tailscale’s installer is open: finish it, then Connect.' : r.url ? 'Tailscale’s download page opened in your browser.' : (r.message ?? 'Tailscale could not be installed from here.');
+            break;
+        }
         case 'remote.allowFirewall': {
             if (!ports.allowFirewall) throw new Error('the firewall rule is only needed on Windows');
             const r = await ports.allowFirewall();

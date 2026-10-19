@@ -1,3 +1,4 @@
+import type { TailscaleStatus } from '../main/tailscale-cli.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
@@ -117,6 +118,10 @@ export interface RemoteSection {
     readonly firewall: boolean;
     /** What the last Allow through the firewall did, in words; absent = not tried. */
     readonly firewallOutcome?: string | null | undefined;
+    /** Where Tailscale stands on this machine (main/tailscale-cli.ts, Tynn #821); absent/`null` = not read yet. */
+    readonly tailscale?: TailscaleStatus | null | undefined;
+    /** What the last Connect or Install did, in words; absent = not tried. */
+    readonly tailscaleOutcome?: string | null | undefined;
 }
 
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
@@ -330,6 +335,10 @@ export type FeatureAction =
     | { kind: 'remote.restart' }
     /** Windows: add the tailnet-scoped inbound rule for the port, one UAC prompt (Genie 1's allowFirewall). */
     | { kind: 'remote.allowFirewall' }
+    /** Bring this machine onto the tailnet (`tailscale up`); a sign-in link opens in the browser (Genie 1's tailscale.up). */
+    | { kind: 'tailscale.up' }
+    /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
+    | { kind: 'tailscale.install' }
     /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
     | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
     | { kind: 'remote.revokeShare'; shareId: string }

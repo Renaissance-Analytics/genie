@@ -1658,6 +1658,28 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                         {remote.enabled && remote.firewall ? <button type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</button> : null}
                         {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
                     </div>
+                    {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
+                        where Tailscale stands, and the one action that moves it on. */}
+                    {remote.tailscale ? (
+                        <div data-tailscale={remote.tailscale.state} className="flex flex-wrap items-center gap-3 text-sm">
+                            <span className="font-medium">Tailscale</span>
+                            {remote.tailscale.state === 'running' ? (
+                                <>
+                                    <span>Connected as <span className="font-mono">{remote.tailscale.self?.dnsName ?? remote.tailscale.self?.hostname ?? remote.host}</span></span>
+                                    <span className="text-xs text-[var(--fg-3)]">{remote.tailscale.peers.length} {remote.tailscale.peers.length === 1 ? 'device' : 'devices'} on your tailnet</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="text-[var(--fg-2)]">{remote.tailscale.remedy?.message ?? (remote.tailscale.state === 'needs-login' ? 'This machine is not on your tailnet yet.' : 'Tailscale is not ready.')}</span>
+                                    {remote.tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{remote.tailscale.remedy.command}</code> : null}
+                                    {remote.tailscale.state === 'absent' ? <button type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</button> : null}
+                                    {remote.tailscale.state === 'needs-login' ? <button type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</button> : null}
+                                    {remote.tailscale.state === 'needs-login' && remote.tailscale.authUrl ? <a data-action="tailscale-signin" href={remote.tailscale.authUrl} target="_blank" rel="noreferrer" className={button}>Sign in</a> : null}
+                                </>
+                            )}
+                            {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}
+                        </div>
+                    ) : null}
                     {!remote.enabled ? null : remote.url === null ? (
                         <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host}, so devices cannot connect yet: {remote.unavailable ?? 'no reason reported'}. The in-app surfaces are unaffected.</p>
                     ) : (
