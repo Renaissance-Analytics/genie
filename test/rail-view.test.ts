@@ -19,6 +19,9 @@ function row(over: Partial<AgentRow> = {}): AgentRow {
     };
 }
 
+// GENIE 1'S ROW (core/rail-indicators.ts): with no processes or sites, both indicators are there and greyed.
+const QUIET = { processes: 'none', processesTitle: 'No background processes — click to open', sites: null, sitesTitle: 'No hosted sites yet — click to open the Site Manager' } as const;
+
 const ws = (id: string, over: Partial<RailWorkspace> = {}): RailWorkspace => ({
     id, path: `C:/_Projects/${id}`, agentsKnown: true, ...over,
 });
@@ -32,8 +35,9 @@ describe('the workspace rail', () => {
         ]);
 
         expect(items).toEqual([
-            { id: 'tynn', path: 'C:/_Projects/tynn', count: 2, alert: true },
-            { id: 'fancy', path: 'C:/_Projects/fancy', count: 1, alert: false },
+            // `working`: the fixture's agents are working by default — tynn's waiting one is not.
+            { id: 'tynn', path: 'C:/_Projects/tynn', count: 2, alert: true, working: 1, ...QUIET },
+            { id: 'fancy', path: 'C:/_Projects/fancy', count: 1, alert: false, working: 1, ...QUIET },
         ]);
     });
 
@@ -55,7 +59,7 @@ describe('the workspace rail', () => {
 
     it('reports a MEASURED zero for a workspace Genie has looked at and found empty', () => {
         const [item] = railWorkspaces([ws('empty')], []);
-        expect(item).toEqual({ id: 'empty', path: 'C:/_Projects/empty', count: 0, alert: false });
+        expect(item).toEqual({ id: 'empty', path: 'C:/_Projects/empty', count: 0, alert: false, working: 0, ...QUIET });
     });
 
     it('reports NOTHING \u2014 not zero \u2014 for a workspace whose agents have not been read yet', () => {
@@ -63,7 +67,7 @@ describe('the workspace rail', () => {
         // different claims, and a `0` in the rail on launch is the second one wearing the
         // first one's clothes.
         const [item] = railWorkspaces([ws('cold', { agentsKnown: false })], []);
-        expect(item).toEqual({ id: 'cold', path: 'C:/_Projects/cold', count: null, alert: null });
+        expect(item).toEqual({ id: 'cold', path: 'C:/_Projects/cold', count: null, alert: null, working: null, ...QUIET });
     });
 
     it('never emits a zero count OR a false alert while knowledge is missing, across a mixed rail', () => {

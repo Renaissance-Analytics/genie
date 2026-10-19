@@ -20,6 +20,7 @@
  */
 
 import type { AgentRow } from './dashboard-view.js';
+import { processTitle, processTone, siteTitle, siteTone, workingAgents, type ProcessTone, type SiteTone } from './rail-indicators.js';
 
 /** A workspace as the rail receives it. */
 export interface RailWorkspace {
@@ -56,6 +57,12 @@ export interface RailItem {
     governedBy?: string;
     /** Hibernated. The rail hides these unless the person asks to see them. */
     asleep?: boolean;
+    /** GENIE 1'S ROW (core/rail-indicators.ts): agents mid-turn (`null` = not read yet), and the process / site tones. */
+    working?: number | null;
+    processes?: ProcessTone;
+    processesTitle?: string;
+    sites?: SiteTone | null;
+    sitesTitle?: string;
 }
 
 /**
@@ -90,9 +97,16 @@ function governorMap(workspaces: readonly RailWorkspace[]): (id: string) => stri
     return (id) => map.get(id) ?? null;
 }
 
+/** The workspace's runtime the row's indicators read: its background processes and its sites, each with its state. */
+export interface RailRuntime {
+    readonly processes: ReadonlyArray<{ readonly workspaceId: string; readonly state: string }>;
+    readonly sites: ReadonlyArray<{ readonly workspaceId: string; readonly state: string }>;
+}
+
 export function railWorkspaces(
     workspaces: readonly RailWorkspace[],
     rows: readonly AgentRow[],
+    runtime: RailRuntime = { processes: [], sites: [] },
 ): readonly RailItem[] {
     const governorOf = governorMap(workspaces);
     return nestGoverned(workspaces, governorOf).map((w) => {
@@ -100,7 +114,13 @@ export function railWorkspaces(
         const governed = governor !== null ? { governedBy: governor } : {};
         const named = w.name ? { name: w.name } : {};
         const asleep = w.asleep === true ? { asleep: true } : {};
-        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, ...named, ...governed, ...asleep };
+        const indicators = {
+            processes: processTone(runtime.processes, w.id),
+            processesTitle: processTitle(runtime.processes, w.id),
+            sites: siteTone(runtime.sites, w.id),
+            sitesTitle: siteTitle(runtime.sites, w.id),
+        };
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, working: null, ...indicators, ...named, ...governed, ...asleep };
 
         const mine = rows.filter((r) => r.workspaceId === w.id);
         return {
@@ -109,6 +129,8 @@ export function railWorkspaces(
             ...named,
             count: mine.length,
             alert: mine.some((r) => r.state === 'waiting' || r.state === 'broken'),
+            working: workingAgents(mine, w.id),
+            ...indicators,
             ...governed,
             ...asleep,
         };
