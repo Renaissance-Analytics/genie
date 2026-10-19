@@ -8,7 +8,8 @@ import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import { FidelityDot } from './Dashboard.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { Dropdown, Icon } from '@particle-academy/react-fancy';
+import { Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
+import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, IW_EVENT_KINDS, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
 import { agentShells } from '../../core/agent-shells.js';
@@ -911,6 +912,15 @@ export function AgentView({
                                     </section>
                                 ) : null}
                                 {ops ? (
+                                    // PROVIDER (the owner, 2026-10-19: Agent settings are "provider, model, mode, autonomy, IssueWatch,
+                                    // permissions"): the CLI it runs on; changing it is Switch driver — identity, inbox and history stay.
+                                    <section data-rail="provider" data-agent-provider={agent.provider}>
+                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h2>
+                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) ops.onSwitchDriver(to); }} aria-label={`${agent.name}'s provider`} />
+                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Its name, inbox and history stay; its next turn runs on the new provider.</p>
+                                    </section>
+                                ) : null}
+                                {ops ? (
                                     <section data-rail="mode" data-mode={ops.mode}>
                                         <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Mode</h2>
                                         <div className="flex items-center gap-1 text-[11px]">
@@ -980,10 +990,10 @@ export function AgentView({
                                         </label>
                                         {ops.onSetAutoApprove ? (
                                             <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
-                                                <input type="checkbox" data-auto-approve={ops.autoApprove ? 'on' : 'off'} checked={ops.autoApprove === true} onChange={(e) => ops.onSetAutoApprove?.(e.target.checked)} className="mt-0.5" />
+                                                <span data-auto-approve={ops.autoApprove ? 'on' : 'off'} className="mt-0.5"><Switch checked={ops.autoApprove === true} onCheckedChange={(checked) => ops.onSetAutoApprove?.(checked)} aria-label={`${agent.name} is autonomous`} /></span>
                                                 <span>
                                                     Autonomous — {agent.name} sets up services, processes, sites and terminals without asking you.
-                                                    <span className="mt-0.5 block text-[var(--fg-4)]">Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Applies to its next action.</span>
+                                                    <span className="mt-0.5 block text-[var(--fg-4)]">Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.</span>
                                                 </span>
                                             </label>
                                         ) : null}

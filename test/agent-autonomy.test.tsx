@@ -76,8 +76,9 @@ describe('the Settings tab shows it', () => {
     const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
 
     it('on and off, said plainly; no ops (a window that cannot set it) → no switch (CONTROL)', () => {
-        expect(render(opsFor(true))).toMatch(/data-auto-approve="on"[^>]*checked/);
-        expect(render(opsFor(false))).toContain('data-auto-approve="off"');
+        // Fancy's Switch (2026-10-19): its state is the switch's own aria-checked, inside the marked span.
+        expect(render(opsFor(true))).toMatch(/data-auto-approve="on"[^>]*>(?:(?!<\/span>)[\s\S])*?role="switch" aria-checked="true"/);
+        expect(render(opsFor(false))).toMatch(/data-auto-approve="off"[^>]*>(?:(?!<\/span>)[\s\S])*?role="switch" aria-checked="false"/);
         expect(render(opsFor(false))).toContain('without asking');
         expect(render(undefined)).not.toContain('data-auto-approve');
     });
