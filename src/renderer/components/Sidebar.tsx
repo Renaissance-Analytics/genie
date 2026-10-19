@@ -1,5 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
-import { Fragment, useState } from 'react';
+import { useState } from 'react';
 import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
 
@@ -56,8 +56,6 @@ export interface SidebarProps {
      * highlighted row (Tynn #805), so you know where you are. Absent = only the workspace's own route highlights it.
      */
     currentWorkspaceId?: string | null | undefined;
-    /** Every agent (Tynn #805, part 3): the ones in the workspace you are in are listed under its row. */
-    agents?: ReadonlyArray<{ id: string; name: string; workspaceId: string; state: string }> | undefined;
     /** Where the collapsed state is remembered; `undefined` = the window's localStorage, `null` = nowhere (tests pass their own). */
     railStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
 }
@@ -65,8 +63,6 @@ export interface SidebarProps {
 const ROW =
     'flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-[13px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 const ROW_ACTIVE = 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]';
-/** An agent's state dot in the rail, the colours the workspace strip uses (WorkspaceTabs). */
-const AGENT_DOT: Record<string, string> = { working: 'bg-[var(--accent)]', waiting: 'bg-[var(--warning)]', broken: 'bg-[var(--danger)]' };
 
 function NavRow({
     route,
@@ -124,7 +120,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, agents = [] }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -304,13 +300,10 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             {(has('workspace') ? shown : []).map((w) => {
                 const route_ = `genie://workspace/${w.id}`;
                 const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
-                // The agents of the workspace you are in, under its row (Tynn #805): one click to each, the current one marked.
-                const inside = w.id === currentWorkspaceId ? agents.filter((a) => a.workspaceId === w.id) : [];
-                const currentAgent = route.startsWith('genie://agent/') ? route.slice('genie://agent/'.length).split(/[?#]/)[0] : null;
 
                 return (
-                    <Fragment key={w.id}>
                     <button
+                        key={w.id}
                         type="button"
                         data-nav={route_}
                         data-workspace={w.id}
@@ -344,25 +337,6 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             ) : null}
                         </span>
                     </button>
-                    {inside.map((a) => {
-                        const on = a.id === currentAgent;
-                        return (
-                            <button
-                                key={a.id}
-                                type="button"
-                                data-rail-agent={a.id}
-                                data-nav={`genie://agent/${a.id}`}
-                                data-active={on ? 'true' : 'false'}
-                                onClick={() => onNavigate(`genie://agent/${a.id}`)}
-                                title={`${a.name} · ${a.state}`}
-                                className={`${ROW} pl-7 text-[12px] ${on ? ROW_ACTIVE : ''}`}
-                            >
-                                <span data-agent-state={a.state} className={`size-1.5 shrink-0 rounded-full ${AGENT_DOT[a.state] ?? 'bg-[var(--fg-4)]'}`} />
-                                <span className="truncate">{a.name}</span>
-                            </button>
-                        );
-                    })}
-                    </Fragment>
                 );
             })}
         </nav>

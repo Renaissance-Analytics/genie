@@ -5,9 +5,9 @@ import { routeWorkspace } from '../src/core/route.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
 
 /**
- * WORKSPACE ↔ AGENT NAVIGATION, PART 3 (Tynn #805; the owner chose agents inside their workspace, as in Genie 1): the
- * sidebar lists the agents of the workspace you are in, under its row — each with its state, one click to open it,
- * the one you are on marked. Only the workspace you are in opens out; the others stay one row each.
+ * THE SIDEBAR LISTS WORKSPACES, NOT AGENTS (the owner, 2026-10-19: "why is the workspace sidebar opening an agent tree?
+ * I never asked for this"). The agent list under the workspace you are in came from a nav proposal's extras, never from
+ * the owner; it is gone. On an agent's page the sidebar still says where you are: that agent's workspace stays marked.
  */
 const agents = [
     { id: 'a1', name: 'atlas', workspaceId: 'tynn', state: 'working' },
@@ -19,37 +19,23 @@ const memory = (collapsed: boolean): Pick<Storage, 'getItem' | 'setItem'> => {
     const data = new Map([['genie.rail.collapsed', collapsed ? '1' : '0']]);
     return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => { data.set(k, v); } };
 };
+// Handed the whole roster, as Shell once passed it: the sidebar must still draw no agent.
 const sidebar = (route: string, collapsed = false) => renderToStaticMarkup(
-    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} agents={agents} />,
+    <Sidebar route={route} deckCount={0} workspaces={[ws('tynn'), ws('fancy')]} available={['deck', 'dashboard', 'genie', 'workspace', 'settings']} onNavigate={() => {}} railStorage={memory(collapsed)} currentWorkspaceId={routeWorkspace(route, agents)} {...({ agents } as object)} />,
 );
-const agentRows = (html: string) => [...html.matchAll(/<button[^>]*data-rail-agent="([a-z0-9]+)"[^>]*>/g)].map((m) => ({ id: m[1]!, active: /data-active="true"/.test(m[0]), nav: m[0].match(/data-nav="([^"]+)"/)?.[1] }));
+const workspaceRow = (html: string, id: string) => html.match(new RegExp(`<button[^>]*data-workspace="${id}"[^>]*>`))?.[0] ?? '';
 
-describe('the sidebar lists the agents of the workspace you are in', () => {
-    it('on an agent’s page: its workspace’s agents, under it, each opening its page; the one you are on marked; COUNTED', () => {
-        const rows = agentRows(sidebar('genie://agent/a1?tab=stream'));
-        expect(rows).toEqual([
-            { id: 'a1', active: true, nav: 'genie://agent/a1' },
-            { id: 'a2', active: false, nav: 'genie://agent/a2' },
-        ]);
+describe('the sidebar lists workspaces, not agents', () => {
+    it('no agent rows anywhere — on an agent’s page, on its workspace, on the Dashboard, collapsed (COUNTED: 0)', () => {
+        for (const html of [sidebar('genie://agent/a1?tab=stream'), sidebar('genie://workspace/tynn'), sidebar('genie://dashboard'), sidebar('genie://agent/a1', true)]) {
+            expect(html.match(/data-rail-agent=/g) ?? []).toHaveLength(0);
+            for (const a of agents) expect(html).not.toContain(`genie://agent/${a.id}`);
+        }
     });
 
-    it('they sit right under their workspace’s row, before the next workspace; each says its state', () => {
-        const html = sidebar('genie://workspace/tynn');
-        const tynn = html.indexOf('data-workspace="tynn"');
-        const fancy = html.indexOf('data-workspace="fancy"');
-        expect(html.indexOf('data-rail-agent="a1"')).toBeGreaterThan(tynn);
-        expect(html.indexOf('data-rail-agent="a2"')).toBeLessThan(fancy);
-        expect(html).toMatch(/data-rail-agent="a1"[\s\S]*?data-agent-state="working"/);
-        // On the workspace's own page none of its agents is the current one.
-        expect(agentRows(html).filter((r) => r.active)).toEqual([]);
-    });
-
-    it('only the workspace you are in opens out; CONTROL: on the Dashboard, no agents are listed', () => {
-        expect(agentRows(sidebar('genie://agent/a3')).map((r) => r.id)).toEqual(['a3']);
-        expect(agentRows(sidebar('genie://dashboard'))).toEqual([]);
-    });
-
-    it('the collapsed icon rail stays icons only: no agent rows', () => {
-        expect(agentRows(sidebar('genie://agent/a1', true))).toEqual([]);
+    it('on an agent’s page its workspace stays marked, and only that one (the positive control: the rows are drawn)', () => {
+        const html = sidebar('genie://agent/a1?tab=stream');
+        expect(workspaceRow(html, 'tynn')).toContain('data-active="true"');
+        expect(workspaceRow(html, 'fancy')).toContain('data-active="false"');
     });
 });
