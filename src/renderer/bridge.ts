@@ -109,6 +109,8 @@ export const FEATURE_CHANNELS = {
 } as const;
 
 export interface GenieBridge {
+    /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
+    remoteWindows?: { open(url: string): Promise<void> };
     /**
      * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, inbox, settings, browser.
      * One snapshot, pushed on change; one `act` that applies a person's action in main and

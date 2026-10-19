@@ -45,3 +45,54 @@ export function rememberedTokens(storage: TokenStorage) {
         hosts: (): string[] => Object.keys(read()),
     };
 }
+
+export { remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+
+const HOSTS_KEY = 'genie.remote.hosts';
+
+/** A host this device has connected to (Genie 1's `remote.known`). `name` is the host's own, from its welcome. */
+export interface KnownHost {
+    readonly url: string;
+    readonly name: string | null;
+    readonly lastConnectedAt: number | null;
+    /** This device holds a token for it: no PIN needed to connect. */
+    readonly paired: boolean;
+}
+
+/**
+ * THE KNOWN HOSTS (Tynn #819): every host this device holds a token for or has connected to, newest first, with its name
+ * and when it was last connected. A host remembered before names were kept is listed by its address, never dropped.
+ * Forget removes the host AND its token — the next connection needs the PIN again.
+ */
+export function knownHosts(storage: TokenStorage) {
+    const tokens = rememberedTokens(storage);
+    const read = (): Record<string, { name: string | null; at: number | null }> => {
+        try {
+            const raw = storage.getItem(HOSTS_KEY);
+            const parsed: unknown = raw ? JSON.parse(raw) : {};
+            return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, { name: string | null; at: number | null }>) : {};
+        } catch {
+            return {};
+        }
+    };
+    const write = (all: Record<string, { name: string | null; at: number | null }>) => {
+        if (Object.keys(all).length === 0) storage.removeItem(HOSTS_KEY);
+        else storage.setItem(HOSTS_KEY, JSON.stringify(all));
+    };
+    return {
+        list: (): KnownHost[] => {
+            const meta = read();
+            const urls = [...new Set([...Object.keys(meta), ...tokens.hosts()])];
+            return urls
+                .map((url): KnownHost => ({ url, name: meta[url]?.name ?? null, lastConnectedAt: meta[url]?.at ?? null, paired: tokens.tokenFor(url) !== null }))
+                .sort((a, b) => (b.lastConnectedAt ?? -1) - (a.lastConnectedAt ?? -1));
+        },
+        noteConnected: (url: string, name: string | null, at: number): void => write({ ...read(), [url]: { name, at } }),
+        forget: (url: string): void => {
+            const all = read();
+            delete all[url];
+            write(all);
+            tokens.forget(url);
+        },
+    };
+}

@@ -160,6 +160,9 @@ const bridge: GenieBridge = {
         },
     },
 
+    // A known remote host in its own window (Tynn #819).
+    remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
+
     /*
      * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose
      * answers are the host's own (a refusal is `false` / `null`, crossed as-is).
