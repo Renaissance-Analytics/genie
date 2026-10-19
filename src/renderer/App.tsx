@@ -8,7 +8,8 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
-import { openAgentTabs as nextOpenAgentTabs } from '../core/workspace-tabs.js';
+import { openAgentTabs as nextOpenAgentTabs, parseTabs } from '../core/workspace-tabs.js';
+import { addressOf, isInternalRoute, routeOfAddress, type AddressContext } from '../core/address.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -394,10 +395,28 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
 }
 
 function DesktopApp({ bridge }: AppProps) {
-    const [route, navigate] = useRoute();
+    // The hash holds the ADDRESS (genie://{workstation}/{workspace-slug}/{tab}, core/address.ts, Tynn #831); the app
+    // works in internal routes. Derived on every render, so an address resolves as soon as the snapshot can name it.
+    const [address, writeAddress] = useRoute();
     const remote = useRemote();
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));
     const snapshot = useSnapshot(resolvedBridge);
+    // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
+    const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
+    const addressContext: AddressContext | null = snapshot.workstation && snapshot.workspaces
+        ? { workstation: snapshot.workstation.name, workspaces: snapshot.workspaces, agents: snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents, tabsOf: (id) => tabsByWorkspace.get(id) }
+        : null;
+    // Not readable yet (no snapshot): an old internal route is used as it is; an address waits on the Dashboard.
+    const route = addressContext
+        ? routeOfAddress(address, addressContext) ?? DEFAULT_ROUTE
+        : isInternalRoute(address) ? address : DEFAULT_ROUTE;
+    const navigate = (next: string): void => { writeAddress(addressContext ? addressOf(next, addressContext) : next); };
+    // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
+    const shownAddress = addressContext ? addressOf(route, addressContext) : address;
+    useEffect(() => {
+        if (!addressContext || shownAddress === address || !isInternalRoute(address)) return;
+        window.location.replace(`#${shownAddress}`);
+    }, [address, shownAddress, addressContext !== null]);
     const [features, setFeatures] = useFeatures(resolvedBridge);
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
@@ -483,6 +502,9 @@ function DesktopApp({ bridge }: AppProps) {
     const reloadWsSettings = (bridge: GenieBridge, id: string) => {
         void bridge.workspaces.settings(id).then((r) => {
             setWsSettings(r.ok ? { values: r.values, overridden: r.overridden } : { values: {}, overridden: [] });
+            // Its designed tabs, for their addresses (core/address.ts).
+            const raw = r.ok ? r.values['workspace_tabs'] : undefined;
+            setTabsByWorkspace((m) => new Map(m).set(id, parseTabs(typeof raw === 'string' ? raw : '').tabs.map((t) => ({ id: t.id, name: t.name }))));
             if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason }));
         });
     };
@@ -863,6 +885,7 @@ function DesktopApp({ bridge }: AppProps) {
         <>
         <Shell
             route={route}
+            address={shownAddress}
             snapshot={snapshot}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
