@@ -50,7 +50,8 @@ const layoutOf = (id: string) => LAYOUTS.find((l) => l.id === id);
 const isKind = (k: unknown): k is PanelKind => typeof k === 'string' && (PANEL_KINDS as readonly string[]).includes(k);
 
 export type StripItem =
-    | { readonly kind: 'agents' }
+    /** The workspace dashboard (the owner, 2026-10-19; q_09d1f4a0) — the `home` view. */
+    | { readonly kind: 'dashboard' }
     /** An agent you opened in this workspace (Tynn #805): its page is drawn under this strip. */
     | { readonly kind: 'agent'; readonly id: string; readonly name: string }
     | { readonly kind: 'designed'; readonly id: string; readonly name: string }
@@ -60,12 +61,12 @@ export type StripItem =
     | { readonly kind: 'settings' };
 
 /**
- * Agents, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
+ * Dashboard, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
  * the order made, +, Settings — + always just before Settings, Settings always last.
  */
 export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean } = {}): StripItem[] {
     return [
-        { kind: 'agents' },
+        { kind: 'dashboard' },
         ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
         ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
         // IssueWatch's view (Tynn #806): only for a workspace linked to a Tynn project — the others have nothing to show.

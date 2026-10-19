@@ -48,6 +48,7 @@ export class Registry {
     #agents: readonly AgentRecord[] = [];
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
+    #handoff: (id: AgentId) => { text: string; at: number } | null = () => null;
     #listeners = new Set<(snapshot: GenieSnapshot) => void>();
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
@@ -167,6 +168,11 @@ export class Registry {
         this.#observed = probe;
     }
 
+    /** An agent's last finished turn's handoff (the attention store's record), for the workspace dashboard (q_09d1f4a0). */
+    setHandoffProbe(probe: (id: AgentId) => { text: string; at: number } | null): void {
+        this.#handoff = probe;
+    }
+
     /** Count of live sessions — the only correct source for "how many agents are running". */
     get runningCount(): number {
         return this.#agents.filter((a) => this.#probe(a.id)?.running === true).length;
@@ -195,7 +201,8 @@ export class Registry {
                 // else, and the row says so (§4.1). Otherwise the declared row as before.
                 .map((record) => {
                     const observed = this.#observed(record.id);
-                    return observed ? observedRowFor(record, observed, now()) : agentRowFor(record, this.#probe(record.id), now);
+                    const row = observed ? observedRowFor(record, observed, now()) : agentRowFor(record, this.#probe(record.id), now);
+                    return { ...row, handoff: this.#handoff(record.id) };
                 }),
             // GENIE'S OWN ROW, beside the workspace agents (the design mockup's `genie · default agent · not in a workspace`
             // group): the Dashboard draws it in a group of its own, so the census that counts it has its row.

@@ -68,6 +68,12 @@ export interface AgentRow {
     fixes: readonly string[];
     /** `4/7` — a plan step, when the agent reports one. */
     step: string | null;
+    /** What started its current turn, first line (core/turn-now.ts); absent/`null` = not reported. */
+    asked?: string | null | undefined;
+    /** The tool its turn is in now, by title; absent/`null` = none running, or not reported. */
+    tool?: string | null | undefined;
+    /** Its last finished turn's handoff (Genie's record of finished turns); absent/`null` = none. */
+    handoff?: { text: string; at: number } | null | undefined;
     target: string | null;
     /** Byte activity for an observed agent. A measurement, where a target is a claim. */
     activity: readonly number[] | null;

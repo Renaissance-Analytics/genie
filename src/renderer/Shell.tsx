@@ -581,6 +581,9 @@ export function Shell({
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             rows={snapshot.agents}
+                            // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
+                            deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}
+                            onOpenDeckItem={(id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
                             onOpenAgent={onOpenAgent}
                             openAgents={openAgentTabs?.workspaceId === parsed.workspaceId ? openAgentTabs.agents : []}
                             onCloseAgent={(id) => openAgentTabs?.onClose(id)}

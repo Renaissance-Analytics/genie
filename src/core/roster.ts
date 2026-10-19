@@ -76,6 +76,9 @@ export interface LiveSession {
     links?: readonly CommsLink[] | null | undefined;
     /** The agent's own plan, when it reports one. */
     plan: { step: number; of: number; doing: string } | null;
+    /** What started this turn and the tool it is in now (core/turn-now.ts); absent or `null` = not reported. */
+    asked?: string | null | undefined;
+    tool?: string | null | undefined;
     /**
      * The model IN USE, as the provider reported it (a notice carrying `particle.academy/model`); the latest report
      * wins. `null` or absent (an older remote host does not send it) = not reported — never the model Genie asked for, which is the agent's setting, not a reading.
@@ -161,6 +164,9 @@ export function agentRowFor(
         fixes: session?.failure?.fixes ?? [],
         step: session?.plan ? `${session.plan.step}/${session.plan.of}` : null,
         target: session?.plan?.doing ?? null,
+        // The workspace dashboard's card (q_09d1f4a0): what it was asked, and the tool it is in now.
+        asked: session?.asked ?? null,
+        tool: session?.tool ?? null,
         // Byte activity, and only for an observed agent. A declared one reports a plan, so
         // there is nothing to measure and nothing to draw.
         activity: null,

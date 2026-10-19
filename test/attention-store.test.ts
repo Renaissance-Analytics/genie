@@ -76,6 +76,24 @@ describe('imDone', () => {
         store.markSeen(finished[0]!.id);
         expect(store.finished().filter((f) => !f.seen)).toHaveLength(0);
     });
+
+    it("an agent's LAST handoff, for the workspace dashboard — read or not, its first line, with its time; none = null", async () => {
+        await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace, handoff: 'old run' });
+        await store.imDone({ agentId: other, agentName: 'wren', workspacePath: workspace, handoff: 'not atlas' });
+        await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace, handoff: '\nDrawer merged.\nNext: the dashboard' });
+        await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace });
+        // Read on the Deck still counts: the dashboard lists the last finished turns, not the unread ones.
+        // markSeen writes in the background; each mark is awaited through the store's own change notice, so no write is
+        // still landing when the test's folder is removed.
+        const seen = (id: string) => new Promise<void>((resolve) => { const off = store.onChange(() => { off(); resolve(); }); store.markSeen(id); });
+        for (const f of [...store.finished()]) await seen(f.id);
+        expect(store.finished().every((f) => f.seen)).toBe(true);
+        const at = (handoff: string) => Date.parse(store.finished().find((f) => f.handoff?.includes(handoff))!.at);
+        expect(store.lastHandoff(agent)).toEqual({ text: 'Drawer merged.', at: at('Drawer merged.') });
+        expect(store.lastHandoff(other)).toEqual({ text: 'not atlas', at: at('not atlas') });
+        expect(at('Drawer merged.')).toBeGreaterThan(at('old run'));
+        expect(store.lastHandoff(mintAgentId())).toBeNull();
+    });
 });
 
 describe('ForceTheQuestion', () => {

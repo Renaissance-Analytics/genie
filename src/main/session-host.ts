@@ -1,5 +1,6 @@
 import type { McpServer } from '@particle-academy/prism-acp';
 import { deliveryFrom } from '../core/delivery.js';
+import { turnNow } from '../core/turn-now.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
@@ -917,6 +918,8 @@ export class SessionHost {
             lastDelivery: deliveryFrom(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: planFrom(rows),
+            // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
+            ...(({ prompt, tool }) => ({ asked: prompt, tool }))(turnNow(rows)),
             model: modelFrom(rows),
             extensions: session.extensions,
             // Both, because each alone is a claim: the driver's declaration, and the driver this session actually holds.

@@ -766,20 +766,21 @@ if (!approvalEnabled) {
     const onWorkspace = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the Workspace surface');
     check(onWorkspace, '35. the rail reaches the Workspace surface');
 
-    // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings, I
-    // should see the agent lanes and all of the agents." The route opens on the agents rail with the seeded agent's
-    // card and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
+    // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings";
+    // and 2026-10-19: the first tab is the WORKSPACE DASHBOARD, not an agent list (q_09d1f4a0). The route opens on it —
+    // the seeded agent in the header's strip, the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
     // makes a tab, the tab offers every panel kind, and a Terminals panel is the terminal manager.
     const home = await cdp.evaluate(`(() => ({
-        rail: Boolean(document.querySelector('[data-workspace-home]')),
-        cards: document.querySelectorAll('[data-home-agent]').length,
+        dashboard: Boolean(document.querySelector('[data-workspace-dashboard]')),
+        pills: document.querySelectorAll('[data-agent-pill]').length,
+        tab: document.querySelector('[data-workspace-tab="home"]')?.textContent ?? null,
         settings: Boolean(document.querySelector('[data-workspace-settings]')),
         terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
     }))()`);
-    check(home.rail && home.cards >= 1 && !home.settings && !home.terminals, '48. the workspace opens on its agents — the rail with the seeded agent, no settings, no terminals', JSON.stringify(home));
+    check(home.dashboard && home.pills >= 1 && home.tab === 'Dashboard' && !home.settings && !home.terminals, '48. the workspace opens on its dashboard — the seeded agent in the strip, the Dashboard tab, no settings, no terminals', JSON.stringify(home));
     await cdp.evaluate(`document.querySelector('[data-workspace-tab="add"]').click(); true`);
-    const designer = await waitFor(cdp, `Boolean(document.querySelector('[data-designed-tab] [data-add-panel="terminal"]')) && !document.querySelector('[data-workspace-home]')`, 'the new tab to open on its designer');
-    check(designer, '49a. + makes a tab that opens on its panel designer (and puts the agents rail away)');
+    const designer = await waitFor(cdp, `Boolean(document.querySelector('[data-designed-tab] [data-add-panel="terminal"]')) && !document.querySelector('[data-workspace-dashboard]')`, 'the new tab to open on its designer');
+    check(designer, '49a. + makes a tab that opens on its panel designer (and puts the dashboard away)');
     await cdp.evaluate(`document.querySelector('[data-designed-tab] [data-add-panel="terminal"]').click(); true`);
     const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-add]'))`, 'the Terminals panel');
     check(terminalsView, '49. a Terminals panel in that tab is the terminal manager, its strip and its + terminal');

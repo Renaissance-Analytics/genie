@@ -12,12 +12,12 @@ import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
 const empty: TabsState = { tabs: [] };
 
 describe('the strip', () => {
-    it('Agents, the opened agents in the order opened, your tabs, +, Settings', () => {
+    it('Dashboard (the workspace dashboard, q_09d1f4a0), the opened agents in the order opened, your tabs, +, Settings', () => {
         const designed = addTab(empty, 'Ops').state;
         const strip = tabStrip(designed, [{ id: 'a1', name: 'atlas' }, { id: 'a2', name: 'wren' }]);
-        expect(strip.map((t) => (t.kind === 'agent' ? `@${t.name}` : t.kind === 'designed' ? t.name : t.kind))).toEqual(['agents', '@atlas', '@wren', 'Ops', 'add', 'settings']);
+        expect(strip.map((t) => (t.kind === 'agent' ? `@${t.name}` : t.kind === 'designed' ? t.name : t.kind))).toEqual(['dashboard', '@atlas', '@wren', 'Ops', 'add', 'settings']);
         // CONTROL: no agents opened — the strip as it was.
-        expect(tabStrip(designed).map((t) => t.kind)).toEqual(['agents', 'designed', 'add', 'settings']);
+        expect(tabStrip(designed).map((t) => t.kind)).toEqual(['dashboard', 'designed', 'add', 'settings']);
     });
 });
 
@@ -60,5 +60,8 @@ describe('the strip, drawn', () => {
         const html = render({ kind: 'view', view: 'home' });
         expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
         expect(html.match(/data-current="true"/g)).toHaveLength(1);
+        // The first tab is the workspace DASHBOARD, and says so (the owner: not "Agents").
+        expect(html).toMatch(/data-workspace-tab="home"[^>]*>Dashboard</);
+        expect(html).not.toMatch(/>Agents</);
     });
 });
