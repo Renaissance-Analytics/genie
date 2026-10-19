@@ -54,7 +54,7 @@ export interface HostApiDeps {
     workspaceOps: {
         confirmAdd(path: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
-        confirmAddFromTynn(parent: string): Promise<unknown>;
+        confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
         wake(workspaceId: string): Promise<unknown>;
         remove(workspaceId: string): Promise<unknown>;
@@ -180,10 +180,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
             case 'workspaces.locateRepo':
                 throw new Error('workspaces.locateRepo opens a folder picker on the host; do it there');
+            case 'workspaces.tynnProjects':
+                throw new Error('workspaces.tynnProjects leads to a folder picker on the host; add from Tynn there');
             case 'workspaces.previewAddFromTynn':
                 throw new Error('workspaces.previewAddFromTynn opens a folder picker on the host; do it there');
             case 'workspaces.confirmAddFromTynn':
-                return deps.workspaceOps.confirmAddFromTynn(str(args[0]));
+                return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.confirmAdd':
                 return deps.workspaceOps.confirmAdd(str(args[0]));
             case 'workspaces.hibernate':

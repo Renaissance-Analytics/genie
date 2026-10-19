@@ -63,7 +63,8 @@ describe('where a signed-out Genie is told to go', () => {
 describe('the installed app owns genie://', () => {
     it('electron-builder declares the genie scheme (Genie 1 did: the AppImage .desktop and the macOS Info.plist get it at build time)', async () => {
         const { readFileSync } = await import('node:fs');
-        const yml = readFileSync('electron-builder.yml', 'utf8');
+        // Line endings normalised: a Windows checkout is CRLF, and a `\n`-only pattern read it as "no block" (2026-10-19).
+        const yml = readFileSync('electron-builder.yml', 'utf8').replace(/\r\n/g, '\n');
         const block = yml.match(/^protocols:\n((?:[ \t]+.*\n)+)/m);
         expect(block, 'a top-level protocols: block').not.toBeNull();
         expect(block![1]).toMatch(/schemes:\s*\n\s*-\s*genie\s*$/m);

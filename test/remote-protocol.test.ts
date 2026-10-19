@@ -55,7 +55,10 @@ describe('the capability table', () => {
         // 56 since `agents.setAutoApprove` (an agent's autonomy, Tynn #801): a write, agent-scoped.
         // 57 since `agents.setIssueWatch` (what an agent hears from IssueWatch, Tynn #806): a write, agent-scoped.
         // 58 since `providerLogin` (Log in to <provider>, 2026-10-18): host-only like takeOver — it opens a window on the host.
-        expect(REMOTE_METHODS.length).toBe(58);
+        // 59 since `workspaces.tynnProjects` (From Tynn picks from the signed-in person's projects, 2026-10-19): host-only
+        // like the preview it leads to — the folder picker after it is the host's.
+        expect(REMOTE_METHODS.length).toBe(59);
+        expect(capabilityOf('workspaces.tynnProjects')).toBe('host-only');
         expect(capabilityOf('cancelTurn')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');

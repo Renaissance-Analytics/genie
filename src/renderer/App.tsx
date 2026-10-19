@@ -34,6 +34,7 @@ import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
+import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -441,6 +442,8 @@ function DesktopApp({ bridge }: AppProps) {
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
     // Add from a git URL (§6.1): the form, then the host picks the parent and the plan replaces the form.
     const [addFromGit, setAddFromGit] = useState(false);
+    // From Tynn (§6.1): the person's projects while picking one; `undefined` when not picking.
+    const [tynnPick, setTynnPick] = useState<TynnProjectsView | undefined>(undefined);
     // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
     const workspaceId = routeWorkspace(route, snapshot.agents);
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
@@ -956,12 +959,19 @@ function DesktopApp({ bridge }: AppProps) {
             onCancelAddGit={() => setAddFromGit(false)}
             onPreviewFromGit={(url) => { void resolvedBridge?.workspaces.previewAddFromGit(url).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setAddFromGit(false); setAddPreview(p); } }); }}
             onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
-            // From Tynn (§6.1): the host picks the parent and asks Tynn; the plan replaces whatever add was in progress.
+            // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
+            tynnPick={tynnPick}
             onAddWorkspaceFromTynn={() => {
                 setAddFromGit(false);
-                void resolvedBridge?.workspaces.previewAddFromTynn().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
+                setAddPreview(null);
+                setTynnPick(null);
+                void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
             }}
-            onConfirmAddTynn={(parent) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            onPickTynnProject={(projectId) => {
+                void resolvedBridge?.workspaces.previewAddFromTynn(projectId).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setTynnPick(undefined); setAddPreview(p); } });
+            }}
+            onCancelTynnPick={() => setTynnPick(undefined)}
+            onConfirmAddTynn={(parent, projectId) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}

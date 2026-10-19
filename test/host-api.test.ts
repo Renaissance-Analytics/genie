@@ -51,7 +51,7 @@ function fakes() {
         workspaceOps: {
             confirmAdd: async (path) => { calls.push(`ws-add:${path}`); return { ok: true }; },
             confirmAddFromGit: async (url, parent) => { calls.push(`ws-add-git:${url}:${parent}`); return { ok: true }; },
-            confirmAddFromTynn: async (parent) => { calls.push(`ws-add-tynn:${parent}`); return { ok: true }; },
+            confirmAddFromTynn: async (parent, projectId) => { calls.push(`ws-add-tynn:${parent}:${projectId}`); return { ok: true }; },
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
@@ -148,6 +148,13 @@ describe('invoke', () => {
         await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
         await expect(api.invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
+        await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
+    });
+
+    it('From Tynn’s confirm carries the CHOSEN project with the parent folder', async () => {
+        const f = fakes();
+        expect(await buildHostApi(f.deps).invoke('workspaces.confirmAddFromTynn', ['/w', '42'])).toEqual({ ok: true });
+        expect(f.calls).toEqual(['ws-add-tynn:/w:42']);
     });
 
     it('a terminal opens in the WORKSPACE’s folder with its service env; an unknown workspace is refused; list is per workspace', async () => {

@@ -2,7 +2,7 @@ import { basename, join } from 'node:path';
 import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
-import { parseTynnProject, tynnAddPlan, type TynnAddPlan } from '../core/tynn.js';
+import { parseTynnProject, tynnAddPlan, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -43,8 +43,8 @@ export interface WorkspaceOpsPorts {
     supervisor: { list(): readonly { id: string; workspaceId: string }[]; stop(id: string): boolean };
     now(): number;
     sleep(ms: number): Promise<void>;
-    /** Tynn (§6.1 add from Tynn): the configured host and one call for the project the token belongs to; absent on a host without the client. */
-    tynn?: { readonly host: string; project(): Promise<unknown> } | undefined;
+    /** Tynn (§6.1 add from Tynn): the host, and the signed-in person's projects (main/tynn-account.ts); absent on a host without it. */
+    tynn?: { readonly host: string; projects(): Promise<unknown[]> } | undefined;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -176,26 +176,34 @@ export async function addWorkspaceFromGit(ports: WorkspaceOpsPorts, url: string,
     return addWorkspace(ports, plan.path);
 }
 
-const NOT_A_PROJECT = 'that token is not a Tynn PROJECT token — Tynn answered with something that is not a project (a project token is minted on the project’s Settings → API page)';
-
-/** The plan for a Tynn source (§6.1), written nowhere: Tynn is asked for the project the token belongs to; the folder derives from its slug. */
-export async function previewAddFromTynn(ports: WorkspaceOpsPorts, parent: string): Promise<TynnAddPlan> {
+/**
+ * The signed-in person's projects, as Tynn lists them (§6.1 add from Tynn — Genie 1's "your Tynn projects"). A row that is
+ * not a project is left out; signed out, or Tynn refusing, is a refusal in Tynn's words.
+ */
+export async function listTynnProjects(ports: WorkspaceOpsPorts): Promise<{ ok: true; host: string; projects: TynnProject[] } | Refusal> {
     if (!ports.tynn) return { ok: false, reason: 'this Genie has no Tynn client' };
-    let raw: unknown;
+    let rows: unknown[];
     try {
-        raw = await ports.tynn.project();
+        rows = await ports.tynn.projects();
     } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
-    const project = parseTynnProject(raw);
-    if (!project) return { ok: false, reason: NOT_A_PROJECT };
+    return { ok: true, host: ports.tynn.host, projects: rows.map(parseTynnProject).filter((p): p is TynnProject => p !== null) };
+}
+
+/** The plan for the CHOSEN Tynn project (§6.1), written nowhere: the folder derives from its slug under the parent. */
+export async function previewAddFromTynn(ports: WorkspaceOpsPorts, parent: string, projectId: string): Promise<TynnAddPlan> {
+    const listed = await listTynnProjects(ports);
+    if (!listed.ok) return listed;
+    const project = listed.projects.find((p) => p.id === projectId);
+    if (!project) return { ok: false, reason: `Tynn lists no project ${projectId} for you — it may have been deleted, or shared with someone else` };
     const path = `${parent.replace(/[\\/]+$/, '')}/${project.slug}`;
-    return tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(path), host: ports.tynn.host });
+    return tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(path), host: listed.host });
 }
 
 /** Confirm: create the folder, then the ordinary add of an EMPTY folder with the manifest the plan showed. */
-export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: string): Promise<Awaited<ReturnType<typeof addWorkspace>>> {
-    const plan = await previewAddFromTynn(ports, parent);
+export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: string, projectId: string): Promise<Awaited<ReturnType<typeof addWorkspace>>> {
+    const plan = await previewAddFromTynn(ports, parent, projectId);
     if (!plan.ok) return plan;
     await ports.fs.mkdir(plan.path);
     return addWorkspace(ports, plan.path, plan.manifest);

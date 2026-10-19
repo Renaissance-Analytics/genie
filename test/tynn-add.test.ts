@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTynnProject, tynnAddPlan, tynnLink, tynnProjectUrl } from '../src/core/tynn.js';
+import { parseTynnProject, tynnAddPlan, tynnLink } from '../src/core/tynn.js';
 
 /**
  * ADD A WORKSPACE FROM TYNN (§6.1) — the pure half. Tynn's REST API answers `GET /api/v1/project` for
@@ -31,11 +31,8 @@ describe('parseTynnProject', () => {
     });
 });
 
-describe('tynnProjectUrl / tynnLink', () => {
-    it('the project endpoint under the host, with or without a trailing slash; the link the schema defines, owner omitted when unknown', () => {
-        expect(tynnProjectUrl('https://tynn.ai')).toBe('https://tynn.ai/api/v1/project');
-        expect(tynnProjectUrl('https://tynn.ai/')).toBe('https://tynn.ai/api/v1/project');
-        expect(tynnProjectUrl('https://tynn.test')).toBe('https://tynn.test/api/v1/project');
+describe('tynnLink', () => {
+    it('the link the schema defines, the host without a trailing slash, owner omitted when unknown', () => {
         expect(tynnLink({ id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null }, 'https://tynn.ai/')).toEqual({ host: 'https://tynn.ai', project: 'tynn', projectId: '42' });
     });
 });

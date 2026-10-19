@@ -35,7 +35,7 @@ import { TynnAccount } from './tynn-account.js';
 import { encryptedFileStore } from './tynn-account-store.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { addWorkspace as addWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -92,7 +92,6 @@ import { fileEventsOf, openFileRoute } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
-import { tynnClient } from './tynn-client.js';
 import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
@@ -1095,10 +1094,12 @@ async function boot(): Promise<void> {
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         // TYNN (§6.1 add from Tynn): the host and token from settings, read at call time; the client is one fetch.
         tynn: {
-            get host() { const h = services?.settings.snapshot().tynn_host; return typeof h === 'string' && h.trim().length > 0 ? h.trim() : 'https://tynn.ai'; },
-            project() {
-                const token = tynnAccount?.token() ?? '';
-                return tynnClient((url, init) => fetch(url, init)).project(this.host, token);
+            // The account's own host (settings, trimmed): the project.json link names the Tynn the projects came from.
+            get host() { return tynnAccount?.host() ?? 'https://tynn.ai'; },
+            // The signed-in person's projects (main/tynn-account.ts) — signed out is refused before any request.
+            projects() {
+                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
+                return tynnAccount.projects();
             },
         },
     };
@@ -1163,16 +1164,19 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
         (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    // ADD FROM TYNN (§6.1): the parent folder is picked on the host; Tynn is asked for the project; the plan is shown before anything is written.
-    ipcMain.handle('genie:workspace-preview-add-tynn', async () => {
+    // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
+    // host, and the plan for THAT project before anything is written.
+    ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
+    ipcMain.handle('genie:workspace-preview-add-tynn', async (_event, rawId: unknown) => {
+        if (typeof rawId !== 'string' || rawId.length === 0) return { ok: false, reason: 'choose a Tynn project first' };
         if (!window) return { ok: false, reason: 'no window' };
         const picked = await dialog.showOpenDialog(window, { title: 'Where should the Tynn envelope be created? Pick the parent folder', properties: ['openDirectory'] });
         const parent = picked.filePaths[0];
         if (picked.canceled || !parent) return { ok: false, reason: 'no folder picked' };
-        return previewAddFromTynn(workspaceOps, parent);
+        return previewAddFromTynn(workspaceOps, parent, rawId);
     });
-    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown) =>
-        (typeof rawParent === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent) : { ok: false, reason: 'give a parent folder' }));
+    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
+        (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
@@ -1330,7 +1334,7 @@ async function boot(): Promise<void> {
             workspaceOps: {
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
-                confirmAddFromTynn: (parent) => addWorkspaceFromTynn(workspaceOps, parent),
+                confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
                 remove: (id) => removeWorkspace(workspaceOps, id),

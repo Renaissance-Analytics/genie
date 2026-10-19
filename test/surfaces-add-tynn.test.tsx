@@ -64,3 +64,30 @@ describe('AddWorkspacePreview for a Tynn source', () => {
         expect(html).not.toMatch(/git clone/);
     });
 });
+
+/**
+ * PICK THE PROJECT (Genie 1's Add-workspace: "your Tynn projects"). Signed in, From Tynn lists the person's own projects;
+ * choosing one goes on to the folder picker and the plan. Loading, none, and Tynn's refusal each say so.
+ */
+describe('TynnProjectPicker', () => {
+    it('lists each project by name with its slug, each a button that picks THAT project', async () => {
+        const { TynnProjectPicker } = await import('../src/renderer/components/TynnProjectPicker.js');
+        const html = renderToStaticMarkup(<TynnProjectPicker state={{ ok: true, host: 'https://tynn.ai', projects: [{ id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null }, { id: 'p2', name: 'Acme', slug: 'acme', vision: null }] }} onPick={() => {}} onCancel={() => {}} />);
+        expect(html).toContain('data-tynn-projects="2"');
+        expect(html).toMatch(/data-tynn-project="42"[^>]*>(?:<[^>]+>)*Tynn\.ai/);
+        expect(html).toMatch(/data-tynn-project="p2"[^>]*>(?:<[^>]+>)*Acme/);
+        expect(html).toContain('https://tynn.ai');
+        expect(html).toContain('data-action="cancel-tynn-pick"');
+    });
+
+    it('loading, no projects, and Tynn’s refusal each say so — no empty list drawn as if it were the answer', async () => {
+        const { TynnProjectPicker } = await import('../src/renderer/components/TynnProjectPicker.js');
+        expect(renderToStaticMarkup(<TynnProjectPicker state={null} onPick={() => {}} onCancel={() => {}} />)).toContain('data-skeleton');
+        const none = renderToStaticMarkup(<TynnProjectPicker state={{ ok: true, host: 'https://tynn.ai', projects: [] }} onPick={() => {}} onCancel={() => {}} />);
+        expect(none).toMatch(/no projects on Tynn yet/i);
+        expect(none).not.toContain('data-tynn-project=');
+        const refused = renderToStaticMarkup(<TynnProjectPicker state={{ ok: false, reason: 'Tynn answered 403: Invalid token' }} onPick={() => {}} onCancel={() => {}} />);
+        expect(refused).toMatch(/Tynn answered 403: Invalid token/);
+        expect(refused).not.toContain('data-tynn-project=');
+    });
+});

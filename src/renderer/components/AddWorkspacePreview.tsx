@@ -38,7 +38,7 @@ export function AddFromGitForm({ onPreview, onCancel }: { onPreview: (url: strin
     );
 }
 
-export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string) => void) | undefined }) {
+export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     if (!preview.ok) {
         return (
@@ -68,7 +68,7 @@ export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit
                 ))}
             </ol>
             <div className="flex gap-2">
-                <button type="button" data-action="confirm-add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white" onClick={() => (preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? 'Create and add' : preview.source === 'git' ? 'Clone and add' : 'Add this workspace'}</button>
+                <button type="button" data-action="confirm-add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white" onClick={() => (preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? 'Create and add' : preview.source === 'git' ? 'Clone and add' : 'Add this workspace'}</button>
                 <button type="button" className={button} onClick={onCancel}>Cancel</button>
             </div>
         </section>

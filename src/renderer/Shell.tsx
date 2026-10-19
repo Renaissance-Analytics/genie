@@ -26,6 +26,7 @@ import { WorkspaceTabs } from './components/WorkspaceTabs.js';
 import { addTab, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
+import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProjectPicker.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -179,9 +180,12 @@ export interface ShellProps {
     onAddWorkspaceFromGit?: (() => void) | undefined;
     onPreviewFromGit?: ((url: string) => void) | undefined;
     onConfirmAddGit?: ((url: string, parent: string) => void) | undefined;
-    /** From Tynn (§6.1): the preview is asked for on the host; confirm creates the envelope under the parent it showed. */
+    /** From Tynn (§6.1, Genie 1's): the person's projects to pick from (`undefined` = not picking); then the host's folder picker and the plan. */
+    tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
-    onConfirmAddTynn?: ((parent: string) => void) | undefined;
+    onPickTynnProject?: ((projectId: string) => void) | undefined;
+    onCancelTynnPick?: (() => void) | undefined;
+    onConfirmAddTynn?: ((parent: string, projectId: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
     onConfirmAdd?: ((path: string) => void) | undefined;
     onCancelAdd?: (() => void) | undefined;
@@ -256,6 +260,9 @@ export function Shell({
     onConfirmAddGit,
     onAddWorkspaceFromTynn,
     onConfirmAddTynn,
+    tynnPick,
+    onPickTynnProject,
+    onCancelTynnPick,
     onCancelAddGit,
     onConfirmAdd,
     onCancelAdd,
@@ -391,8 +398,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p) => onConfirmAddTynn?.(p)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
+                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
