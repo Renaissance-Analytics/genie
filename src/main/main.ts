@@ -90,6 +90,8 @@ import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom,
 import { agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf, openFileRoute } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
+import { remoteAccess } from './remote-access.js';
+import { ensureFirewallRule } from './remote-firewall.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
@@ -1229,7 +1231,8 @@ async function boot(): Promise<void> {
         return typeof host === 'string' && host.trim().length > 0 ? host.trim() : 'https://tynn.ai';
     };
     // Every snapshot — pushed or answered — carries the Tynn account (late-bound: it opens once the services are composed).
-    const processPorts = (): FeaturePorts => ({ ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // The host's switch (Tynn #820) and, on Windows, its firewall rule (Genie 1's allowFirewall) — Settings → Remote access.
+    const processPorts = (): FeaturePorts => ({ ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1600,7 +1603,10 @@ async function boot(): Promise<void> {
         }
     });
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
-    void remoteSocket.start().then(pushFeatures, pushFeatures);
+    // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
+    // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
+    remoteAccessNow = remoteAccess({ listener: remoteSocket, enabled: () => composed.settings.get('remote_access') === true, onChange: pushFeatures });
+    void remoteAccessNow.apply().catch((error: unknown) => { console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`); pushFeatures(); });
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
@@ -1949,6 +1955,7 @@ function recordShutdown(): Promise<unknown> {
 }
 
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
+let remoteAccessNow: ReturnType<typeof remoteAccess> | null = null;
 app.on('before-quit', (event) => {
     // A launch that never booted (a second instance, a `--quit` with no Genie running) owns nothing to shut down — and
     // clearing the genie-running file below would clear the RUNNING Genie's. It exits without a quit; this is the guard.

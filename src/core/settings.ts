@@ -52,6 +52,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'default_agent', group: 'agents', scope: 'workspace', label: 'Provider for new agents', description: 'The provider a new agent in this workspace uses unless told otherwise.', type: 'enum', options: ['claude', 'codex'], default: 'claude' },
     { key: 'approval_gates', group: 'agents', scope: 'workspace', label: 'Approval gates', description: 'Which tool calls park for your approval.', type: 'enum', options: ['all', 'writes', 'none'], default: 'writes' },
     { key: 'tynn_host', group: 'general', scope: 'host', label: 'Tynn host', description: 'Where Tynn lives. Only a self-hosted Tynn changes this.', type: 'string', default: 'https://tynn.ai' },
+    // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
+    // Remote access as its switch, not as a row.
+    { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let paired devices on your tailnet reach this Genie.', type: 'boolean', default: false, hidden: true },
     { key: 'github_authorized', group: 'workstation', scope: 'host', label: 'GitHub App authorized', description: 'Step 1 of 2: you authorized the Genie AOS GitHub App for your account.', type: 'boolean', default: false },
     { key: 'github_installed', group: 'workstation', scope: 'host', label: 'GitHub App installed', description: 'Step 2 of 2: the Genie AOS GitHub App is installed on the repositories Genie works in.', type: 'boolean', default: false },
     { key: 'mcp_sync_claude', group: 'workstation', scope: 'host', label: 'Sync Genie into Claude Code (.mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .mcp.json.', type: 'boolean', default: true },

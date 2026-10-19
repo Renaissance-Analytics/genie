@@ -76,6 +76,8 @@ export const NOT_DRAWN: readonly string[] = [
     'whats_new_seen_version', 'tray_notice_shown',
     'panel_layout', 'panel_splits', 'workspace_tabs',
     'github_authorized', 'github_installed',
+    // Drawn as Remote access's own switch, at the top of that section (Tynn #820) — not as a settings row.
+    'remote_access',
 ];
 
 const PLACE: Readonly<Record<string, SectionId>> = {

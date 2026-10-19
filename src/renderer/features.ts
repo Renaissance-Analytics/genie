@@ -111,6 +111,12 @@ export interface RemoteSection {
     readonly shares: readonly ShareLink[];
     readonly connections: readonly { id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }[];
     readonly servedLink: { id: string; url: string } | null;
+    /** The `remote_access` switch (Tynn #820): off = nothing listens, whatever Tailscale says. */
+    readonly enabled: boolean;
+    /** Windows: the firewall rule can be added here (Genie 1's allowFirewall). */
+    readonly firewall: boolean;
+    /** What the last Allow through the firewall did, in words; absent = not tried. */
+    readonly firewallOutcome?: string | null | undefined;
 }
 
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
@@ -320,6 +326,10 @@ export type FeatureAction =
     | { kind: 'remote.revokeDevice'; deviceId: string }
     | { kind: 'remote.lock' }
     | { kind: 'remote.unlock' }
+    /** Stop and start the listener (Genie 1's restart). */
+    | { kind: 'remote.restart' }
+    /** Windows: add the tailnet-scoped inbound rule for the port, one UAC prompt (Genie 1's allowFirewall). */
+    | { kind: 'remote.allowFirewall' }
     /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
     | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
     | { kind: 'remote.revokeShare'; shareId: string }

@@ -43,7 +43,7 @@ afterEach(async () => {
 describe('the remote section', () => {
     it('is MEASURED at boot: the host name, no URL until a transport listens, unlocked, no PIN, no devices, no links, nobody connected', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null });
+        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null });
     });
 
     it('remote.issuePin puts six digits on this screen with their expiry; lock and unlock flip the kill-switch', async () => {

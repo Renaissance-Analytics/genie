@@ -1605,7 +1605,7 @@ const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
  * a link is a credential you cannot unsend, so you see who already holds one before minting another.
  * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
  */
-function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
+export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
     const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
@@ -1616,7 +1616,15 @@ function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: Featu
                 <Skeletons rows={3} />
             ) : (
                 <>
-                    {remote.url === null ? (
+                    {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. */}
+                    <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">
+                        <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let paired devices reach this Genie" />
+                        <span>{remote.enabled ? `Paired devices on your tailnet can reach ${remote.host}.` : `Remote access is off: nothing listens, and no device can reach ${remote.host}.`}</span>
+                        {remote.enabled ? <button type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</button> : null}
+                        {remote.enabled && remote.firewall ? <button type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</button> : null}
+                        {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
+                    </div>
+                    {!remote.enabled ? null : remote.url === null ? (
                         <p className="text-sm text-[var(--fg-3)]">Nothing is listening on {remote.host}, so devices cannot connect yet: {remote.unavailable ?? 'no reason reported'}. The in-app surfaces are unaffected.</p>
                     ) : (
                         <div className="flex flex-wrap items-center gap-3 text-sm">

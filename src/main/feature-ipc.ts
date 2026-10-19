@@ -41,6 +41,10 @@ import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, Tool
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** The listener following its switch (main/remote-access.ts, Tynn #820); absent = no host side (doctor mode). */
+    readonly remoteAccess?: { apply(): Promise<void>; restart(): Promise<void> };
+    /** Windows: add the firewall rule (main/remote-firewall.ts); absent elsewhere. */
+    readonly allowFirewall?: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
     /** This Genie's Tynn account (main/tynn-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
     readonly tynnAccount?: TynnAccountPort;
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
@@ -132,6 +136,8 @@ export interface FeatureState {
     knowledgeLastAdd?: KnowledgeAdded | null;
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
     servedLink?: { id: string; url: string } | null;
+    /** What the last Allow through the firewall did (Tynn #820), in words. */
+    firewallOutcome?: string | null;
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
 }
 
@@ -294,6 +300,9 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             shares: services.remote.shares(),
             connections: services.remote.connections(),
             servedLink: state.servedLink ?? null,
+            enabled: services.settings.snapshot().remote_access === true,
+            firewall: ports.allowFirewall !== undefined,
+            firewallOutcome: state.firewallOutcome ?? null,
         },
     };
 }
@@ -758,6 +767,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.settings.set(action.key, action.value);
             // Developer mode decides whether unsigned local plugins are admitted: re-read the folder under the new rule.
             if (action.key === 'developer_mode') await services.pluginsRefresh();
+            // The host's switch (Tynn #820): the listener starts or stops with it, now.
+            if (action.key === 'remote_access') await ports.remoteAccess?.apply();
             break;
         case 'settings.pickSound': {
             // Your own file for an alert (Tynn #766 B2): the host's picker; a cancel changes nothing.
@@ -784,6 +795,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'remote.unlock':
             services.remote.unlock();
             break;
+        case 'remote.restart':
+            await ports.remoteAccess?.restart();
+            break;
+        case 'remote.allowFirewall': {
+            if (!ports.allowFirewall) throw new Error('the firewall rule is only needed on Windows');
+            const r = await ports.allowFirewall();
+            next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
+            break;
+        }
         case 'remote.mintShare': {
             // Served exactly once: the URL rides this answer and no snapshot after it.
             const m = services.remote.mintShare({ workspaceId: action.workspaceId, grantedTo: action.grantedTo, expiresInMs: action.expiresInMs });
