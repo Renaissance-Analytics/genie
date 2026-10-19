@@ -39,6 +39,7 @@ import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
+import { openScratchTerminal } from './scratch-terminal.js';
 import { SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
@@ -1756,6 +1757,12 @@ async function boot(): Promise<void> {
     trayHandlers = {
         onUpdate: revealMainWindow,
         onTaskManager: () => { revealMainWindow(); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
+        // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
+        onScratchTerminal: () => {
+            if (!terminals) return;
+            const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route), home: homedir() });
+            if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
+        },
         onOpen: revealMainWindow,
         onSettings: () => {
             revealMainWindow();

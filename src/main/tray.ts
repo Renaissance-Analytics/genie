@@ -24,6 +24,8 @@ export interface TrayHandlers {
     readonly onUpdate?: () => void;
     /** Task Manager… (Tynn #761): every kept process across workspaces — Hosting → Processes. */
     readonly onTaskManager?: () => void;
+    /** New scratch terminal (Tynn #761): a shell in the home folder, in Genie's own workspace, in a window of its own. */
+    readonly onScratchTerminal?: () => void;
 }
 
 /** An update on offer, as the tray shows it. */
@@ -73,6 +75,7 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         ...limits,
         ...(limits.length > 0 ? [{ type: 'separator' as const }] : []),
         { label: 'Open Genie', click: handlers.onOpen },
+        ...(handlers.onScratchTerminal ? [{ label: 'New scratch terminal', click: handlers.onScratchTerminal }] : []),
         { label: 'Settings…', click: handlers.onSettings },
         ...(handlers.onTaskManager ? [{ label: 'Task Manager…', click: handlers.onTaskManager }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
