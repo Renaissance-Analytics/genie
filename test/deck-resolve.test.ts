@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
-import { resolveDeckAnswer } from '../src/core/deck-resolve.js';
+import { resolveDeckAnswer, toggleChoice } from '../src/core/deck-resolve.js';
 
 /**
  * RESOLVING A DECK ITEM IN PLACE (§4.5) — one answer, one effect. The Deck renders four sources as
@@ -78,5 +78,19 @@ describe('which channel an answer travels', () => {
         expect(deckAnswerChannel(base({ id: 'li_1', source: 'user-list' }))).toEqual({ kind: 'feature' });
         // A provider approval with no agent cannot be answered anywhere — refused, not routed.
         expect(deckAnswerChannel(base({ id: 'approval:x', agentId: null }))).toEqual({ kind: 'refused', reason: 'this approval names no agent' });
+    });
+});
+
+// GENIE 1'S TOGGLE (v1 renderer/lib/ask-state.ts toggleDraftOption; the owner, 2026-10-19: "I should be able to unselect a choice").
+describe('toggleChoice', () => {
+    it('single-select: pick one; pick it AGAIN clears it; pick another replaces it', () => {
+        expect(toggleChoice([], '4', false)).toEqual(['4']);
+        expect(toggleChoice(['4'], '4', false)).toEqual([]);
+        expect(toggleChoice(['4'], '8', false)).toEqual(['8']);
+    });
+
+    it('multi-select: each click adds or removes that one, the others kept', () => {
+        expect(toggleChoice(['unit'], 'e2e', true)).toEqual(['unit', 'e2e']);
+        expect(toggleChoice(['unit', 'e2e'], 'unit', true)).toEqual(['e2e']);
     });
 });

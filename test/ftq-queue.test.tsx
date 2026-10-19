@@ -144,19 +144,18 @@ describe('what the person is typing survives another agent asking', () => {
         expect((view as Drafted).drafts?.['q_kai']).toEqual(typed);
         expect((view as Queued).queue?.map((i) => i.id)).toEqual(['q_kai', 'q_wren']);
         expect(h.ctl.showing).toBe('q_kai');
-        // And on screen: the note's exact text, the picked option checked, A not.
+        // And on screen: the note's exact text, the picked option pressed, A not (Genie 1's toggle options, 2026-10-19).
         const html = render(view);
         expect(html).toContain('>use the staging one</textarea>');
-        // Read each input TAG, then its attributes: React 19's server renderer writes `checked` before `value`, so a
-        // pattern that assumes the order fails on correct markup.
-        const inputs = html.match(/<input[^>]*>/g) ?? [];
-        const optionB = inputs.filter((tag) => tag.includes('value="B"'));
+        // Read each option TAG, then its attributes — never a pattern that assumes the renderer's attribute order.
+        const options = html.match(/<button[^>]*data-question-option="[^"]*"[^>]*>/g) ?? [];
+        const optionB = options.filter((tag) => tag.includes('data-question-option="B"'));
         expect(optionB).toHaveLength(1);
-        expect(optionB[0]).toContain('checked=""');
+        expect(optionB[0]).toContain('aria-pressed="true"');
         // The same tag-wise read: an order-assuming pattern here could never fail, so the absence it claims would be empty.
-        const optionA = (html.match(/<input[^>]*>/g) ?? []).filter((tag) => tag.includes('value="A"'));
+        const optionA = options.filter((tag) => tag.includes('data-question-option="A"'));
         expect(optionA).toHaveLength(1);
-        expect(optionA[0]).not.toContain('checked=""');
+        expect(optionA[0]).toContain('aria-pressed="false"');
     });
 
     it('answering wren’s question (picked from the queue) leaves kai’s draft intact and kai’s question on screen', async () => {

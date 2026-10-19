@@ -37,6 +37,16 @@ const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });
  * answered by at least one option OR a non-blank note of its own. One rule, used by the form (its Answer button and the
  * count beside it) and by `resolveDeckForm` (the refusal), so the two can never disagree about what "ready" means.
  */
+/**
+ * ONE CLICK ON AN OPTION — Genie 1's toggle (v1 renderer/lib/ask-state.ts `toggleDraftOption`; the owner, 2026-10-19:
+ * "I should be able to unselect a choice"). Single-select: the option, or nothing when it was already the one picked.
+ * Multi-select: that one added or removed, the others kept.
+ */
+export function toggleChoice(current: readonly string[], label: string, multi: boolean): string[] {
+    if (multi) return current.includes(label) ? current.filter((l) => l !== label) : [...current, label];
+    return current[0] === label ? [] : [label];
+}
+
 export function unansweredCount(questionCount: number, selections: readonly (readonly string[])[], notes: readonly string[]): number {
     let missing = 0;
     for (let i = 0; i < questionCount; i++) {

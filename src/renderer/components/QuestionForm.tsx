@@ -1,7 +1,7 @@
 import { ContentRenderer } from '@particle-academy/react-fancy';
 import { useState, type FormEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
-import { unansweredCount } from '../../core/deck-resolve.js';
+import { toggleChoice, unansweredCount } from '../../core/deck-resolve.js';
 import type { QuestionDraft } from '../../core/question-drafts.js';
 
 /**
@@ -67,8 +67,9 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
     const remaining = unansweredCount(count, selections, notes);
     const sending = answering === item.id;
     // Computed from this render's values (one change per event), so the draft handed to `onDraft` is exactly what is shown.
-    const pick = (i: number, label: string, multi: boolean, on: boolean) => {
-        const next = selections.map((s, j) => (j !== i ? s : multi ? (on ? [...s.filter((l) => l !== label), label] : s.filter((l) => l !== label)) : on ? [label] : []));
+    // Genie 1's toggle (core/deck-resolve.ts `toggleChoice`): a picked option clicked again clears.
+    const pick = (i: number, label: string, multi: boolean) => {
+        const next = selections.map((s, j) => (j !== i ? s : toggleChoice(s, label, multi)));
         setSelections(next);
         onDraft?.({ selections: next, notes });
     };
@@ -95,22 +96,28 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                     <div data-question-text={i} className="min-w-0 break-words">
                         <ContentRenderer value={q.question} format="markdown" lineSpacing={1.6} className="font-sans text-[13px] text-[var(--fg-1)]" />
                     </div>
-                    {q.options.map((o) => (
-                        <label key={o.label} className="flex items-start gap-2 text-[13px] leading-snug text-[var(--fg-2)]">
-                            <input
-                                type={q.multiSelect ? 'checkbox' : 'radio'}
-                                name={`q${i}`}
-                                value={o.label}
-                                checked={(selections[i] ?? []).includes(o.label)}
-                                onChange={(e) => pick(i, o.label, q.multiSelect === true, e.currentTarget.checked)}
-                                className="mt-0.5"
-                            />
-                            <span>
-                                {o.label}
-                                {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}
-                            </span>
-                        </label>
-                    ))}
+                    {/* TOGGLE OPTIONS (Genie 1's): a button per option, pressed when picked; a picked option clicked again clears.
+                        A radio could not be unpicked. */}
+                    <div role="group" aria-label={q.header} className="flex flex-wrap gap-1.5">
+                        {q.options.map((o) => {
+                            const on = (selections[i] ?? []).includes(o.label);
+                            return (
+                                <button
+                                    key={o.label}
+                                    type="button"
+                                    data-question-option={o.label}
+                                    data-select={q.multiSelect ? 'multi' : 'single'}
+                                    aria-pressed={on}
+                                    onClick={() => pick(i, o.label, q.multiSelect === true)}
+                                    title={o.description ?? undefined}
+                                    className={`max-w-full rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                                >
+                                    <span className="font-medium">{o.label}</span>
+                                    {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}
+                                </button>
+                            );
+                        })}
+                    </div>
                     {/* This question's own note (§6.3; Genie 1's FTQ had one per question). A note alone answers it. */}
                     <textarea
                         name={`note${i}`}
