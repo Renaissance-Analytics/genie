@@ -107,19 +107,6 @@ describe('no chat tabs', () => {
             />,
         );
 
-    it('closed: no strip and no tabs — ONE button opens the chat, on the agent the view says (COUNTED)', () => {
-        const html = render();
-        expect(html).not.toContain('data-chat-strip');
-        expect(html).not.toContain('data-chat-tab=');
-        expect(html.match(/data-action="open-chat"/g)).toHaveLength(1);
-        expect(html).toMatch(/data-action="open-chat"[^>]*data-nav="genie:\/\/dashboard\?group=workspace&amp;chat=a_genie"/);
-    });
-
-    it('closed on a workspace agent’s view: the button opens THAT agent', () => {
-        const html = render({ route: 'genie://agent/a_wren?tab=stream' });
-        expect(html).toMatch(/data-action="open-chat"[^>]*data-nav="genie:\/\/agent\/a_wren\?tab=stream&amp;chat=a_wren"/);
-    });
-
     it('open: no chips in the chat — and no open button (positive control: the chat IS drawn)', () => {
         const html = render({ route: 'genie://dashboard?chat=a_genie', chatThread: { agentId: 'a_genie', name: 'genie', fidelity: 'declared', unread: null, messages: [] } });
         expect(html).toContain('data-chat="pinned"');

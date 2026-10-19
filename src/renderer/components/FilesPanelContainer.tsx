@@ -14,7 +14,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
     pinned: boolean;
-    onPin: () => void;
+    onPin?: (() => void) | undefined;
     onClose: () => void;
     popped?: boolean | undefined;
     onPopOut?: (() => void) | undefined;

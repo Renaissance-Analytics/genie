@@ -255,11 +255,12 @@ describe('the rail', () => {
         const html = rail({ available: ['dashboard'] });
 
         expect(html).not.toContain('data-workspace=');
-        expect(html).not.toContain('Workspaces');
+        expect(html).not.toContain('data-rail-divider');
+        expect(html).not.toContain('data-rail-tool="add-workspace"');
 
         // POSITIVE CONTROL: with the surface available, both the header and the rows are there.
         const full = rail({ available: ['dashboard', 'workspace'] });
-        expect(full).toContain('Workspaces');
+        expect(full).toContain('data-rail-divider');
         expect(full).toContain('data-workspace="tynn"');
     });
 

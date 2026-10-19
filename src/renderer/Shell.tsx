@@ -3,10 +3,9 @@ import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
-import { CHAT_STRIP_WIDTH, DOCK_WIDTH, dockHolder, dockReserve, type DockPanel, type DockNotice, type PinnedPanel } from '../core/dock.js';
+import { type DockPanel, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { chatScope, followChat } from '../core/chat-scope.js';
 import { composerMeter } from '../core/composer.js';
-import { filesDock } from '../core/files-popout.js';
 import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
@@ -15,9 +14,8 @@ import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
-import { workspaceLabel } from '../core/workspace-label.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
-import { ChatFlyout, GenieMark, type ChatThread } from './components/ChatFlyout.js';
+import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
@@ -35,7 +33,7 @@ import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import type { Attachment } from '../core/prompt-content.js';
 
 /**
@@ -102,7 +100,7 @@ export interface ShellProps {
     pickFiles?: (() => Promise<string[]>) | undefined;
     /** The browser surface's box, for main to place the view over. */
     onBrowserBounds?: ((b: { x: number; y: number; width: number; height: number }) => void) | undefined;
-    /** The panel pinned to the dock (files, lists), or `null`. An open chat holds the dock over it (`dockHolder`). */
+    /** NOT DRAWN since 2026-10-19 (the chat holds the side for good); the pin model is removed in its own cleanup row. */
     pinned: PinnedPanel | null;
     onNavigate: (route: string) => void;
     onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
@@ -116,7 +114,8 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
-    onCloseChat: () => void;
+    /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
+    onCloseChat?: (() => void) | undefined;
     /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     onOpenAgent: (agentId: string) => void;
@@ -131,7 +130,7 @@ export interface ShellProps {
     files?: GenieBridge['files'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
-    /** The workspace whose file panel holds the dock when `pinned === 'files'` (§4.3). */
+    /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
     onToggleFilesPin?: ((workspaceId: string) => void) | undefined;
@@ -196,11 +195,6 @@ const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel
 /** No Deck items yet: one array, so the toasts see the same list on every render until the snapshot brings one. */
 const NO_DECK_ITEMS: readonly DeckItem[] = [];
 
-/** The chat sits in the dock's frame, under the view header (§4.4) — always: there is no overlay (2026-10-17). */
-function DockFrame({ style, children }: { style: CSSProperties; children: ReactNode }) {
-    return <div data-dock-frame="chat" className="z-10 bg-[var(--bg-0)]" style={style}>{children}</div>;
-}
-
 export function Shell({
     route,
     snapshot,
@@ -217,7 +211,6 @@ export function Shell({
     chatThread,
     openedThreads,
     chatSession = null,
-    pinned,
     onNavigate,
     onOpenAgent,
     openAgentTabs,
@@ -225,8 +218,6 @@ export function Shell({
     onAddWorkspace,
     terminals = NO_TERMINALS,
     files = NO_FILES,
-    filesWorkspaceId,
-    onToggleFilesPin,
     filesPopped = [],
     readCommits,
     onPopOutFiles,
@@ -248,7 +239,6 @@ export function Shell({
     onOpenPalette,
     onSelectRow,
     onSend,
-    onCloseChat,
     onRestartAndSend,
     answeringApproval,
     onAnswerApproval,
@@ -293,47 +283,14 @@ export function Shell({
     const agentWorkspace = parsed.surface === 'agent' ? workspaceFor(snapshot.agents.find((a) => a.id === parsed.agentId)?.workspaceId ?? '') : null;
     const canServe = servable.includes(parsed.surface);
 
-    /**
-     * THE DOCK RESERVE, and the three places it must not be.
-     *
-     * It starts BELOW THE VIEW HEADER (§4.4) — the surface's own header (`data-view-header`), not the title bar —
-     * which keeps its width and position while the body reflows. The content row carries it as `--dock-reserve`;
-     * styles.css applies it as a `margin-right` to every child of a surface except its header, and the docked
-     * panel's frame starts at that header's measured height (`--view-header-h`). From `dockReserve`, which reads
-     * the same `DOCK_WIDTH` the panel is sized by, so the two cannot diverge. See `core/dock.ts`:
-     *
-     *  - not `padding`, or the content sizes to the padded box and its borders run under the
-     *    panel;
-     *  - not on the outer wrapper, or the view header narrows too — the gutter starts BELOW
-     *    the header, which keeps its width and position;
-     *  - not on a `flex: 1` column — measured: that squeezed the left rail from 300px to
-     *    163px, because a flex child with a margin gives up basis rather than slack.
-     *
-     * An open chat holds the dock over whatever is pinned (`dockHolder`): it reserves its own width, and a pinned file
-     * panel under it stays mounted, hidden, until the chat closes.
+    /*
+     * THE CHAT IS A COLUMN OF THE ROW, beside the page (the owner, 2026-10-19: "the chat still covers up the UX. Chat cannot
+     * be closed PERIOD"). It used to float over the page (`position: absolute`), each page making room with a margin on
+     * every child but its view header — and since agents open inside their workspace a page has two headers; the first was
+     * measured, so the agent's own header ran on under the chat. A column cannot cover anything, however a page nests.
+     * Always there: its width is the person's (Tynn #798), remembered and dragged live.
      */
-    // The file panel popped out releases the reserve (§4.3); the slot stays its workspace's, the lamp stays on.
-    const filesSlot = filesDock({ pinned, filesWorkspaceId: filesWorkspaceId ?? null, popped: filesPopped });
-    // A pinned slot reserves whatever panel holds it; only a POPPED-OUT file panel gives the width back.
-    // The pinned chat's width is the person's (Tynn #798): remembered, dragged live — and the reserve is the same number.
     const [chatDockWidth, setChatDockWidth] = useState(() => readChatDockWidth(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
-    const chatOpen = chatThread !== null || parsed.chat !== null;
-    const holder = dockHolder(pinned, chatOpen);
-    const reserve = holder !== 'chat' && filesSlot.kind === 'popped' ? filesSlot.reserve : dockReserve(holder, chatDockWidth);
-    // The header on screen sets where the dock starts: 56px on most surfaces, 44px on the Agent view. Measured before
-    // paint; 56 until then (and in a static render), 0 on a surface without one.
-    const rowRef = useRef<HTMLDivElement | null>(null);
-    const [headerHeight, setHeaderHeight] = useState(56);
-    useLayoutEffect(() => {
-        const header = rowRef.current?.querySelector<HTMLElement>('[data-view-header]') ?? null;
-        const h = header ? Math.round(header.getBoundingClientRect().height) : 0;
-        if (h !== headerHeight) setHeaderHeight(h);
-    });
-    // `?files=detached` (the board's key): a link to the panel in its own window pops it out, once per arrival.
-    useEffect(() => {
-        if (parsed.surface === 'workspace' && parsed.detached && onPopOutFiles && !filesPopped.includes(parsed.workspaceId)) onPopOutFiles(parsed.workspaceId);
-    }, [route]);
-    const dockFrame: CSSProperties = { position: 'absolute', right: 0, bottom: 0, top: 'var(--view-header-h)', display: 'flex' };
 
     /**
      * The approval the FLYOUT may answer — only when this chat is the composer for the agent
@@ -345,9 +302,6 @@ export function Shell({
     // The chat is the composer for ITS subject wherever the view is, so the approval comes from the subject's own session
     // (the Agent view shows the marker) — not only when the routed agent happens to be the subject.
     const chatApproval = chatThread ? chatSession?.pendingApproval ?? (agentDetail?.agent.id === chatThread.agentId ? agentDetail.session?.pendingApproval ?? null : null) : null;
-    // Where the chat opens from here: the agent the view says (core/chat-scope.ts `followChat`) — never a tab to pick.
-    const openChatRoute = formatRoute({ ...parsed, chat: followChat(parsed.chat ?? 'genie', parsed, snapshot.agents, openedThreads ?? []) });
-    const openChatName = (() => { const to = parseRoute(openChatRoute).chat; return snapshot.agents.find((a) => a.id === to)?.name ?? to ?? 'genie'; })();
     // `Stop this turn` in the chat: only while its agent's turn runs AND can be stopped with the agent kept — the same
     // rule as the Agent view's header (`turnStopOffered`). Never the session's stop (the owner, 2026-10-15).
     const chatTurnStop = chatThread !== null && onCancelTurn !== undefined && turnStopOffered(chatSession);
@@ -397,7 +351,7 @@ export function Shell({
                 </div>
             ) : null}
 
-            <div ref={rowRef} className="relative flex min-h-0 flex-1" style={{ '--dock-reserve': `${reserve}px`, '--view-header-h': `${headerHeight}px` } as CSSProperties} data-dock-reserve={reserve}>
+            <div className="relative flex min-h-0 flex-1">
                 <Sidebar
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
@@ -598,8 +552,8 @@ export function Shell({
                             filesFilter={parsed.filter}
                             onFilesRoute={(file, filter) => onNavigate(formatRoute({ ...parsed, panel: 'files', file, filter, detached: false }))}
                             onOpenFile={(path, line) => onNavigate(openFileRoute(parsed.workspaceId, path, line))}
-                            filesPinned={pinned === 'files' && filesWorkspaceId === parsed.workspaceId}
-                            onPinFiles={() => onToggleFilesPin?.(parsed.workspaceId)}
+                            // The chat holds the side for good: a workspace's file panel shows inline (or pops out), never pinned.
+                            filesPinned={false}
                             filesPopped={filesPopped.includes(parsed.workspaceId)}
                             onPopOutFiles={onPopOutFiles ? () => onPopOutFiles(parsed.workspaceId) : undefined}
                             onBringBackFiles={() => onBringBackFiles?.(parsed.workspaceId)}
@@ -655,61 +609,6 @@ export function Shell({
                 </main>
 
                 {/*
-                 * THE FILE PANEL IN THE DOCK (§4.3/§4.4): pinned, the one panel of that workspace sits in the
-                 * slot on every surface; the reserve above makes room. One panel per workspace — the Workspace
-                 * surface does not draw it inline while it is here.
-                 */}
-                {filesSlot.kind === 'docked' && workspaceFor(filesSlot.workspaceId!) ? (
-                    <aside data-dock="files" data-dock-frame="files" hidden={holder === 'chat'} className="z-10 border-l border-[var(--border-1)] bg-[var(--bg-0)]" style={{ ...dockFrame, width: DOCK_WIDTH, ...(holder === 'chat' ? { display: 'none' } : {}) }}>
-                        <FilesPanelContainer
-                            workspace={workspaceFor(filesSlot.workspaceId!)!}
-                            files={files}
-                            pinned
-                            onPin={() => onToggleFilesPin?.(filesSlot.workspaceId!)}
-                            onClose={() => onToggleFilesPin?.(filesSlot.workspaceId!)}
-                            onPopOut={onPopOutFiles ? () => onPopOutFiles(filesSlot.workspaceId!) : undefined}
-                            onPause={onPauseAgent}
-                            onResume={onResumeAgent}
-                            onDirtyChange={onFilesDirtyChange}
-                        />
-                    </aside>
-                ) : null}
-                {/* Popped out (§4.3): the reserve is released and the dock column is a bar that brings the panel back. */}
-                {filesSlot.kind === 'popped' && holder !== 'chat' ? (
-                    <aside data-files-popped={filesSlot.workspaceId} data-dock-frame="files-popped" className="z-10 w-7 items-start justify-center border-l border-[var(--border-1)] bg-[var(--bg-0)] pt-2" style={dockFrame}>
-                        <button
-                            type="button"
-                            data-action="bring-back-files"
-                            title={`The ${workspaceLabel(snapshot.workspaces, filesSlot.workspaceId!)} file panel is in its own window — bring it back`}
-                            onClick={() => onBringBackFiles?.(filesSlot.workspaceId!)}
-                            className="rounded-md border border-[var(--border-1)] px-1 py-1 text-[10px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]"
-                            style={{ writingMode: 'vertical-rl' }}
-                        >
-                            files · bring back
-                        </button>
-                    </aside>
-                ) : null}
-                {/*
-                 * OPEN THE CHAT (the owner, 2026-10-18: no chat tabs — "the workspaces have agent tabs already. Any view that
-                 * is not a workspace view shows the genie agent chat"): with the chat closed and nothing pinned, ONE button on
-                 * the edge, in the width the reserve keeps, opens it on the agent the view says.
-                 */}
-                {holder === null ? (
-                    <aside data-chat-edge="" aria-label="Chat" className="flex-col items-center border-l border-[var(--border-1)] bg-[var(--bg-1)] py-2" style={{ ...dockFrame, width: CHAT_STRIP_WIDTH, flexDirection: 'column' }}>
-                        <button
-                            type="button"
-                            data-action="open-chat"
-                            data-nav={openChatRoute}
-                            title={`Chat with ${openChatName}`}
-                            onClick={() => onNavigate(openChatRoute)}
-                            className="flex w-6 shrink-0 flex-col items-center gap-1.5 rounded-md py-1.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
-                        >
-                            <GenieMark />
-                            <span className="max-h-24 overflow-hidden text-ellipsis whitespace-nowrap" style={{ writingMode: 'vertical-rl' }}>{openChatName}</span>
-                        </button>
-                    </aside>
-                ) : null}
-                {/*
                  * THE APPROVAL TOASTS (the owner, 2026-10-15: "I should not have to go to the deck to respond to every single
                  * thing an agent needs"): an agent's gated Genie workflow, answered from any screen with the Deck's own answer,
                  * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
@@ -721,10 +620,10 @@ export function Shell({
                     hidden={parsed.surface === 'deck'}
                     onAnswer={onAnswerDeckItem}
                     onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
-                    right={reserve + 16}
+                    right={chatDockWidth + 16}
                 />
-                {chatOpen ? (
-                    <DockFrame style={dockFrame}>
+                {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
+                <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ChatFlyout
                         thread={chatThread}
                         dockWidth={chatDockWidth}
@@ -736,14 +635,12 @@ export function Shell({
                         onAnswerApproval={onAnswerApproval}
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
-                        onClose={onCloseChat}
                         onRestartAndSend={onRestartAndSend}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                     />
-                    </DockFrame>
-                ) : null}
+                </div>
             </div>
         </div>
     );

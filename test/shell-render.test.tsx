@@ -286,57 +286,6 @@ const THREAD: ChatThread = {
 };
 
 describe('the dock geometry \u2014 three shipped failures live here', () => {
-    it('an open chat is never overlaid: it is in the dock, positioned in the row, not absolute (2026-10-17)', () => {
-        const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: null });
-        expect(html).not.toContain('data-chat="overlay"');
-        expect(html).not.toMatch(/data-chat="pinned"[^>]*class="[^"]*absolute/);
-        // CONTROL: closed, the strip's reserve.
-        expect(render({ route: 'genie://dashboard?group=workspace' })).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
-    });
-
-    it('reserves exactly the chat’s width when open, from the SAME number the panel is sized by', () => {
-        /**
-         * One number. **Two numbers is a panel overlapping the content by their difference** —
-         * which shipped twice, and the second time it was a three-pixel overlap nobody could
-         * name.
-         *
-         * Asserted as an identity against `DOCK_WIDTH` rather than against `380`, because what
-         * must hold is that the reserve and the panel cannot diverge. The literal 380 is pinned
-         * separately in `dock.test.ts`.
-         */
-        const html = render({
-            route: 'genie://dashboard?chat=kai', chatThread: THREAD,
-        });
-
-        // The pinned CHAT's width is its own (Tynn #798, default CHAT_DOCK_DEFAULT_WIDTH): reserve and panel, one number.
-        expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
-        expect(html).toContain('data-chat="pinned"');
-        expect(html).toContain(`width:${CHAT_DOCK_DEFAULT_WIDTH}px`);
-        // The reserve is a variable the surface's body reads (styles.css), not a margin on the whole row.
-        expect(html).toContain(`--dock-reserve:${CHAT_DOCK_DEFAULT_WIDTH}px`);
-        expect(html).not.toContain(`margin-right:${CHAT_DOCK_DEFAULT_WIDTH}px`);
-    });
-
-    it('starts the gutter BELOW THE VIEW HEADER \u2014 the surface\u2019s own header keeps its width', () => {
-        /**
-         * §4.4: a pinned panel "reserves a 380px gutter that starts *below* the view header. The header keeps its
-         * width and position; the table reflows". The view header is the SURFACE's (the Dashboard's 56px row), not
-         * the title bar — a reserve on the whole content row narrowed that header too. Now the row carries the
-         * reserve as a variable, styles.css applies it to everything in a surface except its marked header, and
-         * the docked panel's frame starts at the header's measured height (56px until measured).
-         */
-        const html = render({
-            route: 'genie://dashboard?chat=kai', chatThread: THREAD,
-        });
-
-        expect(html.match(/data-view-header/g)).toHaveLength(1);
-        expect(html).toMatch(/data-surface="dashboard"[^>]*><div data-view-header/);
-        expect(html).toMatch(/data-dock-frame="chat"[^>]*style="[^"]*top:var\(--view-header-h\)/);
-        expect(html).toContain('--view-header-h:56px');
-        const css = readFileSync('src/renderer/styles.css', 'utf8');
-        expect(css).toMatch(/\[data-surface\]\s*>\s*:not\(\[data-view-header\]\)\s*\{\s*margin-right:\s*var\(--dock-reserve,\s*0px\)/);
-    });
-
     it('every surface marks its own header once, as its first child (positive control: the Dashboard above)', () => {
         for (const [route, over] of [
             ['genie://deck', {}],
@@ -349,22 +298,6 @@ describe('the dock geometry \u2014 three shipped failures live here', () => {
         }
     });
 
-    it('a pinned file panel: its reserve while the chat is closed; the chat’s own once it opens (one slot, one number)', () => {
-        expect(render({ route: 'genie://dashboard', pinned: 'files' })).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
-        expect(render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: 'files' })).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
-    });
-
-    it('the open chat has a close button and no pin (there is nothing to unpin it to)', () => {
-        const html = render({ route: 'genie://dashboard?chat=kai', chatThread: THREAD });
-        expect(html).toContain('aria-label="Close chat"');
-        expect(html).not.toContain('data-chat-pin');
-    });
-
-    it('shows no chat at all when the route names none', () => {
-        const html = render({ route: 'genie://dashboard?group=workspace' });
-        expect(html).not.toContain('data-chat=');
-        expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
-    });
 });
 
 describe('the chat thread', () => {

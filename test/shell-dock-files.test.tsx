@@ -50,31 +50,6 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
 }
 
 describe('the file panel in the dock', () => {
-    it('pinned: a dock column of DOCK_WIDTH holds the panel of the pinned workspace on ANY surface, the content row reserves the same width, the pin lamp is on', () => {
-        const html = render({ pinned: 'files', filesWorkspaceId: 'tynn' });
-        expect(html).toContain('data-dock="files"');
-        expect(html).toMatch(new RegExp(`data-dock="files"[^>]*width:${DOCK_WIDTH}px`));
-        expect(html).toContain('data-files-panel="tynn"');
-        expect(html).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
-        expect(html).toContain('data-pin="on"');
-    });
-
-    it('unpinned: no dock, only the chat strip’s reserve; on the Workspace surface the panel is inline with the lamp off', () => {
-        const dashboard = render({ pinned: null });
-        expect(dashboard).not.toContain('data-dock="files"');
-        expect(dashboard).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
-        const workspace = render({ pinned: null, route: 'genie://workspace/tynn?panel=files' });
-        expect(workspace).toContain('data-files-panel="tynn"');
-        expect(workspace).toContain('data-pin="off"');
-        expect(workspace).not.toContain('data-dock="files"');
-    });
-
-    it('pinned files on the Workspace surface: the panel is in the dock, not inline too — one panel per workspace', () => {
-        const html = render({ pinned: 'files', filesWorkspaceId: 'tynn', route: 'genie://workspace/tynn?panel=files' });
-        expect((html.match(/data-files-panel="tynn"/g) ?? []).length).toBe(1);
-        expect(html).toContain('data-dock="files"');
-    });
-
     it('nothing pinned: no files dock, even with a workspace remembered', () => {
         expect(render({ pinned: null, filesWorkspaceId: 'tynn' })).not.toContain('data-dock="files"');
     });

@@ -50,7 +50,8 @@ export interface FilesPanelProps {
     readonly pinned: boolean;
     readonly onSelect: (path: string) => void;
     readonly onCloseTab: (path: string) => void;
-    readonly onPin: () => void;
+    /** Pin the panel to the side; absent = no Pin (the chat holds the side, 2026-10-19). */
+    readonly onPin?: (() => void) | undefined;
     readonly onClose: () => void;
     readonly edit?: FilesEdit | undefined;
     /** Pop the panel into its own window (§4.3); absent on a bridge that cannot open host windows. */
@@ -157,9 +158,11 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     <button type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</button>
                 ) : (
                     <>
-                        <button type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
-                            {pinned ? 'Pinned' : 'Pin'}
-                        </button>
+                        {onPin ? (
+                            <button type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
+                                {pinned ? 'Pinned' : 'Pin'}
+                            </button>
+                        ) : null}
                         {onPopOut ? <button type="button" data-action="pop-out-files" className={button} title="Pop the panel into its own window" onClick={onPopOut}>Pop out</button> : null}
                         <button type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</button>
                     </>

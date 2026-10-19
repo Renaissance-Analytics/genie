@@ -49,32 +49,10 @@ function render(over: Partial<Parameters<typeof Shell>[0]> = {}): string {
 }
 
 describe('the file panel popped out', () => {
-    it('pinned + popped: no dock panel, reserve 0, a bar naming the workspace with Bring it back; the pin lamp stays on', () => {
-        const html = render({ pinned: 'files', filesWorkspaceId: 'tynn', filesPopped: ['tynn'], onBringBackFiles: () => {} });
-        expect(html).not.toContain('data-dock="files"');
-        expect(html).toContain('data-dock-reserve="0"');
-        expect(html).toContain('data-files-popped="tynn"');
-        expect(html).toContain('data-action="bring-back-files"');
-        expect(html).not.toContain('data-files-panel="tynn"');
-    });
-
-    it('nothing popped is the positive control: the dock holds the panel and the reserve is the dock width', () => {
-        const html = render({ pinned: 'files', filesWorkspaceId: 'tynn', filesPopped: [] });
-        expect(html).toContain('data-dock="files"');
-        expect(html).toContain('data-files-panel="tynn"');
-        expect(html).not.toContain('data-files-popped');
-        expect(html).not.toContain('data-dock-reserve="0"');
-    });
-
     it('unpinned, on the Workspace surface with the panel popped: not inline either — the bar instead', () => {
         const html = render({ pinned: null, route: 'genie://workspace/tynn?panel=files', filesPopped: ['tynn'], onBringBackFiles: () => {} });
         expect(html).not.toContain('data-files-panel="tynn"');
         expect(html).toContain('data-files-popped="tynn"');
     });
 
-    it('another workspace popped out does not touch this one', () => {
-        const html = render({ pinned: 'files', filesWorkspaceId: 'tynn', filesPopped: ['fancy'] });
-        expect(html).toContain('data-dock="files"');
-        expect(html).not.toContain('data-files-popped="tynn"');
-    });
 });

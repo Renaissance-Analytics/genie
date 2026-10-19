@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { CHAT_DOCK_DEFAULT_WIDTH, CHAT_STRIP_WIDTH, DOCK_WIDTH, dockHolder, pinPanel, routeAfterPin } from '../src/core/dock.js';
+import { dockHolder, pinPanel, routeAfterPin } from '../src/core/dock.js';
 import { chatAction } from '../src/core/keys.js';
 import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/bridge.js';
-import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
+import { type ChatThread } from '../src/renderer/components/ChatFlyout.js';
 import { Shell } from '../src/renderer/Shell.js';
 
 /**
@@ -69,38 +69,6 @@ describe('who holds the dock', () => {
         expect(routeAfterPin('genie://agent/kai?tab=stream&chat=kai', outcome)).toBe('genie://agent/kai?tab=stream');
         // CONTROL: a pin that displaced nothing leaves the route alone.
         expect(routeAfterPin('genie://workspace/tynn?panel=files', pinPanel(null, 'files', false))).toBe('genie://workspace/tynn?panel=files');
-    });
-});
-
-describe('the chat, open: always docked', () => {
-    it('in the dock frame, its width reserved, no overlay, no pin, a close button; the open button gives way', () => {
-        const html = shell({ route: 'genie://dashboard?chat=kai', chatThread: THREAD });
-        expect(html).toContain('data-chat="pinned"');
-        expect(html).toContain('data-dock-frame="chat"');
-        expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
-        expect(html).not.toContain('data-chat="overlay"');
-        expect(html).not.toContain('data-chat-pin');
-        expect(html).toContain('aria-label="Close chat"');
-        expect(html).not.toContain('data-action="open-chat"');
-    });
-
-    it('CONTROL — closed: the one button that opens it, and only its reserve', () => {
-        const html = shell();
-        expect(html.match(/data-action="open-chat"/g)).toHaveLength(1);
-        expect(html).not.toContain('data-chat=');
-        expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
-    });
-
-    it('over a pinned file panel: the chat holds the dock; the panel stays MOUNTED, hidden (its unsaved edits kept)', () => {
-        const html = shell({ route: 'genie://dashboard?chat=kai', chatThread: THREAD, pinned: 'files', filesWorkspaceId: 'tynn' });
-        expect(html).toContain(`data-dock-reserve="${CHAT_DOCK_DEFAULT_WIDTH}"`);
-        expect(html).toMatch(/<aside[^>]*data-dock="files"[^>]*hidden=""/);
-        expect(html).toContain('data-files-panel="tynn"');
-        // CONTROL: the chat closed, the same pin is on screen, not hidden, with its own reserve.
-        const back = shell({ pinned: 'files', filesWorkspaceId: 'tynn' });
-        expect(back).toMatch(/<aside[^>]*data-dock="files"/);
-        expect(back).not.toMatch(/<aside[^>]*data-dock="files"[^>]*hidden=""/);
-        expect(back).toContain(`data-dock-reserve="${DOCK_WIDTH}"`);
     });
 });
 
