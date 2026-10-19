@@ -105,6 +105,12 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
             out.push({ id: row.id, who: 'stopped', from: e.by ?? '', text, delivered: true, at: row.at });
             continue;
         }
+        if (e.kind === 'divider' && e.variant === 'compaction') {
+            // `/compact`, said in one line where it happened (the owner, 2026-10-19) — the sizes only when reported.
+            const sizes = e.before !== null && e.after !== null ? ` from ${e.before.toLocaleString('en-US')} to ${e.after.toLocaleString('en-US')} tokens` : '';
+            out.push({ id: row.id, who: 'system', from: '', text: `Compacted the context${sizes}`, delivered: true, at: row.at });
+            continue;
+        }
         if (e.kind !== 'message') continue;
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
