@@ -7,7 +7,8 @@ import { QuestionForm, type QuestionDraft } from '../src/renderer/components/Que
 /**
  * THE FORM IN PLACE (§4.5): an agent's questions are their form, right in the Deck row where they are read (the body IS
  * the form since the owner's "I can't read this", 2026-10-15 — no door to click first) — one fieldset per
- * question with its header chip, radios for a single-select and checkboxes for a multi-select, ONE NOTE PER QUESTION
+ * question with its header chip, Genie 1's TOGGLE options (the owner, 2026-10-19: "I should be able to unselect a
+ * choice" — a radio cannot be unpicked; a picked option clicked again clears), ONE NOTE PER QUESTION
  * right under its options, and one Answer button. No modal, no navigation: the acceptance test for the Deck is clearing
  * the whole band without navigating once.
  *
@@ -35,12 +36,14 @@ describe('the in-place form', () => {
         expect(html).not.toContain('data-deck-expand');
     });
 
-    it('a fieldset per question with the header chip, radios or checkboxes by multiSelect, a note per question, one Answer button — and no navigation', () => {
+    it('a fieldset per question with the header chip, toggle options marked single or multi, a note per question, one Answer button — and no navigation', () => {
         const html = render();
         expect(html).toContain('data-deck-form="q_1"');
         expect((html.match(/data-deck-question="/g) ?? []).length).toBe(2);
-        expect(html).toMatch(/data-deck-question="0"[^]*?type="radio"/);
-        expect(html).toMatch(/data-deck-question="1"[^]*?type="checkbox"/);
+        expect(html).toMatch(/data-deck-question="0"[^]*?data-question-option="4"[^>]*data-select="single"/);
+        expect(html).toMatch(/data-deck-question="1"[^]*?data-question-option="unit"[^>]*data-select="multi"/);
+        // No radio or checkbox: neither can be unpicked by clicking it again.
+        expect(html).not.toMatch(/type="radio"|type="checkbox"/);
         expect(html).toContain('Workers');
         expect(html).toContain('Scope');
         // COUNTED: one note per question, not one for the form.
@@ -72,8 +75,8 @@ describe('the form says what is left and only lets a ready answer through', () =
         const html = form();
         expect((html.match(/<textarea[^>]*data-deck-note="q_1"/g) ?? []).length).toBe(2);
         // Inside each question's fieldset, after its options.
-        expect(html).toMatch(/data-deck-question="0"(?:(?!<\/fieldset>)[^])*type="radio"(?:(?!<\/fieldset>)[^])*data-question-note="0"/);
-        expect(html).toMatch(/data-deck-question="1"(?:(?!<\/fieldset>)[^])*type="checkbox"(?:(?!<\/fieldset>)[^])*data-question-note="1"/);
+        expect(html).toMatch(/data-deck-question="0"(?:(?!<\/fieldset>)[^])*data-question-option=(?:(?!<\/fieldset>)[^])*data-question-note="0"/);
+        expect(html).toMatch(/data-deck-question="1"(?:(?!<\/fieldset>)[^])*data-question-option=(?:(?!<\/fieldset>)[^])*data-question-note="1"/);
         expect(html).toContain('placeholder="Add a note (optional if you picked an option)"');
     });
 
@@ -88,13 +91,12 @@ describe('the form says what is left and only lets a ready answer through', () =
         expect(submitTag(html)).toContain('disabled=""');
         expect(html).toMatch(/data-question-remaining="1"[^>]*>1 of 2 still needs an option or a note</);
         // The chosen option shows as chosen.
-        // Attribute order is the renderer's (React writes `checked` and `value` last, in its own order): find the radio by
-        // its value, then require it to be checked — and the other radio of that question not.
-        const radios = html.match(/<input[^>]*type="radio"[^>]*>/g) ?? [];
-        const four = radios.filter((t) => t.includes('value="4"'));
+        // The option tag found by its label, then required to be pressed — and the other option of that question not.
+        const options = html.match(/<button[^>]*data-question-option="[^"]*"[^>]*>/g) ?? [];
+        const four = options.filter((t) => t.includes('data-question-option="4"'));
         expect(four).toHaveLength(1);
-        expect(four[0]).toContain('checked=""');
-        expect(radios.filter((t) => t.includes('value="8"') && t.includes('checked=""'))).toHaveLength(0);
+        expect(four[0]).toContain('aria-pressed="true"');
+        expect(options.filter((t) => t.includes('data-question-option="8"') && t.includes('aria-pressed="true"'))).toHaveLength(0);
     });
 
     it('a NOTE alone answers its question: every question answered → Answer ENABLED and the count line is gone', () => {
