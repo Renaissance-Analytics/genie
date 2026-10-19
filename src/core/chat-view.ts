@@ -1,5 +1,5 @@
 import { limitWords } from './limit-words.js';
-import type { AgentRow, AgentState, Fidelity } from './dashboard-view.js';
+import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
 import type { Attachment } from './prompt-content.js';
@@ -53,15 +53,6 @@ export interface ChatMessage {
     reason?: string;
 }
 
-export interface ChatChip {
-    agentId: string;
-    name: string;
-    /** `null` for genie, the OS agent: its tab carries Genie's mark, not a state Genie would be guessing. */
-    state: AgentState | null;
-    fidelity: Fidelity;
-    active: boolean;
-    unread: number | null;
-}
 
 export interface ChatContext {
     text: string;
@@ -76,7 +67,6 @@ export interface ChatThreadView {
     messages: readonly ChatMessage[];
     /** `null` until the agent's detail has been read — not "Idle". */
     context: ChatContext | null;
-    chips: readonly ChatChip[];
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -120,14 +110,6 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
     return out;
 }
 
-export function chatChips(rows: readonly AgentRow[], subjectId: string): ChatChip[] {
-    const subject = rows.find((r) => r.id === subjectId);
-    if (!subject) return [];
-    return rows
-        .filter((r) => r.workspaceId === subject.workspaceId)
-        .map((r) => ({ agentId: r.id, name: r.name, state: r.state, fidelity: r.fidelity, active: r.id === subjectId, unread: null }));
-}
-
 export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, rows: readonly AgentRow[], _now: () => number): ChatThreadView {
     const row = rows.find((r) => r.id === subjectId);
     return {
@@ -137,32 +119,15 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         unread: null,
         messages: detail ? byTime(chatMessages(detail), commsRows(detail, rows)) : [],
         context: detail ? chatContext(detail) : null,
-        chips: chatChips(rows, subjectId),
     };
 }
 
 /** The OS agent's address in a route (`chat=genie`); its minted id resolves from the name. */
 const GENIE = 'genie';
-const isOsAgent = (r: AgentRow): boolean => r.workspaceId === '__genie__' && r.name === GENIE;
 /** How many conversations the tabs remember. */
 const KEPT = 8;
 
-/**
- * THE CHAT'S TABS, across workspaces (the board's flyout: `atlas · lark · rook · genie`): the conversations you
- * opened, newest first; then any agent waiting on you that is not already there; genie, the OS agent, always last.
- * An agent no longer on the board drops out rather than showing a name that opens nothing.
- */
-export function chatThreads(agents: readonly AgentRow[], opened: readonly string[], subjectId: string | null): ChatChip[] {
-    const os = agents.find(isOsAgent) ?? null;
-    const onBoard = agents.filter((r) => !isOsAgent(r));
-    const tab = (r: AgentRow): ChatChip => ({ agentId: r.id, name: r.name, state: r.state, fidelity: r.fidelity, active: r.id === subjectId, unread: null });
-    const first = opened.flatMap((id) => onBoard.filter((r) => r.id === id)).map(tab);
-    const waiting = onBoard.filter((r) => r.state === 'waiting' && !opened.includes(r.id)).map(tab);
-    const genie: ChatChip = { agentId: GENIE, name: GENIE, state: null, fidelity: 'declared', active: subjectId === GENIE || (os !== null && subjectId === os.id), unread: null };
-    return [...first, ...waiting, genie];
-}
-
-/** A conversation opened: first in the tabs, once; the tabs keep eight. genie is never remembered — it is always there. */
+/** A conversation opened: first in the list a workspace's chat is chosen from, once; eight are kept. genie is never remembered — it is every other view's. */
 export function rememberThread(opened: readonly string[], id: string): string[] {
     if (id === GENIE) return [...opened];
     return [id, ...opened.filter((x) => x !== id)].slice(0, KEPT);

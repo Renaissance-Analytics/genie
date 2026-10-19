@@ -7,6 +7,7 @@ import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, t
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
+import { followChat } from '../core/chat-scope.js';
 import { openAgentTabs as nextOpenAgentTabs } from '../core/workspace-tabs.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
@@ -16,7 +17,7 @@ import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatSendFor, chatThreadFrom, chatThreads, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatSendFor, chatThreadFrom, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
@@ -647,7 +648,7 @@ function DesktopApp({ bridge }: AppProps) {
             }
             if (action === 'toggle-chat') {
                 e.preventDefault();
-                navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: 'genie' }));
+                navigate(parsed.chat !== null ? route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '') : formatRoute({ ...parsed, chat: followChat('genie', parsed, snapshot.agents, openedThreads) }));
                 return;
             }
             if (action !== 'toggle-files') return;
@@ -862,7 +863,7 @@ function DesktopApp({ bridge }: AppProps) {
             agentResolved={resolved}
             selectedRowId={selectedRowId}
             chatThread={chatThread}
-            chatThreads={chatThreads(snapshot.agents, openedThreads, chatSubject)}
+            openedThreads={openedThreads}
             chatSession={chatDetail?.session ?? null}
             pinned={pinned}
             // The chat rides every navigation (#258) — but arriving at ANOTHER workspace moves it to an agent of that

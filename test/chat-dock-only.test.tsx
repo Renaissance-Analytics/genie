@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CHAT_DOCK_DEFAULT_WIDTH, CHAT_STRIP_WIDTH, DOCK_WIDTH, dockHolder, pinPanel, routeAfterPin } from '../src/core/dock.js';
 import { chatAction } from '../src/core/keys.js';
-import { horizontalWheel } from '../src/core/wheel.js';
 import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/bridge.js';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
 import { Shell } from '../src/renderer/Shell.js';
@@ -74,7 +73,7 @@ describe('who holds the dock', () => {
 });
 
 describe('the chat, open: always docked', () => {
-    it('in the dock frame, its width reserved, no overlay, no pin, a close button; the strip gives way', () => {
+    it('in the dock frame, its width reserved, no overlay, no pin, a close button; the open button gives way', () => {
         const html = shell({ route: 'genie://dashboard?chat=kai', chatThread: THREAD });
         expect(html).toContain('data-chat="pinned"');
         expect(html).toContain('data-dock-frame="chat"');
@@ -82,12 +81,12 @@ describe('the chat, open: always docked', () => {
         expect(html).not.toContain('data-chat="overlay"');
         expect(html).not.toContain('data-chat-pin');
         expect(html).toContain('aria-label="Close chat"');
-        expect(html).not.toContain('data-chat-strip');
+        expect(html).not.toContain('data-action="open-chat"');
     });
 
-    it('CONTROL — closed: the strip of chat tabs, and only its reserve', () => {
+    it('CONTROL — closed: the one button that opens it, and only its reserve', () => {
         const html = shell();
-        expect(html).toContain('data-chat-strip');
+        expect(html.match(/data-action="open-chat"/g)).toHaveLength(1);
         expect(html).not.toContain('data-chat=');
         expect(html).toContain(`data-dock-reserve="${CHAT_STRIP_WIDTH}"`);
     });
@@ -111,24 +110,5 @@ describe('keys: a docked chat stays until closed', () => {
         expect(chatAction(press('Escape'), { open: true })).toBeNull();
         expect(chatAction(press('a'), { open: true, approval: true })).toBe('allow');
         expect(chatAction(press('d'), { open: true, approval: true })).toBe('deny');
-    });
-});
-
-describe('the chat tabs row', () => {
-    it('a mouse wheel scrolls it sideways: lines and pixels both; a trackpad’s own sideways swipe is left to the browser', () => {
-        expect(horizontalWheel({ deltaX: 0, deltaY: 120, deltaMode: 0 })).toBe(120);
-        expect(horizontalWheel({ deltaX: 0, deltaY: -3, deltaMode: 1 })).toBe(-48);
-        expect(horizontalWheel({ deltaX: 30, deltaY: 4, deltaMode: 0 })).toBe(0);
-        expect(horizontalWheel({ deltaX: 0, deltaY: 0, deltaMode: 0 })).toBe(0);
-    });
-
-    it('takes no more than the panel’s width and draws no scrollbar over its chips', () => {
-        const chips = ['prism', 'tynn', 'moic', 'fancy', 'tribeshare', 'impactium'].map((n) => ({ agentId: n, name: n, state: 'idle' as const, fidelity: 'declared' as const, active: n === 'prism', unread: null }));
-        const html = renderToStaticMarkup(<ChatFlyout thread={{ ...THREAD, chips }} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} />);
-        const row = html.match(/<div[^>]*data-chat-threads=""[^>]*>/)?.[0] ?? '';
-        expect(row).not.toBe('');
-        expect(row).toContain('min-w-0');
-        expect(row).toContain('[scrollbar-width:none]');
-        expect((html.match(/data-chat-thread-chip=/g) ?? []).length).toBe(6);
     });
 });

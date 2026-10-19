@@ -9,17 +9,18 @@ import { workspaceLabel } from './workspace-label.js';
  * person can roam with one conversation open. It rode onto another workspace too, and the composer still read
  * `Message moic` over prism's agents — a message typed there went to a project the person was not looking at.
  *
- * The contract:
- *  - **Inside one workspace, and on surfaces of no workspace** (Dashboard, Deck, Settings, the feature surfaces), the
- *    chat stays on its agent — #258's free roam, unchanged.
- *  - **Arriving at ANOTHER workspace** — its route, or one of its agents — moves the chat to an agent of that workspace:
- *    the agent on screen, else the one you last chatted with there (the chat's remembered tabs, newest first), else
- *    its first. Pinned stays pinned, floating stays floating.
+ * The contract — THE CHAT FOLLOWS THE VIEW, and there are no chat tabs (the owner, 2026-10-18: "get rid of the chat
+ * tabs completely because we should be switching from workspace to workspace and then the workspaces have agent tabs
+ * already. Any view that is not a workspace view shows the genie agent chat"):
+ *  - **An agent's view** — the chat is that agent. A workspace's agent tabs are how a person picks one.
+ *  - **A workspace's view** — an agent of that workspace: the one already in the chat if it is there, else the one
+ *    you last chatted with there (newest first), else its first.
+ *  - **Any other view** (Dashboard, Deck, Settings, the feature surfaces) — Genie.
+ *  - Pinned stays pinned; a closed chat stays closed.
  *  - **A workspace with no agent to message** (or whose agents are not read yet) keeps the chat where it was, and the
  *    composer is replaced by the reason — there is nothing on screen to send to, and sending elsewhere is the bug.
- *  - **A chat deliberately on another workspace's agent** (its tab picked while floating) names that workspace in the
+ *  - **A chat deliberately on another workspace's agent** (a link or route that names it) names that workspace in the
  *    composer and the header: `Message lark — in beta.example`. Never silent.
- *  - **genie, the OS agent,** belongs to no project and is never swapped out.
  */
 
 /** The slice of an agent row these rules read (structurally `AgentRow`). */
@@ -69,17 +70,21 @@ export function workspaceOnScreen(route: Route, roster: readonly ChatRosterAgent
  * and that workspace has an agent to move to (see the contract above).
  */
 export function followChat(subject: string, next: Route, roster: readonly ChatRosterAgent[], opened: readonly string[]): string {
+    // Without the roster nothing can be placed: the chat rides along unchanged rather than guess.
+    if (roster.length === 0) return subject;
+    if (next.surface === 'agent') return resolveChatAgent(next.agentId, roster)?.id ?? subject;
     const screen = workspaceOnScreen(next, roster);
-    if (screen === null) return subject;
+    if (screen === null) return genieOf(roster);
     const current = resolveChatAgent(subject, roster);
-    if (current === null || !isProjectAgent(current) || current.workspaceId === screen) return subject;
+    if (current !== null && current.workspaceId === screen) return subject;
     const here = roster.filter((r) => r.workspaceId === screen);
-    if (next.surface === 'agent') {
-        const onScreen = resolveChatAgent(next.agentId, roster);
-        if (onScreen && here.includes(onScreen)) return onScreen.id;
-    }
     const last = opened.find((id) => here.some((r) => r.id === id));
     return last ?? here[0]?.id ?? subject;
+}
+
+/** Genie, the OS agent: its id on this roster, else its name (a route resolves either). */
+export function genieOf(roster: readonly ChatRosterAgent[]): string {
+    return roster.find((r) => !isProjectAgent(r) && r.name === 'genie')?.id ?? 'genie';
 }
 
 export type ChatScope =

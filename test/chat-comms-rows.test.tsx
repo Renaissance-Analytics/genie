@@ -55,7 +55,7 @@ describe('the thread', () => {
 describe('the row', () => {
     it('one mono line with the arrows icon — no bubble, no speaker line', () => {
         const thread = chatThreadFrom(detail([mail('m1', 'a1', 'a2', 'drop challenges table from migration', T + 60_000)]), 'a1', rows, () => 0);
-        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} />);
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} />);
         expect(html).toMatch(/data-chat-message="m1" data-who="system"[\s\S]*atlas → wren · drop challenges table from migration/);
         expect(html.match(/data-who="system"/g)).toHaveLength(1);
     });

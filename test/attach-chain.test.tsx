@@ -70,7 +70,7 @@ describe('the thread', () => {
 
     it('the flyout shows the files, and a refused draft says why — with no Restart, which would not change it', () => {
         const thread: ChatThread = {
-            agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: null, chips: [],
+            agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: null,
             messages: [
                 { id: 'm1', who: 'you', from: 'you', text: 'see this', delivered: true, at: 1, attachments: ['shot.png'] },
                 { id: 'd1', who: 'you', from: 'you', text: 'and this', delivered: false, at: 2, attachments: ['data.bin'], reason: 'data.bin is neither an image nor a text file, so it cannot be sent to an agent' },

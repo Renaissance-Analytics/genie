@@ -299,11 +299,9 @@ export function canonicalAgentRoute(current: string, resolvedId: string): string
  * routes are literals, so this carries the current chat (and whether it is pinned) onto `next` when `next` names no chat
  * of its own. Closing the chat is a route without `chat=`, built from the current one — it never passes through here.
  *
- * BUT NOT ONTO ANOTHER WORKSPACE (the owner, beta.26: "I navigated to the prism workspace but the chat stayed on moic" —
- * and a message went to the wrong agent). When `next` puts another workspace on screen, the chat moves to an agent of
- * THAT workspace (`core/chat-scope.ts` `followChat`: the agent on screen, else the one last chatted with there — `opened`,
- * the chat's remembered tabs, newest first — else its first). Inside one workspace, and on surfaces of no workspace, it
- * stays. Without the roster nothing can be placed in a workspace, and the chat rides along unchanged.
+ * ON THE AGENT THE VIEW SAYS (the owner, 2026-10-18: no chat tabs): an agent's view is that agent, a workspace's view is
+ * an agent of that workspace, every other view is Genie (`core/chat-scope.ts` `followChat`). Without the roster nothing
+ * can be placed, and the chat rides along unchanged.
  */
 export function carryChat(next: string, current: Route, roster: readonly ChatRosterAgent[] = [], opened: readonly string[] = []): string {
     if (current.chat === null) return next;
@@ -312,11 +310,3 @@ export function carryChat(next: string, current: Route, roster: readonly ChatRos
     return formatRoute({ ...parsedNext, chat: followChat(current.chat, parsedNext, roster, opened), pin: current.pin });
 }
 
-/**
- * PICKING A CHAT TAB (the owner, 2026-10-14: "When the chat is pinned, whenever I select an agent tab, it should bring me
- * to that agent's view as well"). The chat is always docked now (2026-10-17), so this is what a pick does: the main view
- * goes to that agent too, the chat beside it.
- */
-export function pickThreadRoute(agentId: string): string {
-    return formatRoute({ ...parseRoute(`genie://agent/${agentId}?tab=stream`), chat: agentId });
-}

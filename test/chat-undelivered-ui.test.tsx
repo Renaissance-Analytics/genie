@@ -7,7 +7,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * <agent> is not running.", and `[Restart <agent> and send]`. Never dropped, never shown as sent.
  */
 const thread: ChatThread = {
-    agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Broken · ACP stream closed', tone: 'bad' }, chips: [],
+    agentId: 'a1', name: 'lark', fidelity: 'declared', unread: null, context: { text: 'Broken · ACP stream closed', tone: 'bad' },
     messages: [{ id: 'd1', who: 'you', from: 'you', text: 'Use 4 workers instead.', delivered: false, at: 1_700_000_000_000 }],
 };
 const render = (t: ChatThread) =>

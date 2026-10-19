@@ -43,7 +43,7 @@ describe('the pinned width', () => {
 });
 
 describe('the panel', () => {
-    const thread = { agentId: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'tynn', context: null, messages: [], chips: [] } as unknown as ChatThread;
+    const thread = { agentId: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'tynn', context: null, messages: [] } as unknown as ChatThread;
     it('sized by the width it is given, and its edge drags', () => {
         const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} widthStorage={null} dockWidth={640} onDockWidth={() => {}} />);
         expect(html).toMatch(/style="width:640px"/);

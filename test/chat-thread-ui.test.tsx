@@ -15,10 +15,6 @@ const T = 1_700_000_000_000;
 const thread: ChatThread = {
     agentId: 'a1', name: 'atlas', fidelity: 'declared', unread: null,
     context: { text: 'Working · Plan 4/7 · Passkey enrolment endpoint', tone: 'ok' },
-    chips: [
-        { agentId: 'a1', name: 'atlas', state: 'working', fidelity: 'declared', active: true, unread: null },
-        { agentId: 'a2', name: 'wren', state: 'waiting', fidelity: 'declared', active: false, unread: null },
-    ],
     messages: [
         { id: 'm1', who: 'you', from: 'you', text: 'Use the cache driver.', delivered: true, at: T },
         { id: 'm2', who: 'agent', from: 'atlas', text: 'Moving challenges to the cache store.', delivered: true, at: T + 60_000 },
@@ -26,7 +22,7 @@ const thread: ChatThread = {
     ],
 };
 const render = (t: ChatThread) =>
-    renderToStaticMarkup(<ChatFlyout thread={t} onSend={() => {}} onClose={() => {}} onPickThread={() => {}} />);
+    renderToStaticMarkup(<ChatFlyout thread={t} onSend={() => {}} onClose={() => {}} />);
 
 describe('the chat transcript', () => {
     it('renders every message with its speaker: you on the right, the agent by NAME, the peer as `peer → agent`', () => {
@@ -53,13 +49,12 @@ describe('the chat transcript', () => {
         expect(render({ ...thread, context: null })).not.toContain('data-chat-context');
     });
 
-    it('thread chips: one per agent in the workspace, the subject active, clickable to switch the thread', () => {
+    // No chat tabs (the owner, 2026-10-18): the view picks the agent (chat-follows-view.test.tsx), the chat shows one.
+    it('no thread chips: one conversation, its context line under the header (positive control: the line IS drawn)', () => {
         const html = render(thread);
-        expect((html.match(/data-chat-thread-chip="/g) ?? []).length).toBe(2);
-        expect(html).toMatch(/data-chat-thread-chip="a1"[^>]*data-active="true"/);
-        expect(html).toMatch(/data-chat-thread-chip="a2"(?![^>]*data-active)/);
-        // No chips row at all when there are none to show — not an empty strip.
-        expect(render({ ...thread, chips: [] })).not.toContain('data-chat-threads');
+        expect(html).toContain('Working · Plan 4/7');
+        expect(html).not.toContain('data-chat-threads');
+        expect(html).not.toContain('data-chat-thread-chip');
     });
 });
 
