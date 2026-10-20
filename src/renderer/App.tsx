@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { openAgentTabs as nextOpenAgentTabs, parseTabs } from '../core/workspace-tabs.js';
-import { addressOf, isInternalRoute, routeOfAddress, type AddressContext } from '../core/address.js';
+import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -483,6 +483,19 @@ function DesktopApp({ bridge }: AppProps) {
         if (!addressContext || shownAddress === address || !isInternalRoute(address)) return;
         window.location.replace(`#${shownAddress}`);
     }, [address, shownAddress, addressContext !== null]);
+    // LEAVING A REMOTE HOST (the two-VM proof, 2026-10-20): the address named that machine; once this window's own snapshot
+    // names this one, the same page comes back here — Disconnect on the host's Remote access lands on this machine's Remote
+    // access (the host it left is listed there), not the Dashboard. Not in a window BOUND to a host: it waits for its host.
+    const leftHost = useRef<string | null>(null);
+    useEffect(() => {
+        if (remote.state?.connected && remote.state.host) { leftHost.current = remote.state.host; return; }
+        const from = leftHost.current;
+        const here = snapshot.workstation?.name;
+        if (remote.bound || from === null || !here || here.toLowerCase() === from.toLowerCase()) return;
+        leftHost.current = null;
+        const next = rehomeAddress(address, from, here);
+        if (next !== address) window.location.replace(`#${next}`);
+    }, [remote.state?.connected, remote.state?.host, remote.bound, snapshot.workstation?.name, address]);
     const [features, setFeatures] = useFeatures(resolvedBridge);
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);

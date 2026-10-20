@@ -8,6 +8,8 @@
  * out of the stylesheet and the app renders unstyled. Straight from react-fancy's README.
  */
 @source "../../node_modules/@particle-academy/react-fancy/dist/**/*.js";
+/* And fancy-code (Tynn #840): the editor's own classes — its gutter, caret and highlight layers — are not in react-fancy. */
+@source "../../node_modules/@particle-academy/fancy-code/dist/**/*.js";
 
 @import "./tokens.css";
 

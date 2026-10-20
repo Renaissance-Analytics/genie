@@ -154,6 +154,15 @@ export class FilesHost {
         return nodes.sort(byName);
     }
 
+    /** The host path of a file or folder in the workspace, confined to it (Tynn #841's menu acts on it); `null` outside. */
+    absolute(workspaceId: string, path: string): string | null {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return null;
+        const rel = confine(ws.path, path);
+        if (rel === null) return null;
+        return rel === '' ? ws.path : join(ws.path, ...rel.split('/'));
+    }
+
     async open(workspaceId: string, path: string): Promise<OpenResult> {
         const ws = this.#ports.workspace(workspaceId);
         if (!ws) return { ok: false, path, error: 'no such workspace' };

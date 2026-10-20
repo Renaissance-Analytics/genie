@@ -41,7 +41,7 @@ describe('a file opened from the Changes tab shows its content without waiting f
             expect(contentCount).toBeGreaterThan(0);
             const unread = single(path, null);
             expect(count(unread, `data-file-crumb="${path}"`)).toBe(1);
-            expect(count(unread, 'data-fancy-file-viewer')).toBe(1);
+            expect(count(unread, 'data-fancy-code-editor')).toBe(1); // the editor itself (Tynn #840: no FileViewer wrapper for text)
             expect(count(unread, MARK)).toBe(contentCount);
         });
     }

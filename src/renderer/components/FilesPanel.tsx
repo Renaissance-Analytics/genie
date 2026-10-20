@@ -1,5 +1,7 @@
-import { Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
-import { FileViewer } from '@particle-academy/fancy-code';
+import { ContextMenu, Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
+import { useState } from 'react';
+import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
+import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
 import { fileCrumb, statusBarFor } from '../../core/files-panel.js';
 import { FancyDiff } from '@particle-academy/fancy-diff';
@@ -38,6 +40,13 @@ export interface FilesEdit {
     /** `Compare` is open: your buffer against the disk, in the kit's diff. */
     readonly comparing?: boolean | undefined;
     readonly onCompare?: (() => void) | undefined;
+    /** A save that failed WITHOUT a conflict (permission, a full disk, the host gone): its reason, until the next save. */
+    readonly saveError?: string | null | undefined;
+}
+
+/** Ctrl+S / Cmd+S (Genie 1's CodePanel) — not with Shift (Save As in most editors) or Alt. */
+export function isSaveShortcut(e: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
+    return (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's';
 }
 
 export interface FilesPanelProps {
@@ -68,6 +77,8 @@ export interface FilesPanelProps {
     readonly single?: string | undefined;
     /** Open a file as its own pane in the workspace grid (§4.6); absent where panes cannot be made (the dock, a popped window). */
     readonly onOpenInPane?: ((path: string) => void) | undefined;
+    /** Right-click a tree row or a tab (Tynn #841): what this window can do, and the container's hand. Absent = no menus. */
+    readonly fileActions?: { readonly external: boolean; readonly reveal: boolean; readonly onAction: (action: FileMenuAction, path: string) => void } | undefined;
     /** The board's `All | Changed N` filter: Changed shows the files grouped by who changed them, in the tree's place. */
     readonly filter?: 'all' | 'changed' | undefined;
     readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;
@@ -135,7 +146,12 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions }: FilesPanelProps) {
+    // The row or tab right-clicked: the menu's items depend on what it is.
+    const [menuFor, setMenuFor] = useState<{ path: string; target: FileMenuTarget } | null>(null);
+    const menuItems = (path: string, target: FileMenuTarget) => fileActions ? fileMenuItems(target, fileActions).map((m, i) => (m.id === '-'
+        ? <ContextMenu.Separator key={`sep-${i}`} />
+        : <ContextMenu.Item key={m.id} onClick={() => fileActions.onAction(m.id as FileMenuAction, path)}>{m.label}</ContextMenu.Item>)) : null;
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -143,7 +159,8 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
     const shownTabs = single ? tabs.filter((t) => t === single) : tabs;
     const changed = changedCount(state);
     return (
-        <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]">
+        <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]"
+            onKeyDown={(e) => { if (isSaveShortcut(e) && edit && open?.ok) { e.preventDefault(); if (edit.dirty && !edit.conflict) edit.onSave(); } }}>
             {/* The board's 38px header: Files · All | Changed N · "one per workspace" · the controls. */}
             <header className="flex h-[38px] shrink-0 items-center gap-2.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 text-sm">
                 <span className="text-xs font-semibold">Files</span>
@@ -215,7 +232,19 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-3 animate-pulse rounded bg-[var(--bg-2)]" style={{ width: `${55 + ((i * 17) % 40)}%` }} />)}
                         </div>
                     ) : (
+                        fileActions ? (
+                            <ContextMenu>
+                                <ContextMenu.Trigger className="h-full">
+                                    {/* Capture runs before the row's own handler: empty space clears the target, a row sets it. */}
+                                    <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor(null)}>
+                                        <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
+                                    </div>
+                                </ContextMenu.Trigger>
+                                {menuFor && menuFor.target !== 'tab' ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
+                            </ContextMenu>
+                        ) : (
                         <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
+                        )
                     )}
                 </aside>
                 )}
@@ -224,18 +253,28 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         {shownTabs.map((t) => {
                             const active = open?.path === t;
                             const mark = marks.get(t);
-                            return (
-                                <div key={t} data-file-tab={t} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
+                            const tab = (
+                                <div key={t} data-file-tab={t} {...(fileActions ? { 'data-file-menu': 'tab' } : {})} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
                                     <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
+                                    {edit?.dirty && open?.path === t ? <span data-dirty-dot="" title="Unsaved changes (Ctrl+S saves)" className="text-[var(--accent)]">●</span> : null}
                                     {onOpenInPane && !single ? <button type="button" data-action="open-in-pane" aria-label={`open ${t} in a pane`} title="Open in its own pane beside the terminals" onClick={() => onOpenInPane(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">⧉</button> : null}
                                     <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
                                 </div>
                             );
+                            return fileActions ? (
+                                <ContextMenu key={t}>
+                                    <ContextMenu.Trigger className="flex">{tab}</ContextMenu.Trigger>
+                                    <ContextMenu.Content>{menuItems(t, 'tab')}</ContextMenu.Content>
+                                </ContextMenu>
+                            ) : tab;
                         })}
                         {edit && open?.ok && edit.dirty && !edit.conflict ? (
                             <button type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button>
                         ) : null}
                     </div>
+                    {edit?.saveError && !edit.conflict ? (
+                        <p data-save-error="" className="m-3 rounded-lg border border-[var(--danger)] p-2 text-xs">Not saved: {edit.saveError}</p>
+                    ) : null}
                     {edit?.conflict ? (
                         <div data-conflict={edit.conflict.path} data-tone="bad" className="m-3 rounded-lg border border-[var(--danger)] p-3 text-sm">
                           <div className="flex items-start gap-2">
@@ -263,10 +302,10 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             ) : null}
                         </div>
                     ) : null}
-                    <div className="min-h-0 flex-1 overflow-auto">
+                    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                         {/* THE BLIND STATE (the board): a file that changed on disk with NO agent report says so over its body. Genie does not guess the author. */}
                         {open?.ok && state?.unreported.includes(open.path) ? (
-                            <div data-unreported-banner={open.path} className="flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">
+                            <div data-unreported-banner={open.path} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">
                                 <Icon name="eye-off" size="xs" />
                                 No agent reported this change
                                 {onShowDiff ? <button type="button" data-action="show-diff" onClick={onShowDiff} className="ml-auto rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Show diff</button> : null}
@@ -275,9 +314,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         {/* Show diff: git's last commit against the open text — captioned as that, never as anyone's change. */}
                         {open?.ok && blindDiff && blindDiff.path === open.path ? (
                             blindDiff.before === null ? (
-                                <p data-blind-diff-none={open.path} className="border-b border-[var(--border-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">Not in the last commit, so there is nothing to compare it with.</p>
+                                <p data-blind-diff-none={open.path} className="shrink-0 border-b border-[var(--border-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">Not in the last commit, so there is nothing to compare it with.</p>
                             ) : (
-                                <div data-blind-diff={open.path} className="max-h-80 overflow-auto border-b border-[var(--border-1)]">
+                                <div data-blind-diff={open.path} className="max-h-80 shrink-0 overflow-auto border-b border-[var(--border-1)]">
                                     <p className="px-4 py-1 text-[11px] text-[var(--fg-4)]">Against the last commit</p>
                                     <FancyDiff source={{ before: blindDiff.before, after: open.text }} variant="compare" mode="inline" />
                                 </div>
@@ -292,15 +331,27 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
                             )
                         ) : open.ok ? (
-                            <div className="flex h-full min-h-0 flex-col">
+                            <div className="flex min-h-0 flex-1 flex-col">
                                 {/* THE CRUMB (the board): the path, segment by segment, over the editor. */}
                                 <div data-file-crumb={open.path} className="flex shrink-0 items-center border-b border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
                                     {fileCrumb(open.path).map((seg, i) => (
                                         <span key={`${i}-${seg}`}>{i > 0 ? <span className="mx-1">/</span> : null}{seg}</span>
                                     ))}
                                 </div>
-                                <div className="min-h-0 flex-1 overflow-auto">
-                                    <FileViewer filename={open.path} value={open.text} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { line } : {})} theme="auto" />
+                                {/* THE EDITOR IS THE PANE (Tynn #840; Genie 1's genie#603): fancy-code's CodeEditor fills the column and
+                                    its Panel is the one scroller. FileViewer was a content-high block — the editor shrank to its text and
+                                    the space under it was dead, which read as "cannot edit". Media still opens in the viewer. */}
+                                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                                    {(() => {
+                                        const kind = resolveFileKind({ filename: open.path });
+                                        return kind.kind === 'media' ? (
+                                            <FileViewer filename={open.path} value={open.text} theme="auto" className="min-h-0 flex-1" />
+                                        ) : (
+                                            <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme="auto">
+                                                <CodeEditor.Panel className="min-h-0 flex-1" />
+                                            </CodeEditor>
+                                        );
+                                    })()}
                                 </div>
                                 {/* THE STATUS BAR (the board): language · line ending · encoding · who is in the file. No cursor position — the viewer reports none. */}
                                 <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} />
