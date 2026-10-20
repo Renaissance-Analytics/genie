@@ -73,6 +73,8 @@ export function identityFrom(stored: StoredIdentity): WorkstationIdentity {
 
 /** Where identities live, per Tynn host. */
 export interface IdentityStore {
+    /** Can a key be stored at all (OS encryption)? Asked BEFORE Tynn is (Tynn #847). */
+    canWrite(): boolean;
     read(host: string): Promise<StoredIdentity | null>;
     write(host: string, identity: StoredIdentity): Promise<void>;
 }
@@ -97,6 +99,7 @@ export function workstationKeyStore(file: string, cipher: IdentityCipher): Ident
         }
     };
     return {
+        canWrite: () => cipher.isAvailable(),
         async read(host) {
             const row = (await load())[host];
             if (!row?.workstationId || !row.keyEnc) return null;
@@ -151,6 +154,9 @@ export async function ensureWorkstation(ports: EnsureWorkstationPorts): Promise<
     const existing = await ports.store.read(host);
     if (existing) return { ok: true, status: 'exists', workstationId: existing.workstationId };
 
+    // Without OS encryption the key could not be kept: ask Tynn NOTHING, or it holds an enrolled, keyless workstation
+    // after every attempt (the two-VM proof, 2026-10-20; Tynn #847).
+    if (!ports.store.canWrite()) return { ok: false, reason: 'this machine cannot encrypt a key (no OS keyring answering), so it is not registered with Tynn' };
     const registered = await ports.request('/api/v1/workstations/self-register', { method: 'POST', body: { name: ports.hostname() } });
     // Tynn answers an unauthenticated session route 404 (tynn.ai#303), 401/419 before that.
     if (registered.status === 401 || registered.status === 404 || registered.status === 419) return { ok: false, reason: 'sign in to Tynn to register this machine' };
