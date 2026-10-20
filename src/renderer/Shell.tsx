@@ -117,10 +117,15 @@ export interface ShellProps {
     onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
     /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
     answeringApproval: string | null;
-    onAnswerApproval: (optionId: string) => void;
+    /**
+     * Answer a parked approval of THIS agent — the Agent view's or the chat's, which can be different agents (the chat
+     * follows the view; it used to be answered with the route's agent, so on a workspace page a chat approval went nowhere).
+     * `note`: the person's words with the answer (beta.33 item 16).
+     */
+    onAnswerApproval: (agentId: string, optionId: string, note?: string) => void;
     /** Answering from the DECK names its agent, because the route is not on that agent. */
     /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
-    onAnswerDeckItem: (item: DeckItem, optionId: string) => void;
+    onAnswerDeckItem: (item: DeckItem, optionId: string, note?: string) => void;
     /** A multi-part question's form, filled in place (§4.5): labels and one note per question. */
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
@@ -501,7 +506,7 @@ export function Shell({
                             focusId={parsed.item}
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
-                            onAnswer={(item, optionId) => onAnswerDeckItem(item, optionId)}
+                            onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckFormRefusal ?? null}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
@@ -565,7 +570,7 @@ export function Shell({
                                 onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
                                 onTakeOver={onTakeOver}
                                 answeringApproval={answeringApproval}
-                                onAnswerApproval={onAnswerApproval}
+                                onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note)}
                                 ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
@@ -710,7 +715,7 @@ export function Shell({
                         approval={chatApproval}
                         commands={chatSession?.extensions?.commands ?? null}
                         answeringApproval={answeringApproval}
-                        onAnswerApproval={onAnswerApproval}
+                        onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note); }}
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).

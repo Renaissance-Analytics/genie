@@ -21,7 +21,7 @@ const finished = base({
 
 describe('deckAnswerRoute', () => {
     it('a provider approval goes back through the session layer with the provider’s option id', () => {
-        expect(deckAnswerRoute(base({ id: 'approval:agent_a' }), 'allow')).toEqual({ kind: 'provider', agentId: 'agent_a', optionId: 'allow' });
+        expect(deckAnswerRoute(base({ id: 'approval:agent_a' }), 'allow')).toEqual({ kind: 'provider', agentId: 'agent_a', optionId: 'allow', note: '' }); // the note (item 16): none given
         expect(deckAnswerRoute(base({ id: 'approval:agent_a', agentId: null }), 'allow')).toEqual({ kind: 'refused', reason: 'this approval names no agent' });
     });
 

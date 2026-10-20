@@ -170,7 +170,7 @@ export interface GenieBridge {
      * request before sending it on — the renderer is not trusted to produce a valid one, and
      * a provider receiving an option it never offered is a protocol error at best.
      */
-    answerApproval(agentId: string, optionId: string): void;
+    answerApproval(agentId: string, optionId: string, note?: string): void;
     /**
      * "Restart with this" on a finish (§4.5): stop, start, and send the agent its own handoff note
      * as the first prompt; the finish is marked seen only when the prompt was taken. A refusal

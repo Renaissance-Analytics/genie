@@ -29,14 +29,14 @@ describe('agent questions', () => {
 
     it('a tool approval (appr_…) resolves the approval queue with allow or deny', () => {
         const item = base({ id: 'appr_1', answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] } });
-        expect(resolveDeckAnswer(item, 'allow')).toEqual({ kind: 'resolve-approval', approvalId: 'appr_1', choice: 'allow' });
-        expect(resolveDeckAnswer(item, 'deny')).toEqual({ kind: 'resolve-approval', approvalId: 'appr_1', choice: 'deny' });
+        expect(resolveDeckAnswer(item, 'allow')).toEqual({ kind: 'resolve-approval', approvalId: 'appr_1', choice: 'allow', note: '' }); // the note (item 16): none given
+        expect(resolveDeckAnswer(item, 'deny')).toEqual({ kind: 'resolve-approval', approvalId: 'appr_1', choice: 'deny', note: '' });
         expect(resolveDeckAnswer(item, 'maybe')).toEqual({ kind: 'refused', reason: 'maybe is not one of this item’s options' });
     });
 
     it('a provider approval (approval:<agent>) goes back to the agent with the provider’s own option id, verbatim', () => {
         const item = base({ id: 'approval:agent_a', answer: { kind: 'inline', options: [{ id: 'allow_once', label: 'Allow once', tone: 'ok' }] } });
-        expect(resolveDeckAnswer(item, 'allow_once')).toEqual({ kind: 'answer-provider-approval', agentId: 'agent_a', optionId: 'allow_once' });
+        expect(resolveDeckAnswer(item, 'allow_once')).toEqual({ kind: 'answer-provider-approval', agentId: 'agent_a', optionId: 'allow_once', note: '' });
     });
 
     it('a forwarded question is answered ELSEWHERE — refused here with the host named', () => {

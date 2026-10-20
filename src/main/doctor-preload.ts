@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('genieDoctor', {
     detail: () => ipcRenderer.invoke('doctor:detail'),
     prompt: (text: string, files?: unknown) => ipcRenderer.invoke('doctor:prompt', text, files ?? []),
     start: () => ipcRenderer.invoke('doctor:start'),
-    answerApproval: (optionId: string) => ipcRenderer.invoke('doctor:answer-approval', optionId),
+    answerApproval: (optionId: string, note?: string) => ipcRenderer.invoke('doctor:answer-approval', optionId, note ?? ''),
     onChange: (listener: () => void) => {
         const handler = () => listener();
         ipcRenderer.on('doctor:changed', handler);

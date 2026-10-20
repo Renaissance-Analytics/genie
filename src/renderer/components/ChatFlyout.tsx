@@ -151,7 +151,8 @@ export interface ChatFlyoutProps {
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
     commands?: readonly ProviderCommand[] | null | undefined;
     answeringApproval?: string | null | undefined;
-    onAnswerApproval?: ((optionId: string) => void) | undefined;
+    /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
+    onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
     /** Absent = no close button (the doctor window: the chat is the page, not a panel). */
     onClose?: (() => void) | undefined;
@@ -484,7 +485,7 @@ export function ChatFlyout({
                     <ApprovalCard
                         approval={approval}
                         answering={answeringApproval ?? null}
-                        onAnswer={(id) => onAnswerApproval?.(id)}
+                        onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                         agentName={thread?.name}
                     />
                 </div>

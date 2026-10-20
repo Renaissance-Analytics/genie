@@ -14,6 +14,7 @@ import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateF
 import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
+import { approvalNoteText } from '../core/approval-note.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
@@ -42,6 +43,11 @@ import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, Toolc
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /**
+     * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
+     * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
+     */
+    readonly deliverToAgent?: ((agentId: string, text: string) => boolean) | undefined;
     /** Tailscale on this machine (main/tailscale-cli.ts, Tynn #821): its cached status, up, install. */
     readonly tailscale?: {
         status(): import('./tailscale-cli.js').TailscaleStatus | null;
@@ -687,16 +693,24 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'deck.answer':
         case 'deck.answerForm': {
-            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId) : resolveDeckForm(action.item, action.selections, Array.isArray(action.notes) ? action.notes : [], action.note);
+            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId, action.note ?? '') : resolveDeckForm(action.item, action.selections, Array.isArray(action.notes) ? action.notes : [], action.note);
             switch (command.kind) {
                 case 'refused':
                     throw new Error(command.reason);
                 case 'answer-question':
                     await services.attention.answer(command.questionId, { selections: command.selections, notes: command.notes, note: command.note });
                     break;
-                case 'resolve-approval':
+                case 'resolve-approval': {
+                    // THE NOTE REACHES THE AGENT (beta.33 item 16): the tool call gets its verdict; the note follows as your
+                    // message. Checked BEFORE the answer, so a note that could not be delivered never leaves a silent verdict.
+                    const text = action.kind === 'deck.answer' && action.item.agentId
+                        ? approvalNoteText({ what: `“${action.item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
+                        : null;
+                    if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
+                    if (text !== null && !ports.deliverToAgent!(action.item.agentId!, text)) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
                     break;
+                }
                 case 'list-done':
                     // The PERSON's Done: the store mails the agent that put the item on their list (attention-store.ts).
                     if (!(await services.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId, by: HUMAN }))) throw new Error(`no list item ${command.itemId}`);

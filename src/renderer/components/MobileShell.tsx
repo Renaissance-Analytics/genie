@@ -47,7 +47,7 @@ export interface MobileShellProps {
     /** `null` until the first snapshot arrived. */
     items: readonly DeckItem[] | null;
     answering: string | null;
-    onAnswer: (item: DeckItem, optionId: string) => void;
+    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
     onDisconnect: () => void;
     /** The agents (dashboard); absent when the app does not offer it. */
     agents?: MobileAgentsSection | undefined;
@@ -103,7 +103,7 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                                     <span className="font-mono">{wsLabel(item.workspaceId)}</span>
                                 </div>
                                 {item.answer.kind === 'inline' ? (
-                                    <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
+                                    <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
                                 ) : (
                                     <p className="mt-1 text-[13px]">{item.title}</p>
                                 )}

@@ -339,7 +339,8 @@ export type FeatureAction =
     /** Remove a managed PHP version — refused while a site is pinned to it. */
     | { kind: 'toolchain.removePhp'; version: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
-    | { kind: 'deck.answer'; item: DeckItem; optionId: string }
+    /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
+    | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
     /**
      * A multi-part question answered IN PLACE (§4.5): one array of labels per question and one note per question (a note
      * alone answers its question). `note` is the overall note — '' from the form, which no longer shows one.

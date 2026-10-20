@@ -33,7 +33,7 @@ function Doctor({ bridge }: { bridge: DoctorBridge }) {
             onSend={(text, attachments) => { void bridge.prompt(text, attachments ?? []); }}
             onStart={() => { void bridge.start(); }}
             answeringApproval={answering}
-            onAnswerApproval={(optionId) => { setAnswering(optionId); void bridge.answerApproval(optionId).finally(() => setAnswering(null)); }}
+            onAnswerApproval={(optionId, note) => { setAnswering(optionId); void bridge.answerApproval(optionId, note).finally(() => setAnswering(null)); }}
         />
     );
 }

@@ -75,7 +75,8 @@ export interface DeckProps {
     signals: SignalState;
     /** `null` unless an answer is in flight. */
     answering: string | null;
-    onAnswer: (item: DeckItem, optionId: string) => void;
+    /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
+    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
     onOpenItem: (item: DeckItem) => void;
     onNavigate: (route: string) => void;
     /** The update signal's door is an action (§7): download, then install. */
@@ -247,7 +248,8 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
 
 interface RowProps {
     answering: string | null;
-    onAnswer: (item: DeckItem, optionId: string) => void;
+    /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
+    onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
     onOpenItem: (item: DeckItem) => void;
     onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     formRefusal: { itemId: string; reason: string } | null;
@@ -355,7 +357,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              * never its text again in a monospace box.
              */}
             {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
-                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
+                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : null}
             {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
                 <InlineOptions options={item.answer.options} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />

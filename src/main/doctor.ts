@@ -115,7 +115,7 @@ export async function runDoctor(): Promise<void> {
     // Your message WITH its files (picked, dropped, pasted images): the same content-block path as Genie's composer.
     ipcMain.handle('doctor:prompt', (_e, text: unknown, files: unknown) => doctorPrompt(host, record.id, text, files));
     ipcMain.handle('doctor:start', () => host.start(record, osaDir));
-    ipcMain.handle('doctor:answer-approval', (_e, optionId: unknown) => (typeof optionId === 'string' ? host.answerApproval(record.id, optionId) : false));
+    ipcMain.handle('doctor:answer-approval', (_e, optionId: unknown, note: unknown) => (typeof optionId === 'string' ? host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '') : false));
     const win = new BrowserWindow({
         width: 1280,
         height: 840,
