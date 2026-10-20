@@ -68,6 +68,8 @@ export interface WorkspaceOpsProps {
     readonly onPreviewRemove: () => void;
     readonly onConfirmRemove: () => void;
     readonly onCancelRemove: () => void;
+    /** Share it through Tynn (Tynn #839; Genie 1's "Share workspace…"); absent = this Genie cannot (a remote guest, no Tynn). */
+    readonly onShare?: (() => void) | undefined;
     /** The repo registry (§6.1); absent = not offered here. `list: null` = not loaded yet. */
     readonly repos?: {
         readonly list: readonly RepoEntry[] | null;
@@ -555,6 +557,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         ) : (
                             <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
                         )}
+                        {ops.onShare ? <button type="button" data-action="share-workspace" title="A link someone opens to reach this workspace over Tynn — control or read-only, for as long as you choose" onClick={ops.onShare} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Share…</button> : null}
                         <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
                     </div>
                 ) : null}

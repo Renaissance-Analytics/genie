@@ -29,6 +29,8 @@ import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { ipcRelayTransport, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
+import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
+import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -614,6 +616,12 @@ function DesktopApp({ bridge }: AppProps) {
         void resolvedBridge?.workspaces.previewAdd().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
+    // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
+    const shares = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.tynnNetwork?.shares : undefined;
+    const [share, setShare] = useState<{ workspaceId: string; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
+    const readShares = (forWorkspace: string) => {
+        void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
+    };
     const workspaceOps: WorkspaceOpsProps | undefined = resolvedBridge && workspaceId && workspaceRow
         ? {
               asleep: workspaceRow.asleep === true,
@@ -648,6 +656,7 @@ function DesktopApp({ bridge }: AppProps) {
               onHibernate: () => { void resolvedBridge.workspaces.hibernate(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? `hibernated; handoffs landed from ${r.handoffs.landed.length === 0 ? 'nobody' : r.handoffs.landed.join(', ')}; ${r.handoffs.missing.length === 0 ? 'none missing' : `missing from ${r.handoffs.missing.join(', ')}`}` : r.reason }))); },
               onWake: () => { void resolvedBridge.workspaces.wake(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? 'awake' : r.reason }))); },
               onPreviewRemove: () => setWsView((v) => ({ ...v, removePreview: true })),
+              ...(shares ? { onShare: () => { setShare({ workspaceId, name: workspaceLabel(snapshot.workspaces, workspaceId), links: null, minted: null, problem: null, busy: false }); readShares(workspaceId); } } : {}),
               onCancelRemove: () => setWsView((v) => ({ ...v, removePreview: false })),
               onConfirmRemove: () => {
                   void resolvedBridge.workspaces.remove(workspaceId).then((r) => {
@@ -1138,6 +1147,32 @@ function DesktopApp({ bridge }: AppProps) {
             <WhatsNewWindow
                 whatsNew={features.whatsNew}
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
+            />
+        ) : null}
+        {share && shares ? (
+            <ShareWorkspaceModal
+                workspaceName={share.name}
+                links={share.links}
+                minted={share.minted}
+                problem={share.problem}
+                busy={share.busy}
+                onClose={() => setShare(null)}
+                onMint={(input) => {
+                    const forWorkspace = share.workspaceId;
+                    setShare((s) => (s ? { ...s, busy: true, problem: null, minted: null } : s));
+                    void shares.mint({ workspaceId: input.whole ? null : forWorkspace, capability: input.capability, expiresInDays: input.expiresInDays }).then((r) => {
+                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: r.ok ? r.link : null, problem: r.ok ? null : r.reason } : s));
+                        if (r.ok) readShares(forWorkspace);
+                    });
+                }}
+                onRevoke={(linkId) => {
+                    const forWorkspace = share.workspaceId;
+                    setShare((s) => (s ? { ...s, busy: true, problem: null } : s));
+                    void shares.revoke(linkId).then((r) => {
+                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: s.minted?.id === linkId ? null : s.minted, problem: r.ok ? null : r.reason } : s));
+                        readShares(forWorkspace);
+                    });
+                }}
             />
         ) : null}
         </>

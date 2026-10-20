@@ -165,6 +165,15 @@ describe('TynnAccount.request — every call rides the session', () => {
         expect(t.calls.at(-1)!.headers).toEqual({ Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' });
     });
 
+    // Tynn #839: revoking a share link is a DELETE (Genie 1's revokeWorkspaceShareLink) — a write, so it carries the token.
+    it('a DELETE is a write: it carries X-XSRF-TOKEN', async () => {
+        const t = fakeTynn();
+        const account = await TynnAccount.open(t.ports);
+        await account.signIn(CODE);
+        await account.request('/workstations/ws_1/share-links/inv_1', { method: 'DELETE' });
+        expect(t.calls.find((c) => c.method === 'DELETE')).toMatchObject({ path: '/workstations/ws_1/share-links/inv_1', headers: { 'X-XSRF-TOKEN': 'xsrf=value' } });
+    });
+
     it('Tynn answering 401 means the session is gone: this Genie shows signed out', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
