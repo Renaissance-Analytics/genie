@@ -891,6 +891,16 @@ export class AgentSession {
      * - **A driver that cannot cancel is never killed instead**, and neither is one that refuses the interrupt: the
      *   stream says so, the turn runs on, and Stop agent remains the way to end it.
      */
+    /**
+     * A PLAN THE AGENT REPORTED THROUGH GENIE'S `plan` TOOL (the owner, 2026-10-20: the Active Plan column had no way to
+     * be filled — the Claude Code Genie runs reports no plan of its own). Written as the SAME `plan` row a provider's plan
+     * update makes, so the column, the Stream and the thread show it exactly as they would the provider's.
+     */
+    reportPlan(entries: readonly { content: string; status: string }[]): void {
+        void this.#emitRow({ kind: 'plan', entries: entries.map((e) => ({ content: e.content, status: e.status })) });
+        this.#changed();
+    }
+
     cancel(by: string | null = 'you'): CancelOutcome {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };

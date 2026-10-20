@@ -1700,6 +1700,8 @@ async function boot(): Promise<void> {
             issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId) },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
+            // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
+            reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),
