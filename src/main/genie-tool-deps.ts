@@ -44,6 +44,8 @@ export interface GenieToolParts {
     readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer> };
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** The `plan` tool: the caller's plan into its own session (`SessionHost.reportPlan`); `false` = no running session. */
+    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean;
     readonly terminals: TerminalsPort;
     /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -95,7 +97,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             processes: p.processes ?? null,
         },
-        attention: { resolveCaller: p.resolveCaller, openFile: p.openFile },
+        attention: { resolveCaller: p.resolveCaller, openFile: p.openFile, ...(p.reportPlan ? { reportPlan: p.reportPlan } : {}) },
         plugins: {
             plugins: { tools: () => p.plugins.tools(), guard: (id) => p.plugins.guard(id) },
             run: p.plugins.run,

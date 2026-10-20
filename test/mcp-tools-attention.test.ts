@@ -57,7 +57,7 @@ describe('openFileForUser', () => {
 });
 
 describe('submitFeedback', () => {
-    it('is gone: the attention tools are openFileForUser alone', () => {
-        expect([...tools.keys()]).toEqual(['openFileForUser']);
+    it('is gone: the attention tools are openFileForUser and plan (plan added 2026-10-20 — the Active Plan column had no feed)', () => {
+        expect([...tools.keys()]).toEqual(['openFileForUser', 'plan']);
     });
 });

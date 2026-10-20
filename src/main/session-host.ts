@@ -749,6 +749,15 @@ export class SessionHost {
         return this.#running.get(agentId)?.run ?? null;
     }
 
+    /** The agent's plan, reported through Genie's `plan` tool (`AgentSession.reportPlan`); `false` when it has no session. */
+    reportPlan(agentId: AgentId, steps: readonly { content: string; status: string }[]): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.reportPlan(steps);
+        this.#emit(agentId);
+        return true;
+    }
+
     prompt(agentId: AgentId, text: string, by: string | null = null): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;

@@ -125,6 +125,8 @@ export class DoctorRun {
             const resolveCaller = (key: string) => sessionCallerOf(book, key, registry, this.#osaDir());
             const roster = () => registry.listAgents();
             const unavailable = (what: string) => () => { throw new Error(NOT_HERE(what)); };
+            // The session host is made after the server it hands to its sessions, so the `plan` tool reaches it late.
+            let sessions: SessionHost | null = null;
             const registrations = allGenieTools(genieToolDeps({
                 inbox,
                 attention,
@@ -137,6 +139,7 @@ export class DoctorRun {
                 glow: () => false,
                 thumbsUp: () => {},
                 openFile: async () => ({ ok: false, reason: NOT_HERE('opening a file for the person') }),
+                reportPlan: (agentId, steps) => sessions?.reportPlan(agentId as never, steps) ?? false,
                 terminals: {
                     list: () => [],
                     open: unavailable('terminals') as never,
@@ -156,6 +159,7 @@ export class DoctorRun {
                 mcpServersFor: (record) => genieMcpServers(endpoint, book.keyFor(record.id)),
                 onThreadId: (agentId, threadId) => { void registry.recordThread(agentId, threadId); },
             });
+            sessions = host;
             return { beside, registry, host, server, knowledge };
         })();
         return this.#opened;

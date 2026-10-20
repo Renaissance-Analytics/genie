@@ -49,7 +49,7 @@ describe('the session key', () => {
 
     it('is the caller for EVERY tool, whatever terminalId the model invents — counted, the offenders named', async () => {
         const calls = await callAll({ terminalId: 'genie' }, { 'genie-session': 'session-k' });
-        expect(calls.length).toBe(13); // twelve Genie tools (no runAgent sidecar since 2026-10-19) + the plugin tool
+        expect(calls.length).toBe(14); // thirteen Genie tools (no runAgent sidecar since 2026-10-19; plan since 2026-10-20) + the plugin tool
         expect(calls.filter((c) => c.asked.join() !== 'session-k').map((c) => `${c.name}: ${c.asked.join()}`)).toEqual([]);
     });
 
@@ -64,7 +64,7 @@ describe('the session key', () => {
     it('the control: with no session key, a plain terminal is still known by its terminalId — every tool', async () => {
         const calls = await callAll({ terminalId: 'term_7' }, {});
         expect(calls.filter((c) => c.asked.join() !== 'term_7').map((c) => c.name)).toEqual([]);
-        expect(calls.length).toBe(13);
+        expect(calls.length).toBe(14);
     });
 
     it('with neither, one message everywhere: a session leaves it out, a terminal passes GENIE_TERMINAL_ID', async () => {

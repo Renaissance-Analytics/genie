@@ -16,7 +16,12 @@ export interface AttentionToolsDeps {
      * workspace and the path RELATIVE to it, never just an absolute path the OS's default app would take.
      */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Hand the caller's plan to its session (`SessionHost.reportPlan`); `false` = it has no running session. Absent = refused. */
+    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean;
 }
+
+/** The statuses a plan step may have — the ones ACP plan entries use, and the column draws (✓ ◐ ○). */
+const PLAN_STATUSES = ['pending', 'in_progress', 'completed'] as const;
 
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
@@ -60,5 +65,42 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
         }),
     };
 
-    return [openFileForUser];
+    /*
+     * THE PLAN (the owner, 2026-10-20: "why would you build an ActivePlan column and feature but then not include any way
+     * for you to use it?"). The caller's whole plan, every call: what it shows replaces what it showed. The steps reach
+     * the caller's OWN session as a plan event, so the Active Plan column and the Stream show them for any provider.
+     */
+    const plan: Registration = {
+        definition: new ToolDefinition(
+            'plan',
+            'Show your plan in your Active Plan column: the WHOLE list each time, every step with a status — pending, in_progress (the one you are on) or completed. Call it when you start work with more than one step, and again as each step starts or finishes.',
+            {
+                type: 'object',
+                properties: {
+                    terminalId: MIRRORED_TERMINAL_ID,
+                    steps: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' }, status: { type: 'string', enum: [...PLAN_STATUSES] } }, required: ['content', 'status'] } },
+                },
+                required: ['steps'],
+            },
+            'Plan',
+        ),
+        handler: withCaller(async (caller, args) => {
+            const raw = Array.isArray(args.steps) ? args.steps : null;
+            if (!raw || raw.length === 0) return err('plan needs `steps`: the whole list, each { content, status }');
+            const steps: Array<{ content: string; status: string }> = [];
+            for (const [i, s] of raw.entries()) {
+                const r = (typeof s === 'object' && s !== null ? s : {}) as Record<string, unknown>;
+                const content = typeof r.content === 'string' ? r.content.trim() : '';
+                const status = typeof r.status === 'string' ? r.status : '';
+                if (content === '') return err(`step ${i + 1} has no content`);
+                if (!(PLAN_STATUSES as readonly string[]).includes(status)) return err(`step ${i + 1}: status "${status}" is not one of ${PLAN_STATUSES.join(', ')}`);
+                steps.push({ content, status });
+            }
+            if (!deps.reportPlan) return err('this Genie cannot show plans');
+            if (!deps.reportPlan(caller.agentId, steps)) return err(`${caller.agentName} has no running session to show a plan in`);
+            return ok({ ok: true, step: steps.filter((s) => s.status === 'completed').length, of: steps.length });
+        }),
+    };
+
+    return [openFileForUser, plan];
 }

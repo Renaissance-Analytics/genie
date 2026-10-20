@@ -37,6 +37,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`agentinbox\` to reach another agent. Never edit another agent's files to talk to it.
 - \`lists\` for your own checklist and for things only a person can do.
 - \`openFileForUser\` to put a file in front of the person.
+- \`plan\` to show your plan in your Active Plan column: the whole list each time, each step pending, in_progress or completed. Call it when you start work with more than one step, and again as each step starts or finishes.
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
 - \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
