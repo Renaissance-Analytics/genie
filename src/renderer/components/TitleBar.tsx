@@ -157,7 +157,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     <Tooltip content={inbox.unread ? `AgentInbox · ${inbox.unread} unread` : 'AgentInbox'} placement="bottom">
                         <button
                             type="button"
-                            data-feature="AgentInbox"
+                            data-system-icon="AgentInbox"
                             data-inbox-icon={inbox.open ? 'open' : 'closed'}
                             aria-label={inbox.unread ? `AgentInbox, ${inbox.unread} unread` : 'AgentInbox'}
                             aria-pressed={inbox.open}

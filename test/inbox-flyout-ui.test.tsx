@@ -41,6 +41,8 @@ const thread = (key: string, over: Partial<InboxThreadView> = {}): InboxThreadVi
     ({ key, messages: mail.filter((x) => pairKey(x.from, x.to) === key) as never, more: false, limit: 50, focus: null, ...over });
 
 const noop = () => {};
+/** A string as a literal inside a RegExp. */
+const esc = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const props = (over: Partial<InboxFlyoutViewProps> = {}): InboxFlyoutViewProps => ({
     threads, peers, thread: null, openKey: null, query: '', filter: 'all', now: T, uncollected: 1, unread: 1, draft: '',
     onQuery: noop, onFilter: noop, onOpenThread: noop, onLoadOlder: noop, onDraft: noop, onSend: noop, onDownload: noop, onMarkAllRead: noop, onDelete: noop, onClose: noop,
@@ -63,7 +65,7 @@ describe('the header’s system icon', () => {
         renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={null} onNavigate={noop} onOpenPalette={noop} platform="generic" {...(inbox ? { inbox } : {})} />);
 
     it('an AgentInbox icon among the feature icons, with the person’s unread count on it, pressed while open', () => {
-        expect(bar({ unread: 3, open: false, onToggle: noop })).toMatch(/data-feature="AgentInbox"[^>]*data-inbox-icon="closed"[\s\S]*data-inbox-badge="3"/);
+        expect(bar({ unread: 3, open: false, onToggle: noop })).toMatch(/data-system-icon="AgentInbox"[^>]*data-inbox-icon="closed"[\s\S]*data-inbox-badge="3"/);
         const open = bar({ unread: 3, open: true, onToggle: noop });
         expect(open).toContain('data-inbox-icon="open"');
         expect(open).toContain('aria-pressed="true"');
@@ -72,8 +74,8 @@ describe('the header’s system icon', () => {
     it('no unread (0) or not read yet (null) draws no count — never a 0; no inbox wired, no icon', () => {
         expect(bar({ unread: 0, open: false, onToggle: noop })).not.toContain('data-inbox-badge');
         expect(bar({ unread: null, open: false, onToggle: noop })).not.toContain('data-inbox-badge');
-        expect(bar({ unread: null, open: false, onToggle: noop })).toContain('data-feature="AgentInbox"');
-        expect(bar()).not.toContain('data-feature="AgentInbox"');
+        expect(bar({ unread: null, open: false, onToggle: noop })).toContain('data-system-icon="AgentInbox"');
+        expect(bar()).not.toContain('data-system-icon="AgentInbox"');
     });
 });
 
@@ -105,7 +107,7 @@ describe('the flyout in the shell', () => {
 
     it('no AgentInbox wired in this window: no icon and no flyout', () => {
         const html = shell('genie://dashboard?group=workspace&inbox=', false);
-        expect(html).not.toContain('data-feature="AgentInbox"');
+        expect(html).not.toContain('data-system-icon="AgentInbox"');
         expect(html).not.toContain('data-inbox-flyout');
     });
 });
@@ -114,7 +116,7 @@ describe('the threads pane', () => {
     it('each thread: who, the last line, unread and waiting — agent-to-agent marked read-only; newest first', () => {
         const out = html(props());
         expect(out.indexOf(`data-inbox-thread="${agentsKey}"`)).toBeLessThan(out.indexOf(`data-inbox-thread="${humanKey}"`));
-        expect(out).toMatch(new RegExp(`data-inbox-thread="${humanKey.replace('|', '\\|')}"[\\s\\S]*?atlas[\\s\\S]*?atlas: Shipped — \\*\\*diff attached\\*\\*[\\s\\S]*?data-thread-unread="1"`));
+        expect(out).toMatch(new RegExp(`data-inbox-thread="${esc(humanKey)}"[\\s\\S]*?atlas[\\s\\S]*?atlas: Shipped — \\*\\*diff attached\\*\\*[\\s\\S]*?data-thread-unread="1"`));
         expect(out).toMatch(/atlas ⇄ wren[\s\S]*?waiting on wren · 1m/);
         expect(out).toContain('data-inbox-unread="1"');
         expect(out).toContain('data-inbox-uncollected="1"');
