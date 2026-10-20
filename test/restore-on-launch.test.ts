@@ -7,8 +7,8 @@ import { Store } from '../src/main/store.js';
 
 /**
  * RESTORE AFTER AN UPGRADE OR RELAUNCH (§7.6, §2.5). The registry remembers which agents were RUNNING
- * when Genie last closed — written at quit, before anything is stopped — so a launch with
- * `restore_agents_on_launch` on knows whom to start. An agent the user had stopped was not running,
+ * when Genie last closed — written at quit, before anything is stopped — so every launch knows whom to
+ * start (always: the restore switch was removed 2026-10-20, the owner's call). An agent the user had stopped was not running,
  * so it is never in the list: "never restarts what the user stopped" falls out of the record, not of
  * a flag. The list is cleared once read, so a crash mid-restore does not restart twice.
  */

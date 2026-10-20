@@ -48,7 +48,6 @@ export const SETTINGS: readonly SettingDef[] = [
     // (core/prompt-library.ts reads it forgivingly). Hidden: Settings → Agents draws it as a list, not a JSON box.
     { key: 'saved_prompts', group: 'agents', scope: 'host', label: 'Saved prompts', description: 'Prompts you send from the Command Window or with their own hotkey.', type: 'string', default: '[]', hidden: true },
     { key: 'agent_cap', group: 'agents', scope: 'workspace', label: 'Running agents cap', description: 'How many agents may run at once in a workspace. A start past the cap is refused and says so; nothing queues.', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' },
-    { key: 'restore_agents_on_launch', group: 'agents', scope: 'host', label: 'Restore agents on launch', description: 'Start the agents that were running when Genie last closed. Applies to every path that could restart an agent: launch, crash recovery, transport loss, upgrade.', type: 'boolean', default: false },
     { key: 'default_agent', group: 'agents', scope: 'workspace', label: 'Provider for new agents', description: 'The provider a new agent in this workspace uses unless told otherwise.', type: 'enum', options: ['claude', 'codex'], default: 'claude' },
     { key: 'approval_gates', group: 'agents', scope: 'workspace', label: 'Approval gates', description: 'Which tool calls park for your approval.', type: 'enum', options: ['all', 'writes', 'none'], default: 'writes' },
     { key: 'tynn_host', group: 'general', scope: 'host', label: 'Tynn host', description: 'Where Tynn lives. Only a self-hosted Tynn changes this.', type: 'string', default: 'https://tynn.ai' },
@@ -90,7 +89,6 @@ export function searchSettings(query: string): Array<SettingDef & { group: Setti
 /** v1 key → genie2 key. A v1 key with no entry here does not carry over, and says why. */
 const V1_MAP: Readonly<Record<string, string>> = {
     theme: 'theme',
-    restore_agents_on_launch: 'restore_agents_on_launch',
     update_channel: 'update_channel',
     track_cwd: 'track_cwd',
     detached_terminals: 'detached_terminals',
@@ -119,6 +117,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {
+    // Genie 2 has no restore switch (the owner, 2026-10-20): every agent that was running always comes back.
+    restore_agents_on_launch: 'Genie 2 always starts again the agents that were running; there is no setting',
     agent_command: 'agents are sessions in Genie 2; there is no launch line to carry',
     // Genie 1's global key opened its Feedback window. Genie 2 has none (the owner, 2026-10-18: "drop the feedback feature.
     // It's only issue watch tracked via github issues").

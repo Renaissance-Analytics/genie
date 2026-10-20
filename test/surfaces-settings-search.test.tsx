@@ -29,7 +29,7 @@ describe('settings search', () => {
         expect(html).toContain('data-setting="sound_');
         expect(html).not.toContain('data-setting="theme"');
         const cross = render('agent');
-        expect(cross).toContain('data-setting="restore_agents_on_launch"');
+        expect(cross).toContain('data-setting="dnd_reply"');
     });
 
     it('no match says so in a sentence naming the query, never an empty list', () => {

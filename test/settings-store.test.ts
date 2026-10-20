@@ -27,7 +27,7 @@ afterEach(async () => {
 describe('reading and writing', () => {
     it('an untouched setting reads its registry default and is NOT in the file', async () => {
         expect(store.get('theme')).toBe('system');
-        expect(store.get('restore_agents_on_launch')).toBe(false);
+        expect(store.get('start_minimized')).toBe(false);
         await store.set('theme', 'light');
         const file = JSON.parse((await readFile(store.file)).toString()) as Record<string, unknown>;
         expect(file).toEqual({ theme: 'light' });
@@ -45,7 +45,7 @@ describe('reading and writing', () => {
     it('an unknown key and a wrong-typed value are refused with the reason, and nothing is written', async () => {
         await expect(store.set('no_such_setting', true)).rejects.toThrow(/no_such_setting/);
         await expect(store.set('theme', 'sepia')).rejects.toThrow(/sepia/);
-        await expect(store.set('restore_agents_on_launch', 'yes')).rejects.toThrow(/boolean/);
+        await expect(store.set('start_minimized', 'yes')).rejects.toThrow(/boolean/);
         expect(store.get('theme')).toBe('system');
     });
 
@@ -54,7 +54,7 @@ describe('reading and writing', () => {
         const snap = store.snapshot();
         expect(Object.keys(snap).sort()).toEqual(SETTINGS.map((s) => s.key).sort());
         expect(snap.theme).toBe('light');
-        expect(snap.restore_agents_on_launch).toBe(false);
+        expect(snap.start_minimized).toBe(false);
     });
 
     it('every registry setting is readable with a value of its declared type', () => {

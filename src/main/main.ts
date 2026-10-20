@@ -1790,7 +1790,7 @@ async function boot(): Promise<void> {
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })));
-        const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted, restoreAll: composed.settings.snapshot().restore_agents_on_launch === true });
+        const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
                 const record = registry?.find(agentId as AgentId);
@@ -2121,10 +2121,10 @@ app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
 /**
  * Every agent session ends with the app, and none is revived on the way out.
  *
- * `restore_agents_on_launch` defaults off and is the ONE setting that governs every path that
- * could restart an agent. There is no second branch here that revives anything "because the
- * window went away" — that branch, in the previous build, resurrected eleven agents the owner
- * had deliberately stopped.
+ * The NEXT launch starts again exactly the agents that were running at quit (always — there is no
+ * setting since 2026-10-20). There is no second branch here that revives anything "because the
+ * window went away" — that branch, in a previous build, resurrected eleven agents the owner
+ * had deliberately stopped: what the person stopped is not running at quit, so it stays stopped.
  */
 /**
  * EVERY SHUTDOWN — a quit or an upgrade — records who was running and, separately, who was MID-TURN, before any session

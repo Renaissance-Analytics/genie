@@ -81,7 +81,7 @@ export const NOT_DRAWN: readonly string[] = [
 ];
 
 const PLACE: Readonly<Record<string, SectionId>> = {
-    update_channel: 'general', launch_at_login: 'general', start_minimized: 'general', restore_agents_on_launch: 'general',
+    update_channel: 'general', launch_at_login: 'general', start_minimized: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
     notification_sounds: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard',

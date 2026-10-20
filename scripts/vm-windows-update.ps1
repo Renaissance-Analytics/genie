@@ -173,12 +173,18 @@ try {
     if ($relaunched.Count -eq 0) { throw 'the updated app did not relaunch' }
 
     # §7.4: the driver started the seeded codex agent (the stub app-server) BEFORE asking for the
-    # install. Its process must be gone now (the quit ended the session) and must not be back
-    # after the relaunch (restore_agents_on_launch defaults OFF; nothing revives on its own).
-    Start-Sleep 10
-    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex*' })
-    Write-Output ("§7.4 stub agent processes after quit + relaunch: " + $stubs.Count)
-    if ($stubs.Count -ne 0) { $stubs | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "§7.4: $($stubs.Count) agent process(es) survived the upgrade or were revived" }
+    # install. Nothing from BEFORE the upgrade may survive it (the quit ends the session), and the
+    # agent that was running comes back ONCE — always: there is no restore setting since 2026-10-20
+    # (the owner: "this should happen all of the time, not a god damn setting"). A stub process
+    # older than the relaunched Genie is a survivor; one younger is the restored agent.
+    $relaunchAt = ($relaunched | ForEach-Object { $_.StartTime } | Sort-Object | Select-Object -First 1)
+    Start-Sleep 15
+    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' -and $_.Name -eq 'node.exe' })
+    $survivors = @($stubs | Where-Object { $_.CreationDate -lt $relaunchAt })
+    $revived = @($stubs | Where-Object { $_.CreationDate -ge $relaunchAt })
+    Write-Output ("§7.4 relaunched at " + $relaunchAt + "; stub agents from before: " + $survivors.Count + "; started again: " + $revived.Count)
+    if ($survivors.Count -ne 0) { $survivors | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "§7.4: $($survivors.Count) agent process(es) survived the upgrade" }
+    if ($revived.Count -ne 1) { throw "§7.4: the agent that was running came back $($revived.Count) times (want exactly 1)" }
     # §7.2's other half: the terminal the driver left open had ONE fancy-pty helper under the
     # install dir (asserted in the driver when fancy-pty is installed); after the quit and the
     # relaunch there must be none — a helper that outlived the upgrade is exactly the 31-orphan

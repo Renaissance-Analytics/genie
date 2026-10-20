@@ -36,7 +36,7 @@ describe('every setting has one place, or is deliberately not drawn', () => {
 
     it('where things went', () => {
         const at: Record<string, SectionId> = {
-            launch_at_login: 'general', do_not_disturb: 'general', update_channel: 'general', restore_agents_on_launch: 'general',
+            launch_at_login: 'general', do_not_disturb: 'general', update_channel: 'general', start_minimized: 'general',
             notification_sounds: 'notifications', sound_question: 'notifications',
             command_window_hotkey: 'keyboard', theme: 'appearance', sidebar_width: 'appearance',
             tynn_host: 'tynn', default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
