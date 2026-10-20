@@ -78,7 +78,7 @@ export interface FilesPanelProps {
     /** Open a file as its own pane in the workspace grid (§4.6); absent where panes cannot be made (the dock, a popped window). */
     readonly onOpenInPane?: ((path: string) => void) | undefined;
     /** Right-click a tree row or a tab (Tynn #841): what this window can do, and the container's hand. Absent = no menus. */
-    readonly fileActions?: { readonly external: boolean; readonly reveal: boolean; readonly onAction: (action: FileMenuAction, path: string) => void } | undefined;
+    readonly fileActions?: { readonly external: boolean; readonly reveal: boolean; readonly edit?: boolean; readonly onAction: (action: FileMenuAction, path: string, target: FileMenuTarget) => void } | undefined;
     /** The board's `All | Changed N` filter: Changed shows the files grouped by who changed them, in the tree's place. */
     readonly filter?: 'all' | 'changed' | undefined;
     readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;
@@ -151,7 +151,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
     const [menuFor, setMenuFor] = useState<{ path: string; target: FileMenuTarget } | null>(null);
     const menuItems = (path: string, target: FileMenuTarget) => fileActions ? fileMenuItems(target, fileActions).map((m, i) => (m.id === '-'
         ? <ContextMenu.Separator key={`sep-${i}`} />
-        : <ContextMenu.Item key={m.id} onClick={() => fileActions.onAction(m.id as FileMenuAction, path)}>{m.label}</ContextMenu.Item>)) : null;
+        : <ContextMenu.Item key={m.id} onClick={() => fileActions.onAction(m.id as FileMenuAction, path, target)}>{m.label}</ContextMenu.Item>)) : null;
     const marks = marksOf(state);
     const touched = new Set<string>([...(state?.files.map((f) => f.path) ?? []), ...(state?.unreported ?? [])]);
     const button = 'rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]';
@@ -235,12 +235,12 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                         fileActions ? (
                             <ContextMenu>
                                 <ContextMenu.Trigger className="h-full">
-                                    {/* Capture runs before the row's own handler: empty space clears the target, a row sets it. */}
-                                    <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor(null)}>
+                                    {/* Capture runs before the row's own handler: empty space targets the root (New file / New folder, Tynn #844), a row sets its own. */}
+                                    <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor({ path: '', target: 'tree-root' })}>
                                         <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
                                     </div>
                                 </ContextMenu.Trigger>
-                                {menuFor && menuFor.target !== 'tab' ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
+                                {menuFor && menuFor.target !== 'tab' && (menuItems(menuFor.path, menuFor.target)?.length ?? 0) > 0 ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
                             </ContextMenu>
                         ) : (
                         <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />

@@ -1,8 +1,9 @@
 import type { GitFileState } from './git-ports.js';
 import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, open as openFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { copyName } from '../core/file-ops.js';
 import {
     FILE_SIZE_CAP,
     activityFrom,
@@ -44,7 +45,12 @@ export interface FilesHostPorts {
     readonly gitStatus?: (root: string, rel: string) => Promise<GitFileState | null>;
     /** A file's last committed text (`git-ports.ts` `gitShowHead`); absent = no `Show diff` baseline. */
     readonly gitShowHead?: (root: string, rel: string) => Promise<string | null>;
+    /** Move a host path to the OS trash (Electron's `shell.trashItem`); absent = Delete is refused and nothing is erased. */
+    readonly trash?: (absolutePath: string) => Promise<void>;
 }
+
+/** What a tree file operation answers (Tynn #844): the path it landed at, or why not. */
+export type FileOpResult = { ok: true; path: string } | { ok: false; reason: string };
 
 /** `git` — the file's state in its repository (`git-ports.ts`), present only when the host has a git port. */
 export type OpenResult = { ok: true; path: string; text: string; sha: string; git?: GitFileState | null } | { ok: false; path: string; error: string };
@@ -83,6 +89,9 @@ export const TREE_MAX_DEPTH = 6;
 export const WATCH_BATCH_MS = 250;
 const SKIP = IGNORED_NAMES;
 const OUTSIDE = 'that path is outside the workspace; Genie opens nothing there';
+const CHANGES_OUTSIDE = 'that path is outside the workspace; Genie changes nothing there';
+const taken = (full: string): Promise<boolean> => access(full).then(() => true, () => false);
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export class FilesHost {
     readonly #ports: FilesHostPorts;
@@ -213,6 +222,84 @@ export class FilesHost {
         // Your own write is not an unreported change.
         this.#changedOnDisk.get(workspaceId)?.delete(rel);
         return { ok: true, sha: shaOf(text) };
+    }
+
+    /*
+     * TREE FILE OPERATIONS (Tynn #844; Genie 1's createFile / createFolder / renamePath / duplicatePath). Every path is
+     * confined to the workspace and the workspace itself is never a target; nothing overwrites — a taken name is refused
+     * in words; Delete hands the host path to the trash port and never erases.
+     */
+    #target(workspaceId: string, path: string): { ok: true; root: string; rel: string; full: string } | { ok: false; reason: string } {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return { ok: false, reason: 'no such workspace' };
+        const rel = confine(ws.path, path);
+        if (rel === null || rel === '') return { ok: false, reason: CHANGES_OUTSIDE };
+        return { ok: true, root: ws.path, rel, full: join(ws.path, ...rel.split('/')) };
+    }
+
+    async create(workspaceId: string, path: string, kind: 'file' | 'folder'): Promise<FileOpResult> {
+        const t = this.#target(workspaceId, path);
+        if (!t.ok) return t;
+        if (await taken(t.full)) return { ok: false, reason: `${t.rel} already exists` };
+        try {
+            if (kind === 'folder') await mkdir(t.full, { recursive: true });
+            else {
+                await mkdir(dirname(t.full), { recursive: true });
+                // `wx`: create, or fail if something got there first — never a truncate.
+                await (await openFile(t.full, 'wx')).close();
+            }
+            return { ok: true, path: t.rel };
+        } catch (error) {
+            return { ok: false, reason: (error as NodeJS.ErrnoException).code === 'EEXIST' ? `${t.rel} already exists` : messageOf(error) };
+        }
+    }
+
+    async rename(workspaceId: string, from: string, to: string): Promise<FileOpResult> {
+        const a = this.#target(workspaceId, from);
+        if (!a.ok) return a;
+        const b = this.#target(workspaceId, to);
+        if (!b.ok) return b;
+        if (await taken(b.full)) return { ok: false, reason: `${b.rel} already exists` };
+        try {
+            await mkdir(dirname(b.full), { recursive: true });
+            await rename(a.full, b.full);
+            return { ok: true, path: b.rel };
+        } catch (error) {
+            return { ok: false, reason: messageOf(error) };
+        }
+    }
+
+    async duplicate(workspaceId: string, path: string): Promise<FileOpResult> {
+        const t = this.#target(workspaceId, path);
+        if (!t.ok) return t;
+        try {
+            if (!(await stat(t.full)).isFile()) return { ok: false, reason: 'only a file can be duplicated' };
+            const slash = t.rel.lastIndexOf('/');
+            const dir = slash === -1 ? '' : t.rel.slice(0, slash);
+            const name = t.rel.slice(slash + 1);
+            for (let n = 1; n <= 1000; n++) {
+                const rel = dir ? `${dir}/${copyName(name, n)}` : copyName(name, n);
+                const full = join(t.root, ...rel.split('/'));
+                if (await taken(full)) continue;
+                await copyFile(t.full, full, 1 /* COPYFILE_EXCL: never over a file that appeared meanwhile */);
+                return { ok: true, path: rel };
+            }
+            return { ok: false, reason: `${t.rel} has too many copies already` };
+        } catch (error) {
+            return { ok: false, reason: messageOf(error) };
+        }
+    }
+
+    async trash(workspaceId: string, path: string): Promise<FileOpResult> {
+        const t = this.#target(workspaceId, path);
+        if (!t.ok) return t;
+        if (!this.#ports.trash) return { ok: false, reason: 'this Genie cannot move files to the trash' };
+        try {
+            await this.#ports.trash(t.full);
+            return { ok: true, path: t.rel };
+        } catch (error) {
+            return { ok: false, reason: messageOf(error) };
+        }
     }
 
     async state(workspaceId: string): Promise<FilesState | null> {

@@ -14,7 +14,7 @@ import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
-import type { FilesState, OpenResult, WriteResult } from '../main/files-host.js';
+import type { FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 
@@ -308,6 +308,12 @@ export interface GenieBridge {
          *  not the host (a window driving another machine) — those act on the host's screen. */
         openExternal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         reveal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** The tree's file operations (Tynn #844), confined to the workspace and never overwriting; Delete goes to the host's
+         *  trash. Absent on a bridge whose host does not offer them — the menu then does not either. */
+        create?(workspaceId: string, path: string, kind: 'file' | 'folder'): Promise<FileOpResult>;
+        rename?(workspaceId: string, from: string, to: string): Promise<FileOpResult>;
+        duplicate?(workspaceId: string, path: string): Promise<FileOpResult>;
+        trash?(workspaceId: string, path: string): Promise<FileOpResult>;
         /** The popped-out panels (§4.3): host-only windows, so a remote bridge has none of this. */
         windows?: {
             popOut(workspaceId: string): Promise<void>;

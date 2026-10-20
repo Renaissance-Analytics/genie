@@ -1,10 +1,12 @@
-import type { FileMenuAction } from '../../core/file-menu.js';
+import type { FileMenuAction, FileMenuTarget } from '../../core/file-menu.js';
+import { createIn, fileOpDialog, tabsAfterDelete, tabsAfterRename, targetOf, type FileOpAction, type FileOpDialog } from '../../core/file-ops.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { reloadsOpenFile, routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import { openOrError, settle } from '../../core/files-reads.js';
 import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-lazy.js';
 import type { GenieBridge } from '../bridge.js';
+import { FileOpModal } from './FileOpModal.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
 
 /**
@@ -224,11 +226,60 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // The host's own separator: a Windows workspace copies C:\…\src\a.ts, not a mix.
     const absolutePath = (rel: string) => { const sep = workspace.path.includes('\\') ? '\\' : '/'; return `${workspace.path.replace(/[\\/]+$/, '')}${sep}${rel.split('/').join(sep)}`; };
     const say = (r: { ok: true } | { ok: false; reason: string }) => { if (!r.ok) setSaveError(r.reason); };
+    /*
+     * THE TREE'S FILE OPERATIONS (Tynn #844): the dialog, then the host does it (confined, never overwriting, Delete to the
+     * trash). The tree is listed again, a new file opens, and open tabs follow a rename or close with a delete. A refusal
+     * stays in the dialog so it can be fixed.
+     */
+    const ops = files.create && files.rename && files.duplicate && files.trash ? { create: files.create, rename: files.rename, duplicate: files.duplicate, trash: files.trash } : null;
+    const [fileOp, setFileOp] = useState<{ dialog: FileOpDialog; error: string | null; busy: boolean } | null>(null);
+    // Where an operation landed is shown: its folders open (a new folder itself too), and the tree listed again.
+    const landed = (path: string, expand: boolean) => {
+        setExpanded((e) => { const out = revealFor(path, e); return expand && !out.includes(path) ? [...out, path] : out; });
+        refresh();
+    };
+    const runFileOp = (dialog: FileOpDialog, name: string) => {
+        if (!ops) return;
+        const target = targetOf(dialog, name);
+        const call = dialog.action === 'new-file' ? ops.create(workspace.id, target, 'file')
+            : dialog.action === 'new-folder' ? ops.create(workspace.id, target, 'folder')
+            : dialog.action === 'rename' ? ops.rename(workspace.id, dialog.node.path, target)
+            : dialog.action === 'duplicate' ? ops.duplicate(workspace.id, dialog.node.path)
+            : ops.trash(workspace.id, dialog.node.path);
+        setFileOp((f) => (f ? { ...f, busy: true, error: null } : f));
+        void call.then((r) => {
+            // Duplicate has no dialog to keep open: its refusal is said where a failed save is.
+            if (!r.ok) { if (dialog.action === 'duplicate') { setFileOp(null); setSaveError(r.reason); } else setFileOp({ dialog, error: r.reason, busy: false }); return; }
+            setFileOp(null);
+            if (dialog.action === 'rename') {
+                const from = dialog.node.path;
+                setTabs((t) => tabsAfterRename(t, from, r.path));
+                if (open && (open.path === from || open.path.startsWith(`${from}/`))) { const moved = r.path + open.path.slice(from.length); setRequested(moved); void read(moved).then(setOpen); }
+            } else if (dialog.action === 'delete') {
+                const gone = dialog.node.path;
+                const kept = tabsAfterDelete(tabs, gone);
+                for (const t of tabs) if (!kept.includes(t)) closeTab(t);
+            }
+            if (dialog.action !== 'delete') landed(r.path, dialog.action === 'new-folder');
+            else refresh();
+            if (dialog.action === 'new-file' || dialog.action === 'duplicate') select(r.path);
+        }, (error: unknown) => setFileOp({ dialog, error: error instanceof Error ? error.message : String(error), busy: false }));
+    };
+    const startFileOp = (action: FileOpAction, path: string, target: FileMenuTarget) => {
+        const creating = action === 'new-file' || action === 'new-folder';
+        const at = creating ? createIn(path, target === 'tree-folder' ? 'tree-folder' : target === 'tree-root' ? 'tree-root' : 'tree-file') : path;
+        const dialog = fileOpDialog(action, { path: at, type: creating ? (at === '' ? 'root' : 'folder') : target === 'tree-folder' ? 'folder' : 'file' });
+        // Duplicate needs no answer (Genie 1): it just happens, beside the file.
+        if (action === 'duplicate') runFileOp(dialog, '');
+        else setFileOp({ dialog, error: null, busy: false });
+    };
     const fileActions = {
         external: files.openExternal !== undefined,
         reveal: files.reveal !== undefined,
-        onAction: (action: FileMenuAction, path: string) => {
+        edit: ops !== null && !single,
+        onAction: (action: FileMenuAction, path: string, target: FileMenuTarget = 'tree-file') => {
             switch (action) {
+                case 'new-file': case 'new-folder': case 'rename': case 'duplicate': case 'delete': startFileOp(action, path, target); break;
                 case 'open-external': void files.openExternal?.(workspace.id, path).then(say); break;
                 case 'reveal': void files.reveal?.(workspace.id, path).then(say); break;
                 case 'copy-path': void navigator.clipboard?.writeText(absolutePath(path)); break;
@@ -241,5 +292,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     };
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    const panel = <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    return (
+        <>
+            {panel}
+            {fileOp && fileOp.dialog.action !== 'duplicate' ? <FileOpModal key={`${fileOp.dialog.action}:${fileOp.dialog.node.path}`} dialog={fileOp.dialog} error={fileOp.error} busy={fileOp.busy} onConfirm={(name) => runFileOp(fileOp.dialog, name)} onCancel={() => setFileOp(null)} /> : null}
+        </>
+    );
 }
