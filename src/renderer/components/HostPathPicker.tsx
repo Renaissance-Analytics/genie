@@ -85,3 +85,59 @@ export function HostPathPicker(props: HostPathPickerProps) {
         </Modal>
     );
 }
+
+/**
+ * A picked folder as a field relative to `root` wants it (Tynn #835 part 3): `repos/app`, `.` for the folder itself;
+ * outside `root` — a sibling that merely starts with its name included — refused in words. Case is ignored only on a
+ * Windows drive path.
+ */
+export function relativeInside(root: string, picked: string): { ok: true; path: string } | { ok: false; reason: string } {
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+    const r = norm(root);
+    const p = norm(picked);
+    const windows = /^[A-Za-z]:/.test(r);
+    const fold = (s: string) => (windows ? s.toLowerCase() : s);
+    if (fold(p) === fold(r)) return { ok: true, path: '.' };
+    if (!fold(p).startsWith(`${fold(r)}/`)) return { ok: false, reason: `${picked} is not inside ${root}` };
+    return { ok: true, path: p.slice(r.length + 1) };
+}
+
+/**
+ * Browse beside a typed folder field (Tynn #835 part 3): picks over the HOST's disk, opening in the folder the field is
+ * relative to, and writes the relative path into the form's field `name`. `root` is read at the click (a form whose
+ * workspace is chosen in a select). No picker, or nothing to be relative to: nothing is drawn — the field stays typed.
+ */
+export function PathBrowse({ name, root }: { readonly name: string; readonly root: (() => string | null) | string | null }) {
+    const pick = useHostPathPicker();
+    const [problem, setProblem] = useState<string | null>(null);
+    if (!pick || root === null) return null;
+    return (
+        <>
+            <button
+                type="button"
+                data-action="browse-path"
+                className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]"
+                onClick={(e) => {
+                    const form = e.currentTarget.form;
+                    const base = typeof root === 'function' ? root() : root;
+                    if (!form || !base) return;
+                    void pick({ mode: 'directory', initialPath: base }).then((picked) => {
+                        if (typeof picked !== 'string') return;
+                        const rel = relativeInside(base, picked);
+                        if (!rel.ok) { setProblem(rel.reason); return; }
+                        setProblem(null);
+                        const field = form.elements.namedItem(name);
+                        if (field instanceof HTMLInputElement) {
+                            const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                            set?.call(field, rel.path);
+                            field.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    });
+                }}
+            >
+                Browse…
+            </button>
+            {problem ? <span data-problem="browse" className="text-xs text-[var(--danger)]">{problem}</span> : null}
+        </>
+    );
+}
