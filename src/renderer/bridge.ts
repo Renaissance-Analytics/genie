@@ -115,7 +115,7 @@ export interface GenieBridge {
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     tynnNetwork?: TynnNetworkBridge;
     /**
-     * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, inbox, settings, browser.
+     * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, settings, browser (the AgentInbox is a flyout, beta.33 item 19).
      * One snapshot, pushed on change; one `act` that applies a person's action in main and
      * answers with the next snapshot, or rejects with the refusal's reason.
      */
@@ -389,7 +389,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     soundData: async () => null,
 };
 
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`

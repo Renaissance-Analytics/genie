@@ -28,7 +28,8 @@ import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProjectPicker.js';
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
-import { BrowserSurface, FlowsSurface, HostingSurface, InboxSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
+import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, ToolchainSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
+import { InboxFlyout } from './components/InboxFlyout.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -101,6 +102,11 @@ export interface ShellProps {
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
     onFeature?: ((action: FeatureAction) => void) | undefined;
+    /**
+     * A feature action whose ANSWER the caller reads (the AgentInbox flyout: a thread's history, an attachment's bytes, a
+     * send's refusal). Absent = no AgentInbox in this window.
+     */
+    featureAsk?: ((action: FeatureAction) => Promise<FeatureData>) | undefined;
     /** The host's file picker for attachments (§6.4); absent = no Attach button. */
     pickFiles?: (() => Promise<string[]>) | undefined;
     /** The browser surface's box, for main to place the view over. */
@@ -229,6 +235,7 @@ export function Shell({
     servable,
     features = EMPTY_FEATURES,
     onFeature = () => {},
+    featureAsk,
     pickFiles,
     onBrowserBounds,
     agentDetail,
@@ -314,6 +321,9 @@ export function Shell({
     // The workspace an agent's page belongs to (Tynn #805): its strip is drawn over the page.
     const agentWorkspace = parsed.surface === 'agent' ? workspaceFor(snapshot.agents.find((a) => a.id === parsed.agentId)?.workspaceId ?? '') : null;
     const canServe = servable.includes(parsed.surface);
+    /** The AgentInbox flyout rides the route (`inbox=`, core/route.ts): open on the threads (`''`), a thread, a message; or closed. */
+    const inboxOpen = parsed.inbox !== undefined && parsed.inbox !== null;
+    const openInbox = (value: string | null): void => onNavigate(formatRoute({ ...parsed, inbox: value }));
 
     /*
      * THE CHAT IS A COLUMN OF THE ROW, beside the page (the owner, 2026-10-19: "the chat still covers up the UX. Chat cannot
@@ -359,6 +369,8 @@ export function Shell({
                 update={updateChip(updateState)}
                 version={features.version ?? null}
                 onOpenUpdate={() => setUpdateOpen(true)}
+                // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
+                inbox={featureAsk ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
             />
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
             {updateOpen && updateChip(updateState) ? (
@@ -480,7 +492,6 @@ export function Shell({
                     {canServe && parsed.surface === 'flows' ? <FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.flows?.adding ? { kind: 'flow', ...features.flows.adding } : undefined} onCloseForm={() => onFeature({ kind: 'flows.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'hosting' ? <HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /> : null}
                     {canServe && parsed.surface === 'toolchain' ? <ToolchainSurface data={features} onAction={onFeature} onNavigate={onNavigate} /> : null}
-                    {canServe && parsed.surface === 'inbox' ? <InboxSurface data={features} onAction={onFeature} onNavigate={onNavigate} compose={inboxCompose} /> : null}
                     {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /> : null}
                     {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
 
@@ -658,6 +669,24 @@ export function Shell({
                 </main>
 
                 {/*
+                 * THE AGENTINBOX FLYOUT (beta.33 item 19): over the content row, under the title bar — whose inbox icon stays
+                 * reachable to close it — like Genie 1's, which slid in below its title bar over a scrim.
+                 */}
+                {featureAsk ? (
+                    <InboxFlyout
+                        value={inboxOpen ? parsed.inbox ?? '' : null}
+                        inbox={features.inbox}
+                        compose={inboxCompose}
+                        loadThread={(req) => featureAsk({ kind: 'inbox.thread', ...req }).then((d) => d.inbox?.thread ?? null)}
+                        send={(to, text, files) => featureAsk({ kind: 'inbox.send', to, text, ...(files.length > 0 ? { attachments: files } : {}) }).then(() => undefined)}
+                        attachment={(attachmentId) => featureAsk({ kind: 'inbox.attachment', attachmentId }).then((d) => d.inbox?.servedAttachment ?? null)}
+                        markAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}
+                        deleteThread={(key) => onFeature({ kind: 'inbox.deleteThread', key })}
+                        onNavigate={openInbox}
+                    />
+                ) : null}
+
+                {/*
                  * THE APPROVAL TOASTS (the owner, 2026-10-15: "I should not have to go to the deck to respond to every single
                  * thing an agent needs"): an agent's gated Genie workflow, answered from any screen with the Deck's own answer,
                  * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
@@ -687,7 +716,7 @@ export function Shell({
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
-                        {...(servable.includes('inbox') ? { onOpenMail: () => onNavigate(formatRoute({ surface: 'inbox', chat: chatThread?.agentId ?? null, pin: null })) } : {})}
+                        {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}

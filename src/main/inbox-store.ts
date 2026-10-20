@@ -59,6 +59,11 @@ interface MailFile {
     messages: InboxMessage[];
     /** participant → seq of the last acknowledged message. */
     cursors: Record<string, number>;
+    /**
+     * The highest seq ever given, kept when a thread is deleted (`deleteThread`): a seq is never given twice, so a cursor or
+     * a told batch that reached a deleted message never swallows the next one. Absent = the newest message's seq.
+     */
+    lastSeq?: number;
     /** Genie 1's history import (core/v1-inbox.ts), once it ran — `sawV1: false` is a blind boot, provisional. */
     v1Import?: V1InboxImportRecord;
 }
@@ -158,6 +163,41 @@ export class InboxStore {
         return this.#mail.messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
     }
 
+    /** Every message, oldest first — what the AgentInbox flyout's threads are read from (core/inbox-threads.ts). */
+    all(): InboxMessage[] {
+        return [...this.#mail.messages];
+    }
+
+    /**
+     * An attachment's name and bytes for THE PERSON, whichever thread it is in (Genie 1's flyout downloads from any thread,
+     * agent-to-agent included: `broker.attachmentFor` lets the human through). The person owns this workstation and
+     * already reads every thread; an agent's access stays `attachmentBytes`, party-checked.
+     */
+    async attachmentForPerson(attachmentId: string): Promise<{ name: string; bytes: Buffer }> {
+        for (const message of this.#mail.messages) {
+            const attachment = message.attachments.find((a) => a.id === attachmentId);
+            if (attachment) return { name: attachment.name, bytes: await readFile(join(this.attachmentsDir, attachment.sha256)) };
+        }
+        throw new Error(`no attachment ${attachmentId}`);
+    }
+
+    /**
+     * Delete the thread between `a` and `b` (Genie 1's Delete thread): its messages go; cursors are positions and stay, so
+     * nobody's unread count moves for mail in other threads. Blobs are content-addressed and may be shared, so they stay.
+     * Returns how many messages went.
+     */
+    async deleteThread(a: Participant, b: Participant): Promise<number> {
+        const before = this.#mail.messages.length;
+        this.#mail.lastSeq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0);
+        this.#mail.messages = this.#mail.messages.filter((m) => !((m.from === a && m.to === b) || (m.from === b && m.to === a)));
+        const gone = before - this.#mail.messages.length;
+        if (gone > 0) {
+            await this.#flush();
+            for (const l of this.#readListeners) l(a);
+        }
+        return gone;
+    }
+
     /** Whether `from` has ever sent `to` a message — read from the durable mail, so it survives a restart. What makes a reply allowed. */
     hasWritten(from: Participant, to: Participant): boolean {
         return this.#mail.messages.some((m) => m.from === from && m.to === to);
@@ -167,7 +207,8 @@ export class InboxStore {
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
         const attachments = await this.#stageAttachments(input.attachments ?? []);
-        const seq = (this.#mail.messages.at(-1)?.seq ?? 0) + 1;
+        const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
+        this.#mail.lastSeq = seq;
         const message: InboxMessage = {
             seq,
             id: `msg_${randomUUID()}`,

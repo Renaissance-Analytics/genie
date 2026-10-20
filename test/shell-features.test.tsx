@@ -63,12 +63,13 @@ function render(route: string, features: Partial<FeatureData> = {}): string {
 }
 
 describe('every feature surface is servable and draws its own body', () => {
+    // The AgentInbox is no longer a surface: it is a flyout over every page (beta.33 item 19; test/inbox-flyout-ui.test.tsx).
     it('SERVABLE names them all — a surface missing here is §0.4: built and unreachable', () => {
-        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser']) expect(SERVABLE).toContain(s);
+        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser']) expect(SERVABLE).toContain(s);
     });
 
     it('each route renders exactly its surface and not the Dashboard underneath', () => {
-        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'inbox', 'settings', 'browser']) {
+        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser']) {
             const html = render(`genie://${s}`);
             expect(html, s).toContain(`data-surface="${s}"`);
             expect(html, s).not.toContain('data-surface="dashboard"');
@@ -92,8 +93,8 @@ describe('first paint — skeletons, never zeros or empty states', () => {
         expect(html).toContain('data-skeleton');
     });
 
-    it('flows / hosting / toolchain / inbox with null data show a skeleton, not an empty-state sentence', () => {
-        for (const s of ['flows', 'hosting', 'toolchain', 'inbox']) {
+    it('flows / hosting / toolchain with null data show a skeleton, not an empty-state sentence', () => {
+        for (const s of ['flows', 'hosting', 'toolchain']) {
             const html = render(`genie://${s}`);
             expect(html, s).toContain('data-skeleton');
             expect(html, s).not.toMatch(/no flows|no sites|nothing installed|no messages/i);
@@ -102,9 +103,8 @@ describe('first paint — skeletons, never zeros or empty states', () => {
 });
 
 describe('measured empties are a different claim', () => {
-    it('flows with an empty list invites the first flow; inbox with no mail says so; hosting with no sites offers to add one', () => {
+    it('flows with an empty list invites the first flow; hosting with no sites offers to add one', () => {
         expect(render('genie://flows', { flows: { flows: [], adding: null } })).toMatch(/first flow|Add a flow/i);
-        expect(render('genie://inbox', { inbox: { unread: [], peers: [], recent: [] } })).toMatch(/No messages/i);
         expect(render('genie://hosting', { hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } } })).toMatch(/Add a site/i);
     });
 

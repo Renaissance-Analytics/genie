@@ -51,7 +51,9 @@ describe('the snapshot', () => {
         const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
         expect(snap.flows).toEqual({ flows: [], adding: null });
         expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, editing: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } });
-        expect(snap.inbox).toEqual({ unread: [], peers: [], recent: [] });
+        // The AgentInbox flyout's threads (beta.33 item 19) are measured too: none yet, nothing uncollected; a thread and an
+        // attachment are answers to their own actions, never in a snapshot.
+        expect(snap.inbox).toEqual({ unread: [], peers: [], recent: [], threads: [], uncollected: 0, thread: null, servedAttachment: null });
         expect(snap.settings.values).toMatchObject({ theme: 'system', start_minimized: false });
         expect(snap.knowledge).toEqual({ hits: [], query: '', adding: null, lastAdd: null });
         // The toolchain is the one section that needs a scan — null until one has run.

@@ -33,11 +33,19 @@ describe('every servable feature surface is reachable by a labelled control', ()
         expect(unreachable).toEqual([]);
     });
 
-    it('Hosting, Toolchain and AgentInbox are rows, named as their surfaces name themselves', () => {
+    it('Hosting and Toolchain are rows, named as their surfaces name themselves', () => {
         const html = rail();
         expect(html).toMatch(/data-nav="genie:\/\/hosting"[\s\S]*?>Hosting</);
         expect(html).toMatch(/data-nav="genie:\/\/toolchain"[\s\S]*?>Toolchain</);
-        expect(html).toMatch(/data-nav="genie:\/\/inbox"[\s\S]*?>AgentInbox</);
+    });
+
+    // The owner (beta.33 item 19): "the agentinbox should not be a page and it should be accessible from the header system
+    // icons just like it was in genie 1". Its way in is the title bar's icon (test/inbox-flyout-ui.test.tsx), not a row.
+    it('the AgentInbox is NOT a rail row any more (positive control: Hosting still is)', () => {
+        const html = rail();
+        expect(html).not.toContain('genie://inbox');
+        expect(html).not.toMatch(/>AgentInbox</);
+        expect(html).toContain('data-nav="genie://hosting"');
     });
 
     it('the Genie Browser is a row — .gen sites, tailnet and Tynn addresses open inside Genie', () => {

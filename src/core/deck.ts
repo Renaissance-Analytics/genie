@@ -347,7 +347,8 @@ export function signalStrip(state: SignalState): readonly Signal[] {
         signals.push({
             kind: 'mail',
             label: `${state.uncollectedMail} message${state.uncollectedMail === 1 ? '' : 's'} not collected`,
-            route: 'genie://inbox',
+            // The AgentInbox flyout over the Deck (beta.33 item 19: not a page); the old page's link would leave the Deck.
+            route: 'genie://deck?inbox=',
         });
     }
 

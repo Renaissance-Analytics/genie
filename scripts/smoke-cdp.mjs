@@ -188,6 +188,15 @@ check(typeof route === 'string' && new RegExp(ADDRESS.dashboard).test(route), '3
 const features = await cdp.evaluate('document.querySelectorAll("[data-feature]").length');
 check(features === 4, '4. the four feature icons are in the title bar', `found ${features}`);
 
+// 4b. THE AGENTINBOX among the header's system icons (beta.33 item 19): a press opens the flyout over the page, a second
+// closes it — in the real window, where the address layer carries `inbox=`.
+const inboxIcon = await cdp.evaluate('document.querySelectorAll("[data-system-icon=\\"AgentInbox\\"]").length');
+await cdp.evaluate(`document.querySelector('[data-system-icon="AgentInbox"]')?.click(); true`);
+const inboxOpened = await waitFor(cdp, 'Boolean(document.querySelector("[data-inbox-flyout]")) && /[?&]inbox=/.test(document.querySelector("[data-route]")?.textContent ?? "")', 'the AgentInbox flyout');
+await cdp.evaluate(`document.querySelector('[data-system-icon="AgentInbox"]')?.click(); true`);
+const inboxClosed = await waitFor(cdp, '!document.querySelector("[data-inbox-flyout]")', 'the AgentInbox flyout to close');
+check(inboxIcon === 1 && inboxOpened && inboxClosed, '4b. the AgentInbox icon in the title bar opens and closes its flyout', JSON.stringify({ inboxIcon, inboxOpened, inboxClosed }));
+
 const navRows = await cdp.evaluate('document.querySelectorAll("[data-nav]").length');
 check(navRows >= 2, '5. the rail offers labelled navigation', `${navRows} rows`);
 
