@@ -54,8 +54,6 @@ export const SETTINGS: readonly SettingDef[] = [
     // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
     // Remote access as its switch, not as a row.
     { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let paired devices on your tailnet reach this Genie.', type: 'boolean', default: false, hidden: true },
-    { key: 'github_authorized', group: 'workstation', scope: 'host', label: 'GitHub App authorized', description: 'Step 1 of 2: you authorized the Genie AOS GitHub App for your account.', type: 'boolean', default: false },
-    { key: 'github_installed', group: 'workstation', scope: 'host', label: 'GitHub App installed', description: 'Step 2 of 2: the Genie AOS GitHub App is installed on the repositories Genie works in.', type: 'boolean', default: false },
     { key: 'mcp_sync_claude', group: 'workstation', scope: 'host', label: 'Sync Genie into Claude Code (.mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .mcp.json.', type: 'boolean', default: true },
     { key: 'mcp_sync_cursor', group: 'workstation', scope: 'host', label: 'Sync Genie into Cursor (.cursor/mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .cursor/mcp.json.', type: 'boolean', default: true },
     { key: 'mcp_sync_codex', group: 'workstation', scope: 'host', label: 'Sync Genie into Codex (.codex/config.toml)', description: 'Config sync writes Genie’s MCP server block into the workspace’s Codex config.', type: 'boolean', default: true },
@@ -125,6 +123,12 @@ const V1_DROP_REASONS: Readonly<Record<string, string>> = {
     global_hotkey: 'Genie 2 has no Feedback window; feedback is GitHub issues, which IssueWatch tracks',
 };
 
+/**
+ * Genie 1's GitHub login (`github_token_enc`, `github_user` and their bookkeeping) is not a setting: the GitHub sign-in
+ * carries it over itself, decrypted with this Genie's key and kept encrypted (main/github-account.ts, beta.33 item 25).
+ */
+const GITHUB_V1_REASON = 'Genie 1’s GitHub sign-in is carried over by the GitHub sign-in itself, encrypted (Settings → GitHub), not as a setting';
+
 export interface CarryOver {
     readonly applied: Record<string, boolean | string>;
     readonly dropped: Array<{ key: string; reason: string }>;
@@ -162,7 +166,7 @@ export function carryOverV1(v1: Readonly<Record<string, string>>): CarryOver {
     for (const [key, raw] of Object.entries(v1)) {
         const target = V1_MAP[key];
         if (target === undefined) {
-            dropped.push({ key, reason: V1_DROP_REASONS[key] ?? `no Genie 2 setting corresponds to v1's ${key}` });
+            dropped.push({ key, reason: V1_DROP_REASONS[key] ?? (key.startsWith('github_') ? GITHUB_V1_REASON : `no Genie 2 setting corresponds to v1's ${key}`) });
             continue;
         }
         const def = SETTINGS.find((s) => s.key === target)!;

@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeaturePorts, type FeatureState } from '../src/main/feature-ipc.js';
 import type { TynnAccountPort } from '../src/main/tynn-account.js';
+import type { GithubAccountPort } from '../src/main/github-account.js';
+import type { GithubView } from '../src/core/github.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
  * TYNN, GITHUB, CONFIG SYNC IN THE SNAPSHOT (§6.9). Tynn is the OPTIONAL identity layer: a token makes
  * Genie signed in; signed out, Tynn-gated rows are annotated with the route to sign in, never dropped.
- * The GitHub App is two distinct steps (authorize, then install) with the status derived from what
- * the person has confirmed. Config sync writes the four targets of a workspace and reports each.
+ * GitHub is the account's REAL status (main/github-account.ts: Genie 1's device-flow sign-in, its login carried over) —
+ * no longer two steps the person ticked (the owner, 2026-10-20: "functional not some dumb list"). Config sync writes the
+ * four targets of a workspace and reports each.
  */
 
 const pty: PtyPort = {
@@ -37,13 +40,14 @@ afterEach(async () => {
 });
 
 describe('integrations in the snapshot', () => {
-    it('signed out of Tynn by default, GitHub blocked by authorize, no sync yet; gated rows are ANNOTATED, never dropped', async () => {
+    it('signed out of Tynn and GitHub by default (no account wired: doctor mode), no sync yet; gated rows are ANNOTATED, never dropped', async () => {
         const snap = await featureSnapshot(services, state());
         expect(snap.integrations).toEqual({
             tynnSignedIn: false,
             // No account port wired (doctor mode, these tests): signed out, nothing pending, the default host.
             tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
-            github: { steps: [{ id: 'authorize', done: false }, { id: 'install', done: false }], blocking: true, blockedBy: 'authorize', missingRepos: ['this workstation'], signal: { label: 'GitHub permissions are blocking features', route: 'genie://settings/github' } },
+            // No GitHub account port: signed out, saying why, and NOT blocking (GitHub is optional; signed out is not a fault).
+            github: expect.objectContaining({ status: 'signed-out', user: null, device: null, installations: null, signal: null, message: expect.stringMatching(/cannot sign in to GitHub here/) }),
             gated: [{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true, enabled: false, note: 'Sign in to Tynn to use this', route: 'genie://settings/tynn' }],
             lastSync: null,
             // The endpoint composeServices was given flows into the section; nothing has probed it in this test.
@@ -66,12 +70,14 @@ describe('integrations in the snapshot', () => {
         expect((await featureSnapshot(services, state())).integrations!.agentFiles![0]!.changed).toEqual([]);
     });
 
-    it('integrations.githubConfirm marks each step done in order', async () => {
-        await expect(handleFeatureAction(services, { kind: 'integrations.githubConfirm', step: 'install' }, state())).rejects.toThrow(/authorize first/);
-        const authorized = await handleFeatureAction(services, { kind: 'integrations.githubConfirm', step: 'authorize' }, state());
-        expect(authorized.integrations!.github).toMatchObject({ blockedBy: 'install', steps: [{ id: 'authorize', done: true }, { id: 'install', done: false }] });
-        const installed = await handleFeatureAction(services, { kind: 'integrations.githubConfirm', step: 'install' }, state());
-        expect(installed.integrations!.github).toMatchObject({ blocking: false, blockedBy: null, signal: null });
+    it('the hand-ticked GitHub steps are gone: integrations.githubConfirm is not an action, and its two booleans are not settings', async () => {
+        // The owner (2026-10-20): "functional not some dumb list". The two booleans it set no longer exist (core/settings.ts).
+        // An old window sending it changes nothing: no flag is written, GitHub stays what the account says.
+        const after = await handleFeatureAction(services, { kind: 'integrations.githubConfirm', step: 'authorize' } as never, state());
+        expect(after.settings!.values).not.toHaveProperty('github_authorized');
+        expect(after.integrations!.github).toMatchObject({ status: 'signed-out' });
+        await expect(services.settings.set('github_authorized', true)).rejects.toThrow(/not a setting/);
+        await expect(services.settings.set('github_installed', true)).rejects.toThrow(/not a setting/);
     });
 
     it('workspace.syncAgentFiles writes the four targets into the workspace and reports each; the snapshot carries the last sync', async () => {
@@ -144,5 +150,44 @@ describe('Tynn sign-in through the account', () => {
 
     it('CONTROL: without an account port the actions refuse in words — nothing pretends to sign in', async () => {
         await expect(handleFeatureAction(services, { kind: 'integrations.tynnCode', code: 'good' }, state())).rejects.toThrow(/cannot sign in to Tynn/);
+    });
+});
+
+/**
+ * GITHUB THROUGH THE ACCOUNT (beta.33 item 25). Each GitHub action reaches the account (main/github-account.ts, faked
+ * here); the snapshot carries the account's view as it is — the real status read from GitHub — never a value the
+ * window sent. Opening a page names WHICH page; the URL is the account's own.
+ */
+describe('GitHub through the account', () => {
+    function fakeGithubAccount() {
+        const calls: string[] = [];
+        let view: GithubView = { status: 'signed-out', user: null, carriedFromGenie1: false, device: null, installations: null, capabilities: [], checking: false, signal: null, message: null };
+        const account: GithubAccountPort = {
+            view: () => view,
+            startSignIn: async () => { calls.push('sign-in'); view = { ...view, status: 'signing-in', device: { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: 0 } }; },
+            cancelSignIn: () => { calls.push('cancel'); view = { ...view, status: 'signed-out', device: null }; },
+            signOut: async () => { calls.push('sign-out'); view = { ...view, status: 'signed-out', user: null }; },
+            refresh: async () => { calls.push('refresh'); },
+            openPage: async (target) => { calls.push(`open:${target.page}${target.page === 'installation' ? `:${target.installationId}` : ''}`); },
+            onChange: () => () => {},
+        };
+        return { account, calls };
+    }
+
+    it('sign in, cancel, check again, the pages, sign out — each through the account; the snapshot is its view', async () => {
+        const { account, calls } = fakeGithubAccount();
+        const ports: FeaturePorts = { githubAccount: account };
+        const signingIn = await handleFeatureAction(services, { kind: 'integrations.githubSignIn' }, state(), ports);
+        expect(signingIn.integrations!.github).toMatchObject({ status: 'signing-in', device: { userCode: 'WDJB-MJHT' } });
+        expect((await handleFeatureAction(services, { kind: 'integrations.githubCancelSignIn' }, state(), ports)).integrations!.github.status).toBe('signed-out');
+        await handleFeatureAction(services, { kind: 'integrations.githubRefresh' }, state(), ports);
+        await handleFeatureAction(services, { kind: 'integrations.githubOpen', target: { page: 'install' } }, state(), ports);
+        await handleFeatureAction(services, { kind: 'integrations.githubOpen', target: { page: 'installation', installationId: 22 } }, state(), ports);
+        await handleFeatureAction(services, { kind: 'integrations.githubSignOut' }, state(), ports);
+        expect(calls).toEqual(['sign-in', 'cancel', 'refresh', 'open:install', 'open:installation:22', 'sign-out']);
+    });
+
+    it('CONTROL: without an account port the GitHub actions refuse in words', async () => {
+        await expect(handleFeatureAction(services, { kind: 'integrations.githubSignIn' }, state())).rejects.toThrow(/cannot sign in to GitHub here/);
     });
 });

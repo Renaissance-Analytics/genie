@@ -11,8 +11,8 @@ import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
  * THE DECK'S SIGNAL STRIP IS MEASURED (§4.5) — until now every signal was a constant `false`/`0`.
- * `services.signals()` reads the stores: mail agents have not collected, GitHub blocking features
- * (not yet authorized), the OS agent working, flows running. The registry takes a signals provider
+ * `services.signals()` reads the stores: mail agents have not collected and flows running; GitHub blocking features
+ * (the GitHub account's measurement) and the OS agent working are handed in by main. The registry takes a signals provider
  * so the estate snapshot carries the live values; without one it stays honest zeros.
  */
 
@@ -41,20 +41,18 @@ afterEach(async () => {
 });
 
 describe('services.signals()', () => {
-    it('GitHub blocks until authorized AND installed; mail an agent has not collected counts; the OS agent is not working when nothing probes it; no flows run', async () => {
-        expect(services.signals({ osAgentWorking: false })).toEqual({ flowsRunning: 0, uncollectedMail: 0, githubBlocked: true, osAgentWorking: false });
-        // Two distinct steps: authorized alone still blocks (install is missing); installed unblocks.
-        await services.settings.set('github_authorized', true);
-        expect(services.signals({ osAgentWorking: false }).githubBlocked).toBe(true);
-        await services.settings.set('github_installed', true);
-        expect(services.signals({ osAgentWorking: false }).githubBlocked).toBe(false);
+    it('GitHub blocking is what the GitHub account MEASURED (passed in by main), not a ticked box; mail an agent has not collected counts; the OS agent is not working when nothing probes it; no flows run', async () => {
+        // The owner (2026-10-20): the two hand-ticked steps were "some dumb list". Whether GitHub blocks features is now
+        // the account's own reading of GitHub (core/github.ts githubSignal), handed in like osAgentWorking.
+        expect(services.signals({ osAgentWorking: false, githubBlocked: false })).toEqual({ flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false });
+        expect(services.signals({ osAgentWorking: false, githubBlocked: true }).githubBlocked).toBe(true);
 
         onRoster('agent_a', 'atlas', 'tynn');
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'ping' });
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'pong' });
-        expect(services.signals({ osAgentWorking: false }).uncollectedMail).toBe(2);
+        expect(services.signals({ osAgentWorking: false, githubBlocked: false }).uncollectedMail).toBe(2);
         await services.inbox.receive({ participant: 'agent_a' as never, limit: 1 });
-        expect(services.signals({ osAgentWorking: true })).toMatchObject({ uncollectedMail: 1, osAgentWorking: true });
+        expect(services.signals({ osAgentWorking: true, githubBlocked: false })).toMatchObject({ uncollectedMail: 1, osAgentWorking: true });
     });
 });
 

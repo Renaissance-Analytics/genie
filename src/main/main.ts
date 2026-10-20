@@ -14,7 +14,7 @@ import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, powerMonitor, safeStorage, session, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -39,6 +39,7 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
+import { GithubAccount } from './github-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
@@ -489,6 +490,8 @@ function revealMainWindow(): void {
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
 let tynnAccount: TynnAccount | null = null;
+/** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
+let githubAccount: GithubAccount | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
@@ -1229,7 +1232,9 @@ async function boot(): Promise<void> {
             mkdir: (p) => mkdir(p, { recursive: true }).then(() => {}),
             gitInit,
             // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
-            gitClone,
+            // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
+            // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
+            gitClone: (url, into) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
@@ -1377,7 +1382,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1591,6 +1596,23 @@ async function boot(): Promise<void> {
     });
     tynnAccount.onChange(pushFeatures);
     afterTynnUrl = pushFeatures;
+    // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
+    // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
+    // device flow. Every change reaches Settings and the Deck's signal at once; GitHub is read once now, and again on
+    // Check again or after a sign-in (no polling of the API).
+    githubAccount = await GithubAccount.open({
+        file: join(genieHome(), 'github.json'),
+        cipher: {
+            isAvailable: () => safeStorage.isEncryptionAvailable(),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        },
+        fetch: (url, init) => net.fetch(url, init),
+        v1Settings: () => readV1Settings(v1DatabaseFile()),
+        openExternal: (url) => shell.openExternal(url),
+    });
+    githubAccount.onChange(() => { pushFeatures(); registry?.touch(); });
+    void githubAccount.refresh();
     // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
@@ -1816,8 +1838,9 @@ async function boot(): Promise<void> {
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
     remoteAccessNow = remoteAccess({ listener: remoteSocket, enabled: () => composed.settings.get('remote_access') === true, onChange: () => { relayAfterSwitch?.(); pushFeatures(); } });
     void remoteAccessNow.apply().catch((error: unknown) => { console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`); pushFeatures(); });
-    // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
-    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));
+    // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
+    // sign-in read from GitHub), the OS agent working.
+    registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })(), githubBlocked: (githubAccount?.view().signal ?? null) !== null }));
     // THE DECK'S ITEMS beyond live permission requests: questions agents asked, the person's list, mail to the person,
     // finished agents, Genie's tool approvals. Built in compose and never read before (the owner never saw a question).
     registry.setDeckSource(() => [...mainErrors.deckItems(), ...composed.deckItems()]);

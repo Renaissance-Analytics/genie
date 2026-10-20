@@ -6,8 +6,7 @@ import { isAlertSoundKey } from './alerts.js';
  *
  * The navigation model, pure — as Genie 1's renderer/lib/settings-nav.ts was — so where every setting lives is decided
  * and tested without a DOM. Grouped sections, one page each. EVERY registry key has exactly one page or is deliberately
- * not drawn: internal bookkeeping, one workspace's own layout (changed where its terminals are), and the raw GitHub
- * flags the GitHub card stands for.
+ * not drawn: internal bookkeeping and one workspace's own layout (changed where its terminals are).
  */
 
 export type SectionId =
@@ -71,11 +70,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 
 const SECTIONS: readonly SectionId[] = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
 
-/** Kept, never drawn: bookkeeping, one workspace's own layout, and the raw GitHub flags (the GitHub card is their UI). */
+/** Kept, never drawn: bookkeeping and one workspace's own layout. (GitHub is no setting: its card reads GitHub itself.) */
 export const NOT_DRAWN: readonly string[] = [
     'whats_new_seen_version', 'tray_notice_shown',
     'panel_layout', 'panel_splits', 'workspace_tabs',
-    'github_authorized', 'github_installed',
     // Drawn as Remote access's own switch, at the top of that section (Tynn #820) — not as a settings row.
     'remote_access',
 ];

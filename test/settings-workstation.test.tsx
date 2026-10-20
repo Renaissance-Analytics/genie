@@ -4,6 +4,7 @@ import { NAV_GROUPS, NOT_DRAWN, type SectionId } from '../src/core/settings-nav.
 import { SETTINGS } from '../src/core/settings.js';
 import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { signedOutGithubView } from '../src/core/github.js';
 
 /**
  * WORKSTATION SETTINGS, DRAWN — GENIE 1'S SIDEBAR (the owner, 2026-10-19; approved FTQ q_3e5257af): a sidebar of grouped
@@ -15,7 +16,7 @@ const values = Object.fromEntries(SETTINGS.map((s) => [s.key, s.default]));
 const integrations: NonNullable<FeatureData['integrations']> = {
     tynnSignedIn: false,
     tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
-    github: { steps: [{ id: 'authorize', done: false }, { id: 'install', done: false }], blocking: true, blockedBy: 'authorize', missingRepos: ['this workstation'], signal: null },
+    github: signedOutGithubView(null),
     gated: [],
     lastSync: null,
     mcp: { url: null, verified: null },
@@ -54,9 +55,11 @@ describe('nothing internal is drawn, on any page', () => {
 });
 
 describe('Accounts', () => {
-    it('GitHub is the two-step card only — no raw “authorized / installed” checkboxes', () => {
+    it('GitHub is the sign-in card (Genie 1’s device flow) — no checklist, no raw “authorized / installed” checkboxes', () => {
+        // beta.33 item 25; the owner (2026-10-20): "functional not some dumb list".
         const html = page('github');
-        expect(html).toContain('data-github-step="authorize"');
+        expect(html).toContain('data-action="github-sign-in"');
+        expect(html).not.toContain('data-github-step');
         expect(html).not.toMatch(/GitHub App authorized|GitHub App installed/);
     });
 

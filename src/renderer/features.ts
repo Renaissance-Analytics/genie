@@ -15,7 +15,8 @@ import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
-import type { AnnotatedRow, GithubAppStatus, SyncResult } from '../core/integrations.js';
+import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
+import type { GithubView } from '../core/github.js';
 import type { PluginEntry } from '../main/plugin-host.js';
 import type { Device } from '../main/remote-devices.js';
 
@@ -170,7 +171,8 @@ export interface IntegrationsSection {
     readonly tynnSignedIn: boolean;
     /** This Genie's Tynn account: where, who (null signed out), the sign-in link kept on screen, and Tynn's last word. */
     readonly tynn: { readonly host: string; readonly user: { readonly name: string; readonly email: string } | null; readonly signInUrl: string | null; readonly message: string | null };
-    readonly github: GithubAppStatus;
+    /** GitHub as this Genie's sign-in read it from GitHub (main/github-account.ts): never the token. */
+    readonly github: GithubView;
     readonly gated: readonly AnnotatedRow[];
     readonly lastSync: { workspaceId: string; results: readonly SyncResult[] } | null;
     /** Genie's own MCP server (§6.9): where it listens, and whether a real server/discover answered at boot (§6.4). */
@@ -397,8 +399,12 @@ export type FeatureAction =
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }
     | { kind: 'integrations.tynnSignOut' }
-    /** The person confirms a GitHub App step they did in the browser; install needs authorize first. */
-    | { kind: 'integrations.githubConfirm'; step: 'authorize' | 'install' }
+    /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
+    | { kind: 'integrations.githubSignIn' }
+    | { kind: 'integrations.githubCancelSignIn' }
+    | { kind: 'integrations.githubRefresh' }
+    | { kind: 'integrations.githubOpen'; target: { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number } }
+    | { kind: 'integrations.githubSignOut' }
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };

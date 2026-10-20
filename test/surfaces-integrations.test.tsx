@@ -3,18 +3,19 @@ import { describe, expect, it } from 'vitest';
 import type { SectionId } from '../src/core/settings-nav.js';
 import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { githubCapabilities, signedOutGithubView, type GithubInstallation, type GithubView } from '../src/core/github.js';
 
 /**
  * INTEGRATIONS IN SETTINGS → WORKSTATION (§6.9). Tynn is optional: signed out shows the sign-in with
- * every gated row still listed and annotated; signed in shows Sign out. The GitHub App is TWO steps,
- * each with its own confirm, the app's own URL in plain text to open; done steps are marked. A workspace's
+ * every gated row still listed and annotated; signed in shows Sign out. GitHub is Genie 1's sign-in and the REAL status
+ * GitHub reports (beta.33 item 25) — no longer two steps the person ticks. A workspace's
  * config sync lives in that workspace's Settings (test/workspace-agent-files.test.tsx); this section points there.
  */
 
 const integrations: NonNullable<FeatureData['integrations']> = {
     tynnSignedIn: false,
     tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
-    github: { steps: [{ id: 'authorize', done: false }, { id: 'install', done: false }], blocking: true, blockedBy: 'authorize', missingRepos: ['this workstation'], signal: { label: 'GitHub permissions are blocking features', route: 'genie://settings/github' } },
+    github: signedOutGithubView(null),
     gated: [{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true, enabled: false, note: 'Sign in to Tynn to use this', route: 'genie://settings/tynn' }],
     lastSync: null,
     mcp: { url: null, verified: null },
@@ -71,16 +72,12 @@ describe('Integrations', () => {
         expect(html).not.toContain('data-form="tynn-code"');
     });
 
-    it('GitHub: two steps, the app URL in plain text, a confirm per step; a done step is marked and the next is the one offered', () => {
+    it('the hand-ticked GitHub checklist is gone: no steps, no “I did this”, no “done” chips', () => {
+        // The owner (2026-10-20), on this page: "functional not some dumb list".
         const html = render(integrations, 'github');
-        expect(html).toContain('data-github-step="authorize"');
-        expect(html).toContain('data-github-step="install"');
-        expect(html).toMatch(/github\.com\/apps\/genie-aos/);
-        expect(html).toContain('data-action="github-confirm-authorize"');
-        expect(html).not.toContain('data-action="github-confirm-install"');
-        const authorized = render({ ...integrations, github: { ...integrations.github, blockedBy: 'install', steps: [{ id: 'authorize', done: true }, { id: 'install', done: false }] } }, 'github');
-        expect(authorized).toContain('data-github-done="authorize"');
-        expect(authorized).toContain('data-action="github-confirm-install"');
+        expect(html).not.toContain('data-github-step');
+        expect(html).not.toContain('github-confirm');
+        expect(html).not.toMatch(/I did this/);
     });
 
     it('config sync is not here: no Sync now and no results even after a sync — the note says each workspace’s Settings has it', () => {
@@ -88,5 +85,96 @@ describe('Integrations', () => {
         expect(html).not.toContain('data-action="sync-config"');
         expect(html).not.toContain('data-sync-result=');
         expect(html).toContain('data-workspace-files-note');
+    });
+});
+
+/**
+ * SETTINGS → GITHUB, FOR REAL (beta.33 item 25; Genie 1's GitHub card). The owner (2026-10-20): "our Github integration
+ * and login needs to be way easier than this and it needs to be functional not some dumb list". Signed out: ONE button.
+ * Signing in: GitHub's code, large, with Copy, and the page to type it on — Genie waits for GitHub by itself. Signed in:
+ * who, where the App is installed (each account, its repositories, the permissions GitHub GRANTED, its own Configure),
+ * Install on more repositories, what each permission lets Genie do, Check again, and Sign out.
+ */
+describe('Settings → GitHub', () => {
+    const page = (github: GithubView) => render({ ...integrations, github }, 'github');
+    const installs: GithubInstallation[] = [
+        { id: 11, account: 'ada', isOrg: false, selection: 'all', repoCount: 40, repos: null, permissions: { metadata: 'read', contents: 'write', issues: 'read' }, settingsUrl: 'https://github.com/settings/installations/11' },
+        { id: 22, account: 'Example-Org', isOrg: true, selection: 'selected', repoCount: 2, repos: ['Example-Org/site', 'Example-Org/api'], permissions: { metadata: 'read', issues: 'read' }, settingsUrl: 'https://github.com/organizations/Example-Org/settings/installations/22' },
+    ];
+    const signedIn = (over: Partial<GithubView> = {}): GithubView => ({
+        status: 'signed-in', user: { login: 'ada', name: 'Ada' }, carriedFromGenie1: false, device: null, installations: installs,
+        capabilities: githubCapabilities({ signedIn: true, installations: installs }), checking: false, signal: null, message: null, ...over,
+    });
+
+    it('signed out: one button to sign in with GitHub — no steps, no token field', () => {
+        const html = page(signedOutGithubView(null));
+        expect(html).toContain('data-github-status="signed-out"');
+        expect(html).toMatch(/data-action="github-sign-in"[^>]*>(?:<[^>]+>)*Sign in with GitHub</);
+        expect(html).not.toMatch(/type="password"/);
+        expect(html).not.toContain('data-action="github-sign-out"');
+    });
+
+    it('signed out with a reason (Genie 1’s login could not be decrypted, a denial): the reason is on screen', () => {
+        const html = page(signedOutGithubView('Genie 1’s GitHub sign-in is on this machine, but this Genie cannot decrypt it.'));
+        expect(html).toMatch(/data-github-message[^>]*>Genie 1’s GitHub sign-in is on this machine, but this Genie cannot decrypt it\.</);
+    });
+
+    it('signing in: GitHub’s code large with Copy, the page to enter it, Cancel — and it says Genie is waiting, nothing to press', () => {
+        const html = page({ ...signedOutGithubView(null), status: 'signing-in', device: { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: 0 } });
+        expect(html).toContain('data-github-status="signing-in"');
+        expect(html).toMatch(/data-github-code="WDJB-MJHT"[^>]*>WDJB-MJHT</);
+        expect(html).toContain('data-action="github-copy-code"');
+        expect(html).toContain('data-action="github-open-device"');
+        expect(html).toContain('github.com/login/device');
+        expect(html).toContain('data-action="github-cancel"');
+        expect(html).toMatch(/Waiting for GitHub/);
+        expect(html).not.toContain('data-action="github-sign-in"');
+    });
+
+    it('signed in: who, carried over from Genie 1 when it was, Check again and Sign out', () => {
+        const html = page(signedIn({ carriedFromGenie1: true }));
+        expect(html).toContain('data-github-status="signed-in"');
+        expect(html).toMatch(/Signed in as <strong>ada<\/strong>/);
+        expect(html).toContain('data-github-carried');
+        expect(html).toContain('data-action="github-refresh"');
+        expect(html).toContain('data-action="github-sign-out"');
+        expect(html).not.toContain('data-action="github-sign-in"');
+        expect(page(signedIn())).not.toContain('data-github-carried');
+    });
+
+    it('every installation: the account, personal or org, its repositories (listed when selected, counted when all), the permissions granted, and its own Configure', () => {
+        const html = page(signedIn());
+        expect(html).toContain('data-github-installation="ada"');
+        expect(html).toContain('data-github-installation="Example-Org"');
+        expect(html).toMatch(/All repositories \(40\)/);
+        expect(html).toContain('Example-Org/site');
+        expect(html).toContain('Example-Org/api');
+        expect(html).toContain('data-github-permission="contents:write"');
+        expect(html).toContain('data-github-permission="issues:read"');
+        expect(html).toContain('data-action="github-configure-11"');
+        expect(html).toContain('data-action="github-configure-22"');
+        expect(html).toMatch(/data-action="github-install"[^>]*>(?:<[^>]+>)*Install on more repositories</);
+    });
+
+    it('what the permissions let Genie do, each row enabled or saying why not', () => {
+        const html = page(signedIn());
+        expect(html).toMatch(/data-github-capability="clone-private"[^>]*data-enabled="true"/);
+        const noContents = page(signedIn({ installations: [installs[1]!], capabilities: githubCapabilities({ signedIn: true, installations: [installs[1]!] }) }));
+        expect(noContents).toMatch(/data-github-capability="clone-private"[^>]*data-enabled="false"/);
+        expect(noContents).toMatch(/Contents/);
+    });
+
+    it('GitHub not read yet: a skeleton, not an empty list; installed nowhere: says so and offers the install', () => {
+        expect(page(signedIn({ installations: null, checking: true }))).toContain('data-github-installations="reading"');
+        const none = page(signedIn({ installations: [], capabilities: githubCapabilities({ signedIn: true, installations: [] }) }));
+        expect(none).toMatch(/not installed on any account/i);
+        expect(none).toContain('data-action="github-install"');
+    });
+
+    it('a sign-in GitHub no longer accepts: said plainly, with Sign in again', () => {
+        const html = page(signedIn({ status: 'expired', installations: null, message: 'GitHub no longer accepts this sign-in (revoked or expired). Sign in again.' }));
+        expect(html).toContain('data-github-status="expired"');
+        expect(html).toMatch(/no longer accepts/);
+        expect(html).toMatch(/data-action="github-sign-in"[^>]*>(?:<[^>]+>)*Sign in again</);
     });
 });

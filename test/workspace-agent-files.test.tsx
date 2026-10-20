@@ -11,6 +11,7 @@ import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { signedOutGithubView } from '../src/core/github.js';
 
 /**
  * A WORKSPACE'S AGENT FILES ARE IN THAT WORKSPACE'S SETTINGS. The owner, on beta.20 (2026-10-13): "I just did this config
@@ -114,7 +115,7 @@ describe('Workstation settings', () => {
     const integrations: NonNullable<FeatureData['integrations']> = {
         tynnSignedIn: false,
         tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
-        github: { steps: [{ id: 'authorize', done: true }, { id: 'install', done: true }], blocking: false, blockedBy: null, missingRepos: [], signal: null },
+        github: signedOutGithubView(null),
         gated: [],
         lastSync: { workspaceId: 'moic', results: [{ id: 'claude', label: 'Claude Code (.mcp.json)', ok: true }] },
         mcp: { url: null, verified: null },

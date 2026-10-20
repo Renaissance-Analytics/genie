@@ -231,9 +231,8 @@ export class Registry {
              */
             deckItems: this.#loaded ? this.#deckItems() : null,
             /*
-             * Every signal false, and that is honest rather than lazy: Flows, AgentInbox and
-             * the GitHub integration are not built, so none of them has anything to report. The
-             * strip renders nothing, which is exactly what it should do when nothing is true.
+             * Without a provider every signal is false — honest zeros, so the strip renders nothing.
+             * main sets the provider: the stores' counts, and what the GitHub sign-in read from GitHub.
              */
             signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,

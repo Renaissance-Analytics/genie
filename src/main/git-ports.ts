@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { redactSecrets } from '../core/github.js';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -13,10 +14,29 @@ export function gitInit(path: string): Promise<void> {
     });
 }
 
-export function gitClone(url: string, into: string): Promise<void> {
+/**
+ * `git clone`, optionally with config for THIS command only — the GitHub sign-in's credential (core/github.ts
+ * cloneAuthFor). The config rides git's GIT_CONFIG_COUNT/KEY_n/VALUE_n environment (git ≥ 2.31), not `-c` arguments:
+ * a process's arguments are readable by every user on the machine, its environment only by the same user. Nothing is
+ * written into the clone's .git/config. Every secret is scrubbed out of git's words before they go anywhere.
+ */
+export function gitClone(url: string, into: string, auth?: { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }): Promise<void> {
+    const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
+    const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
     return new Promise<void>((resolve, reject) => {
-        execFile('git', ['clone', '--', url, into], { windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
+        execFile('git', ['clone', '--', url, into], { windowsHide: true, ...(env ? { env } : {}) }, (error, _stdout, stderr) => (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve()));
     });
+}
+
+/** Config entries as git's environment: GIT_CONFIG_COUNT and GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, appended after any already there. */
+function gitConfigEnv(config: ReadonlyArray<readonly [string, string]>): Record<string, string> {
+    const base = Number(process.env.GIT_CONFIG_COUNT ?? '0') || 0;
+    const env: Record<string, string> = { GIT_CONFIG_COUNT: String(base + config.length) };
+    config.forEach(([key, value], i) => {
+        env[`GIT_CONFIG_KEY_${base + i}`] = key;
+        env[`GIT_CONFIG_VALUE_${base + i}`] = value;
+    });
+    return env;
 }
 
 export interface GitCommit { sha: string; subject: string; author: string; at: number }

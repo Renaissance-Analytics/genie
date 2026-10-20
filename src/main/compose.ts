@@ -24,7 +24,7 @@ import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } 
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
-import { configSync, githubAppStatus, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
+import { configSync, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
@@ -241,8 +241,11 @@ export interface ComposedServices {
     readonly approvals: ApprovalQueue;
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
-    /** The Deck's signal strip, MEASURED from the stores (§4.5). */
-    signals(context: { osAgentWorking: boolean }): SignalState;
+    /**
+     * The Deck's signal strip, MEASURED (§4.5): flows and uncollected mail from the stores; the OS agent's turn and whether
+     * GitHub blocks features (the GitHub account's reading of GitHub, main/github-account.ts) handed in by main.
+     */
+    signals(context: { osAgentWorking: boolean; githubBlocked: boolean }): SignalState;
     /**
      * §6.4 THE INBOX PUSH: the notices due now — registered agents with mail they have not been told about whose session
      * can take a turn (`run` answers its run, or `null` while it cannot). Once per arrival batch. Decides; never sends.
@@ -250,9 +253,8 @@ export interface ComposedServices {
     inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string; mail: readonly NoticeMail[] }>;
     /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
     inboxNoticeSettled(agentId: string, delivered: boolean): void;
-    /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
-    /** GitHub, Genie's MCP server and the agent files. Tynn is the account's (main/tynn-account.ts), added by feature-ipc. */
-    integrations(): { github: GithubAppStatus; mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
+    /** §6.9: Genie's MCP server and the agent files. Tynn and GitHub are their accounts' (main/tynn-account.ts, main/github-account.ts), added by feature-ipc. */
+    integrations(): { mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
     syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
@@ -913,17 +915,15 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 return [{ agentId: id, text, mail }];
             }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
-        signals: ({ osAgentWorking }) => ({
+        signals: ({ osAgentWorking, githubBlocked }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
             // Mail agents have not collected: unread for every registered agent, the human excluded.
             uncollectedMail: [...agents().keys()].reduce((n, id) => n + inbox.unread(id as never).length, 0),
-            githubBlocked: githubAppStatus({ authorized: settings.snapshot().github_authorized === true, installedRepos: settings.snapshot().github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }).blocking,
+            githubBlocked,
             osAgentWorking,
         }),
         integrations: () => {
-            const values = settings.snapshot();
             return {
-                github: githubAppStatus({ authorized: values.github_authorized === true, installedRepos: values.github_installed === true ? ['this workstation'] : [], neededRepos: ['this workstation'] }),
                 mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: input.mcpTools?.() ?? [] },
                 agentFiles: agentFiles.list(),
             };
