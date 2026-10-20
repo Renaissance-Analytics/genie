@@ -181,6 +181,7 @@ export interface IntegrationsSection {
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
 import type { PluginPanelView } from './components/PluginPane.js';
+import type { ClaimingEditor } from '../core/plugin-editors.js';
 
 export interface PluginsSection {
     readonly dir: string;
@@ -188,6 +189,8 @@ export interface PluginsSection {
     readonly entries: readonly PluginEntry[];
     /** The panels ENABLED plugins contribute (§6.7), with their plugin's name — what `+plugin` offers. */
     readonly panels: readonly PluginPanelView[];
+    /** The editors ENABLED plugins declare (beta.33 item 14): a file whose type one claims opens in it, in the file panel. */
+    readonly editors?: readonly ClaimingEditor[];
 }
 
 /** How a MISSING tool would be installed here — the exact command, shown before anything runs — or why it cannot be. */

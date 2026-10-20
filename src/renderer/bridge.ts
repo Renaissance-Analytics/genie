@@ -14,7 +14,7 @@ import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
-import type { FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
+import type { BytesResult, BytesWriteResult, FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 
@@ -304,6 +304,12 @@ export interface GenieBridge {
         onChange(listener: (workspaceId: string, paths?: readonly string[]) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
+        /**
+         * A PLUGIN EDITOR'S BYTES (beta.33 item 14), naming the plugin whose editor holds the file: the host lets them move
+         * only for an enabled plugin's own claimed and declared types. Absent on a bridge with no host files.
+         */
+        readBytes?(workspaceId: string, pluginId: string, path: string): Promise<BytesResult>;
+        writeBytes?(workspaceId: string, pluginId: string, path: string, base64: string, expectedSha: string | null): Promise<BytesWriteResult>;
         /** Right-click (Tynn #841): open with the host OS's own app / show in its file manager. Absent where this window is
          *  not the host (a window driving another machine) — those act on the host's screen. */
         openExternal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;

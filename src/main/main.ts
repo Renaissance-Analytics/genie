@@ -97,6 +97,7 @@ import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, listProcesses } from './process-list.js';
 import { RESUME_AFTER_RESTART, midTurnAgents, relaunchPlan } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
+import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { agentCapFrom } from '../core/inbox.js';
@@ -1140,6 +1141,16 @@ async function boot(): Promise<void> {
         str(workspaceId) && str(path) ? fileOp((h) => h.duplicate(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
     ipcMain.handle('genie:files-trash', (_event, workspaceId: unknown, path: unknown) =>
         str(workspaceId) && str(path) ? fileOp((h) => h.trash(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
+    // A PLUGIN EDITOR'S BYTES (beta.33 item 14): through the plugin gate — an enabled plugin's own claimed and declared types only.
+    const editorBytesDeps = (): EditorBytesDeps | null => (filesHost && services ? { gate: (pluginId, path) => services!.plugins.editorBytes(pluginId, path), files: filesHost } : null);
+    ipcMain.handle('genie:files-read-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown) => {
+        const deps = editorBytesDeps();
+        return deps ? editorRead(deps, workspaceId, pluginId, path) : { ok: false, path: typeof path === 'string' ? path : '', error: 'no files host' };
+    });
+    ipcMain.handle('genie:files-write-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown, base64: unknown, expectedSha: unknown) => {
+        const deps = editorBytesDeps();
+        return deps ? editorWrite(deps, workspaceId, pluginId, path, base64, expectedSha) : { ok: false, reason: 'no files host' };
+    });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });

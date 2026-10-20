@@ -31,6 +31,10 @@ import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remot
 import { ipcRelayTransport, watchTynnSignIn, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
+import { PluginEditorsContext } from './plugin-editors-context.js';
+import type { ClaimingEditor } from '../core/plugin-editors.js';
+
+const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
 import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
@@ -505,6 +509,8 @@ function DesktopApp({ bridge }: AppProps) {
         if (next !== address) window.location.replace(`#${next}`);
     }, [remote.state?.connected, remote.state?.host, remote.bound, snapshot.workstation?.name, address]);
     const [features, setFeatures] = useFeatures(resolvedBridge);
+    // The editors of the plugins enabled on the host (beta.33 item 14): the file panel routes claimed files to them.
+    const pluginEditors = features.plugins?.editors ?? NO_PLUGIN_EDITORS;
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
@@ -932,6 +938,7 @@ function DesktopApp({ bridge }: AppProps) {
     if (parsed.surface === 'files') {
         const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId) ?? null;
         return (
+            <PluginEditorsContext.Provider value={pluginEditors}>
             <FilesWindow
                 workspace={ws}
                 loading={snapshot.workspaces === null}
@@ -940,6 +947,7 @@ function DesktopApp({ bridge }: AppProps) {
                 onPause={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
                 onResume={(agent, path) => tellAgent(agent, resumeMessage(path))}
             />
+            </PluginEditorsContext.Provider>
         );
     }
 
@@ -974,6 +982,7 @@ function DesktopApp({ bridge }: AppProps) {
     }
     return (
         <HostPathPickerContext.Provider value={pickHostPath}>
+        <PluginEditorsContext.Provider value={pluginEditors}>
         <Shell
             route={route}
             address={shownAddress}
@@ -1197,6 +1206,7 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
+        </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>
     );
 }
