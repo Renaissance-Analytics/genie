@@ -305,8 +305,15 @@ export function InboxFlyout({ value, inbox, compose, loadThread, send, attachmen
             .catch((e: unknown) => setError((e as Error).message))
             .finally(() => setSending(false));
     };
+    /*
+     * MOUNTED ONLY WHILE OPEN. Fancy's Drawer unmounts a closed panel on its exit animation's `animationend`, and Genie does
+     * not load react-fancy's stylesheet (its keyframes): no animation runs, no `animationend` comes, and a closed flyout
+     * stayed on screen — CI's real-window smoke caught it ("the AgentInbox flyout to close" timed out). Closing is now
+     * an unmount; search and filter live here, above it, so they are kept for the next opening.
+     */
+    if (value === null) return null;
     return (
-        <Drawer open={value !== null} onClose={() => onNavigate(null)} side="right" attach="container" className="w-[min(1040px,92%)] bg-[var(--surface)] text-[var(--fg-1)]" data-inbox-drawer="">
+        <Drawer open onClose={() => onNavigate(null)} side="right" attach="container" className="w-[min(1040px,92%)] bg-[var(--surface)] text-[var(--fg-1)]" data-inbox-drawer="">
             <InboxFlyoutView
                 threads={threads}
                 peers={inbox?.peers ?? []}
