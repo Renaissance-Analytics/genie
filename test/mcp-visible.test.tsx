@@ -20,7 +20,7 @@ import { mcpToolsList } from '../src/renderer/components/FeatureSurfaces.js';
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-mcpvis-')); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const driverFor: DriverFor = () => (() => ({ start: () => {}, prompt: () => {}, kill: () => {}, get cliSessionId() { return null; } })) as SessionDriverFactory;
 
 describe('the session records the servers it was started with', () => {

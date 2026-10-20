@@ -24,7 +24,7 @@ import { Store } from '../src/main/store.js';
  * over real HTTP. And never while normal Genie runs: two Genies driving one agent's thread is how a conversation forks.
  */
 const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 let home: string;
 let ws: string;
 let runs: DoctorRun[] = [];

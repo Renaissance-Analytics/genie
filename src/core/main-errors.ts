@@ -42,7 +42,11 @@ import type { DeckItem } from './deck.js';
  * main.ts's own `boot().catch`.
  */
 
-export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection';
+/**
+ * `stop-unverified`: an agent's stop could not be verified — a process of its run is still running, or the machine could
+ * not be read (hosting plan 1.1/1.3). Not a crash: a Deck item, because "Stop" must never quietly mean "probably".
+ */
+export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified';
 
 export const MAIN_ERROR_DECK_PREFIX = 'genie:main-error:';
 /** The Deck item that says how many distinct errors were replaced to keep the list bounded. */
@@ -74,6 +78,7 @@ export interface Recorded {
 const KIND_LABEL: Record<MainErrorKind, string> = {
     'uncaught-exception': 'uncaught exception',
     'unhandled-rejection': 'unhandled promise rejection',
+    'stop-unverified': 'unverified stop',
 };
 
 /** Whatever was thrown — an Error, a string, an object, `undefined` — as a message, its stack and the stack's top frame. */
@@ -125,6 +130,7 @@ export function mainErrorLogLine(recorded: Recorded): string {
 /** The Deck's title for one error: what happened, that Genie kept running, how many times. */
 export function mainErrorTitle(e: MainError): string {
     const times = e.count === 1 ? '' : ` — ${e.count} times`;
+    if (e.kind === 'stop-unverified') return `A stop could not be verified: ${e.message.replace(/\.$/, '')}${times}. Each step is in ~/.genie/runtime/lifecycle.log.`;
     return `Genie kept running after an ${KIND_LABEL[e.kind]}: ${e.message}${e.topFrame ? ` (${e.topFrame})` : ''}${times}. The stack is in Genie’s log.`;
 }
 

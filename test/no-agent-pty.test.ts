@@ -70,7 +70,7 @@ const recordingPty: PtyPort = {
     onExit: () => () => {},
 };
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: () => ({ killed: 0, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) };
 
 /** A driver that does nothing. If an agent ever reached for a pty, it would not be through this. */
 const fakeDriverFor: DriverFor = () => {

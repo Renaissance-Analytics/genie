@@ -47,9 +47,9 @@ afterAll(() => {
  * It also made this file take **25.8 seconds for 21 tests that do no I/O**. That was the tell,
  * and it surfaced as a flake in a sibling suite rather than as a failure here.
  */
-let reaped: readonly (readonly number[])[] = [];
+let reaped: readonly (readonly unknown[])[] = [];
 const noProcessTree: ProcessTree = {
-    descendantsOf: () => [],
+    snapshot: () => [],
     killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 

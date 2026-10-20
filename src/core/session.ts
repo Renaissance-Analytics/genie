@@ -6,7 +6,7 @@ import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { subtreeOf, systemProcessTree, type ProcessTree } from './process-tree.js';
+import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { RATE_LIMIT_META } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
@@ -30,6 +30,13 @@ export interface SessionDriver {
     /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
     prompt(content: string | readonly PromptBlock[]): void;
     kill(signal?: NodeJS.Signals): void;
+    /**
+     * CLOSE THE PROVIDER'S STDIN — prism-acp's `endInput()`: "tells the CLI no more turns are coming". Claude ends on its
+     * own once it has finished, which is what lets it flush its conversation before a restart resumes it. Optional: a
+     * fake driver has none, and Codex's is a no-op (its app server has no stdin close) — the host decides whether a
+     * provider gets a grace at all (`gracefulEndFor`).
+     */
+    endInput?(): void;
     /**
      * END THE CURRENT TURN AND KEEP THE SESSION — prism-acp's `AgentDriver.cancel?()` (0.14.0, prism-acp-ts#16/#17).
      * The provider is asked to interrupt; the turn then ends through `onTurnEnd` with `stopReason: 'cancelled'`, and the
@@ -163,6 +170,14 @@ export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
  */
 export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: 'not-running' | 'no-turn' | 'unsupported' | 'refused' };
 
+/**
+ * How a stop ended (`AgentSession.stop`). `verified` only when a fresh reading shows every process the run was seen to
+ * own is gone. Unverified says why, and names what is still running (`survivors`, empty when it could not look).
+ */
+export type StopVerdict =
+    | { readonly verified: true; readonly ended: number }
+    | { readonly verified: false; readonly reason: string; readonly survivors: readonly ProcessInfo[] };
+
 /** How many lines of provider output to keep. Enough to explain a failure, bounded. */
 const STDERR_KEPT = 50;
 
@@ -236,6 +251,13 @@ export interface AgentSessionOptions {
      * reap happened without killing anything on the machine running the test.
      */
     processTree?: ProcessTree;
+    /**
+     * The run's OWN processes, once known at start — the new direct child of Genie the driver spawned and its tree
+     * (hosting plan 1.2). What the host writes into its spawn ledger, so a crash cannot orphan them unrecorded.
+     */
+    onSpawned?: (processes: readonly ProcessInfo[]) => void;
+    /** Output arrived from this run after it was stopped (hosting plan 1.4). Said once per run. */
+    onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
     clock?: () => number;
 }
@@ -300,14 +322,31 @@ export class AgentSession {
      */
     #stderr: string[] = [];
     /**
-     * This session's own subtree, captured just after start.
+     * THIS RUN'S OWN PROCESSES (hosting plan 1.2): the processes that were NEW, DIRECT children of Genie across the
+     * driver's spawn — `cmd.exe` on Windows (prism-acp spawns through it), the provider itself elsewhere. `null` when the
+     * machine could not be read at start.
      *
-     * Recorded as the DIFFERENCE against the descendants that existed a moment before, so a
-     * stop can never reach into a sibling session's processes. On a workstation running a
-     * dozen agents that distinction is the difference between stopping one and stopping the
-     * room.
+     * Never "everything that appeared under Genie between two scans": that diff claimed another agent's Bash tool, a
+     * terminal's command, a php-cgi — whatever started in the same instant — and a stop would have killed it. Another
+     * agent's tool and a terminal's command appear DEEPER, under their own parents; only the spawn makes a new direct
+     * child. A stop reaches the roots' tree AS IT IS THEN, so a provider the shell launched later is still reached.
      */
-    #ownedPids: readonly number[] = [];
+    #roots: readonly ProcessInfo[] | null = null;
+    /** Every process of this run seen so far (the roots' trees at start and at stop) — what a verification checks. */
+    #members: readonly ProcessInfo[] = [];
+    /**
+     * THE RUN IS OVER (hosting plan 1.4). Set by `stop()`; from then on the old driver's events are not this agent's
+     * any more: output is dropped (and said once), an approval is answered `cancelled`, a protocol error is ignored. A
+     * straggler used to keep writing rows into the agent's thread beside the next run.
+     */
+    #ended = false;
+    #stragglerNoted = false;
+    /** The stop in progress, so a second `stop()` waits for the same one. */
+    #stopping: Promise<StopVerdict> | null = null;
+    /** How the stop ended, once known — synchronously, when it needed no grace and no retry. */
+    #verdict: StopVerdict | null = null;
+    /** Whoever waits for the provider's exit (a graceful stop's grace). */
+    #exitWaiters: Array<() => void> = [];
     /**
      * Our own record of whether the provider is alive: true from `start`, false on exit or
      * stop. Used when the driver does not expose `running` — see {@link SessionDriver.running}.
@@ -436,6 +475,8 @@ export class AgentSession {
     get running(): boolean {
         if (!this.#driver) return false;
         if (this.#exited) return false;
+        // Stopped: the run is over for Genie, whatever the provider is still doing in its grace.
+        if (this.#ended) return false;
         return this.#driver.running ?? this.#alive;
     }
 
@@ -605,8 +646,13 @@ export class AgentSession {
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             events: {
-                onUpdate: (update) => void this.#ingest(update),
+                onUpdate: (update) => {
+                    if (this.#ended) { this.#straggler(); return; }
+                    void this.#ingest(update);
+                },
                 onProtocolError: (problem, detail) => {
+                    // A stopped run's transport closing is the stop, not a fault of the agent.
+                    if (this.#ended) return;
                     /*
                      * ONE thing lost, the session going on (prism-acp >= 0.13 says so: a frame it could not read, a
                      * temporary file it could not remove). A warning row in the stream, the state untouched. Taking it as
@@ -632,6 +678,7 @@ export class AgentSession {
                     }
                 },
                 onStderr: (line) => {
+                    if (this.#ended) return;
                     // Kept, never promoted to a fault. Plenty of providers log here normally,
                     // and a build that painted every one of them red would teach people to
                     // ignore red.
@@ -639,6 +686,8 @@ export class AgentSession {
                 },
                 onRequestPermission: (request) =>
                     new Promise<PermissionOutcomeLike>((resolve) => {
+                        // Nobody will answer a stopped run's question: it is declined, and said once.
+                        if (this.#ended) { this.#straggler(); resolve({ outcome: 'cancelled' }); return; }
                         const approval = approvalFrom(request);
 
                         // A request with no readable options cannot be answered by anybody.
@@ -658,6 +707,7 @@ export class AgentSession {
                         this.#options.onStateChange?.();
                     }),
                 onTurnEnd: (outcome) => {
+                    if (this.#ended) { this.#straggler(); return; }
                     // Two turns are two replies even with nothing between them. Without this a
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
@@ -795,6 +845,9 @@ export class AgentSession {
                      * stop reading red.
                      */
                     this.#turnState = this.#failure ? 'failed' : 'stopped';
+                    const waiters = this.#exitWaiters;
+                    this.#exitWaiters = [];
+                    for (const w of waiters) w();
 
                     /*
                      * And TELL somebody. This notified nobody, so a provider dying left its
@@ -807,9 +860,14 @@ export class AgentSession {
             },
         });
         const tree = this.#options.processTree ?? systemProcessTree;
-        const before = new Set(tree.descendantsOf(process.pid));
+        const before = tree.snapshot();
         this.#driver.start();
-        this.#ownedPids = tree.descendantsOf(process.pid).filter((pid) => !before.has(pid));
+        const after = before === null ? null : tree.snapshot();
+        if (before !== null && after !== null) {
+            this.#roots = newChildrenOf(before, after, process.pid);
+            this.#members = subtreeOf(after, this.#roots);
+            this.#options.onSpawned?.(this.#members);
+        }
         this.#alive = true;
         // READY, when the driver declares when (see `SessionDriver.ready`): announced, so whatever waits for it (the inbox
         // push) is told without polling. A rejection is still the end of starting — the failure itself arrives through
@@ -876,70 +934,123 @@ export class AgentSession {
     }
 
     /**
-     * End the run.
+     * END THE RUN, AND PROVE IT ENDED (hosting plan 1.3; the owner, 2026-10-20: "agents get duplicated").
      *
-     * The previous build's stop reported success while leaving the provider alive, so the
-     * owner had agents they could not stop. Here `stop()` resolves only once the driver
-     * reports it is no longer running, and a caller is expected to verify by process scan at
-     * the integration level — a return value is not evidence.
+     * 1. **It stops listening at once** (`#ended`, plan 1.4): the run is over for Genie the moment Stop is asked.
+     * 2. **Stdin first, with a grace** (`graceMs`, only for a driver that can close it): Claude ends on its own and
+     *    flushes the conversation a graceful restart resumes. The previous build never called prism-acp's `endInput()`.
+     * 3. **Then the kill and the reap.** On Windows the driver's kill reaches only the `cmd.exe` prism-acp spawns
+     *    through; `claude.exe` and everything under it would live on with a dead parent. So the run's tree is read
+     *    BEFORE the kill — the kill is what orphans — from this run's own roots, and every process of it is ended.
+     * 4. **Then a fresh reading verifies it**: every process this run was seen to own is gone. One that will not go
+     *    makes the verdict UNVERIFIED, naming it — never a success. A stop that could not read the machine says so.
+     *
+     * With no grace (quit, upgrade) steps 1-3 and the first verification run before this returns, synchronously: a
+     * quit that proceeds right after it has already killed the tree.
      */
-    stop(signal: NodeJS.Signals = 'SIGTERM'): void {
-        /*
-         * WHO IS OURS, asked BEFORE the provider's kill — the kill is what orphans.
-         *
-         * On Windows prism-acp spawns the provider through `cmd.exe` (`shell: true`, for npm's `.cmd` shims) and its
-         * kill is `child.kill()`: TerminateProcess on that `cmd.exe` and nothing else. The provider under it lives on
-         * with a dead parent, and a walk from this pid taken AFTER the kill no longer reaches it — so the reap below
-         * judged it "not ours" and left it running. Seen on the installed app (Windows VM acceptance, 2026-10-15): an
-         * agent provider that ignores its stdin closing outlived every quit, its command line in the quoted form only a
-         * `cmd.exe /s /c` launch leaves, and the `cmd.exe` above it gone.
-         *
-         * One walk, the same one `killTree` used to take after the kill, so a stop costs what it did. No walk when the
-         * session owns nothing (rule 4 in core/process-tree.ts). A walk that found nothing (it could not run, or
-         * everything already exited) is not handed on: `killTree` then walks for itself, as it always did.
-         */
-        const tree = this.#options.processTree ?? systemProcessTree;
-        /*
-         * And the session's tree AS IT IS NOW, from that same walk (Tynn #796, the owner, 2026-10-17: moic's provider
-         * outlived an upgrade and kept writing to its worktree beside the new one, on the same session). `#ownedPids`
-         * is a snapshot taken right after start; a provider its shell launched after that instant — or a re-exec, or a
-         * tool's child — was never in it, and the kill below could not reach it. With parents in the walk, everything
-         * under the session's own pids is the session's, whenever it arrived.
-         */
-        const edges = this.#ownedPids.length > 0 && tree.walk ? tree.walk(process.pid) : null;
-        const walked = edges !== null ? edges.map((e) => e.pid) : this.#ownedPids.length > 0 ? tree.descendantsOf(process.pid) : [];
-        const oursBeforeKill = walked.length > 0 ? walked : undefined;
-        const targets = edges !== null && edges.length > 0 ? subtreeOf(edges, this.#ownedPids) : this.#ownedPids;
+    stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
+        if (this.#stopping) return this.#stopping;
+        this.#ended = true;
 
-        this.#driver?.kill(signal);
-
-        /**
-         * Then reap this session's own subtree, as defence in depth.
-         *
-         * Measured 2026-10-10: `driver.kill('SIGTERM')` already terminates the whole provider
-         * tree, so this is normally a no-op. It is kept because "stop means stop" is the one
-         * promise the previous build broke — it returned success while the owner's agents
-         * kept running — and a signal is not guaranteed to reach a detached grandchild or a
-         * provider that re-parents.
-         *
-         * Only this session's own subtree is touched. NEVER a name sweep: this machine runs
-         * a dozen agents at once, and a sweep would stop the room rather than one agent.
-         */
-        // A promise nobody will ever resolve is a provider process waiting forever. `stop`
-        // means stop, and that has to include the things stop is waiting ON.
+        // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to
+        // include the things stop is waiting ON.
         const abandoned = this.#approval;
         if (abandoned) void this.#emitRow({ kind: 'approval', question: abandoned.approval.question, tool: abandoned.approval.tool ?? null, outcome: 'cancelled', optionId: null });
         abandoned?.resolve({ outcome: 'cancelled' });
         this.#approval = null;
         this.#parkedAt = null;
-
-        tree.killTree(targets, oursBeforeKill);
-
-        this.#alive = false;
         this.#turnState = 'stopped';
         this.#inTurn = false;
         this.#queued = [];
         this.#stopAskedBy = null;
+
+        const tree = this.#options.processTree ?? systemProcessTree;
+        const driver = this.#driver;
+        const graceMs = options.graceMs ?? 0;
+        if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
+            // The tree BEFORE stdin closes: a provider that then ends on its own (on Windows) orphans its children, and
+            // a reading after its exit could no longer reach them from the roots.
+            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
+            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
+            try { driver.endInput(); } catch { /* a stdin already closed: the kill below ends it */ }
+            this.#stopping = this.#exitWithin(graceMs).then(() => this.#endTree(tree, signal));
+        } else {
+            this.#stopping = this.#endTree(tree, signal);
+        }
+        this.#alive = false;
+        void this.#stopping.then((v) => { this.#verdict = v; });
+        return this.#stopping;
+    }
+
+    /** The stop's verdict once it is known; `null` while it is still running (or before any stop). */
+    get stopVerdict(): StopVerdict | null {
+        return this.#verdict;
+    }
+
+    /** Resolves when the provider exits, or after `ms` — whichever is first. */
+    #exitWithin(ms: number): Promise<void> {
+        if (this.#exited) return Promise.resolve();
+        return new Promise((resolve) => {
+            const timer = setTimeout(done, ms);
+            function done(): void { clearTimeout(timer); resolve(); }
+            this.#exitWaiters.push(done);
+        });
+    }
+
+    /** Kill, reap, verify. Synchronous up to the first verification; retries (bounded) only for a survivor. */
+    #endTree(tree: ProcessTree, signal: NodeJS.Signals): Promise<StopVerdict> {
+        const roots = this.#roots;
+        const before = roots && roots.length > 0 ? tree.snapshot() : null;
+        if (before && roots) this.#members = unionOf(this.#members, subtreeOf(before, roots));
+        // Everything of this run that is still running now: the roots' tree as it is, and any member a provider's own
+        // exit already orphaned (still the SAME process: pid, start time and name).
+        const targets = before ? stillRunning(this.#members, before) : [];
+
+        this.#driver?.kill(signal);
+        const reap = tree.killTree(targets, before ?? []);
+
+        const settled = (v: StopVerdict): Promise<StopVerdict> => { this.#verdict = v; return Promise.resolve(v); };
+        if (roots === null) {
+            // Nothing was recorded at start (the machine could not be read): nothing to verify against.
+            return settled({ verified: false, reason: 'Genie could not read this agent’s processes when it started, so it cannot verify they ended.', survivors: [] });
+        }
+        if (roots.length > 0 && before === null) {
+            return settled({ verified: false, reason: 'Genie could not read the machine’s processes to end this agent’s tree.', survivors: [] });
+        }
+        const check = (): StopVerdict | null => {
+            if (this.#members.length === 0) return { verified: true, ended: 0 };
+            const now = tree.snapshot();
+            if (now === null) return { verified: false, reason: 'Genie could not read the machine’s processes to verify this agent ended.', survivors: [] };
+            const survivors = stillRunning(this.#members, now);
+            if (survivors.length === 0) return { verified: true, ended: this.#members.length };
+            if (reap.refused) return { verified: false, reason: reap.reason ?? 'The reap was refused.', survivors };
+            return null;
+        };
+        const first = check();
+        if (first) return settled(first);
+        // A process just killed can take a moment to leave the table. Kill what is left again, look again, a few times.
+        return (async (): Promise<StopVerdict> => {
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+                await new Promise((r) => setTimeout(r, 250));
+                const now = tree.snapshot();
+                if (now === null) break;
+                const left = stillRunning(this.#members, now);
+                if (left.length === 0) return { verified: true, ended: this.#members.length };
+                tree.killTree(left, now);
+            }
+            const now = tree.snapshot();
+            const survivors = now ? stillRunning(this.#members, now) : this.#members;
+            if (now && survivors.length === 0) return { verified: true, ended: this.#members.length };
+            return { verified: false, reason: `Still running after the stop: ${describeProcesses(survivors)}.`, survivors };
+        })();
+    }
+
+    /** Output (or a question) from this run after it was stopped: dropped, and said once. */
+    #straggler(): void {
+        if (this.#stragglerNoted) return;
+        this.#stragglerNoted = true;
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'This agent’s previous run was still producing output after it was stopped. That output was not recorded, and the run was ended.' });
+        this.#options.onStraggler?.();
     }
 
     /** Whether this session's driver can end a turn and keep the session (it has prism-acp's `cancel`). */

@@ -17,7 +17,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * failure was recorded — so the session stamps them with the clock it is given, the host passes its clock, the
  * snapshot carries them, and the pill reads them. Without a stamp the pill says nothing about time (never a guess).
  */
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const fmt = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
 describe('the session stamps', () => {

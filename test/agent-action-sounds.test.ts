@@ -78,7 +78,7 @@ let dir: string;
 let now = Date.UTC(2026, 9, 17, 3, 0, 0);
 let timers: Array<{ at: number; fn: () => void; cleared: boolean }> = [];
 const events = new Map<string, DriverEvents>();
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
 const driverFor: DriverFor = (record) => {
     const factory: SessionDriverFactory = (options) => {
         events.set(record.name, options.events);

@@ -33,8 +33,8 @@ afterAll(() => {
 
 /** Observes and never touches the machine; counts reaps so "not killed" includes "subtree not reaped". */
 function recordingTree() {
-    const reaps: (readonly number[])[] = [];
-    const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => { reaps.push(pids); return { killed: pids.length, refused: false }; } };
+    const reaps: (readonly unknown[])[] = [];
+    const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => { reaps.push(pids); return { killed: pids.length, refused: false }; } };
     return { tree, reaps };
 }
 
@@ -233,7 +233,7 @@ describe('SessionHost.cancel — the slot stays, the agent keeps running', () =>
                 get cliSessionId() { return null; },
             };
         };
-        const noTree: ProcessTree = { descendantsOf: () => [], killTree: () => ({ killed: 0, refused: false }) };
+        const noTree: ProcessTree = { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) };
         const h = new SessionHost({ userData: dir, driverFor, processTree: noTree });
         return { h, dir, counts, endTurn: (o: TurnOutcomeLike) => events.onTurnEnd?.(o) };
     }

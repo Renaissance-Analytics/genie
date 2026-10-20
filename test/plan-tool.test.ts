@@ -18,7 +18,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * as the same plan event a provider sends, so the column and the Stream show it for any provider.
  */
 
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
 const driverFor: DriverFor = () => {
     const factory: SessionDriverFactory = () => ({ start: () => {}, prompt: () => {}, kill: () => {}, get cliSessionId() { return null; } });
     return factory;

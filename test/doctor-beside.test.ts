@@ -23,7 +23,7 @@ import { Store } from '../src/main/store.js';
  * - shares only the agent's thread (nobody else is writing it), and HOLDS the workspace: the running Genie refuses to
  *   start an agent there until doctor lets go.
  */
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 let home: string;
 let wsAwake: string;
 let wsAsleep: string;

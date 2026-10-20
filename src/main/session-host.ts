@@ -36,6 +36,29 @@ export function turnCancelFor(provider: string): boolean | null {
     return typeof declared === 'boolean' ? declared : null;
 }
 
+/**
+ * Whether a provider gets a GRACE at stop: its stdin is closed and it may end on its own before the kill (hosting plan
+ * 1.3). Claude does — `endInput()` tells it no more turns are coming, and it flushes the conversation a graceful restart
+ * resumes. Codex does not: its app server has no stdin close (prism-acp's `endInput` is a no-op there), so a grace would
+ * only be a wait.
+ */
+export function gracefulEndFor(provider: string): boolean {
+    return provider === 'claude';
+}
+
+/** How long a provider with a grace gets to end on its own before it is killed (hosting plan 1.3: about 3 s). */
+export const STOP_GRACE_MS = 3_000;
+
+/**
+ * What the host tells about every run's processes: the spawn ledger, the lifecycle log and the Deck listen here (main.ts).
+ * `spawned` once its processes are known; `ended` with the stop's verdict; `straggler` when a stopped run kept talking.
+ */
+export interface SessionLifecycle {
+    spawned(agentId: AgentId, run: number, processes: readonly ProcessInfo[]): void;
+    ended(agentId: AgentId, run: number, verdict: StopVerdict): void;
+    straggler(agentId: AgentId, run: number): void;
+}
+
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
 
@@ -47,7 +70,7 @@ export function raisesApprovals(provider: string, permissions?: AgentPermissions
 import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
 import { promptContent, type Attachment, type PromptAccepts } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
-import type { ProcessTree } from '../core/process-tree.js';
+import { describeProcesses, stillRunning, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
 import {
     AgentSession,
     type DriverEvents,
@@ -56,6 +79,7 @@ import {
     type PermissionRequestLike,
     type PromptContext,
     type SessionDriverFactory,
+    type StopVerdict,
     type TurnOutcomeLike,
 } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
@@ -305,6 +329,14 @@ export class SessionHost {
     readonly unusableThreadIds = new Map<AgentId, string>();
 
     readonly #processTree: ProcessTree | undefined;
+    readonly #stopGraceMs: number;
+    readonly #lifecycle: SessionLifecycle | undefined;
+    /** Stops still in their grace or verification, by agent: a start waits for them (hosting plan 1.3). */
+    readonly #ending = new Map<AgentId, Promise<StopVerdict>>();
+    /** The last stop's verdict, by agent — what `ended()` answers once the stop is over. */
+    readonly #verdicts = new Map<AgentId, StopVerdict>();
+    /** A previous run's processes that a stop could not end: no new run starts beside them. */
+    readonly #leftovers = new Map<AgentId, readonly ProcessInfo[]>();
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
     readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
@@ -371,6 +403,10 @@ export class SessionHost {
         rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
         /** Where the threads are kept. Default: the durable file store under `userData` — a test may hand in its own. */
         store?: () => SessionStore;
+        /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
+        stopGraceMs?: number;
+        /** Every run's processes and how it ended — the ledger, the log, the Deck. Absent = told to nobody. */
+        lifecycle?: SessionLifecycle;
     }) {
         this.#userData = options.userData;
         this.#store = options.store ?? (() => openDurableStore(sessionsDir(this.#userData)));
@@ -381,6 +417,8 @@ export class SessionHost {
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
+        this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
+        this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
@@ -510,6 +548,30 @@ export class SessionHost {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
 
+        /*
+         * ONE PROVIDER PER AGENT, IN-PROCESS, AT ALL TIMES (hosting plan 1.3; Tynn #796). A run that is still stopping,
+         * or whose stop left processes running, is not over: a second provider beside it is two Claudes on one
+         * conversation. The leftovers are looked at again now — gone since, and the start goes ahead.
+         */
+        if (this.#ending.has(record.id)) {
+            const reason = `"${record.name}" is still stopping; it starts once its previous run has ended.`;
+            this.refusals.set(record.id, reason);
+            this.#emit(record.id);
+            return { ok: false, reason };
+        }
+        const leftover = this.#leftovers.get(record.id);
+        if (leftover) {
+            const now = (this.#processTree ?? systemProcessTree).snapshot();
+            const still = now === null ? leftover : stillRunning(leftover, now);
+            if (still.length > 0) {
+                const reason = `Genie will not start "${record.name}" beside its previous run, which is still running: ${describeProcesses(still)}. End those processes, then start it again.`;
+                this.refusals.set(record.id, reason);
+                this.#emit(record.id);
+                return { ok: false, reason };
+            }
+            this.#leftovers.delete(record.id);
+        }
+
         // Two processes driving one workspace's agents is how a conversation forks: a hold is a refusal, said.
         const held = this.#heldElsewhere?.(record) ?? null;
         if (held !== null) return { ok: false, reason: held };
@@ -592,6 +654,8 @@ export class SessionHost {
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
+            onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
+            onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
@@ -845,16 +909,40 @@ export class SessionHost {
      * provider alive, so the owner had agents they could not stop AND a capacity figure that
      * never came back down.
      */
-    stop(agentId: AgentId): boolean {
+    stop(agentId: AgentId, options: { graceful?: boolean } = {}): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
 
-        entry.session.stop();
+        // A grace only for a provider that can end on its own, and never at quit or upgrade (`graceful: false`).
+        const graceMs = options.graceful !== false && gracefulEndFor(entry.provider) ? this.#stopGraceMs : 0;
+        const ending = entry.session.stop('SIGTERM', { graceMs });
         this.#running.delete(agentId);
         // Its last rows (a cancelled approval, the reply the exit closes) are still on their way to the thread.
         this.#stopped.add(entry.session);
+        const done = (verdict: StopVerdict): void => {
+            if (this.#ending.get(agentId) === ending) this.#ending.delete(agentId);
+            this.#verdicts.set(agentId, verdict);
+            if (!verdict.verified && verdict.survivors.length > 0) this.#leftovers.set(agentId, verdict.survivors);
+            else this.#leftovers.delete(agentId);
+            this.#lifecycle?.ended(agentId, entry.run, verdict);
+        };
+        // Known at once when no grace and no retry was needed (and then a start right after is not refused).
+        const known = entry.session.stopVerdict;
+        if (known) done(known);
+        else {
+            this.#ending.set(agentId, ending);
+            void ending.then((v) => { done(v); this.#emit(agentId); });
+        }
         this.#emit(agentId);
         return true;
+    }
+
+    /**
+     * How the agent's last stop ended: waits for one still in its grace or verification. `null` when it was never
+     * stopped here. Restart waits on this before it starts the next run (hosting plan 1.3).
+     */
+    ended(agentId: AgentId): Promise<StopVerdict | null> {
+        return this.#ending.get(agentId) ?? Promise.resolve(this.#verdicts.get(agentId) ?? null);
     }
 
     /**
@@ -1024,9 +1112,11 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.turnsEndedThisRun ?? 0;
     }
 
-    /** Stop everything. An upgrade ends every agent session and does not revive them. */
+    /**
+     * Stop everything, at once (quit, upgrade): no grace, so the kill and the reap have run when this returns.
+     */
     stopAll(): void {
-        for (const id of [...this.#running.keys()]) this.stop(id);
+        for (const id of [...this.#running.keys()]) this.stop(id, { graceful: false });
     }
 
     #emit(agentId: AgentId): void {

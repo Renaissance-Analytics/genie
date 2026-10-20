@@ -68,7 +68,7 @@ vi.mock('../src/core/thread-store.js', async (importOriginal) => {
     };
 });
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 function fakeFactory(): SessionDriverFactory {
     return () => {
         const driver: SessionDriver = { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };

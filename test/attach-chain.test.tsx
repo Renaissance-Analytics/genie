@@ -21,7 +21,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const bytes = new Uint8Array([1, 2, 3]);
 
 describe('the IPC payload', () => {

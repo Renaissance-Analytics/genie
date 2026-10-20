@@ -17,7 +17,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 vi.mock('electron', () => ({ Menu: { buildFromTemplate: vi.fn() }, Tray: vi.fn(), nativeImage: { createFromBuffer: vi.fn() } }));
 
 const MIN = 60_000;
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
 const handlers = () => ({ onOpen: vi.fn(), onSettings: vi.fn(), onCheckUpdates: vi.fn(), onQuit: vi.fn(), onResumeLimit: vi.fn() });
 
 describe('the tray menu', () => {

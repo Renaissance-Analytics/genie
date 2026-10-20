@@ -51,7 +51,7 @@ describe('the probe offers the turn Stop on a claude agent whose driver can canc
                 get cliSessionId() { return null; },
             };
         };
-        const noTree: ProcessTree = { descendantsOf: () => [], killTree: () => ({ killed: 0, refused: false }) };
+        const noTree: ProcessTree = { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) };
         const h = new SessionHost({ userData: dir, driverFor, processTree: noTree });
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws_example', provider: 'claude', name: 'atlas' });
         expect(h.start(agent, dir)).toEqual({ ok: true });

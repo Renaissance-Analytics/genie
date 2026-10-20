@@ -25,7 +25,7 @@ import { Store } from '../src/main/store.js';
 const dirs: string[] = [];
 const tempDir = () => { const d = mkdtempSync(join(tmpdir(), 'genie2-turns-')); dirs.push(d); return d; };
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function fakeDriver(refuse: () => string | null = () => null) {
     let events: DriverEvents = {};

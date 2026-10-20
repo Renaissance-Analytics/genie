@@ -49,7 +49,7 @@ describe('a running agent\'s row carries its comms', () => {
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
     const driverFor: DriverFor = () => ((() => ({ start: () => {}, prompt: () => {}, kill: () => {}, get cliSessionId() { return null; } })) as SessionDriverFactory);
-    const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
     it('from the injected reader, scoped to the session start; without a reader it stays null (positive control)', () => {
         const now = 1_760_000_000_000;

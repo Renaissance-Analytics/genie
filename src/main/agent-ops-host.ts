@@ -5,6 +5,7 @@ import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.j
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
+import type { StopVerdict } from '../core/session.js';
 import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
 
 /**
@@ -36,6 +37,8 @@ export interface AgentOpsPorts {
     host: {
         start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
         stop(id: AgentRecord['id']): boolean;
+        /** How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. */
+        ended?(id: AgentRecord['id']): Promise<StopVerdict | null>;
         probe(id: AgentRecord['id']): LiveSession | null;
     };
     cwdFor(record: AgentRecord): string;
@@ -62,7 +65,17 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
     if (!record) return UNKNOWN;
     const plan = restartPlan(kind, { threadId: record.threadId, wedged: isWedged(ports.host.probe(record.id)) });
     if (!plan.ok) return plan;
+    /*
+     * STOP, THEN START — IN THAT ORDER (hosting plan 1.3). Both used to run in the same tick, so the new provider started
+     * while the old one was still alive: two Claudes on one conversation. The new run starts only once the old one has
+     * ended (its grace, its kill, a fresh reading); a stop that left processes running refuses the restart, naming them,
+     * BEFORE a fresh restart discards the thread.
+     */
     ports.host.stop(record.id);
+    const verdict = (await ports.host.ended?.(record.id)) ?? null;
+    if (verdict && !verdict.verified && verdict.survivors.length > 0) {
+        return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
+    }
     if (plan.kind === 'graceful') {
         const started = ports.host.start(record, ports.cwdFor(record));
         return started.ok ? { ok: true, kind: 'graceful' } : started;

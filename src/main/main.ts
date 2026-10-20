@@ -56,6 +56,10 @@ import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile a
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
+import { openLifecycleLog } from './lifecycle-log.js';
+import { SpawnLedger } from './spawn-ledger.js';
+import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
+import { randomUUID } from 'node:crypto';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
@@ -731,8 +735,37 @@ async function boot(): Promise<void> {
         stalled: (id, text) => { host?.notice(id as AgentId, text); },
     });
     keepaliveNow = keepalive;
+    /*
+     * THE SPAWN LEDGER AND THE LIFECYCLE LOG (hosting plan 1.5 / 1.6). Every agent run's processes are written down as
+     * they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
+     * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
+     * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
+     */
+    const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
+    lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
+    spawnLedger.sweep(systemProcessTree, lifecycleLog);
     host = new SessionHost({
         userData: genieHome(),
+        lifecycle: {
+            spawned: (agentId, run, processes) => {
+                spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
+                lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
+            },
+            ended: (agentId, run, verdict) => {
+                if (verdict.verified) {
+                    spawnLedger.forget('agent', agentId, run);
+                    lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
+                    return;
+                }
+                // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
+                if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
+                lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
+                const name = registry?.find(agentId)?.name ?? agentId;
+                mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
+            },
+            straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
+        },
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
         onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
@@ -1921,7 +1954,9 @@ async function boot(): Promise<void> {
     void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
-        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })));
+        // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
+        // from before the ledger (beta.32 and earlier) left on an agent's thread.
+        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
