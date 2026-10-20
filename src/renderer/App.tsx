@@ -28,7 +28,7 @@ import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alert
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
-import { ipcRelayTransport, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
+import { ipcRelayTransport, watchTynnSignIn, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import type { ShareLink } from '../main/tynn-share-links.js';
@@ -208,7 +208,14 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
-    useEffect(() => { if (net) void net.workstations().then(setTynnWorkstations, (error: unknown) => setTynnWorkstations({ ok: false, reason: error instanceof Error ? error.message : String(error) })); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Read again whenever this Genie's Tynn sign-in changes (Tynn #850): read once at open, signing in afterwards left it
+    // saying "sign in to Tynn".
+    useEffect(() => {
+        const features = typeof window === 'undefined' ? undefined : window.genie?.features;
+        if (!net || !features) return;
+        const read = () => { void net.workstations().then(setTynnWorkstations, (error: unknown) => setTynnWorkstations({ ok: false, reason: error instanceof Error ? error.message : String(error) })); };
+        return watchTynnSignIn(features, read);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (!client) return;

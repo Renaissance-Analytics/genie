@@ -69,3 +69,26 @@ export function ipcRelayTransport(net: TynnNetworkBridge, channel: string): Rela
         closedBecause: () => because,
     };
 }
+
+/**
+ * CONNECT'S TYNN WORKSTATIONS FOLLOW THE SIGN-IN (Tynn #850): `onChange` with this Genie's Tynn sign-in at once and
+ * each time it CHANGES — not on every features push, and not while features are unread (`integrations: null` is not
+ * "signed out"). The list is read again on each.
+ */
+export function watchTynnSignIn(
+    features: { snapshot(): Promise<import('./features.js').FeatureData>; subscribe(listener: (data: import('./features.js').FeatureData) => void): () => void },
+    onChange: (signedIn: boolean) => void,
+): () => void {
+    let last: boolean | null = null;
+    let stopped = false;
+    const see = (data: import('./features.js').FeatureData) => {
+        if (stopped || !data.integrations) return;
+        const signedIn = data.integrations.tynnSignedIn;
+        if (signedIn === last) return;
+        last = signedIn;
+        onChange(signedIn);
+    };
+    const off = features.subscribe(see);
+    void features.snapshot().then(see, () => {});
+    return () => { stopped = true; off(); };
+}
