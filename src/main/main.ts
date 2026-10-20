@@ -39,6 +39,8 @@ import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
+import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
+import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
@@ -640,6 +642,8 @@ const featureListeners = new Set<(data: FeatureData) => void>();
 async function boot(): Promise<void> {
     // genie:// — Tynn's sign-in hands its code back through it (openGenieUrl above).
     registerGenieProtocol();
+    // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
+    if (process.platform === 'linux') rememberPasswordStore(genieHome(), safeStorage.getSelectedStorageBackend());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
@@ -2185,6 +2189,17 @@ app.on('before-quit', (event) => {
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();
     clearGenieRunning(genieHome());
+});
+
+// THE LINUX PASSWORD STORE (Tynn #846; Genie 1's genie#379/#588): Chromium picks its secret store from the desktop's
+// name and does not know Hyprland (Omarchy) — so safeStorage could encrypt nothing there. Chosen from what owns the
+// session bus, or what a previous launch was seen using; BEFORE app-ready, when OSCrypt reads the switch.
+applyLinuxPasswordStore({
+    platform: process.platform,
+    argv: process.argv,
+    probe: () => probeOwnedBusNames(passwordStoreBusNames()),
+    remembered: () => readRememberedPasswordStore(genieHome()),
+    appendSwitch: (key, value) => app.commandLine.appendSwitch(key, value),
 });
 
 // Only a `boot` launch boots — and only `boot()` creates the main window (core/quit-flag.ts `launchDecision`).

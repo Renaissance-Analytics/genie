@@ -47,6 +47,7 @@ function memoryStore(initial: Record<string, StoredIdentity> = {}) {
     return {
         writes,
         byHost,
+        canWrite: () => true,
         read: async (host: string) => byHost.get(host) ?? null,
         write: async (host: string, identity: StoredIdentity) => { writes.push(host); byHost.set(host, identity); },
     };
@@ -125,6 +126,19 @@ describe('ensureWorkstation — this machine registers with Tynn once', () => {
         const tynn = fakeTynn({ register: 422 });
         const result = await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store: memoryStore() });
         expect(result).toEqual({ ok: false, reason: 'Tynn refused to register this machine (422: no)' });
+    });
+});
+
+describe('no OS encryption: Tynn is never asked (Tynn #847)', () => {
+    // The two-VM proof (2026-10-20): Genie registered and ENROLLED the machine, then could not store the key — an
+    // enrolled, keyless workstation left in Tynn on every attempt. Ask the store first.
+    it('a store that cannot write: nothing is registered, and it says why', async () => {
+        const tynn = fakeTynn();
+        const store = { ...memoryStore(), canWrite: () => false };
+        const result = await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store });
+        expect(result.ok).toBe(false);
+        expect(result.ok ? '' : result.reason).toMatch(/encrypt/);
+        expect(tynn.calls).toEqual([]);
     });
 });
 
