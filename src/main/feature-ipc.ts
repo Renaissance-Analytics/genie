@@ -82,8 +82,6 @@ export interface FeaturePorts {
     readonly openInBrowser?: OpenInBrowser;
     /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
     readonly mainErrors?: { dismiss(id: string): boolean };
-    /** The host's file picker for an alert's own sound (Tynn #766 B2): the chosen path, or `null` when cancelled. */
-    readonly pickSound?: () => Promise<string | null>;
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
     readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it). */
@@ -783,11 +781,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // The host's switch (Tynn #820): the listener starts or stops with it, now.
             if (action.key === 'remote_access') await ports.remoteAccess?.apply();
             break;
-        case 'settings.pickSound': {
-            // Your own file for an alert (Tynn #766 B2): the host's picker; a cancel changes nothing.
+        case 'settings.setSoundFile': {
+            // Your own file for an alert (Tynn #766 B2): picked in the window over the host's disk (Tynn #835).
             if (!isAlertSoundKey(action.key)) throw new Error(`${action.key} is not an alert sound`);
-            const path = ports.pickSound ? await ports.pickSound() : null;
-            if (path === null) break;
+            const path = action.path;
             if (!soundFileMime(path)) throw new Error(`${path.split(/[\\/]/).pop()} is not a sound file Genie can play (wav, mp3, ogg, m4a, aac, flac or webm)`);
             await services.settings.set(`${action.key}_custom`, path);
             await services.settings.set(action.key, 'custom');

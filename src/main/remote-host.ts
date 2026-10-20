@@ -35,7 +35,7 @@ export interface HostApi {
 }
 
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
-const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.confirmAddFromGit', 'workspaces.confirmAddFromTynn'];
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.tynnProjects', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn'];
 
 /** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
 function normalizedPath(p: string): string {

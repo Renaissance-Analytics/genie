@@ -154,10 +154,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         workspaces: {
             previewAdd: (path) => answer('workspaces.previewAdd', path),
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
-            previewAddFromGit: () => answer('workspaces.previewAddFromGit'),
+            previewAddFromGit: (url, parent) => answer('workspaces.previewAddFromGit', url, parent),
             confirmAddFromGit: (url, parent) => answer('workspaces.confirmAddFromGit', url, parent),
             tynnProjects: () => answer('workspaces.tynnProjects'),
-            previewAddFromTynn: (projectId) => answer('workspaces.previewAddFromTynn', projectId),
+            previewAddFromTynn: (projectId, parent) => answer('workspaces.previewAddFromTynn', projectId, parent),
             confirmAddFromTynn: (parent, projectId) => answer('workspaces.confirmAddFromTynn', parent, projectId),
             hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),
             wake: (workspaceId) => answer('workspaces.wake', workspaceId),
@@ -166,7 +166,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             addRepo: (workspaceId, input) => answer('workspaces.addRepo', workspaceId, input),
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
             removeRepoLock: (workspaceId, slug) => answer('workspaces.removeRepoLock', workspaceId, slug),
-            locateRepo: (workspaceId, slug) => answer('workspaces.locateRepo', workspaceId, slug),
+            locateRepo: (workspaceId, slug, path) => answer('workspaces.locateRepo', workspaceId, slug, path),
             commitsSince: (workspaceId, since) => answer('workspaces.commitsSince', workspaceId, since),
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
@@ -212,7 +212,6 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             // Nothing to place on a screen that is not the host's.
             setBrowserBounds: async () => {},
             // A remote window cannot reach the host's files to attach; it answers nothing picked.
-            pickFiles: async () => [],
             // Nor the host's sound files: the alert plays its own sound here.
             soundData: async () => null,
         },

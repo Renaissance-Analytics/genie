@@ -30,7 +30,7 @@ import { connectRemote, type RemoteClient, type RemoteState } from './remote-bri
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { ipcRelayTransport, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
-import { HostPathPicker } from './components/HostPathPicker.js';
+import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
@@ -575,7 +575,11 @@ function DesktopApp({ bridge }: AppProps) {
         return () => { live = false; };
     }, [resolvedBridge, faultKey, faultsTick]);
     const locateRepo = (workspaceId: string, slug: string) => {
-        void resolvedBridge?.workspaces.locateRepo(workspaceId, slug).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+        // Opens in the envelope: the repo's folder is inside it (Tynn #835).
+        const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
+        void pickFolder(`Where is ${slug} now? Pick its folder inside the envelope`, envelope).then((path) => {
+            if (path) void resolvedBridge?.workspaces.locateRepo(workspaceId, slug, path).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+        });
     };
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
     const [wsSettings, setWsSettings] = useState<{ values: Record<string, boolean | string>; overridden: string[] } | null>(null);
@@ -628,11 +632,14 @@ function DesktopApp({ bridge }: AppProps) {
         : null;
     // ADD A WORKSPACE (Tynn #835): the folder is picked over the HOST's disk — the remote machine's, when this window
     // drives one — then the plan is shown before anything is written.
-    const [picking, setPicking] = useState(false);
-    const previewAdd = () => { if (resolvedBridge?.host) setPicking(true); };
-    const previewPicked = (path: string) => {
-        setPicking(false);
-        void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview);
+    // THE WINDOW'S ONE PICKER (Tynn #835): every file and folder is chosen over the HOST's disk — the remote machine's
+    // when this window drives one — by promise; `null` when cancelled.
+    const [pickerAsk, setPickerAsk] = useState<{ opts: Parameters<PickHostPath>[0]; resolve: (picked: string | string[] | null) => void } | null>(null);
+    const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts, resolve })) : null;
+    const pickFolder = (title: string, initialPath?: string): Promise<string | null> =>
+        pickHostPath ? pickHostPath({ mode: 'directory', title, ...(initialPath ? { initialPath } : {}) }).then((p) => (typeof p === 'string' ? p : null)) : Promise.resolve(null);
+    const previewAdd = () => {
+        void pickFolder('Add a workspace: pick its folder').then((path) => { if (path) void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview); });
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
@@ -984,7 +991,7 @@ function DesktopApp({ bridge }: AppProps) {
         );
     }
     return (
-        <>
+        <HostPathPickerContext.Provider value={pickHostPath}>
         <Shell
             route={route}
             address={shownAddress}
@@ -1101,7 +1108,7 @@ function DesktopApp({ bridge }: AppProps) {
             addFromGit={addFromGit}
             onAddWorkspaceFromGit={() => { setAddPreview(null); setAddFromGit(true); }}
             onCancelAddGit={() => setAddFromGit(false)}
-            onPreviewFromGit={(url) => { void resolvedBridge?.workspaces.previewAddFromGit(url).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setAddFromGit(false); setAddPreview(p); } }); }}
+            onPreviewFromGit={(url) => { void pickFolder('Where should the clone land? Pick the parent folder').then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); }); }}
             onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
             tynnPick={tynnPick}
@@ -1112,7 +1119,7 @@ function DesktopApp({ bridge }: AppProps) {
                 void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
             }}
             onPickTynnProject={(projectId) => {
-                void resolvedBridge?.workspaces.previewAddFromTynn(projectId).then((p) => { if (p.ok || p.reason !== 'no folder picked') { setTynnPick(undefined); setAddPreview(p); } });
+                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder').then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
             }}
             onCancelTynnPick={() => setTynnPick(undefined)}
             onConfirmAddTynn={(parent, projectId) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
@@ -1136,7 +1143,8 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
-            pickFiles={resolvedBridge ? () => resolvedBridge.features.pickFiles() : undefined}
+            // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
+            pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files' }).then((p) => (Array.isArray(p) ? p : typeof p === 'string' ? [p] : [])) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
@@ -1168,8 +1176,16 @@ function DesktopApp({ bridge }: AppProps) {
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
             />
         ) : null}
-        {picking && resolvedBridge?.host ? (
-            <HostPathPicker mode="directory" title="Add a workspace: pick its folder" listDir={(path) => resolvedBridge.host!.listDir(path)} onPick={(p) => previewPicked(String(p))} onCancel={() => setPicking(false)} />
+        {pickerAsk && resolvedBridge?.host ? (
+            <HostPathPicker
+                mode={pickerAsk.opts.mode}
+                title={pickerAsk.opts.title}
+                initialPath={pickerAsk.opts.initialPath}
+                extensions={pickerAsk.opts.extensions}
+                listDir={(path) => resolvedBridge.host!.listDir(path)}
+                onPick={(p) => { pickerAsk.resolve(p); setPickerAsk(null); }}
+                onCancel={() => { pickerAsk.resolve(null); setPickerAsk(null); }}
+            />
         ) : null}
         {share && shares ? (
             <ShareWorkspaceModal
@@ -1197,6 +1213,6 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
-        </>
+        </HostPathPickerContext.Provider>
     );
 }

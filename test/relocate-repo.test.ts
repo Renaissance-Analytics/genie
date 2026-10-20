@@ -59,9 +59,13 @@ describe('relocateRepoIn (the host)', () => {
     });
 });
 
+// Tynn #835: the folder is picked IN THE WINDOW over the host's disk — so a remote window locates a repo too: the host
+// is handed the workspace, the repo and the folder its owner picked there.
 describe('a remote window', () => {
-    it('is told the picker is on the host', async () => {
-        const api = buildHostApi({} as never);
-        await expect(api.invoke('workspaces.locateRepo', ['moic', 'site'])).rejects.toThrow(/folder picker/);
+    it('locates the repo with the folder it picked on the host', async () => {
+        const seen: string[][] = [];
+        const api = buildHostApi({ workspaceOps: { locateRepo: async (ws: string, slug: string, path: string) => { seen.push([ws, slug, path]); return { ok: true, path }; } } } as never);
+        expect(await api.invoke('workspaces.locateRepo', ['moic', 'site', '/w/moic/repos/site'])).toEqual({ ok: true, path: '/w/moic/repos/site' });
+        expect(seen).toEqual([['moic', 'site', '/w/moic/repos/site']]);
     });
 });
