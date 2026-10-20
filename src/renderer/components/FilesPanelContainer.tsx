@@ -1,3 +1,4 @@
+import type { FileMenuAction } from '../../core/file-menu.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { reloadsOpenFile, routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
@@ -182,10 +183,14 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     }, [read, open, onRouteChange, filter]);
 
     const shown: OpenFile | null = open?.ok && buffer && buffer.path === open.path ? { ...open, text: buffer.text } : open;
+    // A save that fails without a conflict is SAID (Tynn #840): it used to vanish, leaving a dirty buffer and no reason.
+    const [saveError, setSaveError] = useState<string | null>(null);
     const save = (expected: string | null) => {
         if (!open?.ok || !buffer) return;
+        setSaveError(null);
         void files.write(workspace.id, open.path, buffer.text, expected).then((r) => {
             if (r.ok) { setOpen({ ok: true, path: open.path, text: buffer.text, sha: r.sha }); setBuffer(null); setConflict(null); }
+            else if (!r.conflict) setSaveError(r.reason);
             else if (r.conflict) {
                 setConflict({ ...r.conflict, baseline: open.text });
                 // The known writer is TOLD, once, and held paused until your buffer is clean (then `resumeMessage`).
@@ -197,7 +202,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
                     setTold(writer);
                 }
             }
-        });
+        }, (error: unknown) => setSaveError(error instanceof Error ? error.message : String(error)));
     };
     const edit: FilesEdit | undefined = open?.ok
         ? {
@@ -212,9 +217,29 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
               told,
               comparing,
               onCompare: () => setComparing((c) => !c),
+              saveError,
           }
         : undefined;
+    // RIGHT-CLICK A FILE (Tynn #841): the host's own app / file manager where this window is the host; copy and close anywhere.
+    // The host's own separator: a Windows workspace copies C:\…\src\a.ts, not a mix.
+    const absolutePath = (rel: string) => { const sep = workspace.path.includes('\\') ? '\\' : '/'; return `${workspace.path.replace(/[\\/]+$/, '')}${sep}${rel.split('/').join(sep)}`; };
+    const say = (r: { ok: true } | { ok: false; reason: string }) => { if (!r.ok) setSaveError(r.reason); };
+    const fileActions = {
+        external: files.openExternal !== undefined,
+        reveal: files.reveal !== undefined,
+        onAction: (action: FileMenuAction, path: string) => {
+            switch (action) {
+                case 'open-external': void files.openExternal?.(workspace.id, path).then(say); break;
+                case 'reveal': void files.reveal?.(workspace.id, path).then(say); break;
+                case 'copy-path': void navigator.clipboard?.writeText(absolutePath(path)); break;
+                case 'copy-relative-path': void navigator.clipboard?.writeText(path); break;
+                case 'close': closeTab(path); break;
+                case 'close-others': for (const t of tabs) if (t !== path) closeTab(t); break;
+                case 'close-all': for (const t of tabs) closeTab(t); break;
+            }
+        },
+    };
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    return <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
 }

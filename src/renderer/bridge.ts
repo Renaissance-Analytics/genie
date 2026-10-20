@@ -305,6 +305,10 @@ export interface GenieBridge {
         onChange(listener: (workspaceId: string, paths?: readonly string[]) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
+        /** Right-click (Tynn #841): open with the host OS's own app / show in its file manager. Absent where this window is
+         *  not the host (a window driving another machine) — those act on the host's screen. */
+        openExternal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        reveal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The popped-out panels (§4.3): host-only windows, so a remote bridge has none of this. */
         windows?: {
             popOut(workspaceId: string): Promise<void>;

@@ -223,3 +223,14 @@ export function routeOfAddress(address: string, ctx: AddressContext): string | n
     if (!third.startsWith('@') && fourth === undefined && ctx.tabsOf?.(workspaceId) === undefined) return `genie://workspace/${workspaceId}`;
     return null;
 }
+
+/**
+ * Leaving a remote host (the two-VM proof, 2026-10-20): the address that named THAT machine names this one, same page —
+ * Disconnect on the host's Remote access lands on this machine's Remote access, not the Dashboard. Only `from`'s own
+ * addresses move; anything else is returned as it is.
+ */
+export function rehomeAddress(address: string, from: string, to: string): string {
+    const m = /^genie:\/\/([^/?]+)(.*)$/.exec(address.trim());
+    if (!m || m[1]!.toLowerCase() !== from.toLowerCase()) return address;
+    return `genie://${to}${m[2]}`;
+}

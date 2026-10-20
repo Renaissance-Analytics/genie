@@ -1109,6 +1109,19 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-children', (_event, workspaceId: unknown, dir: unknown) => (typeof workspaceId === 'string' && typeof dir === 'string' ? filesHost?.children(workspaceId, dir) ?? null : null));
     ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
+    // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
+    ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
+        const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
+        if (!abs) return { ok: false, reason: 'that file is not in this workspace' };
+        const failed = await shell.openPath(abs);
+        return failed === '' ? { ok: true } : { ok: false, reason: failed };
+    });
+    ipcMain.handle('genie:files-reveal', (_event, workspaceId: unknown, path: unknown) => {
+        const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
+        if (!abs) return { ok: false, reason: 'that file is not in this workspace' };
+        shell.showItemInFolder(abs);
+        return { ok: true };
+    });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });

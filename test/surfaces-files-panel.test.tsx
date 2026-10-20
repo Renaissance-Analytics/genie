@@ -69,7 +69,7 @@ describe('FilesPanel', () => {
         const html = render({ open: { ok: false, path: 'huge.bin', error: 'this file is 180 MB; Genie will not open it' }, tabs: ['huge.bin'] });
         expect(html).toContain('data-tab-error');
         expect(html).toMatch(/this file is 180 MB; Genie will not open it/);
-        expect(render({})).toContain('data-fancy-file-viewer');
+        expect(render({})).toContain('data-fancy-code-editor'); // the editor itself (Tynn #840: no FileViewer wrapper for text)
     });
 
     it('before the tree is known, skeletons — not an empty tree', () => {
