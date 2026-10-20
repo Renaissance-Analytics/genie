@@ -826,7 +826,10 @@ if (!approvalEnabled) {
     await new Promise((r) => setTimeout(r, 1200));
     await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
     await cdp.send('Input.insertText', { text: `echo ${token}` });
-    const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '')`;
+    // The rows JOINED, without the line breaks between them: a narrow pane WRAPS the typed command ("echo g" / "enie-…"),
+    // and counting per line read it as absent — 37 and 38 failed on the Windows VM's 1024-px window (beta.32, the docked
+    // chat taking half of it) while the shell had run it. The token is random, so joining rows cannot make one up.
+    const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
 
