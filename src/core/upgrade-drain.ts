@@ -21,14 +21,15 @@ export function midTurnAgents(agents: readonly { id: string; turnState: string |
 }
 
 /**
- * THE RELAUNCH. The agents a shutdown interrupted mid-turn are started first and told to continue (`resume`) —
- * always, whatever `restore_agents_on_launch` says, because cancelling their turn was Genie's doing, not the person's.
- * Every other agent that was running is started only when `restoreAll` (that setting) is on, and is NOT prompted:
- * nothing was cut off. One start per agent, three seconds apart.
+ * THE RELAUNCH — ALWAYS (the owner, 2026-10-20: "get rid of the fucking option. this should happen all of the time, not a
+ * god damn setting"). The agents a shutdown interrupted mid-turn are started first and told to continue (`resume`):
+ * cancelling their turn was Genie's doing, not the person's. Every other agent that was running is started after them,
+ * NOT prompted: nothing was cut off. An agent the person stopped was not running at quit, so it is not on either list.
+ * One start per agent, three seconds apart.
  */
-export function relaunchPlan(input: { runningAtQuit: readonly string[]; interruptedAtQuit: readonly string[]; restoreAll: boolean }, gapMs: number = RESTORE_GAP_MS): Array<{ agentId: string; at: number; resume: boolean }> {
+export function relaunchPlan(input: { runningAtQuit: readonly string[]; interruptedAtQuit: readonly string[] }, gapMs: number = RESTORE_GAP_MS): Array<{ agentId: string; at: number; resume: boolean }> {
     const resumed = [...new Set(input.interruptedAtQuit)];
-    const rest = input.restoreAll ? input.runningAtQuit.filter((id) => !resumed.includes(id)) : [];
+    const rest = [...new Set(input.runningAtQuit)].filter((id) => !resumed.includes(id));
     return [...resumed.map((agentId) => ({ agentId, resume: true })), ...rest.map((agentId) => ({ agentId, resume: false }))]
         .map((s, i) => ({ agentId: s.agentId, at: i * gapMs, resume: s.resume }));
 }

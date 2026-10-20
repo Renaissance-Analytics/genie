@@ -13,8 +13,9 @@ import { Store } from '../src/main/store.js';
  *
  * At ANY shutdown (quit or upgrade) the agents mid-turn — and only those — are recorded and their turns cancelled
  * (the session ends, which is how a provider's turn is cancelled). At the next launch exactly those are started again
- * and told to continue; an idle agent is not touched unless `restore_agents_on_launch` restores everyone, and then it
- * is started WITHOUT being prompted. Starts stay three seconds apart, the interrupted first.
+ * and told to continue; every other agent that was running is started too, WITHOUT being prompted — always, there is
+ * no setting (the owner, 2026-10-20: "this should happen all of the time, not a god damn setting"). Starts stay three
+ * seconds apart, the interrupted first.
  */
 describe('who was mid-turn', () => {
     it('is the working agents only — counted, idle / failed / stopped / unknown excluded', () => {
@@ -27,15 +28,15 @@ describe('who was mid-turn', () => {
 });
 
 describe('the relaunch', () => {
-    it('resumes and prompts ONLY the interrupted agents when restore-all is off', () => {
-        expect(relaunchPlan({ runningAtQuit: ['a', 'b', 'c'], interruptedAtQuit: ['c', 'a'], restoreAll: false })).toEqual([
+    it('prompts ONLY the interrupted agents, in the order recorded', () => {
+        expect(relaunchPlan({ runningAtQuit: ['c', 'a'], interruptedAtQuit: ['c', 'a'] })).toEqual([
             { agentId: 'c', at: 0, resume: true },
             { agentId: 'a', at: 3000, resume: true },
         ]);
     });
 
-    it('with restore-all on, the interrupted first and prompted; the rest started after, NOT prompted, none twice', () => {
-        expect(relaunchPlan({ runningAtQuit: ['a', 'b', 'c'], interruptedAtQuit: ['c'], restoreAll: true })).toEqual([
+    it('ALWAYS: the interrupted first and prompted; every other agent that was running started after, NOT prompted, none twice', () => {
+        expect(relaunchPlan({ runningAtQuit: ['a', 'b', 'c'], interruptedAtQuit: ['c'] })).toEqual([
             { agentId: 'c', at: 0, resume: true },
             { agentId: 'a', at: 3000, resume: false },
             { agentId: 'b', at: 6000, resume: false },
@@ -43,7 +44,7 @@ describe('the relaunch', () => {
     });
 
     it('nothing recorded, nothing started (control)', () => {
-        expect(relaunchPlan({ runningAtQuit: [], interruptedAtQuit: [], restoreAll: true })).toEqual([]);
+        expect(relaunchPlan({ runningAtQuit: [], interruptedAtQuit: [] })).toEqual([]);
     });
 
     it('the prompt says the turn was cancelled by a Genie shutdown and asks to continue', () => {

@@ -21,9 +21,11 @@ describe('the registry', () => {
         }
     });
 
-    it('carries the settings the spec names: restore agents on launch (default OFF), update channel, theme, default agent, DND reply, notification sounds', () => {
+    it('carries the settings the spec names: update channel, theme, default agent, DND reply, notification sounds — and no restore switch', () => {
         const byKey = Object.fromEntries(SETTINGS.map((s) => [s.key, s])) as Record<string, SettingDef>;
-        expect(byKey.restore_agents_on_launch).toMatchObject({ type: 'boolean', default: false, scope: 'host', group: 'agents' });
+        // Changed 2026-10-20 (the owner: "get rid of the fucking option. this should happen all of the time, not a god damn
+        // setting"): Genie ALWAYS starts again the agents that were running; there is no switch.
+        expect(byKey.restore_agents_on_launch).toBeUndefined();
         expect(byKey.update_channel).toMatchObject({ type: 'enum', options: ['stable', 'dev'], default: 'dev', scope: 'host', group: 'general' });
         expect(byKey.theme).toMatchObject({ type: 'enum', options: ['dark', 'light', 'system'], default: 'system', scope: 'device', group: 'appearance' });
         expect(byKey.default_agent).toMatchObject({ scope: 'workspace', group: 'agents' });
@@ -46,7 +48,7 @@ describe('search', () => {
         const hits = searchSettings('theme');
         expect(hits.map((h) => h.key)).toContain('theme');
         expect(hits[0]!.group).toBe('appearance');
-        expect(searchSettings('RESTORE').map((h) => h.key)).toEqual(['restore_agents_on_launch']);
+        expect(searchSettings('MINIMIZED').map((h) => h.key)).toEqual(['start_minimized']);
         expect(searchSettings('zzz-nothing')).toEqual([]);
     });
 });
@@ -55,21 +57,26 @@ describe('carrying v1 settings over', () => {
     it('maps the v1 keys that still exist to their genie2 keys and values, and REPORTS the ones that do not', () => {
         const v1 = {
             theme: 'light',
-            restore_agents_on_launch: 'true',
+            start_minimized: 'on',
             update_channel: 'beta', // v1's name for the dev channel — migrated, not dropped
             agent_command: 'claude --dangerously-skip-permissions',
+            restore_agents_on_launch: 'off',
             track_cwd: 'on',
         };
         const r = carryOverV1(v1);
-        expect(r.applied).toEqual({ theme: 'light', restore_agents_on_launch: true, update_channel: 'dev', track_cwd: true });
-        // COUNTED: the one field that must NOT come over — the agent launch line — is named, not lost silently.
-        expect(r.dropped).toEqual([{ key: 'agent_command', reason: 'agents are sessions in Genie 2; there is no launch line to carry' }]);
+        expect(r.applied).toEqual({ theme: 'light', start_minimized: true, update_channel: 'dev', track_cwd: true });
+        // COUNTED: the fields that must NOT come over are named, not lost silently — the agent launch line, and Genie 1's
+        // restore switch (Genie 2 always restores; an 'off' carried over would be a promise nothing keeps).
+        expect(r.dropped).toEqual([
+            { key: 'agent_command', reason: 'agents are sessions in Genie 2; there is no launch line to carry' },
+            { key: 'restore_agents_on_launch', reason: 'Genie 2 always starts again the agents that were running; there is no setting' },
+        ]);
     });
 
     it('a value that does not fit the setting’s type is dropped with the reason, not coerced into a wrong default', () => {
-        const r = carryOverV1({ theme: 'sepia', restore_agents_on_launch: 'maybe' });
+        const r = carryOverV1({ theme: 'sepia', start_minimized: 'maybe' });
         expect(r.applied).toEqual({});
-        expect(r.dropped.map((d) => d.key).sort()).toEqual(['restore_agents_on_launch', 'theme']);
+        expect(r.dropped.map((d) => d.key).sort()).toEqual(['start_minimized', 'theme']);
         expect(r.dropped.find((d) => d.key === 'theme')!.reason).toMatch(/sepia/);
     });
 
