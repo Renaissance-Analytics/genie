@@ -163,8 +163,7 @@ export interface WorkspaceProps {
     onOpenDeckItem?: ((itemId: string) => void) | undefined;
     onOpenAgent?: ((agentId: string) => void) | undefined;
     /** The agents open as tabs in this workspace's strip (Tynn #805), and closing one. */
-    openAgents?: ReadonlyArray<{ id: string; name: string; state: string }> | undefined;
-    onCloseAgent?: ((agentId: string) => void) | undefined;
+    agentTabs?: ReadonlyArray<{ id: string; name: string; state: string }> | undefined;
     /** Open a file of this workspace in its file panel at a line (a path clicked in a terminal, Tynn #763). */
     onOpenFile?: ((path: string, line: number | null) => void) | undefined;
     onAddAgent?: (() => void) | undefined;
@@ -178,7 +177,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, openAgents = [], onCloseAgent, onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -570,7 +569,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
               */}
             <WorkspaceTabs
                 designed={designed}
-                openAgents={openAgents}
+                agents={agentTabs}
                 current={{ kind: 'view', view }}
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
@@ -578,7 +577,6 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 onView={(v) => onViewChange?.(v as WorkspaceView)}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
                 onOpenAgent={(id) => onOpenAgent?.(id)}
-                onCloseAgent={(id) => onCloseAgent?.(id)}
             />
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">

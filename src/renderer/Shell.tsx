@@ -23,7 +23,7 @@ import { TitleBar } from './components/TitleBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
-import { addTab, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
+import { addTab, agentTabsOf, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
 import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProjectPicker.js';
@@ -123,9 +123,9 @@ export interface ShellProps {
     onCloseChat?: (() => void) | undefined;
     /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
+    /** Discard an undelivered chat draft, unsent. */
+    onDiscardDraft?: ((draftId: string) => void) | undefined;
     onOpenAgent: (agentId: string) => void;
-    /** The agents open as tabs in the workspace on screen, and closing one (Tynn #805). */
-    openAgentTabs?: { workspaceId: string; agents: ReadonlyArray<{ id: string; name: string; state: string }>; onClose: (agentId: string) => void } | null | undefined;
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
@@ -239,7 +239,6 @@ export function Shell({
     chatSession = null,
     onNavigate,
     onOpenAgent,
-    openAgentTabs,
     onAddAgent,
     onAddWorkspace,
     terminals = NO_TERMINALS,
@@ -266,6 +265,7 @@ export function Shell({
     onSelectRow,
     onSend,
     onRestartAndSend,
+    onDiscardDraft,
     answeringApproval,
     onAnswerApproval,
     onAnswerDeckItem,
@@ -509,12 +509,12 @@ export function Shell({
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
                         // AN AGENT OPENS INSIDE ITS WORKSPACE (Tynn #805; the owner's choice, as in Genie 1): its page sits under
-                        // its workspace's strip — Agents, the agents you opened, your tabs, +, Settings — one click from each.
+                        // its workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
                         <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
                             {agentWorkspace ? (
                                 <WorkspaceTabs
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
-                                    openAgents={openAgentTabs?.workspaceId === agentWorkspace.id ? openAgentTabs.agents : []}
+                                    agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
                                     current={{ kind: 'agent', id: parsed.agentId }}
                                     canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
@@ -527,7 +527,6 @@ export function Shell({
                                         onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
                                     }}
                                     onOpenAgent={onOpenAgent}
-                                    onCloseAgent={(id) => openAgentTabs?.onClose(id)}
                                 />
                             ) : null}
                             <div className="min-h-0 flex-1">
@@ -593,8 +592,7 @@ export function Shell({
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}
                             onOpenDeckItem={(id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
                             onOpenAgent={onOpenAgent}
-                            openAgents={openAgentTabs?.workspaceId === parsed.workspaceId ? openAgentTabs.agents : []}
-                            onCloseAgent={(id) => openAgentTabs?.onClose(id)}
+                            agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
                             onAddAgent={() => onAddAgent(parsed.workspaceId)}
                             onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
@@ -689,6 +687,7 @@ export function Shell({
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         onRestartAndSend={onRestartAndSend}
+                        onDiscardDraft={onDiscardDraft}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
