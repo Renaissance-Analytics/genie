@@ -161,6 +161,23 @@ describe('reads, writes, the baton', () => {
         expect(await b.call('prompt', 'agent_a', 'hi')).toMatchObject({ ok: true });
     });
 
+    // Tynn #845 (the two-VM proof, 2026-10-20): Upgrade host said "nobody is driving … take the baton" — check and
+    // download were writes. The whole upgrade is the OWNER acting on the host: no baton, and still never a guest.
+    it('Upgrade host, all three steps, by the owner WITHOUT the baton; a guest is refused each (CONTROL)', async () => {
+        const o = await owner('laptop');
+        expect(await o.call('updates.check')).toMatchObject({ ok: true });
+        expect(await o.call('updates.download')).toMatchObject({ ok: true });
+        expect(await o.call('updates.install')).toMatchObject({ ok: true });
+        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
+        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
+        const guest = connect();
+        await guest.hello({ kind: 'share', id: link.id, secret }, 'wren');
+        await guest.call('baton.take');
+        for (const step of ['updates.check', 'updates.download', 'updates.install']) {
+            expect(await guest.call(step)).toMatchObject({ ok: false });
+        }
+    });
+
     it('an upgrade is gated on OWNERSHIP, not the baton; lock is the owner’s kill-switch for every write', async () => {
         const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
         const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
