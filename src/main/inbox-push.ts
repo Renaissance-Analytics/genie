@@ -1,5 +1,7 @@
 import type { AgentId } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
+import type { PromptContext } from '../core/session.js';
+import type { NoticeMail } from '../core/stream-event.js';
 
 /**
  * §6.4 THE INBOX PUSH — GENIE'S, FOR EVERY PROVIDER. When mail lands for an agent, Genie puts the notice into that
@@ -31,10 +33,13 @@ export interface InboxPushPorts {
         /** Turns ended in the agent's current run. */
         turnsEndedThisRun(agentId: AgentId): number;
         probe(agentId: AgentId): LiveSession | null;
-        prompt(agentId: AgentId, text: string, by?: string | null): boolean;
+        prompt(agentId: AgentId, text: string, by?: string | null, context?: PromptContext): boolean;
     };
-    /** The notices due (compose's `inboxReminders`): decides and marks them sending; never sends. */
-    readonly reminders: (input: { run: (agentId: string) => number | null }) => Array<{ agentId: string; text: string }>;
+    /**
+     * The notices due (compose's `inboxReminders`): decides and marks them sending; never sends. `mail`: the messages a
+     * notice tells about, carried on its ledger row so the chat shows who wrote and what (beta.33 item 18).
+     */
+    readonly reminders: (input: { run: (agentId: string) => number | null }) => Array<{ agentId: string; text: string; mail?: readonly NoticeMail[] }>;
     /** A notice settled (compose's `inboxNoticeSettled`): delivered, or its batch untold. */
     readonly settled: (agentId: string, delivered: boolean) => void;
     /**
@@ -78,7 +83,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             out.set(id, { run, endedBefore: host.turnsEndedThisRun(id) });
             let taken = false;
             try {
-                taken = host.prompt(id, r.text, 'genie');
+                taken = host.prompt(id, r.text, 'genie', r.mail ? { mail: r.mail } : {});
             } catch {
                 taken = false;
             }

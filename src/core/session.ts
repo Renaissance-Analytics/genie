@@ -1,7 +1,7 @@
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
-import { toStreamEvent, type StreamEvent } from './stream-event.js';
+import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -763,21 +763,20 @@ export class AgentSession {
      * `by` is who started the turn when the caller knows (`you` from the composer, `genie` for a reminder or a
      * handoff ask, a peer's name) — written into the ledger as the turn's marker, and `null` when nobody said.
      */
-    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null): void {
+    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
         if (!this.#driver) throw new Error('session is not started');
         if (this.#held) {
             // Held for the limit: recorded now, as it was sent; handed to the provider when the limit resets.
-            const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
-            void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
+            void this.#emitRow(promptRow(text, by, sent, context));
             this.#heldPrompts.push({ text, by, sent });
             this.#changed();
             return;
         }
-        this.#send(text, by, sent, true);
+        this.#send(text, by, sent, true, context);
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
-    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false): void {
+    #send(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, record = false, context: PromptContext = {}): void {
         if (!this.#driver) throw new Error('session is not started');
         // The provider takes it FIRST: a prompt it refuses (Codex while a turn runs, a driver that throws) writes nothing
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
@@ -794,8 +793,7 @@ export class AgentSession {
         }
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
-        const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
-        if (record) void this.#emitRow(by === null || by === 'you' ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments } : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments });
+        if (record) void this.#emitRow(promptRow(text, by, sent, context));
         // A provider that DOES echo it is not recorded twice (see `#handle`).
         this.#echo = text;
         this.#echoSeen = '';
@@ -1165,6 +1163,23 @@ export class AgentSession {
         this.#writes = this.#writes.then(write, write);
         await this.#writes;
     }
+}
+
+/** What a prompt's ledger row carries beyond its text: a Genie notice's mail (beta.33 item 18). */
+export interface PromptContext {
+    readonly mail?: readonly NoticeMail[] | undefined;
+}
+
+/**
+ * A prompt's own message row: yours (`you`, or nobody said), or the sender's as a peer — with its files, and, for a
+ * Genie notice, the mail it told about. Absent fields are left off, never written empty.
+ */
+function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext): StreamEvent {
+    const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
+    const mail = context.mail && context.mail.length > 0 ? { mail: context.mail } : {};
+    return by === null || by === 'you'
+        ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments }
+        : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments, ...mail };
 }
 
 /**

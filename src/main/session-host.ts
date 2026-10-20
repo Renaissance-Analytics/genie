@@ -53,6 +53,7 @@ import {
     type PermissionOutcomeLike,
     type CancelOutcome,
     type PermissionRequestLike,
+    type PromptContext,
     type SessionDriverFactory,
     type TurnOutcomeLike,
 } from '../core/session.js';
@@ -758,10 +759,11 @@ export class SessionHost {
         return true;
     }
 
-    prompt(agentId: AgentId, text: string, by: string | null = null): boolean {
+    /** `context`: what the prompt's ledger row carries beyond its text — a Genie notice's mail (the inbox push). */
+    prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
-        entry.session.prompt(text, by);
+        entry.session.prompt(text, by, null, context);
         this.#emit(agentId);
         return true;
     }

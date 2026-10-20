@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chatCommsOf, chatThreadFrom } from '../src/core/chat-view.js';
 import { mintAgentId } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction } from '../src/main/feature-ipc.js';
@@ -108,6 +109,33 @@ describe('the feature action, end to end into the agent’s inbox', () => {
         expect(services.attention.pending().map((q) => q.id)).not.toContain(asked.questionId);
         const [mail] = (await services.inbox.receive({ participant: agent })).messages;
         expect(mail!.text).toContain('- **Scope** — Which suites?\n  → (no option chosen)\n  Note: only if it is quick');
+    });
+
+    /*
+     * THE ANSWER SHOWS IN THE CHAT the moment it is sent (beta.33 item 7; the owner: "I did not see the msg post from
+     * answering the FTQ appear"). The agent got it; the chat did not, because main's detail dropped the person's mail.
+     * Here the same path main takes — the agent's mail as `chatCommsOf` hands it to the chat — with the inbox the answer
+     * really went into, before the agent has read anything.
+     */
+    it('the answer is in the asking agent’s chat at once — who it is from, the question, the option chosen and the note', async () => {
+        const agent = mintAgentId();
+        const asked = await services.attention.ask({
+            agentId: agent, agentName: 'kai', workspaceId: 'tynn',
+            questions: [{ header: 'Workers', question: 'How many workers?', options: [{ label: '4' }, { label: '8' }] }],
+        }, { userActive: true });
+        const item = services.deckItems().find((i) => i.id === asked.questionId)!;
+        await handleFeatureAction(services, { kind: 'deck.answerForm', item, selections: [['4']], notes: ['the box has 4 cores'], note: '' }, { toolStatuses: null, knowledgeQuery: '' });
+
+        const thread = chatThreadFrom({
+            agent: { id: agent, name: 'kai', provider: 'claude', fidelity: 'declared' },
+            session: null, rows: [],
+            comms: chatCommsOf(services.inbox.involving(agent, 50)),
+        }, agent, [], () => 0);
+        const answer = thread.messages.filter((m) => m.who === 'mail');
+        expect(answer).toHaveLength(1);
+        expect(answer[0]!.from).toBe('you → kai');
+        expect(answer[0]!.text).toContain(`Answer to your question ${asked.questionId}:`);
+        expect(answer[0]!.text).toContain('- **Workers** — How many workers?\n  → 4\n  Note: the box has 4 cores');
     });
 
     it('control: a question with neither an option nor a note is refused by name, and the question stays asked', async () => {

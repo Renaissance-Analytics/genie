@@ -92,6 +92,9 @@ afterEach(async () => {
 });
 
 describe('services.inboxReminders', () => {
+    // Each notice names the mail it tells about (beta.33 item 18: the owner wants the CONTEXT of a delivery in the chat) —
+    // the prompt's words are unchanged; `mail` is what its ledger row carries.
+    const told = (text: string) => ({ id: expect.stringMatching(/^msg_/), from: HUMAN, fromName: null, text, sentAt: expect.any(String) });
     it('reports what to send for every registered agent with mail it has not been told about whose session can take a turn', async () => {
         onRoster('agent_a', 'atlas', 'tynn');
         onRoster('agent_b', 'bolt', 'tynn');
@@ -99,17 +102,17 @@ describe('services.inboxReminders', () => {
         await services.inbox.send({ from: HUMAN, to: 'agent_b' as never, text: 'pong' });
         const runs = new Map<string, number>([['agent_a', 1]]);
         const run = (id: string): number | null => runs.get(id) ?? null;
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('ping')] }]);
         services.inboxNoticeSettled('agent_a', true);
         // Atlas's batch was told; bolt can now take a turn and gets its own.
         runs.set('agent_b', 2);
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('pong')] }]);
         services.inboxNoticeSettled('agent_b', true);
         expect(services.inboxReminders({ run })).toEqual([]);
         // Atlas collects; a new message for it is a new batch, told at once.
         await services.inbox.receive({ participant: 'agent_a' as never });
         expect(services.inboxReminders({ run })).toEqual([]);
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'again' });
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.' }]);
+        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('again')] }]);
     });
 });

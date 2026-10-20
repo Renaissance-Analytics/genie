@@ -3,6 +3,7 @@ import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { transportHub } from '../core/remote-protocol.js';
+import { chatCommsOf } from '../core/chat-view.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
 import type { RelaySocket } from './relay-wire.js';
 import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
@@ -583,10 +584,9 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         cost: sessionCostOf(host.rowsFor(record.id)),
         refusal: host.refusals.get(record.id) ?? null,
         takeOver,
-        // Its mail with other agents, for the system rows in its chat (the person's mail is the chat itself).
-        comms: services
-            ? services.inbox.involving(record.id, 50).filter((m) => m.from !== 'human' && m.to !== 'human').map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt }))
-            : null,
+        // Its AgentInbox mail — with other agents AND the person (an FTQ answer is the person's) — for the mail rows in its
+        // chat (core/chat-view.ts `chatCommsOf`).
+        comms: services ? chatCommsOf(services.inbox.involving(record.id, 50)) : null,
     };
 }
 
