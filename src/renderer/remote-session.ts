@@ -1,3 +1,4 @@
+import { relayWorkstationOf } from '../core/remote-window.js';
 /**
  * CONNECTING TO ANOTHER MACHINE — the client-local half (§6.8). The device's memory of where it has
  * paired is a DEVICE preference (the three-way split), so it lives in the window's own storage under
@@ -9,6 +10,8 @@ export function remoteUrl(input: string): { ok: true; url: string } | { ok: fals
     if (text.length === 0) return { ok: false, reason: 'name the host — its name or address, with the port Genie shows under Remote access' };
     if (/^https?:\/\//i.test(text)) return { ok: false, reason: 'a Genie host is reached over ws:// or wss://, not http://' };
     if (/^wss?:\/\//i.test(text)) return { ok: true, url: text };
+    // A Tynn workstation (Tynn #837): main holds its connection; the address passes through.
+    if (relayWorkstationOf(text) !== null) return { ok: true, url: text };
     return { ok: true, url: `wss://${text}/genie` };
 }
 
@@ -46,7 +49,7 @@ export function rememberedTokens(storage: TokenStorage) {
     };
 }
 
-export { remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+export { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 
 const HOSTS_KEY = 'genie.remote.hosts';
 

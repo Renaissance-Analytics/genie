@@ -126,9 +126,16 @@ export interface RemoteSection {
     readonly tynnWorkstation?: TynnWorkstationState | null | undefined;
 }
 
+/** This machine on the Tynn relay as a host (main/tynn-network.ts, Tynn #838). */
+export type TynnRelayState =
+    | { readonly state: 'off' }
+    | { readonly state: 'connecting' }
+    | { readonly state: 'reachable'; readonly relay: string }
+    | { readonly state: 'unavailable'; readonly reason: string };
+
 /** Whether this machine is registered with Tynn as a workstation, and with which Tynn; or why not. */
 export type TynnWorkstationState =
-    | { readonly registered: true; readonly host: string; readonly workstationId: string }
+    | { readonly registered: true; readonly host: string; readonly workstationId: string; readonly relay?: TynnRelayState | undefined }
     | { readonly registered: false; readonly reason: string };
 
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */

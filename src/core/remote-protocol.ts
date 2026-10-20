@@ -274,6 +274,23 @@ export interface ServerTransport {
     unavailable?(): string | null;
 }
 
+/**
+ * ONE TRANSPORT FROM SEVERAL (Tynn #838): RemoteHost hears the tailnet listener (the primary — its address and its
+ * reason for not listening are what Settings shows) and any transport added while it lives, such as the Tynn relay.
+ */
+export function transportHub(primary: ServerTransport): ServerTransport & { add(transport: ServerTransport): () => void } {
+    const listeners = new Set<(connection: ServerConnection) => void>();
+    const fan = (connection: ServerConnection) => { for (const l of listeners) l(connection); };
+    primary.onConnection(fan);
+    return {
+        onConnection: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+        // Only what the primary has: RemoteHost words a missing reason itself.
+        ...(primary.address ? { address: () => primary.address!() } : {}),
+        ...(primary.unavailable ? { unavailable: () => primary.unavailable!() } : {}),
+        add: (transport) => transport.onConnection(fan),
+    };
+}
+
 /** Two ends wired to each other in memory. Frames are delivered on the microtask queue, in order. */
 export function inMemoryPair(): { client: ClientTransport; server: ServerConnection } {
     const make = () => {

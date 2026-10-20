@@ -8,6 +8,7 @@ import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import type { TynnNetworkBridge } from './relay-transport.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -111,6 +112,8 @@ export const FEATURE_CHANNELS = {
 export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string): Promise<void> };
+    /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
+    tynnNetwork?: TynnNetworkBridge;
     /**
      * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, inbox, settings, browser.
      * One snapshot, pushed on change; one `act` that applies a person's action in main and
