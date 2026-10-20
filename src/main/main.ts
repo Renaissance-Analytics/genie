@@ -742,6 +742,8 @@ async function boot(): Promise<void> {
         // Each opened file carries its git state (the persona's `· committed`).
         gitStatus: gitFileStatus,
         gitShowHead,
+        // Delete goes to the OS trash (Tynn #844), never an erase.
+        trash: (absolutePath) => shell.trashItem(absolutePath),
         workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {
@@ -1127,6 +1129,17 @@ async function boot(): Promise<void> {
         shell.showItemInFolder(abs);
         return { ok: true };
     });
+    // THE TREE'S FILE OPERATIONS (Tynn #844): confined, never overwriting, Delete to the trash — all in the host.
+    const fileOp = (run: (host: FilesHost) => Promise<unknown>) => (filesHost ? run(filesHost) : Promise.resolve({ ok: false, reason: 'no files host' }));
+    const str = (v: unknown): v is string => typeof v === 'string';
+    ipcMain.handle('genie:files-create', (_event, workspaceId: unknown, path: unknown, kind: unknown) =>
+        str(workspaceId) && str(path) && (kind === 'file' || kind === 'folder') ? fileOp((h) => h.create(workspaceId, path, kind)) : { ok: false, reason: 'bad arguments' });
+    ipcMain.handle('genie:files-rename', (_event, workspaceId: unknown, from: unknown, to: unknown) =>
+        str(workspaceId) && str(from) && str(to) ? fileOp((h) => h.rename(workspaceId, from, to)) : { ok: false, reason: 'bad arguments' });
+    ipcMain.handle('genie:files-duplicate', (_event, workspaceId: unknown, path: unknown) =>
+        str(workspaceId) && str(path) ? fileOp((h) => h.duplicate(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
+    ipcMain.handle('genie:files-trash', (_event, workspaceId: unknown, path: unknown) =>
+        str(workspaceId) && str(path) ? fileOp((h) => h.trash(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
