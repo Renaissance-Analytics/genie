@@ -178,6 +178,12 @@ const bridge: GenieBridge = {
             ipcRenderer.on('genie:relay-closed', handler);
             return () => { ipcRenderer.removeListener('genie:relay-closed', handler); };
         },
+        // Sharing this machine through Tynn (Tynn #839).
+        shares: {
+            list: (workspaceId) => ipcRenderer.invoke('genie:tynn-share-links', workspaceId) as Promise<never>,
+            mint: (input) => ipcRenderer.invoke('genie:tynn-share-mint', input) as Promise<never>,
+            revoke: (linkId) => ipcRenderer.invoke('genie:tynn-share-revoke', linkId) as Promise<never>,
+        },
     },
 
     /*

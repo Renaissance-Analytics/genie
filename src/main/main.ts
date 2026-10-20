@@ -5,6 +5,7 @@ import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../cor
 import { transportHub } from '../core/remote-protocol.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
 import type { RelaySocket } from './relay-wire.js';
+import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
@@ -35,7 +36,7 @@ import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
-import { genieUrlIn, signInCodeFrom } from '../core/tynn-sign-in.js';
+import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
@@ -509,6 +510,9 @@ function registerGenieProtocol(): void {
 
 function openGenieUrl(url: string): void {
     if (!tynnAccount) { pendingGenieUrl = url; return; }
+    // A Tynn share link, opened (Tynn #839): Tynn's page opens genie://workstation/open?id=… — its window, over the relay.
+    const workstation = workstationOpenFrom(url);
+    if (workstation) { openRemoteWindow(`relay:${workstation.id}`); return; }
     if (signInCodeFrom(url) === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
     revealMainWindow();
     void tynnAccount.signIn(url).then((r) => {
@@ -1138,6 +1142,22 @@ async function boot(): Promise<void> {
         sender.once('destroyed', () => opened.transport.close());
         return { ok: true, channel };
     });
+    // SHARING THIS MACHINE THROUGH TYNN (Tynn #839; Genie 1's workspace share links), over the session.
+    const ownWorkstation = () => (tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null);
+    const shareRequest = (path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }) => {
+        if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
+        return tynnAccount.request(path, init);
+    };
+    ipcMain.handle('genie:tynn-share-links', (_event, workspaceId: unknown) => listShareLinks(shareRequest, ownWorkstation(), typeof workspaceId === 'string' ? workspaceId : null));
+    ipcMain.handle('genie:tynn-share-mint', (_event, input: unknown) => {
+        const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
+        return mintShareLink(shareRequest, ownWorkstation(), {
+            workspaceId: typeof i.workspaceId === 'string' ? i.workspaceId : null,
+            capability: i.capability === 'readonly' ? 'readonly' : 'control',
+            expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
+        });
+    });
+    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId) : { ok: false, reason: 'not a link' }));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;

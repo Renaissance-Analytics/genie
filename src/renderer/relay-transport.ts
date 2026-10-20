@@ -1,4 +1,5 @@
 import type { ClientTransport } from '../core/remote-protocol.js';
+import type { ShareLink } from '../main/tynn-share-links.js';
 
 /**
  * A TYNN WORKSTATION'S CONNECTION, SEEN FROM THE WINDOW (Tynn #837). Main dials the relay with the Tynn grant and the
@@ -26,6 +27,12 @@ export interface TynnNetworkBridge {
     close(channel: string): void;
     onMessage(listener: (channel: string, text: string) => void): () => void;
     onClosed(listener: (channel: string, reason: string | null) => void): () => void;
+    /** Sharing this machine through Tynn (Tynn #839): `workspaceId: null` = the whole workstation. */
+    shares?: {
+        list(workspaceId: string | null): Promise<{ ok: true; links: ShareLink[] } | { ok: false; reason: string }>;
+        mint(input: { workspaceId: string | null; capability: 'control' | 'readonly'; expiresInDays: number }): Promise<{ ok: true; link: ShareLink } | { ok: false; reason: string }>;
+        revoke(linkId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    };
 }
 
 export interface RelayClientTransport extends ClientTransport {

@@ -69,3 +69,14 @@ describe('the Workspace surface', () => {
         expect(render(ops({ lastOutcome: 'hibernated; handoffs landed from atlas; none missing' }))).toMatch(/data-ops-outcome[^>]*>hibernated; handoffs landed from atlas/);
     });
 });
+
+// Tynn #839: Genie 1's "Share workspace…" from the workspace (v1 inventory row 116).
+describe('Share… on the workspace', () => {
+    it('offered when this Genie can share through Tynn', () => {
+        expect(render(ops({ onShare: () => {} }))).toContain('data-action="share-workspace"');
+    });
+
+    it('not offered otherwise (CONTROL: a remote guest, a Genie with no Tynn)', () => {
+        expect(render(ops())).not.toContain('data-action="share-workspace"');
+    });
+});

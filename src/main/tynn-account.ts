@@ -15,7 +15,7 @@ import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
  * are cleared anyway and the person is told the Tynn session ends when it expires.
  */
 
-export type SessionFetch = (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+export type SessionFetch = (url: string, init: { method: 'GET' | 'POST' | 'DELETE'; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export interface TynnAccountPorts {
     /** The Tynn host from settings, read at call time. */
@@ -182,7 +182,7 @@ export class TynnAccount implements TynnAccountPort {
      * owner, 2026-10-19 — attackers must not learn what exists). So a 404 while signed in asks /api/v1/me once: it
      * answers who this session belongs to, or this Genie shows signed out.
      */
-    async request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<TynnResponse> {
+    async request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<TynnResponse> {
         const res = await this.#raw(path, init);
         if (res.status === 401 || res.status === 419) this.#set(null);
         else if (res.status === 404 && path !== '/api/v1/me' && this.status().signedIn) {
@@ -195,7 +195,7 @@ export class TynnAccount implements TynnAccountPort {
         return res;
     }
 
-    async #raw(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<TynnResponse> {
+    async #raw(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<TynnResponse> {
         const host = this.host();
         const headers: Record<string, string> = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
         if (init.body !== undefined) headers['Content-Type'] = 'application/json';

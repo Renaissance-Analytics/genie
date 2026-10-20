@@ -37,3 +37,23 @@ export function signInCodeFrom(input: string): string | null {
 export function genieUrlIn(argv: readonly string[]): string | null {
     return argv.find((a) => a.startsWith('genie://')) ?? null;
 }
+
+/**
+ * A Tynn share link, opened (Tynn #839): Tynn's landing page opens `genie://workstation/open?id=…[&workspace=…][&name=…]`
+ * (WorkstationController::genieWorkspaceDeepLink) — the workstation to open over the Tynn relay. Anything else, or an id
+ * that is not a workstation id, is not one.
+ */
+export function workstationOpenFrom(url: string): { id: string; workspace: string | null; name: string | null } | null {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return null;
+    }
+    if (parsed.protocol !== 'genie:' || parsed.hostname !== 'workstation' || parsed.pathname !== '/open') return null;
+    const id = parsed.searchParams.get('id');
+    if (id === null || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+    const workspace = parsed.searchParams.get('workspace');
+    const name = parsed.searchParams.get('name');
+    return { id, workspace: workspace || null, name: name || null };
+}
