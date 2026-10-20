@@ -30,6 +30,7 @@ import { connectRemote, type RemoteClient, type RemoteState } from './remote-bri
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { ipcRelayTransport, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
+import { HostPathPicker } from './components/HostPathPicker.js';
 import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
@@ -625,8 +626,13 @@ function DesktopApp({ bridge }: AppProps) {
               },
           }
         : null;
-    const previewAdd = () => {
-        void resolvedBridge?.workspaces.previewAdd().then((p) => { if (p.ok || p.reason !== 'no folder picked') setAddPreview(p); });
+    // ADD A WORKSPACE (Tynn #835): the folder is picked over the HOST's disk — the remote machine's, when this window
+    // drives one — then the plan is shown before anything is written.
+    const [picking, setPicking] = useState(false);
+    const previewAdd = () => { if (resolvedBridge?.host) setPicking(true); };
+    const previewPicked = (path: string) => {
+        setPicking(false);
+        void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview);
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
@@ -1161,6 +1167,9 @@ function DesktopApp({ bridge }: AppProps) {
                 whatsNew={features.whatsNew}
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
             />
+        ) : null}
+        {picking && resolvedBridge?.host ? (
+            <HostPathPicker mode="directory" title="Add a workspace: pick its folder" listDir={(path) => resolvedBridge.host!.listDir(path)} onPick={(p) => previewPicked(String(p))} onCancel={() => setPicking(false)} />
         ) : null}
         {share && shares ? (
             <ShareWorkspaceModal

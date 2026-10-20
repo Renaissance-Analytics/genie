@@ -30,6 +30,35 @@ export interface HostApi {
     /** Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`. */
     onEvent(listener: (channel: string, payload: unknown) => void): () => void;
     workspaceOfAgent(agentId: string): string | null;
+    /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
+    workspacePaths?(): Readonly<Record<string, string>>;
+}
+
+/** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.confirmAddFromGit', 'workspaces.confirmAddFromTynn'];
+
+/** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
+function normalizedPath(p: string): string {
+    const out: string[] = [];
+    for (const seg of p.replace(/\\/g, '/').split('/')) {
+        if (seg === '' || seg === '.') continue;
+        if (seg === '..') out.pop();
+        else out.push(seg);
+    }
+    const drive = /^[A-Za-z]:$/.test(out[0] ?? '');
+    return drive ? `${out.join('/')}` : `/${out.join('/')}`;
+}
+
+/**
+ * Is `path` the folder `root` or inside it (not a sibling that merely starts with its name)? Case is ignored only on a
+ * Windows drive path: on Linux `/w/TYNN` is a different folder, and treating it as `/w/tynn` would let a guest out.
+ */
+function within(path: string, root: string): boolean {
+    const windows = /^[A-Za-z]:/.test(normalizedPath(root));
+    const fold = (s: string) => (windows ? s.toLowerCase() : s);
+    const p = fold(normalizedPath(path));
+    const r = fold(normalizedPath(root)).replace(/\/$/, '');
+    return p === r || p.startsWith(`${r}/`);
 }
 
 interface Connection {
@@ -245,8 +274,16 @@ export class RemoteHost {
         if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
         // Only the owner changes the host itself — a guest of the whole host included.
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
+        if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
+        // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
+        if (!auth.isOwner && method === 'host.listDir') {
+            const paths = this.#api.workspacePaths?.() ?? {};
+            const roots = auth.workspaceId !== null ? [paths[auth.workspaceId]].filter((p): p is string => typeof p === 'string') : Object.values(paths);
+            const target = String(args[0] ?? '');
+            if (!roots.some((r) => within(target, r))) return refuse(`${target} is outside what this link shares`);
+        }
         if (capability === 'host-only') {
-            if (method === 'addWorkspace' || method === 'workspaces.previewAdd') return refuse(`${method} opens a folder picker on ${this.#hostName}; do it there`);
+            if (method === 'addWorkspace') return refuse(`${method} opens a folder picker on ${this.#hostName}; do it there`);
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);
             return refuse(`${method} places a view on ${this.#hostName}'s own window; there is nothing to do remotely`);
         }

@@ -60,7 +60,8 @@ describe('the capability table', () => {
         // 59 since `workspaces.tynnProjects` (From Tynn picks from the signed-in person's projects, 2026-10-19): host-only
         // like the preview it leads to — the folder picker after it is the host's.
         // 60 since `workspaces.setDefaultAgent` (Genie 1's default agent, 2026-10-19): a write, workspace-scoped like setGoverns.
-        expect(REMOTE_METHODS.length).toBe(60);
+        // 61 since `host.listDir` (Tynn #835: every file and folder picker reads the HOST's disk): a read; a guest only inside its workspace(s).
+        expect(REMOTE_METHODS.length).toBe(61);
         expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setDefaultAgent');
         expect(capabilityOf('workspaces.tynnProjects')).toBe('host-only');
@@ -72,7 +73,9 @@ describe('the capability table', () => {
         expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('host-only');
         expect(capabilityOf('workspaces.confirmAddFromTynn')).toBe('write');
         expect(capabilityOf('inbox.sendFile')).toBe('write');
-        expect(capabilityOf('workspaces.previewAdd')).toBe('host-only');
+        // Tynn #835: the folder is picked in the window (FileBrowser over the host's own disk), so the preview reads a path.
+        expect(capabilityOf('workspaces.previewAdd')).toBe('read');
+        expect(capabilityOf('host.listDir')).toBe('read');
         expect(capabilityOf('workspaces.hibernate')).toBe('write');
         expect(capabilityOf('agents.restart')).toBe('write');
         expect(capabilityOf('agents.diagnose')).toBe('read');

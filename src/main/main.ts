@@ -39,6 +39,7 @@ import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
+import { listHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
@@ -1280,13 +1281,10 @@ async function boot(): Promise<void> {
     // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
     ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
         (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-preview-add', async () => {
-        if (!window) return { ok: false, reason: 'no window to pick a folder from' };
-        const picked = await dialog.showOpenDialog(window, { title: 'Add a workspace', properties: ['openDirectory'] });
-        const path = picked.filePaths[0];
-        if (picked.canceled || !path) return { ok: false, reason: 'no folder picked' };
-        return previewAddWorkspace(workspaceOps, path);
-    });
+    // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
+    ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
+        (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
+    ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     ipcMain.handle('genie:workspace-preview-add-git', async (_event, rawUrl: unknown) => {
         if (typeof rawUrl !== 'string' || !window) return { ok: false, reason: 'give a git URL' };
@@ -1490,6 +1488,7 @@ async function boot(): Promise<void> {
             uploads: uploadSender({ dir: join(genieHome(), 'uploads'), resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
+                previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),

@@ -81,7 +81,7 @@ const bridge: GenieBridge = {
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     workspaces: {
-        previewAdd: () => ipcRenderer.invoke('genie:workspace-preview-add') as never,
+        previewAdd: (path) => ipcRenderer.invoke('genie:workspace-preview-add', path) as never,
         confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
         previewAddFromGit: (url) => ipcRenderer.invoke('genie:workspace-preview-add-git', url) as never,
         confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
@@ -162,6 +162,8 @@ const bridge: GenieBridge = {
 
     // A known remote host in its own window (Tynn #819).
     remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
+    // This machine's disk, one folder at a time, for every picker (Tynn #835).
+    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
