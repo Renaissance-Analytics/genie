@@ -65,6 +65,7 @@ export const REMOTE_METHODS = [
     'features.act',
     'features.setBrowserBounds',
     'updates.state',
+    'host.listDir',
     'updates.check',
     'updates.download',
     'updates.install',
@@ -109,7 +110,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setPermissions': 'write',
     'agents.setModel': 'write',
     'agents.diagnose': 'read',
-    'workspaces.previewAdd': 'host-only',
+    // Tynn #835: the folder is picked IN THE WINDOW (a FileBrowser over the host's own disk); the preview reads a path.
+    'workspaces.previewAdd': 'read',
+    // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
+    'host.listDir': 'read',
     'workspaces.confirmAdd': 'write',
     'workspaces.previewAddFromGit': 'host-only',
     'workspaces.confirmAddFromGit': 'write',

@@ -1,3 +1,4 @@
+import { listHostDir } from './host-fs.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { CancelOutcome } from '../core/session.js';
@@ -52,6 +53,8 @@ export interface HostApiDeps {
     };
     serviceEnvFor(workspaceId: string): Record<string, string>;
     workspaceOps: {
+        /** The plan for adding the folder picked in the window (Tynn #835) — nothing is written. */
+        previewAdd?(path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
@@ -174,7 +177,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.diagnose':
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':
-                throw new Error('workspaces.previewAdd opens a folder picker on the host; do it there');
+                if (!deps.workspaceOps.previewAdd) throw new Error('this host cannot preview adding a folder');
+                return deps.workspaceOps.previewAdd(str(args[0]));
             case 'workspaces.previewAddFromGit':
                 throw new Error('workspaces.previewAddFromGit opens a folder picker on the host; do it there');
             case 'workspaces.confirmAddFromGit':
@@ -256,6 +260,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.features.snapshot();
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction);
+            case 'host.listDir':
+                return listHostDir(str(args[0]));
             case 'updates.state':
                 return deps.updates?.state() ?? null;
             case 'updates.check':
@@ -272,6 +278,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     return {
         invoke,
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
+        workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
         onEvent: (listener) => {
             const offs = [
                 deps.subscribeSnapshot((s) => listener('snapshot', s)),

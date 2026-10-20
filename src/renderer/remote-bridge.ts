@@ -152,7 +152,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         addWorkspace: () => fire('addWorkspace'),
         takeOver: (agentId) => answer<{ ok: true; terminalId: string }>('takeOver', agentId),
         workspaces: {
-            previewAdd: () => answer('workspaces.previewAdd'),
+            previewAdd: (path) => answer('workspaces.previewAdd', path),
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
             previewAddFromGit: () => answer('workspaces.previewAddFromGit'),
             confirmAddFromGit: (url, parent) => answer('workspaces.confirmAddFromGit', url, parent),
@@ -216,6 +216,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             // Nor the host's sound files: the alert plays its own sound here.
             soundData: async () => null,
         },
+        // The REMOTE host's disk, for every picker in this window (Tynn #835).
+        host: { listDir: (path: string) => answer('host.listDir', path) as never },
         updates: {
             state: () => read<UpdateState>('updates.state'),
             subscribe: (onChange) => on('updates', (p) => onChange(p as UpdateState)),
