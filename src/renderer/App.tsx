@@ -8,7 +8,7 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
-import { openAgentTabs as nextOpenAgentTabs, parseTabs } from '../core/workspace-tabs.js';
+import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
@@ -611,32 +611,6 @@ function DesktopApp({ bridge }: AppProps) {
         if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
     }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
-    // THE AGENTS OPEN AS TABS, per workspace (Tynn #805): the one you open joins its workspace's strip; closing the one you
-    // are on returns you to the workspace.
-    const [openAgentIds, setOpenAgentIds] = useState<Readonly<Record<string, readonly string[]>>>({});
-    const onAgentId = parsed.surface === 'agent' ? parsed.agentId : null;
-    useEffect(() => {
-        if (!workspaceId) return;
-        const roster = snapshot.agents.filter((a) => a.workspaceId === workspaceId).map((a) => a.id);
-        setOpenAgentIds((all) => {
-            const next = nextOpenAgentTabs(all[workspaceId] ?? [], onAgentId, roster);
-            const prev = all[workspaceId] ?? [];
-            return next.length === prev.length && next.every((id, i) => id === prev[i]) ? all : { ...all, [workspaceId]: next };
-        });
-    }, [workspaceId, onAgentId, snapshot.agents]);
-    const openAgentTabs = workspaceId
-        ? {
-              workspaceId,
-              agents: (openAgentIds[workspaceId] ?? []).flatMap((id) => {
-                  const a = snapshot.agents.find((x) => x.id === id);
-                  return a ? [{ id: a.id, name: a.name, state: a.state }] : [];
-              }),
-              onClose: (id: string) => {
-                  setOpenAgentIds((all) => ({ ...all, [workspaceId]: (all[workspaceId] ?? []).filter((x) => x !== id) }));
-                  if (onAgentId === id) navigate(`genie://workspace/${workspaceId}`);
-              },
-          }
-        : null;
     // ADD A WORKSPACE (Tynn #835): the folder is picked over the HOST's disk — the remote machine's, when this window
     // drives one — then the plan is shown before anything is written.
     // THE WINDOW'S ONE PICKER (Tynn #835): every file and folder is chosen over the HOST's disk — the remote machine's
@@ -892,7 +866,8 @@ function DesktopApp({ bridge }: AppProps) {
     const chatBase = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
     const chatThread: ChatThread | null = chatBase === null
         ? null
-        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts);
+        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });
+    const discardDraft = (draftId: string): void => setDrafts((d) => d.filter((x) => x.id !== draftId));
 
     // SAVED PROMPTS (Tynn #758): the library from Settings → Agents, sent from the Command Window or by a prompt's own
     // hotkey to the agent in front of the person — its chat if open, else the agent on screen, else Genie — and that chat
@@ -1049,6 +1024,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             onSend={(id, text, attachments) => { if (id) send(id, text, attachments ?? []); }}
             onRestartAndSend={restartAndSend}
+            onDiscardDraft={discardDraft}
             answeringApproval={answering}
             onAnswerApproval={(optionId) => {
                 if (!agentId) return;
@@ -1101,7 +1077,6 @@ function DesktopApp({ bridge }: AppProps) {
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}
-            openAgentTabs={openAgentTabs}
             onOpenAgent={(id) => {
                 // Start or reattach, THEN navigate. Reattach is the main process's job and is
                 // idempotent, so arriving at an agent that is already running is not a second

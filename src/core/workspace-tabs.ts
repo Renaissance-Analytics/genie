@@ -82,23 +82,13 @@ export function workspaceViewRoute(workspaceId: string, view: string): string {
     return base.surface === 'workspace' ? formatRoute({ ...base, view: view as WorkspaceView }) : `genie://workspace/${encodeURIComponent(workspaceId)}`;
 }
 
-/** How many agents stay open as tabs in one workspace's strip. */
-export const MAX_OPEN_AGENTS = 6;
-
 /**
- * The agents open as tabs in a workspace, in the order opened (Tynn #805): the one you are on joins at the end, once;
- * an agent no longer in the workspace drops out; past MAX_OPEN_AGENTS the oldest gives way — never the current one.
+ * A workspace's agent tabs: EVERY agent of the workspace, in roster order, running or not (the owner, 2026-10-20: "I
+ * have no fucking way to select different agents now"). The strip is an agent's door — the Dashboard shows only the
+ * running ones — so a tab per agent you happened to open left a stopped agent unreachable, and after an upgrade, all.
  */
-export function openAgentTabs(prev: readonly string[], current: string | null, roster: readonly string[]): string[] {
-    const present = new Set(roster);
-    let open = prev.filter((id) => present.has(id));
-    if (current !== null && present.has(current) && !open.includes(current)) open = [...open, current];
-    while (open.length > MAX_OPEN_AGENTS) {
-        const drop = open.findIndex((id) => id !== current);
-        if (drop < 0) break;
-        open = [...open.slice(0, drop), ...open.slice(drop + 1)];
-    }
-    return open;
+export function agentTabsOf<A extends { id: string; name: string; workspaceId: string; state: string }>(roster: readonly A[], workspaceId: string): Array<{ id: string; name: string; state: string }> {
+    return roster.filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name, state: a.state }));
 }
 
 function freshId(state: TabsState): string {

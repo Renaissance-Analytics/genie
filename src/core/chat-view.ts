@@ -51,6 +51,8 @@ export interface ChatMessage {
     attachments?: readonly string[];
     /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
     reason?: string;
+    /** An undelivered draft only: how it is sent now — `send` while its agent runs again, else `restart` (start it, then send). */
+    resend?: 'send' | 'restart';
 }
 
 
@@ -245,19 +247,25 @@ export interface Draft {
 }
 
 /**
- * The thread with THIS agent's undelivered drafts appended after the wire messages, as `you`, not delivered. The
- * flyout marks them and offers `Restart <agent> and send`; showing them as sent would have someone wait for an answer
- * that cannot come, and dropping them loses what they wrote.
+ * The thread with THIS agent's undelivered drafts, as `you`, not delivered, each WHERE IT WAS WRITTEN — before any later
+ * message (the owner, 2026-10-20: a draft appended after everything sat under the newer messages, "stuck on my screen").
+ * `running`: the agent runs now, so a draft is sent as it is (`Send now`); otherwise it is started first (`Restart <agent>
+ * and send`). Showing a draft as sent would have someone wait for an answer that cannot come; dropping it loses what
+ * they wrote — so it stays until it is sent or discarded.
  */
-export function withDrafts<T extends { agentId: string; messages: readonly ChatMessage[] }>(thread: T, drafts: readonly Draft[]): T {
-    const mine = drafts.filter((d) => d.agentId === thread.agentId);
+export function withDrafts<T extends { agentId: string; messages: readonly ChatMessage[] }>(thread: T, drafts: readonly Draft[], opts: { running?: boolean } = {}): T {
+    const mine = drafts.filter((d) => d.agentId === thread.agentId).sort((a, b) => a.at - b.at);
     if (mine.length === 0) return thread;
-    return {
-        ...thread,
-        messages: [...thread.messages, ...mine.map((d): ChatMessage => ({
-            id: d.id, who: 'you', from: 'you', text: d.text, delivered: false, at: d.at,
-            ...(d.attachments && d.attachments.length > 0 ? { attachments: d.attachments.map((a) => a.name) } : {}),
-            ...(d.reason ? { reason: d.reason } : {}),
-        }))],
-    };
+    const pending = mine.map((d): ChatMessage => ({
+        id: d.id, who: 'you', from: 'you', text: d.text, delivered: false, at: d.at, resend: opts.running === true ? 'send' : 'restart',
+        ...(d.attachments && d.attachments.length > 0 ? { attachments: d.attachments.map((a) => a.name) } : {}),
+        ...(d.reason ? { reason: d.reason } : {}),
+    }));
+    const messages: ChatMessage[] = [];
+    for (const m of thread.messages) {
+        // A wire message with no time keeps its place; it never pulls a draft past it.
+        if (m.at !== null) while (pending.length > 0 && pending[0]!.at! < m.at) messages.push(pending.shift()!);
+        messages.push(m);
+    }
+    return { ...thread, messages: [...messages, ...pending] };
 }

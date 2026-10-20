@@ -43,7 +43,7 @@ export interface ChatThread {
     /** `null` when the count could not be read — never `0`, which claims you are up to date. */
     unread: number | null;
     /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
-    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason'>>)[];
+    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend'>>)[];
     /** The line under the header — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
     /** The subject's own conversation is loaded (`core/chat-view.ts`); absent = not said, drawn as not loaded. */
@@ -91,6 +91,8 @@ export interface ChatFlyoutProps {
     onClose?: (() => void) | undefined;
     /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
+    /** Put an undelivered draft away, unsent (the owner, 2026-10-20: it was "stuck on my screen"). */
+    onDiscardDraft?: ((draftId: string) => void) | undefined;
     /**
      * Present = a turn is running AND it can be stopped with the agent kept (`turnStopOffered`): `Stop this turn` sits on
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
@@ -129,7 +131,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onOpenFile, onRestartAndSend, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onRestartAndSend, onDiscardDraft, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -375,8 +377,14 @@ export function ChatFlyout({
                             ) : null}
                             {m.delivered ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
-                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? `${thread?.name ?? 'the agent'} is not running.`}</span>
-                                    {m.reason ? null : <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>}
+                                    {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
+                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
+                                    <div className="flex items-center gap-1.5">
+                                        {onDiscardDraft ? <button type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</button> : null}
+                                        {m.reason ? null : m.resend === 'send'
+                                            ? <button type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</button>
+                                            : <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>}
+                                    </div>
                                 </div>
                             )}
                         </div>
