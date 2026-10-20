@@ -13,6 +13,7 @@ import { flowNodes } from '../core/flow-form.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
+import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
@@ -24,7 +25,7 @@ import {
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -147,7 +148,14 @@ export interface FeatureState {
     /** What the last Tailscale Connect or Install did (Tynn #821), in words. */
     tailscaleOutcome?: string | null;
     lastSync?: { workspaceId: string; results: readonly SyncResult[] } | null;
+    /** Transient: the thread an `inbox.thread` action asked for, served in its answer only. */
+    inboxThread?: InboxThreadView | null;
+    /** Transient: an attachment's bytes an `inbox.attachment` action asked for, served once. */
+    servedAttachment?: { id: string; name: string; base64: string } | null;
 }
+
+/** The most of one thread an `inbox.thread` action serves at once. */
+const INBOX_THREAD_MAX = 2_000;
 
 /** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
 export function toolchainSection(state: FeatureState): ToolchainSection | null {
@@ -279,7 +287,11 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const hits = state.knowledgeQuery
         ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits
         : services.knowledge.list({ scopes: 'all', limit: 200 }).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
-    const peers = services.agentAddresses().map((a) => ({ address: a.address, name: a.name, reachable: true }));
+    const roster = services.agentAddresses();
+    const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
+    // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
+    const mail = services.inbox.all();
+    const nameOf = participantNamer(roster);
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
@@ -290,7 +302,12 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
-        inbox: { unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200) },
+        inbox: {
+            unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200),
+            threads: inboxThreads(mail, nameOf), uncollected: uncollected(mail),
+            // Served in the answer to the action that asked, once — never in a pushed snapshot.
+            thread: state.inboxThread ?? null, servedAttachment: state.servedAttachment ?? null,
+        },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         integrations: { ...tynnIntegration(services, state, ports.tynnAccount), ...services.integrations(), lastSync: state.lastSync ?? null },
@@ -319,6 +336,11 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 }
 
 const USER = { kind: 'user' } as const;
+
+/** A participant by name: the person is `you`, an agent its roster name, one no longer here its id. */
+function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>): (participant: string) => string {
+    return (participant) => (participant === HUMAN ? 'you' : roster.find((a) => a.agentId === participant)?.name ?? participant);
+}
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */
 function agentProblems(services: ComposedServices, document: unknown): Problem[] {
@@ -762,6 +784,33 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (target.kind === 'human') throw new Error('that is you');
             // One unreadable or executable path fails the whole send; the store says which (§6.4).
             await services.inbox.send({ from: HUMAN, to: target.id, text: action.text, ...(action.attachments && action.attachments.length > 0 ? { attachments: action.attachments } : {}) });
+            break;
+        }
+        // THE AGENTINBOX FLYOUT (beta.33 item 19). A thread's history, by its key or by a message in it (a chat's mail row).
+        case 'inbox.thread': {
+            const mail = services.inbox.all();
+            const key = action.key ?? (action.messageId ? threadKeyOfMessage(mail, action.messageId) : null);
+            if (!key) throw new Error(action.messageId ? `no message ${action.messageId}` : 'which thread?');
+            const limit = Math.min(Math.max(action.limit, 1), INBOX_THREAD_MAX);
+            const t = threadOf(mail, key, limit);
+            next.inboxThread = { key, messages: t.messages, more: t.more, limit, focus: action.messageId ?? null };
+            break;
+        }
+        case 'inbox.markAllRead': {
+            // The person's own receive, to the end: the only thing that marks mail read.
+            const n = services.inbox.unread(HUMAN).length;
+            if (n > 0) await services.inbox.receive({ participant: HUMAN, limit: n });
+            break;
+        }
+        case 'inbox.attachment': {
+            const a = await services.inbox.attachmentForPerson(action.attachmentId);
+            next.servedAttachment = { id: action.attachmentId, name: a.name, base64: a.bytes.toString('base64') };
+            break;
+        }
+        case 'inbox.deleteThread': {
+            const pair = pairOf(action.key);
+            if (!pair) throw new Error(`${action.key} is not a thread`);
+            await services.inbox.deleteThread(pair[0] as never, pair[1] as never);
             break;
         }
         case 'inbox.markRead': {

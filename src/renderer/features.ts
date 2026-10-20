@@ -23,6 +23,33 @@ export type { FrontDoorStatus };
 import type { HostedProcess } from '../main/process-book.js';
 import type { RestartPolicy } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
+import type { ThreadSummary } from '../core/inbox-threads.js';
+
+/**
+ * The AgentInbox (beta.33 item 19): the person's unread mail, who can be written to, the person's own conversation
+ * (`recent`, an observed agent's chat), every thread (core/inbox-threads.ts), and the mail agents have not collected.
+ * `thread` and `servedAttachment` are in the ANSWER to the action that asked for them only — never in a pushed snapshot.
+ */
+export interface InboxSection {
+    readonly unread: readonly InboxMessage[];
+    readonly peers: readonly { address: string; agentId?: string | undefined; name: string; reachable: boolean }[];
+    readonly recent: readonly InboxMessage[];
+    readonly threads?: readonly ThreadSummary[] | undefined;
+    /** Mail every agent has not collected (Genie 1's lag badge). */
+    readonly uncollected?: number | undefined;
+    readonly thread?: InboxThreadView | null | undefined;
+    readonly servedAttachment?: { id: string; name: string; base64: string } | null | undefined;
+}
+
+/** One thread's history as the `inbox.thread` action answers it: the newest `limit`, and whether older ones exist. */
+export interface InboxThreadView {
+    readonly key: string;
+    readonly messages: readonly InboxMessage[];
+    readonly more: boolean;
+    readonly limit: number;
+    /** The message the thread was opened on (a chat's mail row), when it was. */
+    readonly focus: string | null;
+}
 
 /**
  * WHAT THE FEATURE SURFACES RENDER FROM — the renderer's view of the stores, crossed over the
@@ -205,7 +232,7 @@ export interface FeatureData {
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null } | null;
     readonly toolchain: ToolchainSection | null;
-    readonly inbox: { unread: readonly InboxMessage[]; peers: readonly { address: string; name: string; reachable: boolean }[]; recent: readonly InboxMessage[] } | null;
+    readonly inbox: InboxSection | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
     /** The Genie Browser: the page it shows (each .gen site at its own https origin), this machine's sites, and its history. */
     readonly browser: { url: string | null; routes: readonly GenRoute[]; canGoBack: boolean; canGoForward: boolean };
@@ -332,6 +359,12 @@ export type FeatureAction =
     /** Attachments are host paths from the host's own picker; the store keeps BYTE COPIES, never the path. */
     | { kind: 'inbox.send'; to: string; text: string; attachments?: readonly string[] }
     | { kind: 'inbox.markRead'; messageId: string }
+    /** A thread's history, by its key or by a message in it; answered in `inbox.thread`, never pushed. */
+    | { kind: 'inbox.thread'; key?: string; messageId?: string; limit: number }
+    | { kind: 'inbox.markAllRead' }
+    /** An attachment's bytes for the person, answered once in `inbox.servedAttachment`. */
+    | { kind: 'inbox.attachment'; attachmentId: string }
+    | { kind: 'inbox.deleteThread'; key: string }
     | { kind: 'settings.set'; key: string; value: boolean | string }
     /** Pick your own sound file for an alert (Tynn #766 B2): the host's picker; the alert is set to Custom file. */
     | { kind: 'settings.setSoundFile'; key: string; path: string }

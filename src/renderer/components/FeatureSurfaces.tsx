@@ -853,80 +853,12 @@ export interface InboxCompose {
     readonly onClear?: (() => void) | undefined;
 }
 
-const baseName = (p: string): string => p.split(/[\\/]/).pop() ?? p;
 
 /** 2048 → "2.0 kB"; 14 → "14 B"; honest units, one decimal above bytes. */
 export function formatSize(bytes: number): string {
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} kB`;
     return `${bytes} B`;
-}
-
-export function InboxSurface({ data, onAction, compose }: SurfaceProps & { compose?: InboxCompose | undefined }) {
-    const inbox = data.inbox;
-    const reachable = inbox?.peers.filter((p) => p.reachable) ?? [];
-    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
-    return (
-        <div data-surface="inbox" className="flex h-full min-h-0 flex-col">
-            <Header title="AgentInbox" />
-            {inbox === null ? (
-                <Skeletons />
-            ) : inbox.unread.length === 0 ? (
-                <Empty>No messages waiting. {inbox.peers.length > 0 ? `${inbox.peers.length} agents can be reached.` : ''}</Empty>
-            ) : (
-                <ul className="divide-y divide-[var(--border-1)]">
-                    {inbox.unread.map((m) => (
-                        <li key={m.id} data-message={m.id} className="flex items-start gap-3 px-5 py-2">
-                            <span className="font-mono text-xs text-[var(--fg-4)]">{m.from}</span>
-                            <span className="flex-1 text-sm">{m.text}</span>
-                            {m.attachments.length > 0 ? (
-                                <ul className="flex flex-wrap gap-1">
-                                    {m.attachments.map((a) => (
-                                        <li key={a.id} data-attachment={a.id} className="rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]">{a.name} <span className="text-[var(--fg-4)]">{formatSize(a.size)}</span></li>
-                                    ))}
-                                </ul>
-                            ) : null}
-                            <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'inbox.markRead', messageId: m.id })}>Mark read</button>
-                        </li>
-                    ))}
-                </ul>
-            )}
-            {inbox !== null ? (
-                <form data-form="inbox-send" className="mt-auto flex flex-col gap-2 border-t border-[var(--border-1)] px-5 py-3 text-sm" onSubmit={(e) => {
-                    e.preventDefault();
-                    const d = new FormData(e.currentTarget);
-                    const to = String(d.get('to') ?? '');
-                    const text = String(d.get('text') ?? '').trim();
-                    if (!to || !text) return;
-                    onAction({ kind: 'inbox.send', to, text, ...(compose && compose.attachments.length > 0 ? { attachments: compose.attachments } : {}) });
-                    e.currentTarget.reset();
-                    compose?.onClear?.();
-                }}>
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs text-[var(--fg-3)]">To</span>
-                        <select name="to" className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 text-xs" disabled={reachable.length === 0}>
-                            {reachable.map((p) => <option key={p.address} value={p.address}>{p.name} · {p.address}</option>)}
-                        </select>
-                        {reachable.length === 0 ? <span className="text-xs text-[var(--fg-4)]">no agent can be reached from here</span> : null}
-                        <span className="ml-auto" />
-                        {compose ? <button type="button" data-action="attach-files" className={button} onClick={compose.onPick}>Attach…</button> : null}
-                        <button type="submit" className={button} disabled={reachable.length === 0}>Send</button>
-                    </div>
-                    {compose && compose.attachments.length > 0 ? (
-                        <ul className="flex flex-wrap gap-1">
-                            {compose.attachments.map((p) => (
-                                <li key={p} data-attached={baseName(p)} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px]">
-                                    {baseName(p)}
-                                    <button type="button" data-action="remove-attachment" aria-label={`remove ${baseName(p)}`} onClick={() => compose.onRemove(p)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : null}
-                    <Input name="text" placeholder="Message — the agent reads it with agentinbox receive; attachments arrive as byte copies" />
-                </form>
-            ) : null}
-        </div>
-    );
 }
 
 

@@ -99,9 +99,23 @@ function withQuery(path: string, params: URLSearchParams): string {
     return q ? `genie://${path}?${q}` : `genie://${path}`;
 }
 
-/** The internal route as its address; left as it is when Genie cannot name it. */
+/** `?inbox=<v>` (or `&inbox=<v>`) on the end of a route or address: the AgentInbox flyout rides every page. */
+function withInbox(target: string, inbox: string | null): string {
+    if (inbox === null) return target;
+    const p = new URLSearchParams();
+    p.set('inbox', inbox);
+    return `${target}${target.includes('?') ? '&' : '?'}${p.toString()}`;
+}
+
+/** The internal route as its address; left as it is when Genie cannot name it. The AgentInbox flyout rides along. */
 export function addressOf(internal: string, ctx: AddressContext): string {
     const r: Route = parseRoute(internal);
+    const base = addressOfPage(r, internal, ctx);
+    // Left as it is (Genie cannot name it): the internal route already carries its own `inbox=`.
+    return base === internal ? base : withInbox(base, r.inbox ?? null);
+}
+
+function addressOfPage(r: Route, internal: string, ctx: AddressContext): string {
     const ws = ctx.workstation;
     const params = new URLSearchParams();
     switch (r.surface) {
@@ -164,7 +178,17 @@ export function addressOf(internal: string, ctx: AddressContext): string {
 
 /** The address as the internal route; an OLD address as it is; `null` when it names nothing here. */
 export function routeOfAddress(address: string, ctx: AddressContext): string | null {
-    const m = /^genie:\/\/([^?]*)(?:\?(.*))?$/.exec(address.trim());
+    const internal = routeOfPage(address, ctx);
+    if (internal === null || internal === address.trim()) return internal;
+    const query = address.trim().split('?')[1] ?? '';
+    const params = new URLSearchParams(query);
+    // The page's own route may already say it (`…/inbox` opens the flyout): never twice.
+    if (parseRoute(internal).inbox !== undefined) return internal;
+    return withInbox(internal, params.has('inbox') ? params.get('inbox') ?? '' : null);
+}
+
+function routeOfPage(address: string, ctx: AddressContext): string | null {
+    const m =/^genie:\/\/([^?]*)(?:\?(.*))?$/.exec(address.trim());
     if (!m) return null;
     const segs = (m[1] ?? '').split('/').filter(Boolean);
     const query = m[2] ?? '';
@@ -194,7 +218,9 @@ export function routeOfAddress(address: string, ctx: AddressContext): string | n
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;
         case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login']))}` : null;
-        case 'knowledge': case 'flows': case 'toolchain': case 'inbox': return `genie://${second}`;
+        case 'knowledge': case 'flows': case 'toolchain': return `genie://${second}`;
+        // The AgentInbox was a page; its address opens the flyout over the Dashboard.
+        case 'inbox': return `genie://dashboard?group=workspace&inbox=${encodeURIComponent(params.get('inbox') ?? '')}`;
         case 'genie': {
             const os = ctx.agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === 'genie');
             return os ? agentRoute(os, third) : agentRoute({ id: 'genie', name: 'genie', workspaceId: OS_WORKSPACE }, third);

@@ -1022,6 +1022,8 @@ function DesktopApp({ bridge }: AppProps) {
                     console.error('[genie] feature action refused:', (error as Error).message);
                 });
             }}
+            // The AgentInbox flyout reads its actions' answers (a thread, an attachment) and a send's refusal.
+            featureAsk={(action) => (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => { setFeatures(data); return data; })}
             onSend={(id, text, attachments) => { if (id) send(id, text, attachments ?? []); }}
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}

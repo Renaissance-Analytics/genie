@@ -43,6 +43,12 @@ export type Pin = 'right';
 interface Common {
     chat: string | null;
     pin: Pin | null;
+    /**
+     * THE AGENTINBOX FLYOUT, over whatever page is open (beta.33 item 19: "the agentinbox should not be a page"):
+     * `''` = open on its threads, a thread key (`human|agent_x`) or a message id (`msg_…`) = open on that one. Absent or
+     * `null` = closed. Optional, so a route without it reads exactly as before.
+     */
+    inbox?: string | null;
 }
 
 export type DashboardGroup = 'workspace' | 'status';
@@ -60,7 +66,7 @@ function workspaceViewOf(raw: string | null): WorkspaceView {
 /** The Stream's two layouts (the board): the ledger, or one card per turn. */
 export type StreamLayout = 'ledger' | 'turns';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
-export type PlainFeature = 'knowledge' | 'flows' | 'toolchain' | 'inbox';
+export type PlainFeature = 'knowledge' | 'flows' | 'toolchain';
 /** Hosting's three tabs: `?tab=` opens it on one (the tray's Task Manager…, Tynn #761); absent = Sites. */
 export type HostingTab = 'sites' | 'processes' | 'services';
 const HOSTING_TABS: readonly HostingTab[] = ['sites', 'processes', 'services'];
@@ -104,7 +110,7 @@ export type Route =
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
-const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'toolchain', 'inbox'];
+const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'toolchain'];
 
 function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };
@@ -141,6 +147,7 @@ export function parseRoute(input: string): Route {
     const common: Common = {
         chat: params.get('chat') || null,
         pin: params.get('pin') === 'right' ? 'right' : null,
+        ...(params.has('inbox') ? { inbox: params.get('inbox') ?? '' } : {}),
     };
 
     switch (head) {
@@ -217,6 +224,10 @@ export function parseRoute(input: string): Route {
             return { surface: 'hosting', ...(HOSTING_TABS.includes(tab as HostingTab) ? { tab: tab as HostingTab } : {}), ...common };
         }
 
+        // The AgentInbox is a flyout now, not a page: an old link to the page opens the flyout over the Dashboard.
+        case 'inbox':
+            return dashboard('workspace', { ...common, inbox: common.inbox ?? '' });
+
         default:
             if (PLAIN_FEATURES.includes(head as PlainFeature)) return { surface: head as PlainFeature, ...common };
             return dashboard('workspace', common);
@@ -265,6 +276,7 @@ export function formatRoute(route: Route): string {
 
     if (route.chat) params.set('chat', route.chat);
     if (route.pin) params.set('pin', route.pin);
+    if (route.inbox !== undefined && route.inbox !== null) params.set('inbox', route.inbox);
 
     const path =
         route.surface === 'agent' ? `agent/${route.agentId}`

@@ -66,9 +66,15 @@ export interface TitleBarProps {
     platform?: FancyPlatform | undefined;
     /** The Command Window's key as set (core/hotkeys.ts); absent = Genie's default. A disabled one is absent too. */
     paletteKey?: string | undefined;
+    /**
+     * THE AGENTINBOX, among the header's system icons (beta.33 item 19; the owner: "accessible from the header system icons
+     * just like it was in genie 1"): `unread` is the person's unread mail, drawn as a count on the icon; `null` = not read
+     * yet (no count, never a 0). Absent = this window has no AgentInbox to open.
+     */
+    inbox?: { unread: number | null; open: boolean; onToggle: () => void } | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -147,6 +153,26 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                         </button>
                     </Tooltip>
                 ))}
+                {inbox ? (
+                    <Tooltip content={inbox.unread ? `AgentInbox · ${inbox.unread} unread` : 'AgentInbox'} placement="bottom">
+                        <button
+                            type="button"
+                            data-feature="AgentInbox"
+                            data-inbox-icon={inbox.open ? 'open' : 'closed'}
+                            aria-label={inbox.unread ? `AgentInbox, ${inbox.unread} unread` : 'AgentInbox'}
+                            aria-pressed={inbox.open}
+                            onClick={inbox.onToggle}
+                            className={`[-webkit-app-region:no-drag] relative flex size-6 items-center justify-center rounded-md hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] ${inbox.open ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}
+                        >
+                            <Icon name="mail" size="sm" />
+                            {inbox.unread ? (
+                                <span data-inbox-badge={inbox.unread} className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-[var(--warning)] px-1 text-center font-mono text-[9px] leading-[14px] text-black">
+                                    {inbox.unread > 99 ? '99+' : inbox.unread}
+                                </span>
+                            ) : null}
+                        </button>
+                    </Tooltip>
+                ) : null}
             </div>
 
             <span data-route className="truncate font-mono text-[11px] text-[var(--fg-4)]">
