@@ -137,8 +137,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.resize': 'write',
     'terminals.close': 'write',
     'features.act': 'write',
-    'updates.check': 'write',
-    'updates.download': 'write',
+    // The whole upgrade is the OWNER acting on the host (Tynn #845): no baton, never a guest.
+    'updates.check': 'upgrade',
+    'updates.download': 'upgrade',
     'updates.install': 'upgrade',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',

@@ -33,7 +33,9 @@ describe('the capability table', () => {
         expect(capabilityOf('features.act')).toBe('write');
         expect(capabilityOf('terminals.write')).toBe('write');
         expect(capabilityOf('restartWithHandoff')).toBe('write');
-        expect(capabilityOf('updates.download')).toBe('write');
+        // Tynn #845: the upgrade is the owner's, all of it — no baton.
+        expect(capabilityOf('updates.check')).toBe('upgrade');
+        expect(capabilityOf('updates.download')).toBe('upgrade');
         expect(capabilityOf('updates.install')).toBe('upgrade');
         expect(capabilityOf('addWorkspace')).toBe('host-only');
         expect(capabilityOf('takeOver')).toBe('host-only');
