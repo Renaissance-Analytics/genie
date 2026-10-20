@@ -87,10 +87,12 @@ describe('AgentSession.stop — stdin first, a grace, then the kill, then a veri
         const s = sessionWith(t, d.factory);
         s.start();
 
-        const started = Date.now();
-        const verdict = await s.stop('SIGTERM', { graceMs: 150 });
+        const stopping = s.stop('SIGTERM', { graceMs: 150 });
+        // Inside the grace: stdin closed, nothing killed yet. (Read from the log, never a wall clock: a timer may fire a
+        // millisecond either side of Date.now on a loaded VM; the 2026-10-20 re-run failed this test once, and the wall-clock bound was its one such assertion.)
+        expect(log).toEqual(['start:941000', 'endInput:941000']);
+        const verdict = await stopping;
 
-        expect(Date.now() - started).toBeGreaterThanOrEqual(140);
         expect(log).toEqual(['start:941000', 'endInput:941000', 'kill:941000']);
         expect(t.alive(d.claude)).toBe(false);
         expect(verdict).toMatchObject({ verified: true });
