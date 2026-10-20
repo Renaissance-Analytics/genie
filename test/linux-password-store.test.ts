@@ -429,3 +429,32 @@ describe('applyLinuxPasswordStore — the launch hook', () => {
         expect(() => applyLinuxPasswordStore({ platform: 'linux', argv: [], probe: () => { throw new Error('no bus'); }, remembered: () => null, appendSwitch: () => {} })).not.toThrow();
     });
 });
+
+/**
+ * OMARCHY, MEASURED (Tynn #846; the two-VM proof, 2026-10-20, run 5). `busctl --user list` also lists ACTIVATABLE
+ * names — installed, NOT running: PID `-`, process `(activatable)`. Counted as owned, `org.kde.kwalletd6` won over the
+ * gnome-keyring that really owned `org.freedesktop.secrets`; Chromium then started a KWallet that answers nothing on
+ * Omarchy ("Error contacting kwalletd6") and safeStorage could not encrypt. Only a name something OWNS counts.
+ */
+describe('busctl on a fresh Omarchy boot (measured output)', () => {
+    const FRESH_OMARCHY = [
+        'org.freedesktop.impl.portal.desktop.kwallet     - -               -     (activatable) -                 - -',
+        'org.freedesktop.secrets                       710 gnome-keyring-d genie :1.3          user@1000.service - -',
+        'org.kde.kwalletd6                               - -               -     (activatable) -                 - -',
+        'org.kde.secretservicecompat                     - -               -     (activatable) -                 - -',
+    ].join('\n');
+
+    it('an activatable name is not owned: only gnome-keyring’s Secret Service counts', () => {
+        expect(parseBusctlNames(FRESH_OMARCHY)).toEqual(['org.freedesktop.secrets']);
+    });
+
+    it('so Omarchy gets gnome-libsecret, not a KWallet nobody started', () => {
+        const owned = probeOwnedBusNames(passwordStoreBusNames(), () => FRESH_OMARCHY);
+        expect(chooseLinuxPasswordStore({ platform: 'linux', argv: [], ownedBusNames: owned })).toBe('gnome-libsecret');
+    });
+
+    it('a KWallet that IS running still wins (CONTROL: a KDE session)', () => {
+        const kde = FRESH_OMARCHY.replace('org.kde.kwalletd6                               - -               -     (activatable)', 'org.kde.kwalletd6                            4999 kwalletd6       genie :1.47        ');
+        expect(chooseLinuxPasswordStore({ platform: 'linux', argv: [], ownedBusNames: probeOwnedBusNames(passwordStoreBusNames(), () => kde) })).toBe('kwallet6');
+    });
+});

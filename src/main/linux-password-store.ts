@@ -125,13 +125,16 @@ export function chooseLinuxPasswordStore(input: PasswordStoreChoice): string | n
 
 /**
  * PURE: the NAME column of `busctl --user list --no-legend`. Unique connection
- * names (`:1.42`) are not services and are dropped.
+ * names (`:1.42`) are not services and are dropped; so are ACTIVATABLE names — installed, not running, PID `-`.
  */
 export function parseBusctlNames(stdout: string): string[] {
     const names: string[] = [];
     for (const line of (stdout ?? '').split(/\r?\n/)) {
-        const name = line.trim().split(/\s+/)[0] ?? '';
+        const [name = '', pid = ''] = line.trim().split(/\s+/);
         if (!name || name.startsWith(':')) continue;
+        // Only an OWNED name (a PID). On Omarchy an activatable kwalletd6 outranked the gnome-keyring that owned the
+        // Secret Service, and Chromium started a KWallet that answers nothing (Tynn #846; measured 2026-10-20).
+        if (!/^\d+$/.test(pid)) continue;
         names.push(name);
     }
     return names;
