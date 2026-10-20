@@ -6,7 +6,7 @@ import { fileLinkTarget, linkFileRefs } from '../../core/chat-file-links.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
-import type { ChatContext, ChatMessage } from '../../core/chat-view.js';
+import { chatFollowKey, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
@@ -37,7 +37,7 @@ import { TurnStop } from './TurnStop.js';
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -64,6 +64,27 @@ export function GenieMark() {
 function clock(at: number): string {
     const d = new Date(at);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * YOUR MESSAGE IS WAITING BEHIND A STEP (beta.33 item 21; the owner: three messages unanswered while moic ran one shell
+ * command, "with nothing on screen saying why"). Which step, running since when; and — the owner's choice, FTQ
+ * q_91b3cddf — `Interrupt and send`: the current turn ends (the Stop-this-turn path) and what waits runs next, in order.
+ * Without a way to stop the turn here, it still says why, with no dead button. Hook-free.
+ */
+export function ChatWaiting({ id, agentName, waiting, onInterruptAndSend }: { id: string; agentName: string; waiting: ChatWaitingOn; onInterruptAndSend?: (() => void) | undefined }) {
+    return (
+        <div data-chat-waiting={id} className="flex max-w-full flex-col items-end gap-1 text-right text-[12px] text-[var(--warning)]">
+            <span>{`Waiting — ${agentName} reads it when this step ends:`}</span>
+            <span className="font-mono text-[11px] text-[var(--fg-2)]">{waiting.step}</span>
+            {waiting.since !== null ? <span className="font-mono text-[11px] text-[var(--fg-4)]">{`running since ${clock(waiting.since)}`}</span> : null}
+            {onInterruptAndSend ? (
+                <button type="button" data-action="interrupt-and-send" data-message={id} title={`Stop ${agentName}'s current turn; what you sent runs next, in order`} onClick={() => onInterruptAndSend()} className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/10 px-2.5 py-1 text-[12px] font-medium text-[var(--fg-1)] hover:bg-[var(--warning)]/20">
+                    Interrupt and send
+                </button>
+            ) : null}
+        </div>
+    );
 }
 
 /**
@@ -165,6 +186,11 @@ export interface ChatFlyoutProps {
      * the context line, with the turn's status. Absent = no turn Stop in the chat — never a Stop that ends the agent.
      */
     onStopTurn?: (() => void) | undefined;
+    /**
+     * `Interrupt and send` on a message waiting behind a step (beta.33 item 21): end the current turn so what waits runs
+     * next. Absent = this turn cannot be stopped from here; the waiting message still says why.
+     */
+    onInterruptAndSend?: (() => void) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
     /** Signed out: `Log in` on the context line, with the provider's name. */
@@ -198,7 +224,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -240,12 +266,15 @@ export function ChatFlyout({
      */
     const scrollRef = useRef<HTMLDivElement>(null);
     const followRef = useRef(true);
-    const messageCount = thread?.messages.length ?? 0;
+    // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
+    // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
+    // did not move until the next message arrived.
+    const followKey = chatFollowKey(thread?.agentId ?? null, thread?.messages ?? []);
     useLayoutEffect(() => { followRef.current = true; }, [thread?.agentId]);
     useLayoutEffect(() => {
         const el = scrollRef.current;
         if (el && followRef.current) el.scrollTop = el.scrollHeight;
-    }, [thread?.agentId, messageCount]);
+    }, [followKey]);
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -441,6 +470,7 @@ export function ChatFlyout({
                              * cannot come.
                              */}
                             {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
+                            {m.waiting && m.delivered ? <ChatWaiting id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}

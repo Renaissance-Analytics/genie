@@ -62,7 +62,19 @@ export function agentShells(rows: readonly TimedEvent[]): AgentShells {
 
     const taskFor = (taskId: string, toolUseId: string | null, at: number | null): AgentShell => {
         const existing = byKey.get(taskId);
-        if (existing) return existing;
+        if (existing) {
+            // NAMED FIRST BY THE LIVE SET, then by its own event (Claude's real order — measured on the owner's threads,
+            // beta.33 item 21): the set carries no tool-use id, so the command is joined now, when the event names it.
+            const late = toolUseId !== null ? commands.get(toolUseId) : undefined;
+            if (late && toolUseId !== null) {
+                existing.kind = late.kind;
+                existing.command = late.command;
+                existing.description ??= late.description;
+                existing.startedAt = late.startedAt ?? existing.startedAt;
+                commands.delete(toolUseId);
+            }
+            return existing;
+        }
         const command = toolUseId !== null ? commands.get(toolUseId) : undefined;
         const shell: AgentShell = command
             ? { ...command, key: taskId }

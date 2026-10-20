@@ -41,6 +41,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
 - \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
+- Keep your steps short. Run long commands — test suites, builds, servers — in the background (your shell's background option, or \`processes\`) and check on them, rather than in one long step: messages from the person reach you only between your steps, so while one command runs they wait.
 - \`knowledge\` for the workstation's knowledge graph.
 - \`thumbsUp\` to say you are ready.
 

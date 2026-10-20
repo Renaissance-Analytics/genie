@@ -61,6 +61,28 @@ describe('agentShells', () => {
         expect(later.ended).toEqual([expect.objectContaining({ command: 'npm run dev', state: 'failed', summary: 'exit 1', outputFile: '/tmp/b1.out', endedAt: 5000 })]);
     });
 
+    /*
+     * THE ORDER CLAUDE REALLY SENDS (beta.33 item 21; the owner's Shells tab: "STARTED IN THE BACKGROUND — STATE NOT
+     * REPORTED · 6"). Measured on the owner's recorded threads (~/.genie/runtime/sessions, 2026-10-20): in all of them —
+     * 49, 41 and 15 background commands — every task was named FIRST by the live set (`background_tasks_changed`, which
+     * carries no tool-use id) and only then by its `task_started` (which does). The join keyed on the first sighting, so
+     * the task was a nameless `task` and the command stayed "not reported" forever. The fixture above sends them the
+     * other way round, which is why it passed.
+     */
+    it('the live set naming a task BEFORE its started event (Claude’s real order): still joined to its command', () => {
+        const rows = [
+            bash('tu1', 'npm test', true, 1000),
+            live([{ taskId: 'b1', taskType: 'local_bash', description: 'run the suite' }], 1001),
+            task({ event: 'started', taskId: 'b1', toolUseId: 'tu1', taskType: 'local_bash', description: 'run the suite' }, 1002),
+        ];
+        const now = agentShells(rows);
+        expect(now.unreported).toEqual([]);
+        expect(now.running.map((s) => [s.key, s.kind, s.command, s.state, s.startedAt])).toEqual([['b1', 'shell', 'npm test', 'running', 1000]]);
+        const done = agentShells([...rows, task({ event: 'ended', taskId: 'b1', toolUseId: 'tu1', status: 'completed', summary: 'ok' }, 9000), live([], 9001)]);
+        expect(done.ended.map((s) => [s.command, s.state, s.summary])).toEqual([['npm test', 'completed', 'ok']]);
+        expect(done.unreported).toEqual([]);
+    });
+
     it('the live set is authoritative: a task only the set names is running; a running task the set dropped without an ending is no longer running', () => {
         const s = agentShells([
             task({ event: 'started', taskId: 'b1', toolUseId: 'tu9', taskType: 'local_bash', description: 'watch logs' }, 10),

@@ -67,6 +67,17 @@ export interface ChatMessage {
     mailId?: string;
     /** A `delivery` row: the messages Genie told the agent about. */
     mail?: readonly ChatMailRef[];
+    /**
+     * Your message, sent while the agent was in a step that has not ended (beta.33 item 21): the step it waits behind and
+     * when that step started. Claude reads a message at its next tool boundary; absent = not waiting.
+     */
+    waiting?: ChatWaitingOn;
+}
+
+/** The step a message waits behind: its title (the command, or the tool), and when it started. */
+export interface ChatWaitingOn {
+    readonly step: string;
+    readonly since: number | null;
 }
 
 
@@ -114,6 +125,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
 
 export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
+    const waiting = waitingMessages(detail.rows);
     for (const row of detail.rows) {
         const e = row.event;
         if (e.kind === 'stopped') {
@@ -143,9 +155,58 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         }
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
-        out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at, ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}) });
+        const waits = who === 'you' ? waiting.get(row.id) : undefined;
+        out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at, ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
+}
+
+/**
+ * WHICH OF YOUR MESSAGES WAIT, and behind what (beta.33 item 21; the owner's moic, inside one shell command from 14:31,
+ * three messages unanswered and nothing saying why). Read from the ledger: a message of yours sent while a step of the
+ * running turn had started and not ended waits behind that step, until it completes or fails (the boundary Claude reads
+ * queued messages at), or the turn ends or is stopped. A message sent between steps does not wait.
+ */
+export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, ChatWaitingOn> {
+    /** Steps started and not ended, in the turn now running: id → what it is and when it started. */
+    const open = new Map<string, ChatWaitingOn>();
+    /** Messages waiting, and the step each waits behind. */
+    const waits = new Map<string, { on: string; waiting: ChatWaitingOn }>();
+    for (const { id, event: e, at } of ledger) {
+        if (e.kind === 'turn' || e.kind === 'stopped' || e.kind === 'run') {
+            open.clear();
+            waits.clear();
+            continue;
+        }
+        if (e.kind === 'tool') {
+            if (e.toolCallId === '') continue;
+            if (e.status === 'completed' || e.status === 'failed') {
+                open.delete(e.toolCallId);
+                for (const [m, w] of waits) if (w.on === e.toolCallId) waits.delete(m);
+                continue;
+            }
+            const known = open.get(e.toolCallId);
+            const step = e.title ?? e.name ?? known?.step ?? 'a step';
+            open.set(e.toolCallId, { step: known && (e.title === null || e.title === '') ? known.step : step, since: known?.since ?? at });
+            continue;
+        }
+        if (e.kind === 'message' && e.speaker === 'you' && open.size > 0) {
+            // Behind the step started last: the one running now.
+            const [on, waiting] = [...open.entries()].at(-1)!;
+            waits.set(id, { on, waiting });
+        }
+    }
+    return new Map([...waits].map(([m, w]) => [m, w.waiting]));
+}
+
+/**
+ * WHAT THE CHAT FOLLOWS (beta.33 item 6): a person at the end of the thread stays at its end while this changes — a new
+ * message, AND the last message growing as the agent writes it. Keyed on the count alone, a reply streamed below the
+ * fold of a chat that did not move, and was seen only when the next message arrived ("when the message closes").
+ */
+export function chatFollowKey(agentId: string | null, messages: readonly { readonly id: string; readonly text: string }[]): string {
+    const last = messages[messages.length - 1];
+    return `${agentId ?? ''}:${messages.length}:${last ? `${last.id}:${last.text.length}` : ''}`;
 }
 
 export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, rows: readonly AgentRow[], _now: () => number): ChatThreadView {
