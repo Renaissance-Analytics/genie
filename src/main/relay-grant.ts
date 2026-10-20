@@ -1,0 +1,104 @@
+import { createPublicKey, verify } from 'node:crypto';
+import type { PreAuth } from '../core/remote-protocol.js';
+
+/**
+ * A TYNN CONNECT GRANT, CHECKED BY THE HOST (Tynn #838) — Genie 1's `host-core/relay-host/grant.ts`, unchanged.
+ *
+ * Tynn mints a short-lived EdDSA JWS (`typ: wsgrant+jwt`) for a member it entitles to this workstation: who (`sub`,
+ * `name`), how (`cap`: control | readonly), where (`scope`: `host:all` or `workspace:<id>`), why (`src`: owner, grant,
+ * invite), until when (`exp`), bound to the member's key (`cnf.jkt`). The host verifies it against Tynn's published
+ * keys, offline; whether it is STILL active (revoked, workstation locked) is Tynn's introspection, asked separately.
+ */
+
+export interface TynnJwk {
+    kty: string;
+    crv: string;
+    kid: string;
+    x: string;
+    alg?: string;
+    use?: string;
+}
+
+export type WorkspaceScope = 'host:all' | `workspace:${string}`;
+
+export interface HostGrant {
+    jti: string;
+    sub: string;
+    name: string | null;
+    source: string | null;
+    capability: 'control' | 'readonly';
+    scopes: WorkspaceScope[];
+    expiresAt: number;
+    confirmationKeyThumbprint?: string;
+}
+
+export type GrantCheck = { ok: true; grant: HostGrant } | { ok: false; reason: string };
+
+const MEMBER_GRANT_TYPE = 'wsgrant+jwt';
+
+function segment(seg: string): Record<string, unknown> | null {
+    try {
+        const v = JSON.parse(Buffer.from(seg, 'base64url').toString('utf8')) as unknown;
+        return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+}
+
+const isScope = (v: unknown): v is WorkspaceScope => v === 'host:all' || (typeof v === 'string' && v.startsWith('workspace:') && v.length > 'workspace:'.length);
+const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[]; workstationId: string; now?: number; leewaySec?: number }): GrantCheck {
+    const parts = token.split('.');
+    if (parts.length !== 3) return { ok: false, reason: 'not a compact JWS' };
+    const [h, p, s] = parts as [string, string, string];
+    const header = segment(h);
+    const claims = segment(p);
+    if (!header || !claims) return { ok: false, reason: 'invalid JWS encoding' };
+    if (header.alg !== 'EdDSA') return { ok: false, reason: 'unsupported algorithm' };
+    if (header.typ !== undefined && header.typ !== MEMBER_GRANT_TYPE) return { ok: false, reason: 'not a member grant' };
+
+    const jwk = opts.keys.find((k) => k.kid === header.kid);
+    if (!jwk) return { ok: false, reason: 'unknown signing key' };
+    let signed = false;
+    try {
+        const key = createPublicKey({ key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x }, format: 'jwk' });
+        signed = verify(null, Buffer.from(`${h}.${p}`, 'ascii'), key, Buffer.from(s, 'base64url'));
+    } catch {
+        signed = false;
+    }
+    if (!signed) return { ok: false, reason: 'signature verification failed' };
+
+    const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
+    const leeway = opts.leewaySec ?? 60;
+    if (typeof claims.exp !== 'number' || nowSec > claims.exp + leeway) return { ok: false, reason: 'grant expired' };
+    if (typeof claims.nbf === 'number' && nowSec + leeway < claims.nbf) return { ok: false, reason: 'grant not yet valid' };
+    if (claims.aud !== opts.workstationId) return { ok: false, reason: 'grant audience mismatch' };
+
+    const jti = text(claims.jti);
+    const sub = text(claims.sub);
+    const capability = claims.cap === 'control' || claims.cap === 'readonly' ? claims.cap : null;
+    const scopes = Array.isArray(claims.scope) && claims.scope.length > 0 && claims.scope.every(isScope) ? (claims.scope as WorkspaceScope[]) : null;
+    if (!jti || !sub || !capability || !scopes) return { ok: false, reason: 'invalid grant claims' };
+
+    const cnf = claims.cnf !== null && typeof claims.cnf === 'object' ? text((claims.cnf as Record<string, unknown>).jkt) : null;
+    return {
+        ok: true,
+        grant: { jti, sub, name: text(claims.name), source: text(claims.src), capability, scopes, expiresAt: claims.exp * 1000, ...(cnf ? { confirmationKeyThumbprint: cnf } : {}) },
+    };
+}
+
+/**
+ * Who the grant's holder is on THIS Genie. The owner's own grant is the owner; anyone else is a guest — of the whole
+ * host (`host:all`), or of the one workspace named. Genie 2 scopes a guest to a single workspace, so a grant naming
+ * several is refused in words rather than widened.
+ */
+export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } | { ok: false; reason: string } {
+    const label = grant.name ?? grant.sub;
+    const readonly = grant.capability === 'readonly';
+    if (grant.source === 'owner') return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
+    if (grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };
+    const workspaces = grant.scopes.map((s) => s.slice('workspace:'.length));
+    if (workspaces.length !== 1) return { ok: false, reason: `this Genie shares one workspace per link; this grant names ${workspaces.length}` };
+    return { ok: true, principal: { label, isOwner: false, workspaceId: workspaces[0]!, readonly } };
+}

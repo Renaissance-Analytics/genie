@@ -35,7 +35,7 @@ export interface HostApi {
 interface Connection {
     readonly id: string;
     readonly socket: ServerConnection;
-    auth: { label: string; isOwner: boolean; workspaceId: string | null } | null;
+    auth: { label: string; isOwner: boolean; workspaceId: string | null; readonly: boolean } | null;
 }
 
 export class RemoteHost {
@@ -187,15 +187,20 @@ export class RemoteHost {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
             token = this.#devices.pair(label).token;
-            connection.auth = { label, isOwner: true, workspaceId: null };
+            connection.auth = { label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'token') {
             const device = this.#devices.byToken(auth.token);
             if (!device) return this.#refuse(connection, `this device is not paired with ${this.#hostName}`, true);
-            connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null };
+            connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null, readonly: false };
+        } else if (auth.kind === 'relay') {
+            // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
+            const pre = connection.socket.preAuth;
+            if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
+            connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         } else {
             const r = this.#shares.redeem(auth.id, auth.secret);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
-            connection.auth = { label: auth.label ?? message.label ?? r.grantedTo, isOwner: false, workspaceId: r.workspaceId };
+            connection.auth = { label: auth.label ?? message.label ?? r.grantedTo, isOwner: false, workspaceId: r.workspaceId, readonly: false };
         }
         this.#send(connection, {
             kind: 'welcome',
@@ -214,6 +219,8 @@ export class RemoteHost {
 
         switch (method) {
             case 'baton.take': {
+                // Holding the baton would keep everyone who CAN change things from doing so.
+                if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
                 const r = this.#baton.take(connection.id, auth.label);
                 return r.ok ? ok({ driver: auth.label, mine: true }) : refuse(`${r.driverLabel} is driving ${this.#hostName}`);
             }
@@ -234,6 +241,10 @@ export class RemoteHost {
         }
 
         const capability = capabilityOf(method);
+        // A read-only grant (Tynn #838): reads, nothing else.
+        if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+        // Only the owner changes the host itself — a guest of the whole host included.
+        if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (capability === 'host-only') {
             if (method === 'addWorkspace' || method === 'workspaces.previewAdd') return refuse(`${method} opens a folder picker on ${this.#hostName}; do it there`);
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);

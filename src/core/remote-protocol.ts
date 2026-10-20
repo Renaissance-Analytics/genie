@@ -161,7 +161,20 @@ export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 't
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
     | { kind: 'token'; token: string; label?: string }
-    | { kind: 'share'; id: string; secret: string; label?: string };
+    | { kind: 'share'; id: string; secret: string; label?: string }
+    /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
+     *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
+    | { kind: 'relay'; label?: string };
+
+/** Who a transport already proved a connection to be (the Tynn relay's grant, main/relay-grant.ts). */
+export interface PreAuth {
+    readonly label: string;
+    readonly isOwner: boolean;
+    /** The one workspace a guest may reach; `null` = the whole host. */
+    readonly workspaceId: string | null;
+    /** Reads only: every change is refused. */
+    readonly readonly: boolean;
+}
 
 export type WireMessage =
     | { kind: 'hello'; auth: AuthRequest; label?: string }
@@ -192,8 +205,9 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             const okAuth =
                 (auth.kind === 'pin' && typeof auth.code === 'string') ||
                 (auth.kind === 'token' && typeof auth.token === 'string') ||
-                (auth.kind === 'share' && typeof auth.id === 'string' && typeof auth.secret === 'string');
-            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token} or a share {id, secret}' };
+                (auth.kind === 'share' && typeof auth.id === 'string' && typeof auth.secret === 'string') ||
+                auth.kind === 'relay';
+            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, a share {id, secret} or relay' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             return { ok: true, message: raw as unknown as WireMessage };
         }
@@ -247,6 +261,8 @@ export interface ClientTransport {
 
 export interface ServerConnection extends ClientTransport {
     readonly remoteAddress: string;
+    /** Set by a transport that authenticated the connection itself (the Tynn relay); a `relay` hello takes it. */
+    readonly preAuth?: PreAuth;
 }
 
 /** Where connections come from — fancy-ws on a real socket, or the in-memory pair in tests. */
