@@ -440,7 +440,8 @@ export function Shell({
                                 agents: snapshot.agents.length,
                                 // Providers come from the toolchain scan when one has run; until then NOT a line.
                                 providers: features.toolchain ? features.toolchain.tools.filter((t) => (t.tool === 'claude-code' || t.tool === 'codex') && t.installed !== null).map((t) => t.tool) : null,
-                                githubConnected: null,
+                                // Signed in to GitHub as the GitHub sign-in read it (main/github-account.ts); `null` until read.
+                                githubConnected: features.integrations ? features.integrations.github.status === 'signed-in' : null,
                                 // Signed in to Tynn when the integrations section says so; `null` until it has been read.
                                 tynnSignedIn: features.integrations?.tynnSignedIn ?? null,
                             }}

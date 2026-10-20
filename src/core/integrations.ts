@@ -4,9 +4,8 @@
  * - Tynn is the OPTIONAL identity layer. Genie is fully usable signed out, and a Tynn-gated row is
  *   ANNOTATED with the reason and the route, never dropped — a row that vanishes on sign-out reads
  *   as a feature that broke.
- * - The GitHub App has two distinct steps: AUTHORIZE (who you are) and INSTALL (which repos). A
- *   blocked feature says which step blocks it. The Deck's "GitHub permissions are blocking features"
- *   signal is derived here and appears only when it is true.
+ * - GitHub is its own module now (core/github.ts, main/github-account.ts): Genie 1's sign-in and the real status GitHub
+ *   reports, not two steps the person ticked (beta.33 item 25).
  * - Config sync writes to FOUR independent targets; each reports its own result, and one failing
  *   never blocks or hides the others.
  */
@@ -30,33 +29,6 @@ export function tynnGate(rows: readonly GatedRow[], state: { signedIn: boolean }
             ? { ...r, enabled: false, note: 'Sign in to Tynn to use this', route: 'genie://settings/tynn' }
             : { ...r, enabled: true, note: null, route: null },
     );
-}
-
-export interface GithubAppInput {
-    readonly authorized: boolean;
-    readonly installedRepos: readonly string[];
-    readonly neededRepos: readonly string[];
-}
-
-export interface GithubAppStatus {
-    readonly steps: Array<{ id: 'authorize' | 'install'; done: boolean }>;
-    readonly blocking: boolean;
-    readonly blockedBy: 'authorize' | 'install' | null;
-    readonly missingRepos: string[];
-    readonly signal: { label: string; route: string } | null;
-}
-
-export function githubAppStatus(input: GithubAppInput): GithubAppStatus {
-    const missingRepos = input.neededRepos.filter((r) => !input.installedRepos.includes(r));
-    const installDone = missingRepos.length === 0;
-    const blockedBy: GithubAppStatus['blockedBy'] = !input.authorized ? 'authorize' : !installDone ? 'install' : null;
-    return {
-        steps: [{ id: 'authorize', done: input.authorized }, { id: 'install', done: input.authorized && installDone }],
-        blocking: blockedBy !== null,
-        blockedBy,
-        missingRepos,
-        signal: blockedBy === null ? null : { label: 'GitHub permissions are blocking features', route: 'genie://settings/github' },
-    };
 }
 
 export interface SyncTarget {

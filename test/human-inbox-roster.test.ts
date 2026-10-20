@@ -59,8 +59,8 @@ describe('the human inbox, from the roster', () => {
     });
 
     it('counts a roster agent\'s uncollected mail in the Deck signal (positive control: 0 before the send)', async () => {
-        expect(services.signals({ osAgentWorking: false }).uncollectedMail).toBe(0);
+        expect(services.signals({ osAgentWorking: false, githubBlocked: false }).uncollectedMail).toBe(0);
         await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'read me' });
-        expect(services.signals({ osAgentWorking: false }).uncollectedMail).toBe(1);
+        expect(services.signals({ osAgentWorking: false, githubBlocked: false }).uncollectedMail).toBe(1);
     });
 });

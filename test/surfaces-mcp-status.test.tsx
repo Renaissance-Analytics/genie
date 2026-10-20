@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { signedOutGithubView } from '../src/core/github.js';
 
 /**
  * THE MCP TRANSPORT, VERIFIED AT BOOT, ON SCREEN (§6.4 "native transport verified at boot", §6.9). Settings →
@@ -13,7 +14,7 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 const integrations = (mcp: NonNullable<FeatureData['integrations']>['mcp']): NonNullable<FeatureData['integrations']> => ({
     tynnSignedIn: false,
     tynn: { host: 'https://tynn.ai', user: null, signInUrl: null, message: null },
-    github: { steps: [{ id: 'authorize', done: false }, { id: 'install', done: false }], blocking: true, blockedBy: 'authorize', missingRepos: ['this workstation'], signal: { label: 'GitHub permissions are blocking features', route: 'genie://settings/github' } } as never,
+    github: signedOutGithubView(null),
     gated: [],
     lastSync: null,
     mcp,

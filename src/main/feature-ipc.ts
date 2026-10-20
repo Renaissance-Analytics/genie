@@ -5,6 +5,8 @@ import { isAlertSoundKey } from '../core/alerts.js';
 import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
 import { tynnGate, type SyncResult } from '../core/integrations.js';
 import type { TynnAccountPort } from './tynn-account.js';
+import type { GithubAccountPort } from './github-account.js';
+import { signedOutGithubView } from '../core/github.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
@@ -62,6 +64,8 @@ export interface FeaturePorts {
     readonly allowFirewall?: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
     /** This Genie's Tynn account (main/tynn-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
     readonly tynnAccount?: TynnAccountPort;
+    /** This Genie's GitHub sign-in (main/github-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
+    readonly githubAccount?: GithubAccountPort;
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
@@ -275,6 +279,14 @@ function tynnAccountOf(ports: FeaturePorts): TynnAccountPort {
     return ports.tynnAccount;
 }
 
+const NO_GITHUB = 'this Genie cannot sign in to GitHub here: it has no GitHub account (doctor mode)';
+
+/** The GitHub sign-in, or a refusal in words: without one nothing pretends to sign in. */
+function githubAccountOf(ports: FeaturePorts): GithubAccountPort {
+    if (!ports.githubAccount) throw new Error(NO_GITHUB);
+    return ports.githubAccount;
+}
+
 /** Tynn in Settings → Integrations: who is signed in where, the sign-in under way, and the rows Tynn gates. */
 function tynnIntegration(services: ComposedServices, state: FeatureState, account: TynnAccountPort | undefined) {
     const status = account?.status() ?? { signedIn: false as const };
@@ -316,7 +328,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), ...services.integrations(), lastSync: state.lastSync ?? null },
+        // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -913,12 +926,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.tynnMessage = r.revoked ? null : r.reason;
             break;
         }
-        case 'integrations.githubConfirm': {
-            const values = services.settings.snapshot();
-            if (action.step === 'install' && values.github_authorized !== true) throw new Error('authorize first: the GitHub App must be authorized for your account before it can be installed on repositories');
-            await services.settings.set(action.step === 'authorize' ? 'github_authorized' : 'github_installed', true);
+        // GITHUB, Genie 1's way (beta.33 item 25): one button starts the device flow (the code comes back in the snapshot and
+        // the account waits for GitHub by itself, pushing when it lands); the pages are the account's own URLs.
+        case 'integrations.githubSignIn':
+            await githubAccountOf(ports).startSignIn();
             break;
-        }
+        case 'integrations.githubCancelSignIn':
+            githubAccountOf(ports).cancelSignIn();
+            break;
+        case 'integrations.githubRefresh':
+            await githubAccountOf(ports).refresh();
+            break;
+        case 'integrations.githubOpen':
+            await githubAccountOf(ports).openPage(action.target);
+            break;
+        case 'integrations.githubSignOut':
+            await githubAccountOf(ports).signOut();
+            break;
         case 'plugins.setEnabled':
             await services.plugins.setEnabled(action.id, action.enabled);
             break;

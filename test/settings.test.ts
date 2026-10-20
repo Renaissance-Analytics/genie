@@ -88,6 +88,15 @@ describe('carrying v1 settings over', () => {
     it('nothing to carry is an empty result, not an error', () => {
         expect(carryOverV1({})).toEqual({ applied: {}, dropped: [] });
     });
+
+    it('Genie 1’s GitHub login is not a setting: it is carried by the GitHub sign-in itself (encrypted), and the record says so without the value', () => {
+        // beta.33 item 25: main/github-account.ts decrypts `github_token_enc` with this Genie's key and keeps it encrypted.
+        const r = carryOverV1({ github_token_enc: 'djEwSECRETBLOB', github_user: 'ada', github_refresh_enc: '' });
+        expect(r.applied).toEqual({});
+        expect(r.dropped.map((d) => d.key).sort()).toEqual(['github_refresh_enc', 'github_token_enc', 'github_user']);
+        for (const d of r.dropped) expect(d.reason).toMatch(/Settings → GitHub/);
+        expect(JSON.stringify(r)).not.toContain('djEwSECRETBLOB');
+    });
 });
 
 describe('onboarding — two steps, two decisions', () => {

@@ -1,7 +1,7 @@
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
@@ -11,6 +11,7 @@ import { NAV_GROUPS, sectionOf, type SectionId } from '../../core/settings-nav.j
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
+import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
@@ -986,7 +987,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'keyboard' ? <GenieHotkeys values={values} onAction={onAction} /> : null}
                             {active === 'appearance' ? <SetSection title="Appearance" desc="How Genie looks on this device.">{rows('appearance')}</SetSection> : null}
                             {active === 'tynn' ? <SetSection title="Tynn" desc="Optional: identity, your projects, and IssueWatch. Genie is fully usable signed out." data-settings-tynn=""><TynnBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
-                            {active === 'github' ? <SetSection title="GitHub App" desc="Two steps, each confirmed here after you do it in the browser." data-settings-github=""><GithubBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
+                            {active === 'github' ? <SetSection title="GitHub" desc="Sign in to the Genie AOS app: who you are on GitHub, where the app is installed, and what it may do there." data-settings-github=""><GithubBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
                             {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} /></SetSection> : null}
                             {active === 'workspace-defaults' ? <SetSection title="Defaults for workspaces" desc="What every workspace uses unless its own Settings override it.">{rows('workspace-defaults')}</SetSection> : null}
                             {active === 'prompts' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
@@ -1453,13 +1454,9 @@ function Plugins({ plugins, onAction }: { plugins: FeatureData['plugins']; onAct
     );
 }
 
-const GITHUB_APP_URL = 'https://github.com/apps/genie-aos';
-
 /**
  * INTEGRATIONS (§6.9). Tynn is OPTIONAL: signed out shows the sign-in and every Tynn-gated row still
- * listed, annotated with the route; signed in shows Sign out. The GitHub App is TWO distinct steps,
- * each confirmed by the person after doing it in the browser (the app's own URL is plain text to
- * open). A workspace's agent files — their status and its Sync now — are in that workspace's own Settings; this
+ * listed, annotated with the route; signed in shows Sign out. GitHub is its own card (GithubBlock). A workspace's agent files — their status and its Sync now — are in that workspace's own Settings; this
  * section says so (the owner, 2026-10-13: a picker here, above Genie start's record of every workspace, read as
  * "I chose one workspace but it updated all workspaces").
  */
@@ -1597,29 +1594,120 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
     );
 }
 
-/** GITHUB — the App's two steps, each confirmed after doing it in the browser. The raw flags are this card's data, never rows. */
+/**
+ * GITHUB — Genie 1's card, for real (beta.33 item 25). The owner (2026-10-20): "our Github integration and login needs to
+ * be way easier than this and it needs to be functional not some dumb list … I already had github setup with this app
+ * with genie 1 so why is it not functional anymore?"
+ *
+ * Signed out: ONE button. Signing in: GitHub's code, large, with Copy, and its page (opened already; again on a click) —
+ * Genie waits for GitHub by itself and the card changes when it lands. Signed in: who (and that it came from Genie 1),
+ * every account the app is installed on with its repositories and the permissions GitHub GRANTED, each with its own
+ * Configure; Install on more repositories; what those permissions let Genie do; Check again; Sign out. Everything here is
+ * what main read from GitHub (main/github-account.ts); the token never reaches this window.
+ */
 function GithubBlock({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
-    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
+    const [copied, setCopied] = useState(false);
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
+    const gh = integrations.github;
+    const message = gh.message ? <p data-github-message="" className="text-xs text-[var(--danger)]">{gh.message}</p> : null;
+    const open = (target: Extract<FeatureAction, { kind: 'integrations.githubOpen' }>['target']) => onAction({ kind: 'integrations.githubOpen', target });
+
+    if (gh.status === 'signing-in' && gh.device) {
+        const code = gh.device.userCode;
+        return (
+            <div data-integrations="" data-github-status="signing-in" className="flex flex-col gap-3 text-sm">
+                <p>Enter this code on GitHub’s page — it opened in your browser:</p>
+                <div className="flex items-center gap-3">
+                    <span data-github-code={code} className="select-all rounded-md border border-[var(--border-1)] px-3 py-1.5 font-mono text-2xl tracking-widest">{code}</span>
+                    <Button type="button" data-action="github-copy-code" variant="ghost" size="sm" onClick={() => { void navigator.clipboard?.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? 'Copied' : 'Copy'}</Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button type="button" data-action="github-open-device" size="sm" onClick={() => open({ page: 'device' })}>Open GitHub again</Button>
+                    <span className="font-mono text-xs text-[var(--fg-3)]">{gh.device.verificationUri}</span>
+                </div>
+                <p className="text-[var(--fg-3)]">Waiting for GitHub — this changes by itself once you approve Genie AOS there.</p>
+                <div><Button type="button" data-action="github-cancel" variant="ghost" size="sm" onClick={() => onAction({ kind: 'integrations.githubCancelSignIn' })}>Cancel</Button></div>
+                {message}
+            </div>
+        );
+    }
+
+    if (gh.status === 'signed-out' || gh.user === null) {
+        return (
+            <div data-integrations="" data-github-status="signed-out" className="flex flex-col gap-2 text-sm">
+                <p className="text-[var(--fg-3)]">One click: GitHub shows a code, you approve the Genie AOS app in your browser, and Genie reads where it is installed. No token to paste.</p>
+                <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>
+                {message}
+                {githubCapabilityList(gh.capabilities)}
+            </div>
+        );
+    }
+
+    const expired = gh.status === 'expired';
     return (
-        <div data-integrations="">
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">GitHub App — two steps</h3>
-                        <p className="text-sm text-[var(--fg-3)]">Open <span className="font-mono">{GITHUB_APP_URL}</span>, do each step there, then confirm it here.</p>
-                        <ol className="mt-1 flex flex-col gap-1 text-sm">
-                            {integrations.github.steps.map((step, i) => {
-                                const offered = integrations.github.blockedBy === step.id;
-                                return (
-                                    <li key={step.id} data-github-step={step.id} {...(step.done ? { 'data-github-done': step.id } : {})} className="flex items-center gap-3">
-                                        <span className="font-mono text-xs text-[var(--fg-4)]">{i + 1}</span>
-                                        <span>{step.id === 'authorize' ? 'Authorize the app for your account' : 'Install the app on the repositories Genie works in'}</span>
-                                        {step.done ? <Badge variant="soft" size="sm">done</Badge> : offered ? (
-                                            <button type="button" data-action={`github-confirm-${step.id}`} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'integrations.githubConfirm', step: step.id })}>I did this</button>
-                                        ) : null}
+        <div data-integrations="" data-github-status={gh.status} className="flex flex-col gap-3 text-sm">
+            <div className="flex items-center gap-2">
+                <Avatar size="sm" fallback={gh.user.login.slice(0, 2).toUpperCase()} alt={gh.user.login} />
+                <span className="flex-1">Signed in as <strong>{gh.user.login}</strong>{gh.user.name ? <span className="text-[var(--fg-3)]"> {gh.user.name}</span> : null}</span>
+                {gh.carriedFromGenie1 ? <span data-github-carried=""><Badge variant="soft" size="sm" color="emerald">Carried over from Genie 1</Badge></span> : null}
+                <Button type="button" data-action="github-refresh" variant="ghost" size="sm" disabled={gh.checking} onClick={() => onAction({ kind: 'integrations.githubRefresh' })}>{gh.checking ? 'Checking…' : 'Check again'}</Button>
+                <Button type="button" data-action="github-sign-out" variant="ghost" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignOut' })}>Sign out</Button>
+            </div>
+            {message}
+            {expired ? <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in again</Button></div> : (
+                <>
+                    <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2">
+                            <h3 className="flex-1 text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Where the Genie AOS app is installed</h3>
+                            <Button type="button" data-action="github-install" size="sm" onClick={() => open({ page: 'install' })}>Install on more repositories</Button>
+                        </div>
+                        {gh.installations === null ? (
+                            <div data-github-installations="reading"><Skeletons rows={2} /></div>
+                        ) : gh.installations.length === 0 ? (
+                            <p data-github-installations="0" className="text-[var(--fg-3)]">The app is not installed on any account yet. Install it on the accounts and repositories Genie should reach.</p>
+                        ) : (
+                            <ul data-github-installations={gh.installations.length} className="flex flex-col divide-y divide-[var(--border-1)] rounded-md border border-[var(--border-1)]">
+                                {gh.installations.map((i) => (
+                                    <li key={i.id} data-github-installation={i.account} className="flex flex-col gap-1.5 px-3 py-2">
+                                        <div className="flex items-center gap-2">
+                                            <strong className="flex-1">{i.account}</strong>
+                                            <Badge variant="soft" size="sm" color="zinc">{i.isOrg ? 'Organization' : 'Personal'}</Badge>
+                                            <Button type="button" data-action={`github-configure-${i.id}`} variant="ghost" size="xs" onClick={() => open({ page: 'installation', installationId: i.id })}>Configure</Button>
+                                        </div>
+                                        <span className="text-xs text-[var(--fg-3)]">{i.selection === 'all' ? `All repositories${i.repoCount !== null ? ` (${i.repoCount})` : ''}` : `${i.repoCount ?? i.repos?.length ?? 0} selected ${(i.repoCount ?? i.repos?.length ?? 0) === 1 ? 'repository' : 'repositories'}`}</span>
+                                        {i.repos && i.repos.length > 0 ? <span className="font-mono text-xs">{i.repos.join(', ')}</span> : null}
+                                        <div className="flex flex-wrap gap-1">
+                                            {Object.entries(i.permissions).map(([name, level]) => (
+                                                <span key={name} data-github-permission={`${name}:${level}`}><Badge variant="soft" size="sm">{`${name.replace(/_/g, ' ')}: ${level}`}</Badge></span>
+                                            ))}
+                                        </div>
                                     </li>
-                                );
-                            })}
-                        </ol>
-                        {integrations.github.signal ? <p className="mt-1 text-xs text-[var(--warning)]">{integrations.github.signal.label}</p> : null}
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                    {githubCapabilityList(gh.capabilities)}
+                    <p className="text-xs text-[var(--fg-3)]">Sign out forgets the sign-in on this machine. To revoke Genie AOS from your GitHub account entirely, <Button type="button" data-action="github-open-authorizations" variant="ghost" size="xs" onClick={() => open({ page: 'authorizations' })}>open GitHub’s authorized apps</Button>.</p>
+                </>
+            )}
+        </div>
+    );
+}
+
+/** What GitHub's permissions let Genie do, each enabled or saying why not (core/github.ts githubCapabilities). */
+function githubCapabilityList(rows: readonly GithubCapability[]) {
+    return (
+        <div className="flex flex-col gap-1">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">What Genie can do with GitHub</h3>
+            <ul className="flex flex-col gap-1">
+                {rows.map((r) => (
+                    <li key={r.id} data-github-capability={r.id} data-enabled={r.enabled ? 'true' : 'false'} className="flex items-baseline gap-2">
+                        <Badge variant="soft" size="sm" color={r.enabled ? 'emerald' : 'amber'}>{r.enabled ? 'yes' : 'not yet'}</Badge>
+                        <span className={r.enabled ? '' : 'text-[var(--fg-3)]'}>{r.label}</span>
+                        {r.note ? <span className="text-xs text-[var(--fg-3)]">{r.note}</span> : null}
+                    </li>
+                ))}
+            </ul>
         </div>
     );
 }

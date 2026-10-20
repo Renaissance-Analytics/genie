@@ -7,8 +7,7 @@ import { SETTINGS } from '../src/core/settings.js';
  * hard to use and not even remotely correct"; plan .ai/plans/genie-2-settings-redesign.md, approved FTQ q_3e5257af).
  *
  * The navigation model, pure (as v1's renderer/lib/settings-nav.ts): grouped sections, one page each; EVERY setting has
- * exactly one place or is deliberately not drawn — internal bookkeeping, one workspace's own layout, and the raw GitHub
- * flags the GitHub card stands for.
+ * exactly one place or is deliberately not drawn — internal bookkeeping and one workspace's own layout.
  */
 
 const SECTIONS = NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));
@@ -29,9 +28,14 @@ describe('every setting has one place, or is deliberately not drawn', () => {
         for (const s of SETTINGS) if (sectionOf(s.key) !== null) expect(SECTIONS, s.key).toContain(sectionOf(s.key));
     });
 
-    it('not drawn: bookkeeping, one workspace’s own layout, the raw GitHub flags (shown only through the GitHub card), and the remote-access switch (drawn by Remote access itself, Tynn #820)', () => {
-        expect([...NOT_DRAWN].sort()).toEqual(['github_authorized', 'github_installed', 'panel_layout', 'panel_splits', 'remote_access', 'tray_notice_shown', 'whats_new_seen_version', 'workspace_tabs']);
+    it('not drawn: bookkeeping, one workspace’s own layout, and the remote-access switch (drawn by Remote access itself, Tynn #820)', () => {
+        expect([...NOT_DRAWN].sort()).toEqual(['panel_layout', 'panel_splits', 'remote_access', 'tray_notice_shown', 'whats_new_seen_version', 'workspace_tabs']);
         for (const k of NOT_DRAWN) expect(sectionOf(k), k).toBeNull();
+    });
+
+    it('GitHub is not a setting at all: the two hand-ticked flags are gone (beta.33 item 25; the owner: "functional not some dumb list")', () => {
+        // GitHub's status is read from GitHub by the account (main/github-account.ts); nothing a person ticks stands for it.
+        expect(SETTINGS.filter((s) => s.key.startsWith('github_')).map((s) => s.key)).toEqual([]);
     });
 
     it('where things went', () => {
