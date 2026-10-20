@@ -162,6 +162,23 @@ const bridge: GenieBridge = {
 
     // A known remote host in its own window (Tynn #819).
     remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
+    // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
+    tynnNetwork: {
+        workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
+        open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
+        send: (channel, text) => ipcRenderer.send('genie:relay-send', channel, text),
+        close: (channel) => ipcRenderer.send('genie:relay-close', channel),
+        onMessage: (listener) => {
+            const handler = (_e: unknown, channel: string, text: string) => listener(channel, text);
+            ipcRenderer.on('genie:relay-message', handler);
+            return () => { ipcRenderer.removeListener('genie:relay-message', handler); };
+        },
+        onClosed: (listener) => {
+            const handler = (_e: unknown, channel: string, reason: string | null) => listener(channel, reason);
+            ipcRenderer.on('genie:relay-closed', handler);
+            return () => { ipcRenderer.removeListener('genie:relay-closed', handler); };
+        },
+    },
 
     /*
      * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose

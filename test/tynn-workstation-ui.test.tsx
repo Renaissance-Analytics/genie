@@ -25,6 +25,25 @@ describe('the Tynn row', () => {
         expect(html).toContain('sign in to Tynn to register this machine');
     });
 
+    // Tynn #838: this machine on the relay, as a host.
+    it('reachable over the Tynn relay: says so, naming the relay', () => {
+        const html = render({ registered: true, host: 'https://tynn.example.com', workstationId: 'ws_01abc', relay: { state: 'reachable', relay: 'wss://relay.example.com' } });
+        expect(html).toMatch(/data-tynn-relay="reachable"/);
+        expect(html).toContain('relay.example.com');
+    });
+
+    it('not reachable: Tynn’s own reason', () => {
+        const html = render({ registered: true, host: 'https://tynn.example.com', workstationId: 'ws_01abc', relay: { state: 'unavailable', reason: 'No relay is configured for this workstation, so it cannot be reached over Tynn.' } });
+        expect(html).toMatch(/data-tynn-relay="unavailable"/);
+        expect(html).toContain('No relay is configured for this workstation, so it cannot be reached over Tynn.');
+    });
+
+    it('relay off (remote access off): says how to turn it on', () => {
+        const html = render({ registered: true, host: 'https://tynn.example.com', workstationId: 'ws_01abc', relay: { state: 'off' } });
+        expect(html).toMatch(/data-tynn-relay="off"/);
+        expect(html).toContain('Turn on remote access');
+    });
+
     it('not read yet: no row (CONTROL — the row is driven by the state, not always drawn)', () => {
         expect(render(null)).not.toContain('data-tynn-workstation');
         expect(render(undefined)).not.toContain('data-tynn-workstation');

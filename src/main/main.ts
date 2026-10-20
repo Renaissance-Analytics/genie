@@ -1,7 +1,11 @@
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
-import { remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+import { transportHub } from '../core/remote-protocol.js';
+import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
+import type { RelaySocket } from './relay-wire.js';
+import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -33,7 +37,7 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
-import { ensureWorkstation, workstationKeyStore } from './workstation-identity.js';
+import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
@@ -481,6 +485,16 @@ function revealMainWindow(): void {
 let tynnAccount: TynnAccount | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
+/** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
+let relayAfterSwitch: (() => void) | null = null;
+/** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
+let relayHostNow: RelayHostHandle | null = null;
+let relayStatusNow: RelayHostStatus = { state: 'off' };
+/** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
+const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents }>();
+let nextRelayChannel = 0;
+/** The global WebSocket, as the relay ends' socket. */
+const relaySocket = (url: string): RelaySocket => new WebSocket(url) as unknown as RelaySocket;
 let pendingGenieUrl: string | null = genieUrlIn(process.argv);
 let afterTynnUrl: (() => void) | null = null;
 
@@ -1095,6 +1109,44 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
+    // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
+    // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
+    ipcMain.handle('genie:tynn-workstations', async () => {
+        const account = tynnAccount;
+        if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
+        const own = tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null;
+        return connectableWorkstations((path, init) => account.request(path, init), own);
+    });
+    ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
+        if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
+        const account = tynnAccount;
+        if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
+        const pop = PopKeypair.generate();
+        const grant = await mintConnectGrant((path, init) => account.request(path, init), workstationId, pop.publicJwk);
+        if (!grant.ok) return grant;
+        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
+        if (!opened.ok) return opened;
+        const channel = `relay_${++nextRelayChannel}`;
+        const sender = event.sender;
+        relayChannels.set(channel, { transport: opened.transport, sender });
+        opened.transport.onMessage((text) => { if (!sender.isDestroyed()) sender.send('genie:relay-message', channel, text); });
+        opened.transport.onClose(() => {
+            relayChannels.delete(channel);
+            if (!sender.isDestroyed()) sender.send('genie:relay-closed', channel, opened.transport.closedBecause());
+        });
+        // The window went: its connection goes with it.
+        sender.once('destroyed', () => opened.transport.close());
+        return { ok: true, channel };
+    });
+    // Only the window that opened a channel may use it.
+    ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
+        const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
+        if (c && c.sender === event.sender && typeof text === 'string') c.transport.send(text);
+    });
+    ipcMain.on('genie:relay-close', (event, channel: unknown) => {
+        const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
+        if (c && c.sender === event.sender) c.transport.close();
+    });
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
     ipcMain.handle('genie:files-write', (_event, workspaceId: unknown, path: unknown, text: unknown, expectedSha: unknown) =>
@@ -1281,7 +1333,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), tynnWorkstation: () => tynnWorkstationNow, issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1291,6 +1343,7 @@ async function boot(): Promise<void> {
         serve: staticServer(join(here, '../renderer')),
     });
     remoteSocketNow = remoteSocket;
+    const remoteHub = transportHub(remoteSocket.transport);
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -1333,7 +1386,8 @@ async function boot(): Promise<void> {
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
         frontDoorPort: 0,
         hostName: hostname(),
-        remoteTransport: remoteSocket.transport,
+        // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
+        remoteTransport: remoteHub,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
@@ -1510,9 +1564,37 @@ async function boot(): Promise<void> {
             const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId } : { registered: false, reason: result.reason };
-        })().finally(() => { registering = null; pushFeatures(); });
+        })().finally(() => { registering = null; void applyRelayHost(); pushFeatures(); });
         return registering;
     };
+    // THIS GENIE ON THE TYNN RELAY, AS A HOST (Tynn #838; Genie 1's relay-host-controller): while remote access is on and
+    // this machine is registered with the Tynn in use. Off, or registered elsewhere: the link stops.
+    let relayFor: string | null = null;
+    const applyRelayHost = async (): Promise<void> => {
+        const account = tynnAccount;
+        const registered = tynnWorkstationNow?.registered ? tynnWorkstationNow : null;
+        const want = registered && account && composed.settings.get('remote_access') === true ? `${registered.host} ${registered.workstationId}` : null;
+        if (want === relayFor) return;
+        relayHostNow?.stop();
+        relayHostNow = null;
+        relayFor = want;
+        relayStatusNow = { state: 'off' };
+        if (!want || !registered) { pushFeatures(); return; }
+        const stored = await identities.read(registered.host);
+        if (!stored || relayFor !== want) { pushFeatures(); return; }
+        const identity = identityFrom(stored);
+        relayHostNow = startRelayHost({
+            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => identity.authHeader(), fetch }),
+            socket: relaySocket,
+            workstationId: identity.workstationId,
+            fingerprint: identity.fingerprint,
+            sign: (data) => identity.sign(data),
+            attach: (transport) => remoteHub.add(transport),
+            onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
+            log: (message) => console.log(`[tynn relay] ${message}`),
+        });
+    };
+    relayAfterSwitch = () => { void applyRelayHost(); };
     tynnAccount.onChange(() => { void registerWorkstation(); });
     void registerWorkstation();
     // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
@@ -1681,7 +1763,7 @@ async function boot(): Promise<void> {
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
-    remoteAccessNow = remoteAccess({ listener: remoteSocket, enabled: () => composed.settings.get('remote_access') === true, onChange: pushFeatures });
+    remoteAccessNow = remoteAccess({ listener: remoteSocket, enabled: () => composed.settings.get('remote_access') === true, onChange: () => { relayAfterSwitch?.(); pushFeatures(); } });
     void remoteAccessNow.apply().catch((error: unknown) => { console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`); pushFeatures(); });
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking, the OS agent working.
     registry.setSignals(() => composed.signals({ osAgentWorking: (() => { const os = registry?.osAgent(); return os ? host?.probe(os.id)?.turnState === 'working' : false; })() }));

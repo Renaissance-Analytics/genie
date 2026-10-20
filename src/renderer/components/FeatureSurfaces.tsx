@@ -14,6 +14,7 @@ import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
 import type { HostUpgradeStep } from '../../core/host-upgrade.js';
+import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
@@ -1341,6 +1342,10 @@ export interface RemoteConnectProps {
     readonly onUpgradeHost?: (() => void) | undefined;
     /** Where an upgrade stands (core/host-upgrade.ts); absent = none running. */
     readonly upgrade?: HostUpgradeStep | null | undefined;
+    /** The workstations Tynn says this person can see (Tynn #837); absent/`null` = not asked. */
+    readonly tynnWorkstations?: TynnWorkstationList | null | undefined;
+    /** Open a Tynn workstation in its own window, over the Tynn relay. */
+    readonly onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void) | undefined;
 }
 
 /** An upgrade's step, in words, for the host it is upgrading. */
@@ -1361,7 +1366,7 @@ function upgradeWords(step: HostUpgradeStep, host: string): string {
  * "DRIVE ANOTHER MACHINE" — a host, a PIN (or a remembered token), a label for this screen. While
  * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
  */
-export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null }: RemoteConnectProps) {
+export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null, tynnWorkstations = null, onOpenWorkstation }: RemoteConnectProps) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // An upgrade in flight is said in place of its button — connected or not: the link DROPS while the host restarts.
     const upgrading = upgrade !== null && upgrade.kind !== 'up-to-date' && upgrade.kind !== 'done' && upgrade.kind !== 'failed' && upgrade.kind !== 'lost';
@@ -1395,10 +1400,33 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             ))}
         </ul>
     ) : null;
+    // YOUR TYNN WORKSTATIONS (Genie 1's Hosts picker, Tynn #837): each one Tynn says you may reach opens in its own
+    // window over the Tynn relay; one you may not is shown, and says why, but not offered.
+    const tynnList = tynnWorkstations === null ? null : !tynnWorkstations.ok ? (
+        <p data-tynn-workstations="unavailable" className="text-xs text-[var(--fg-3)]">Your Tynn workstations: {tynnWorkstations.reason}.</p>
+    ) : tynnWorkstations.workstations.length === 0 ? null : (
+        <div data-tynn-workstations="" className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-[var(--fg-3)]">Your Tynn workstations</span>
+            <ul className="flex flex-col gap-1">
+                {tynnWorkstations.workstations.map((w) => (
+                    <li key={w.id} data-tynn-workstation-row={w.id} className="flex items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[13px]">
+                        <span className="font-medium">{w.name}</span>
+                        <span className="text-[11px] text-[var(--fg-4)]">{w.local ? 'desktop' : 'cloud'}{w.source === 'owner' ? ' · yours' : w.source ? ' · shared with you' : ''}</span>
+                        {w.connectable && onOpenWorkstation ? (
+                            <button type="button" data-action="open-workstation" onClick={() => onOpenWorkstation(w)} className={`ml-auto ${button}`}>Open</button>
+                        ) : (
+                            <span className="ml-auto text-[11px] text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
+                        )}
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
     return (
         <div className="flex flex-col gap-3">
         {upgradeLine}
         {upgrading ? null : reconnect}
+        {tynnList}
         {list}
         <form
             data-form="connect-remote"
@@ -1712,7 +1740,18 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                         <div data-tynn-workstation={remote.tynnWorkstation.registered ? 'registered' : 'unregistered'} className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="font-medium">Tynn</span>
                             {remote.tynnWorkstation.registered ? (
-                                <span>This machine is registered with <span className="font-mono">{remote.tynnWorkstation.host.replace(/^https?:\/\//, '')}</span> as workstation <span className="font-mono text-xs">{remote.tynnWorkstation.workstationId}</span></span>
+                                <>
+                                    <span>This machine is registered with <span className="font-mono">{remote.tynnWorkstation.host.replace(/^https?:\/\//, '')}</span> as workstation <span className="font-mono text-xs">{remote.tynnWorkstation.workstationId}</span></span>
+                                    {/* Reachable over the Tynn relay (Tynn #838), or why not — Tynn's own words. */}
+                                    {remote.tynnWorkstation.relay ? (
+                                        <span data-tynn-relay={remote.tynnWorkstation.relay.state} className="basis-full text-xs text-[var(--fg-3)]">
+                                            {remote.tynnWorkstation.relay.state === 'reachable' ? `Reachable through the Tynn relay (${remote.tynnWorkstation.relay.relay.replace(/^wss?:\/\//, '')}).`
+                                                : remote.tynnWorkstation.relay.state === 'unavailable' ? `Not reachable through Tynn: ${remote.tynnWorkstation.relay.reason}`
+                                                : remote.tynnWorkstation.relay.state === 'connecting' ? 'Connecting to the Tynn relay…'
+                                                : 'Turn on remote access to be reachable through Tynn.'}
+                                        </span>
+                                    ) : null}
+                                </>
                             ) : (
                                 <span className="text-[var(--fg-2)]">Not registered: {remote.tynnWorkstation.reason}.</span>
                             )}
