@@ -1,4 +1,4 @@
-import { useHostPathPicker } from './HostPathPicker.js';
+import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
@@ -172,7 +172,7 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                 </form>
             </Header>
             {adding?.kind === 'flow' ? (
-                <AddFlowForm defaults={adding.defaults} problems={adding.problems} onSubmit={(form) => onAction({ kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
+                <AddFlowForm defaults={adding.defaults} problems={adding.problems} root={workspaces.find((w) => w.id === adding.defaults.workspaceId)?.path} onSubmit={(form) => onAction({ kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
             ) : null}
             {flows === null ? (
                 <Skeletons />
@@ -342,6 +342,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
             </Header>
             {adding?.kind === 'site' ? (
                 <AddSiteForm
+                    root={adding.repoPath}
                     defaults={adding.defaults}
                     existingHosts={(hosting?.sites ?? []).map((s) => s.host)}
                     problems={adding.problems}
@@ -496,6 +497,7 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                 <Input name="name" required placeholder="Name (queue worker)" aria-label="Name" />
                 <Input name="command" required placeholder="Command (php artisan queue:work)" aria-label="Command" />
                 <Input name="folder" placeholder="Folder in the workspace (optional)" aria-label="Folder" />
+                <PathBrowse name="folder" root={() => { const chosen = (document.querySelector('[data-form="add-process"] [name="workspace"]') as HTMLInputElement | HTMLSelectElement | null)?.value ?? workspaces[0]?.id; return workspaces.find((w) => w.id === chosen)?.path ?? null; }} />
                 <select name="restart" defaultValue="on-failure" aria-label="Restart" className={field}>
                     <option value="on-failure">Restart on failure</option>
                     <option value="always">Always restart</option>

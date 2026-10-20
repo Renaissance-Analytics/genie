@@ -1,3 +1,4 @@
+import { PathBrowse } from './HostPathPicker.js';
 import { useState } from 'react';
 import { Input } from '@particle-academy/react-fancy';
 import { flowFields, flowFormFromFields, type FlowStep } from '../../core/flow-form.js';
@@ -44,9 +45,11 @@ export interface AddSiteFormProps {
     /** The same form edits a site (`edit-site`, "Save") — one set of fields, one validation, for Add and Edit. */
     readonly formId?: 'add-site' | 'edit-site';
     readonly submitLabel?: string;
+    /** The folder the root is relative to (the site's repo) — Browse picks inside it (Tynn #835); absent = typed only. */
+    readonly root?: string | undefined;
 }
 
-export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersions = [], formId = 'add-site', submitLabel = 'Add site' }: AddSiteFormProps) {
+export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersions = [], formId = 'add-site', submitLabel = 'Add site', root }: AddSiteFormProps) {
     // An Edit opens on the site's pin; a pin to a version not installed here is shown as that, never swapped.
     const pinned = defaults.phpVersion ?? '';
     return (
@@ -89,6 +92,7 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersion
             </Row>
             <Row label="Root (static: the built directory; php: public)">
                 <Input name="root" defaultValue={defaults.root ?? ''} placeholder="dist" />
+                <PathBrowse name="root" root={root ?? null} />
                 <ProblemLine field="root" problems={problems} />
             </Row>
             <Row label="PHP version (php sites)">
@@ -118,6 +122,8 @@ export interface AddFlowFormProps {
     readonly problems: readonly Problem[];
     readonly onSubmit: (form: FlowForm) => void;
     readonly onCancel: () => void;
+    /** The workspace's folder — a command's folder is relative to it, and Browse picks inside it (Tynn #835). */
+    readonly root?: string | undefined;
 }
 
 const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = [
@@ -131,7 +137,7 @@ const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = 
  * process's log), a prompt to an agent (held back while the agent is mid-turn), or only a note that it fired.
  * Only the chosen step's fields are drawn; the document is built from the fields on submit (core/flow-form.ts).
  */
-export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowFormProps) {
+export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root }: AddFlowFormProps) {
     const initial = flowFields(defaults.document);
     const [step, setStep] = useState<FlowStep['kind']>(initial.step.kind);
     const command = initial.step.kind === 'command' ? initial.step : { command: '', folder: '' };
@@ -175,6 +181,7 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel }: AddFlowF
                     </Row>
                     <Row label="Folder in the workspace (optional)">
                         <Input name="folder" defaultValue={command.folder} placeholder="repos/app" />
+                        <PathBrowse name="folder" root={root ?? null} />
                         <ProblemLine field="folder" problems={problems} />
                     </Row>
                 </>

@@ -36,6 +36,7 @@ export function WorkspaceRuntimeModal({ kind, workspace, data, onAction, onClose
                             </div>
                             {adding ? (
                                 <AddSiteForm
+                                    root={adding.repoPath}
                                     defaults={adding.defaults}
                                     existingHosts={(hosting?.sites ?? []).map((s) => s.host)}
                                     problems={adding.problems}
