@@ -153,7 +153,7 @@ export type StreamEvent =
      * one parked), never read off the wire. The request itself is state (the parked card) until then; the decision
      * is history, and the chips row's Approvals count it. `optionId` is the provider's own, verbatim.
      */
-    | { kind: 'approval'; question: string; tool: string | null; outcome: 'allowed' | 'denied' | 'answered' | 'cancelled'; optionId: string | null }
+    | { kind: 'approval'; question: string; tool: string | null; outcome: 'allowed' | 'denied' | 'answered' | 'cancelled'; optionId: string | null; /** The person's note with the answer (beta.33 item 16), when there was one. */ note?: string }
     /**
      * A kind Genie does not map yet.
      *

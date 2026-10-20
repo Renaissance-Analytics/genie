@@ -908,12 +908,12 @@ async function boot(): Promise<void> {
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
-    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown) => {
+    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || typeof optionId !== 'string') return { ok: false };
         // The session checks the id against the parked request. A refusal leaves the approval
         // parked, which is recoverable; answering with something meaningless is not.
-        return { ok: host.answerApproval(record.id, optionId) };
+        return { ok: host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '') };
     });
 
     ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown) => {
@@ -1475,7 +1475,7 @@ async function boot(): Promise<void> {
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text) => host!.prompt(id, text),
-                answerApproval: (id, optionId) => host!.answerApproval(id, optionId),
+                answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },
             registerAgent: async (workspaceId) => {
@@ -1941,6 +1941,8 @@ async function boot(): Promise<void> {
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
+        // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
+        deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
         // The Deck's Dismiss on a recorded main-process error.
         mainErrors,
         toolchain: {

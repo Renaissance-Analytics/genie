@@ -424,9 +424,9 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             refusal={note ?? remote.state.lastRefusal}
             items={snapshot.deckItems}
             answering={answering}
-            onAnswer={(item, optionId) => {
+            onAnswer={(item, optionId, answerNote) => {
                 setNote(null);
-                const route = deckAnswerRoute(item, optionId);
+                const route = deckAnswerRoute(item, optionId, answerNote ?? '');
                 switch (route.kind) {
                     case 'refused':
                         setNote(route.reason);
@@ -439,11 +439,11 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                         return;
                     case 'provider':
                         setAnswering(optionId);
-                        bridge!.answerApproval(route.agentId, optionId);
+                        bridge!.answerApproval(route.agentId, optionId, route.note);
                         return;
                     case 'feature':
                         setAnswering(optionId);
-                        void bridge!.features.act({ kind: 'deck.answer', item, optionId }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setAnswering(null));
+                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setAnswering(null));
                         return;
                 }
             }}
@@ -1037,10 +1037,9 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
             answeringApproval={answering}
-            onAnswerApproval={(optionId) => {
-                if (!agentId) return;
+            onAnswerApproval={(id, optionId, note) => {
                 setAnswering(optionId);
-                resolvedBridge?.answerApproval(agentId, optionId);
+                resolvedBridge?.answerApproval(id, optionId, note ?? '');
             }}
             onAnswerDeckForm={(item, selections, notes) => {
                 // The filled form goes to main as one feature action — labels and one note per question; the form shows
@@ -1055,16 +1054,16 @@ function DesktopApp({ bridge }: AppProps) {
                 });
             }}
             deckFormRefusal={deckFormRefusal}
-            onAnswerDeckItem={(item, optionId) => {
+            onAnswerDeckItem={(item, optionId, note) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.
-                const route = deckAnswerRoute(item, optionId);
+                const route = deckAnswerRoute(item, optionId, note ?? '');
                 switch (route.kind) {
                     case 'refused':
                         console.error('[genie] deck answer refused:', route.reason);
                         return;
                     case 'feature':
-                        void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId }).then(setFeatures).catch((error: unknown) => {
+                        void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId, ...(note ? { note } : {}) }).then(setFeatures).catch((error: unknown) => {
                             console.error('[genie] deck answer refused:', (error as Error).message);
                         });
                         return;
@@ -1079,7 +1078,7 @@ function DesktopApp({ bridge }: AppProps) {
                         return;
                     case 'provider':
                         setAnswering(optionId);
-                        resolvedBridge?.answerApproval(route.agentId, optionId);
+                        resolvedBridge?.answerApproval(route.agentId, optionId, route.note);
                         return;
                 }
             }}

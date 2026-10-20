@@ -124,6 +124,27 @@ describe('the Deck’s inline answers reach the stores', () => {
         expect(await verdict).toBe('allowed');
     });
 
+    // beta.33 item 16 — the owner: "I rejected with a note in the rejection but compass did not get the rejection notice".
+    it('Deny WITH a note on a Genie approval: the tool gets its verdict, and the note reaches the agent as your message', async () => {
+        const verdict = services.approvals.gate({ agentId: 'agent_x' as never, agentName: 'atlas', workspaceId: 'tynn', workspacePath: dir }, 'write', 'npm test');
+        const item = services.deckItems().find((i) => i.id.startsWith('appr_'))!;
+        const told: string[][] = [];
+        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'deny', note: 'run it in the background' }, state(), { deliverToAgent: (id, text) => { told.push([id, text]); return true; } });
+        expect(await verdict).toBe('denied');
+        expect(told).toEqual([['agent_x', `You rejected “${item.title}”: run it in the background`]]);
+    });
+
+    it('a note that cannot be delivered is refused BEFORE the answer — never a silent verdict; no note, nothing to deliver', async () => {
+        void services.approvals.gate({ agentId: 'agent_x' as never, agentName: 'atlas', workspaceId: 'tynn', workspacePath: dir }, 'write', 'npm test');
+        const item = services.deckItems().find((i) => i.id.startsWith('appr_'))!;
+        await expect(handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'deny', note: 'why' }, state())).rejects.toThrow(/note cannot reach the agent/);
+        expect(services.deckItems().some((i) => i.id === item.id)).toBe(true);
+        const told: string[] = [];
+        await handleFeatureAction(services, { kind: 'deck.answer', item, optionId: 'deny', note: '  ' }, state(), { deliverToAgent: (_id, text) => { told.push(text); return true; } });
+        expect(told).toEqual([]);
+        expect(services.deckItems().some((i) => i.id === item.id)).toBe(false);
+    });
+
     it('a refused resolution rejects with the reason and changes nothing', async () => {
         const item = services.deckItems();
         expect(item).toEqual([]);

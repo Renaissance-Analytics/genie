@@ -1,5 +1,5 @@
-import { Button, Icon, Toast } from '@particle-academy/react-fancy';
-import { useEffect, useReducer } from 'react';
+import { Button, Icon, Input, Toast } from '@particle-academy/react-fancy';
+import { useEffect, useReducer, useState } from 'react';
 import type { OptionTone } from '../../core/approval.js';
 import type { DeckItem } from '../../core/deck.js';
 import { EMPTY_TOASTS, TOAST_DEPTH, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
@@ -39,8 +39,11 @@ const TONE: Record<OptionTone, string> = {
 
 export interface ApprovalToastStackProps {
     view: ToastStackView;
-    /** Allow / Deny — the Deck's own answer. */
-    onAnswer: (item: DeckItem, optionId: string) => void;
+    /** Allow / Deny — the Deck's own answer — with the note typed on this request ('' = none; beta.33 item 16). */
+    onAnswer: (item: DeckItem, optionId: string, note: string) => void;
+    /** The note typed per request, by its id; absent = none typed. */
+    notes?: Readonly<Record<string, string>> | undefined;
+    onNote?: ((itemId: string, note: string) => void) | undefined;
     /** Later: off the toasts, kept in the Deck. */
     onLater: (item: DeckItem) => void;
     /** Fancy turned the stack (wheel or arrow): the new front's index in the ring. */
@@ -58,7 +61,8 @@ function workspaceOf(item: DeckItem): string {
 }
 
 /** The front request: who, where, what, and its answers. */
-function FrontCard({ item, view, onAnswer, onLater, onOpenDeck }: { item: DeckItem; view: ToastStackView } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onLater' | 'onOpenDeck'>) {
+function FrontCard({ item, view, onAnswer, onLater, onOpenDeck, notes, onNote }: { item: DeckItem; view: ToastStackView } & Pick<ApprovalToastStackProps, 'onAnswer' | 'onLater' | 'onOpenDeck' | 'notes' | 'onNote'>) {
+    const note = notes?.[item.id] ?? '';
     const busy = view.answering.includes(item.id);
     const options = item.answer.kind === 'inline' ? item.answer.options : [];
     return (
@@ -71,6 +75,8 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck }: { item: DeckIt
                 {view.total > 1 ? <span data-approval-toast-position="" className="shrink-0 font-mono">{`${view.position} of ${view.total}`}</span> : null}
             </div>
             <p data-approval-toast-title="" className="mb-2.5 break-words leading-[18px] text-[var(--fg-1)]">{item.title}</p>
+            {/* An optional note, sent with Allow or Deny: the agent is told what you said (beta.33 item 16). */}
+            {onNote ? <Input data-toast-note={item.id} value={note} onValueChange={(v) => onNote(item.id, v)} size="sm" placeholder={`Note for ${item.agentName ?? 'the agent'} (optional)`} aria-label="Note with your answer" className="mb-2" /> : null}
             <div className="flex items-center gap-2">
                 {options.map((option) => (
                     <Button
@@ -80,7 +86,7 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck }: { item: DeckIt
                         data-toast-option={option.id}
                         data-tone={option.tone}
                         disabled={busy}
-                        onClick={() => onAnswer(item, option.id)}
+                        onClick={() => onAnswer(item, option.id, note)}
                         className={`border ${TONE[option.tone]}`}
                     >
                         {option.label}
@@ -101,7 +107,7 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck }: { item: DeckIt
 }
 
 /** The stack itself: a pure function of its view — no state, so a test can read it and press its buttons. */
-export function ApprovalToastStack({ view, onAnswer, onLater, onFront, onEngage, onOpenDeck, right = 16 }: ApprovalToastStackProps) {
+export function ApprovalToastStack({ view, onAnswer, onLater, onFront, onEngage, onOpenDeck, notes, onNote, right = 16 }: ApprovalToastStackProps) {
     if (view.total === 0) return null;
     const front = view.ring[view.front]!;
     return (
@@ -134,7 +140,7 @@ export function ApprovalToastStack({ view, onAnswer, onLater, onFront, onEngage,
                 cardClassName="border-[var(--warning)]/40 bg-[var(--bg-1)]"
                 renderItem={(item, { isFront }) =>
                     isFront ? (
-                        <FrontCard item={item} view={view} onAnswer={onAnswer} onLater={onLater} onOpenDeck={onOpenDeck} />
+                        <FrontCard item={item} view={view} onAnswer={onAnswer} onLater={onLater} onOpenDeck={onOpenDeck} notes={notes} onNote={onNote} />
                     ) : (
                         // The ones behind are inert (Fancy's): only the front one is answered.
                         <span data-approval-toast-behind={item.id} className="text-[12px] text-[var(--fg-3)]">{item.title}</span>
@@ -152,7 +158,7 @@ export interface ApprovalToastsProps {
     dnd: boolean;
     /** Drawn nowhere (the Deck itself is on screen: it shows these with the same buttons). The rules keep running. */
     hidden?: boolean | undefined;
-    onAnswer: (item: DeckItem, optionId: string) => void;
+    onAnswer: (item: DeckItem, optionId: string, note: string) => void;
     onOpenDeck?: ((item: DeckItem) => void) | undefined;
     right?: number | undefined;
 }
@@ -162,14 +168,17 @@ export function ApprovalToasts({ items, dnd, hidden = false, onAnswer, onOpenDec
     // The first render already knows what is parked (and what arrived under DND), so nothing flashes on boot.
     const [state, dispatch] = useReducer(toastReducer, null, () => toastReducer(EMPTY_TOASTS, { kind: 'items', items, dnd }));
     useEffect(() => { dispatch({ kind: 'items', items, dnd }); }, [items, dnd]);
+    const [notes, setNotes] = useState<Readonly<Record<string, string>>>({});
     if (hidden) return null;
     return (
         <ApprovalToastStack
             view={toastView(state, items)}
-            onAnswer={(item, optionId) => {
+            onAnswer={(item, optionId, note) => {
                 dispatch({ kind: 'answering', id: item.id });
-                onAnswer(item, optionId);
+                onAnswer(item, optionId, note);
             }}
+            notes={notes}
+            onNote={(id, note) => setNotes((n) => ({ ...n, [id]: note }))}
             onLater={(item) => dispatch({ kind: 'later', id: item.id })}
             onFront={(index) => dispatch({ kind: 'front', index })}
             onEngage={(on) => dispatch({ kind: 'engage', on })}

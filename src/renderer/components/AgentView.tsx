@@ -152,7 +152,8 @@ export interface AgentViewProps {
     chatSubject?: string | null | undefined;
     /** `null` unless an answer is in flight. */
     answeringApproval?: string | null | undefined;
-    onAnswerApproval?: ((optionId: string) => void) | undefined;
+    /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
+    onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onNavigate: (route: string) => void;
     onSelect: (rowId: string | null) => void;
     /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
@@ -840,7 +841,7 @@ export function AgentView({
                                 <ApprovalCard
                                     approval={approval}
                                     answering={answeringApproval ?? null}
-                                    onAnswer={(id) => onAnswerApproval?.(id)}
+                                    onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                                     agentName={agent.name}
                                 />
                             ) : null}

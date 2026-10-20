@@ -1,4 +1,5 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Icon, Input } from '@particle-academy/react-fancy';
+import { useState } from 'react';
 import type { Approval, OptionTone } from '../../core/approval.js';
 
 /**
@@ -31,7 +32,8 @@ export interface ApprovalCardProps {
     approval: Approval;
     /** `null` while an answer is in flight, so the buttons can stop accepting a second press. */
     answering: string | null;
-    onAnswer: (optionId: string) => void;
+    /** `note`: the person's words with the answer (beta.33 item 16) — Genie delivers them to the agent; '' = none. */
+    onAnswer: (optionId: string, note: string) => void;
     /** The asking agent, for the board's heading `atlas asks to run Bash`; without it the heading names the tool alone. */
     agentName?: string | undefined;
 }
@@ -39,7 +41,17 @@ export interface ApprovalCardProps {
 /** The board's key hints on the two decisions the keys reach (§4.2 `a` / `d`). */
 const KEY_HINT: Partial<Record<OptionTone, string>> = { ok: 'A', bad: 'D' };
 
-export function ApprovalCard({ approval, answering, onAnswer, agentName }: ApprovalCardProps) {
+/**
+ * THE NOTE (beta.33 item 16; the owner: "I rejected with a note in the rejection but compass did not get the rejection
+ * notice"): every approval takes one, optional, sent with whichever option is pressed. Held here; the card itself is
+ * hook-free (`ApprovalCardView`), so a test can press it.
+ */
+export function ApprovalCard(props: ApprovalCardProps) {
+    const [note, setNote] = useState('');
+    return <ApprovalCardView {...props} note={note} onNote={setNote} />;
+}
+
+export function ApprovalCardView({ approval, answering, onAnswer, agentName, note, onNote }: ApprovalCardProps & { note: string; onNote: (note: string) => void }) {
     // The board's heading and meta, each only when the request reported the piece; the question itself always.
     const heading = approval.tool ? `${agentName ? `${agentName} asks` : 'asks'} to run ${approval.tool}` : null;
     const meta = approval.toolCallId ? `tool_call ${approval.toolCallId.replace(/^toolu_/, '').slice(0, 4)} · 1 of 1 pending` : null;
@@ -66,6 +78,16 @@ export function ApprovalCard({ approval, answering, onAnswer, agentName }: Appro
                 <pre data-approval-command="" className="hidden">{approval.command}</pre>
             ) : null}
 
+            {/* An optional note, sent with the answer — the agent is told "You rejected …: <note>" (item 16). */}
+            <Input
+                data-approval-note=""
+                value={note}
+                onValueChange={onNote}
+                size="sm"
+                placeholder={agentName ? `Note for ${agentName} (optional) — sent with your answer` : 'Note (optional) — sent with your answer'}
+                aria-label="Note with your answer"
+                className="mb-2"
+            />
             <div className="flex flex-wrap gap-2">
                 {approval.options.map((option) => (
                     <button
@@ -77,7 +99,7 @@ export function ApprovalCard({ approval, answering, onAnswer, agentName }: Appro
                         // The provider is blocked on a single promise; a second answer resolves
                         // nothing and the second press would look ignored.
                         disabled={answering !== null}
-                        onClick={() => onAnswer(option.id)}
+                        onClick={() => onAnswer(option.id, note)}
                         className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${TONE[option.tone]}`}
                     >
                         {option.label}

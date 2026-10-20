@@ -1,6 +1,7 @@
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
+import { approvalNoteText } from './approval-note.js';
 import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
@@ -532,7 +533,7 @@ export class AgentSession {
      * best. A refused answer leaves the approval parked, which is recoverable; "answered with
      * something meaningless" is not.
      */
-    answerApproval(optionId: string): boolean {
+    answerApproval(optionId: string, note = ''): boolean {
         const held = this.#approval;
         if (!held) return false;
         if (!held.approval.options.some((o) => o.id === optionId)) return false;
@@ -543,9 +544,52 @@ export class AgentSession {
         // THE DECISION IS A LEDGER ROW: what was decided about which call, kept with the conversation (the chips row's
         // Approvals, the ledger's history). The request was state until now; the answer is a fact worth a line.
         const chosen = held.approval.options.find((o) => o.id === optionId);
-        void this.#emitRow({ kind: 'approval', question: held.approval.question, tool: held.approval.tool ?? null, outcome: chosen?.tone === 'ok' ? 'allowed' : chosen?.tone === 'bad' ? 'denied' : 'answered', optionId });
+        const outcome = chosen?.tone === 'ok' ? 'allowed' : chosen?.tone === 'bad' ? 'denied' : 'answered';
+        const trimmed = note.trim();
+        void this.#emitRow({ kind: 'approval', question: held.approval.question, tool: held.approval.tool ?? null, outcome, optionId, ...(trimmed ? { note: trimmed } : {}) });
+        /*
+         * THE NOTE REACHES THE AGENT (beta.33 item 16; the owner: "I rejected with a note in the rejection but compass did
+         * not get the rejection notice"). ACP's outcome has no note, so the note goes as the person's own message, through
+         * the chat prompt's path: Claude reads it at its next step. A provider that refuses a prompt while its turn runs
+         * (Codex) gets it the moment that turn ends (`#afterTurn`).
+         */
+        const text = approvalNoteText({ what: held.approval.question, outcome, option: chosen?.label ?? optionId, note });
+        if (text !== null) this.deliver(text, 'you');
         this.#changed();
         return true;
+    }
+
+    /** Messages a provider refused mid-turn, sent in order as soon as a turn ends. */
+    #afterTurn: Array<{ text: string; by: string | null }> = [];
+
+    /**
+     * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
+     * held for the end of the turn when it refuses a prompt mid-turn (Codex), then sent in order. An approval's note
+     * (item 16) — from the card here, or from a Genie approval answered on the Deck (main/feature-ipc.ts).
+     */
+    deliver(text: string, by: string | null): void {
+        if (this.#afterTurn.length === 0) {
+            try {
+                this.prompt(text, by);
+                return;
+            } catch {
+                // Refused (Codex: a turn already in flight). Nothing was recorded; it waits for the turn to end.
+            }
+        }
+        this.#afterTurn.push({ text, by });
+    }
+
+    /** A turn ended: what waited goes out, oldest first, until the provider refuses again. */
+    #flushAfterTurn(): void {
+        while (this.#afterTurn.length > 0 && this.running && this.#approval === null) {
+            const next = this.#afterTurn[0]!;
+            try {
+                this.prompt(next.text, next.by);
+            } catch {
+                return;
+            }
+            this.#afterTurn.shift();
+        }
     }
 
     start(): void {
@@ -679,6 +723,8 @@ export class AgentSession {
                         this.#inTurn = true;
                         this.#turnState = 'working';
                     }
+                    // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
+                    if (!crashed && !this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
                     // Working (found in the first doctor trial, 2026-10-13).

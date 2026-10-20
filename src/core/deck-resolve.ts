@@ -16,8 +16,9 @@ import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
 
 export type DeckCommand =
     | { kind: 'answer-question'; questionId: string; selections: string[][]; notes: string[]; note: string }
-    | { kind: 'resolve-approval'; approvalId: string; choice: 'allow' | 'deny' }
-    | { kind: 'answer-provider-approval'; agentId: string; optionId: string }
+    /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent; '' = none. */
+    | { kind: 'resolve-approval'; approvalId: string; choice: 'allow' | 'deny'; note: string }
+    | { kind: 'answer-provider-approval'; agentId: string; optionId: string; note: string }
     | { kind: 'list-done'; workspaceId: string; itemId: string }
     | { kind: 'mark-read'; messageId: string }
     | { kind: 'mark-seen'; finishedId: string }
@@ -105,7 +106,7 @@ export function deckAnswerChannel(item: DeckItem): { kind: 'provider'; agentId: 
 }
 
 export type DeckAnswerRoute =
-    | { kind: 'provider'; agentId: string; optionId: string }
+    | { kind: 'provider'; agentId: string; optionId: string; note: string }
     | { kind: 'feature' }
     | { kind: 'navigate'; route: string }
     | { kind: 'restart-with-handoff'; agentId: string; finishedId: string }
@@ -116,11 +117,11 @@ export type DeckAnswerRoute =
  * layer; Open is a navigation the window does itself; Restart-with-this is a session command with
  * its own bridge call; everything else is a feature action main resolves against the stores.
  */
-export function deckAnswerRoute(item: DeckItem, optionId: string): DeckAnswerRoute {
+export function deckAnswerRoute(item: DeckItem, optionId: string, note = ''): DeckAnswerRoute {
     const channel = deckAnswerChannel(item);
     if (channel.kind === 'refused') return channel;
-    if (channel.kind === 'provider') return { kind: 'provider', agentId: channel.agentId, optionId };
-    const command = resolveDeckAnswer(item, optionId);
+    if (channel.kind === 'provider') return { kind: 'provider', agentId: channel.agentId, optionId, note };
+    const command = resolveDeckAnswer(item, optionId, note);
     switch (command.kind) {
         case 'refused':
         case 'navigate':
@@ -131,7 +132,7 @@ export function deckAnswerRoute(item: DeckItem, optionId: string): DeckAnswerRou
     }
 }
 
-export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand {
+export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): DeckCommand {
     if (item.forwardedFrom !== null || item.answer.kind === 'elsewhere') {
         const host = item.answer.kind === 'elsewhere' ? item.answer.host : item.forwardedFrom;
         return refuse(`this question was raised on ${host} and must be answered there`);
@@ -141,9 +142,9 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string): DeckCommand
 
     switch (item.source) {
         case 'agent-question':
-            if (item.id.startsWith('q_')) return { kind: 'answer-question', questionId: item.id, selections: [[optionId]], notes: [''], note: '' };
-            if (item.id.startsWith('appr_')) return { kind: 'resolve-approval', approvalId: item.id, choice: optionId === 'allow' ? 'allow' : 'deny' };
-            if (item.id.startsWith('approval:') && item.agentId) return { kind: 'answer-provider-approval', agentId: item.agentId, optionId };
+            if (item.id.startsWith('q_')) return { kind: 'answer-question', questionId: item.id, selections: [[optionId]], notes: [''], note: note.trim() };
+            if (item.id.startsWith('appr_')) return { kind: 'resolve-approval', approvalId: item.id, choice: optionId === 'allow' ? 'allow' : 'deny', note: note.trim() };
+            if (item.id.startsWith('approval:') && item.agentId) return { kind: 'answer-provider-approval', agentId: item.agentId, optionId, note: note.trim() };
             return refuse(`${item.id} is not an item Genie knows how to answer`);
         case 'user-list':
             if (item.workspaceId === null) return refuse('this item names no workspace; it cannot be marked done from here');

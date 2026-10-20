@@ -31,7 +31,7 @@ function fakes() {
             cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
             resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
-            answerApproval: (id, opt) => { calls.push(`approve:${id}:${opt}`); return true; },
+            answerApproval: (id, opt, note) => { calls.push(`approve:${id}:${opt}${note ? `:${note}` : ''}`); return true; },
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
         },
         registerAgent: async (workspaceId) => { calls.push(`register:${workspaceId}`); return { id: 'agent_new' }; },
@@ -106,9 +106,11 @@ describe('invoke', () => {
         expect(await api.invoke('stopAgent', ['agent_a'])).toEqual({ ok: true });
         expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
         expect(await api.invoke('answerApproval', ['agent_a', 'allow'])).toEqual({ ok: true });
+        // An approval's note crosses the wire too (beta.33 item 16): a remote window's rejection reaches the agent.
+        expect(await api.invoke('answerApproval', ['agent_a', 'deny', 'not that file'])).toEqual({ ok: true });
         expect(await api.invoke('addAgent', ['tynn'])).toEqual({ ok: true, id: 'agent_new' });
         expect(await api.invoke('restartWithHandoff', ['agent_a', 'fin_1'])).toEqual({ ok: true });
-        expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'register:tynn', 'stop:agent_a', 'start:agent_a:/w/tynn', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
+        expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn', 'stop:agent_a', 'start:agent_a:/w/tynn', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
     });

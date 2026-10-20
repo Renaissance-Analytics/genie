@@ -711,13 +711,23 @@ export class SessionHost {
      * Returns false when there was nothing parked or the id was not offered — the session
      * checks, because the renderer is not trusted to send back a valid one.
      */
-    answerApproval(agentId: AgentId, optionId: string): boolean {
+    answerApproval(agentId: AgentId, optionId: string, note = ''): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
 
-        const answered = entry.session.answerApproval(optionId);
+        // The person's note, when there is one, reaches the agent after the answer (AgentSession.answerApproval, item 16).
+        const answered = entry.session.answerApproval(optionId, note);
         if (answered) this.#emit(agentId);
         return answered;
+    }
+
+    /** A message that must reach the agent, now or when its turn ends (AgentSession.deliver); false = no session. */
+    deliver(agentId: AgentId, text: string, by: string | null = 'you'): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.deliver(text, by);
+        this.#emit(agentId);
+        return true;
     }
 
     /** `by` is who started the turn, when the caller knows (`you`, `genie`, a peer's name); it is written into the ledger. */

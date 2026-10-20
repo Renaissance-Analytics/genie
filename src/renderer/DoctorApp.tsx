@@ -34,7 +34,7 @@ export interface DoctorBridge {
     /** Your message, with the composer's files (picked, dropped or pasted) — sent as content blocks, as in Genie. */
     prompt(text: string, attachments?: readonly Attachment[]): Promise<boolean>;
     start(): Promise<{ ok: true } | { ok: false; reason: string }>;
-    answerApproval(optionId: string): Promise<boolean>;
+    answerApproval(optionId: string, note?: string): Promise<boolean>;
     onChange(listener: () => void): () => void;
 }
 
@@ -55,7 +55,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
     detail: DoctorDetail | null;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
     onStart: () => void;
-    onAnswerApproval: (optionId: string) => void;
+    onAnswerApproval: (optionId: string, note?: string) => void;
     answeringApproval?: string | null;
 }) {
     const [selected, setSelected] = useState<string | null>(null);

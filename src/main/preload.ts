@@ -73,8 +73,8 @@ const bridge: GenieBridge = {
         void ipcRenderer.invoke('genie:add-agent', workspaceId);
     },
 
-    answerApproval: (agentId, optionId) => {
-        void ipcRenderer.invoke('genie:answer-approval', agentId, optionId);
+    answerApproval: (agentId, optionId, note) => {
+        void ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '');
     },
 
     restartWithHandoff: (agentId, finishedId) =>
