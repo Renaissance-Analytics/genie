@@ -1251,14 +1251,9 @@ async function boot(): Promise<void> {
     // The commits in the workspace's repos since a moment (an observed agent's index): git's own account.
     ipcMain.handle('genie:workspace-commits-since', (_event, raw: unknown, since: unknown) => (typeof raw === 'string' && typeof since === 'number' ? commitsSinceIn(repoOps, raw, since) : { ok: false, reason: 'name a workspace and a moment' }));
     // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
-    ipcMain.handle('genie:workspace-repo-locate', async (_event, raw: unknown, slug: unknown) => {
-        if (typeof raw !== 'string' || typeof slug !== 'string') return { ok: false, reason: 'name a workspace and a repo' };
-        if (!window) return { ok: false, reason: 'no window to ask in' };
-        const picked = await dialog.showOpenDialog(window, { title: `Where is ${slug} now? Pick its folder inside the envelope`, properties: ['openDirectory'] });
-        const path = picked.filePaths[0];
-        if (picked.canceled || !path) return { ok: false, reason: 'no folder picked' };
-        return relocateRepoIn(repoOps, raw, slug, path);
-    });
+    // The folder is picked in the window over the host's disk (Tynn #835); the manifest's path moves.
+    ipcMain.handle('genie:workspace-repo-locate', (_event, raw: unknown, slug: unknown, path: unknown) =>
+        (typeof raw === 'string' && typeof slug === 'string' && typeof path === 'string' && path !== '' ? relocateRepoIn(repoOps, raw, slug, path) : { ok: false, reason: 'name a workspace, a repo and its folder' }));
     ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
         const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
         return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
@@ -1286,27 +1281,17 @@ async function boot(): Promise<void> {
         (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
-    ipcMain.handle('genie:workspace-preview-add-git', async (_event, rawUrl: unknown) => {
-        if (typeof rawUrl !== 'string' || !window) return { ok: false, reason: 'give a git URL' };
-        const picked = await dialog.showOpenDialog(window, { title: 'Where should the clone land? Pick the parent folder', properties: ['openDirectory'] });
-        const parent = picked.filePaths[0];
-        if (picked.canceled || !parent) return { ok: false, reason: 'no folder picked' };
-        const plan = await previewAddFromGit(workspaceOps, rawUrl, parent);
-        return plan.ok ? { ...plan, parent } : plan;
-    });
+    // The parent is picked in the window over the host's disk (Tynn #835).
+    const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
+    ipcMain.handle('genie:workspace-preview-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
+        (typeof rawUrl === 'string' && typeof rawParent === 'string' && rawParent !== '' ? previewGit(rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
         (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
     ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
-    ipcMain.handle('genie:workspace-preview-add-tynn', async (_event, rawId: unknown) => {
-        if (typeof rawId !== 'string' || rawId.length === 0) return { ok: false, reason: 'choose a Tynn project first' };
-        if (!window) return { ok: false, reason: 'no window' };
-        const picked = await dialog.showOpenDialog(window, { title: 'Where should the Tynn envelope be created? Pick the parent folder', properties: ['openDirectory'] });
-        const parent = picked.filePaths[0];
-        if (picked.canceled || !parent) return { ok: false, reason: 'no folder picked' };
-        return previewAddFromTynn(workspaceOps, parent, rawId);
-    });
+    ipcMain.handle('genie:workspace-preview-add-tynn', (_event, rawId: unknown, rawParent: unknown) =>
+        (typeof rawId === 'string' && rawId.length > 0 && typeof rawParent === 'string' && rawParent !== '' ? previewAddFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'choose a Tynn project and a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
         (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
@@ -1489,6 +1474,10 @@ async function boot(): Promise<void> {
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
+                previewAddFromGit: (url, parent) => previewGit(url, parent),
+                tynnProjects: () => listTynnProjects(workspaceOps),
+                previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
+                locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
@@ -1928,12 +1917,6 @@ async function boot(): Promise<void> {
         openInBrowser,
         // The Deck's Dismiss on a recorded main-process error.
         mainErrors,
-        // An alert's own sound (Tynn #766 B2): the host's picker, sound files only.
-        pickSound: async () => {
-            if (!window || window.isDestroyed()) return null;
-            const picked = await dialog.showOpenDialog(window, { title: 'Choose a sound', properties: ['openFile'], filters: [{ name: 'Sounds', extensions: [...SOUND_FILE_EXTENSIONS] }] });
-            return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0]!;
-        },
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),
@@ -1983,12 +1966,6 @@ async function boot(): Promise<void> {
         // A zero-sized box means the surface is not on screen: hide rather than paint over another surface.
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
-    });
-    // §6.4 attachments: the host's own picker; what it answers is all a send may attach.
-    ipcMain.handle(FEATURE_CHANNELS.pickFiles, async () => {
-        if (!window || window.isDestroyed()) return [];
-        const picked = await dialog.showOpenDialog(window, { title: 'Attach files', properties: ['openFile', 'multiSelections'] });
-        return picked.canceled ? [] : picked.filePaths;
     });
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
     // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.

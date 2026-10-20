@@ -1,3 +1,5 @@
+import { useHostPathPicker } from './HostPathPicker.js';
+import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
@@ -927,6 +929,13 @@ export function InboxSurface({ data, onAction, compose }: SurfaceProps & { compo
 
 
 function SettingControl({ def, value, onAction, customPath }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined }) {
+    // Your own sound file (Tynn #766 B2), picked over the HOST's disk in the window (Tynn #835): sound files only.
+    const pickHostPath = useHostPathPicker();
+    const pickSound = () => {
+        void pickHostPath?.({ mode: 'file', title: 'Choose a sound', extensions: SOUND_FILE_EXTENSIONS }).then((p) => {
+            if (typeof p === 'string') onAction({ kind: 'settings.setSoundFile', key: def.key, path: p });
+        });
+    };
     if (value === null) return <Skeleton shape="text" width={80} />;
     if (def.type === 'boolean') {
         return <Switch checked={value === true} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: def.key, value: checked })} aria-label={def.label} />;
@@ -935,7 +944,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
         const select = (
             // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
             // By name when the setting has names for its options (a sound is "Wind Down", not `winddown`).
-            <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => onAction(isAlertSoundKey(def.key) && v === 'custom' ? { kind: 'settings.pickSound', key: def.key } : { kind: 'settings.set', key: def.key, value: v })} aria-label={def.label} />
+            <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
         );
         if (!isAlertSoundKey(def.key)) return select;
         // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
@@ -948,7 +957,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
                     <span data-sound-custom={def.key} title={String(customPath)} className="max-w-[160px] truncate text-xs text-[var(--fg-3)]">{file}</span>
                 ) : null}
                 {value === 'custom' ? (
-                    <Button type="button" size="sm" variant="ghost" data-action="sound-pick" onClick={() => onAction({ kind: 'settings.pickSound', key: def.key })}>Change…</Button>
+                    <Button type="button" size="sm" variant="ghost" data-action="sound-pick" onClick={pickSound}>Change…</Button>
                 ) : null}
                 <Button type="button" size="sm" variant="ghost" data-sound-preview={def.key} disabled={sound === null} onClick={() => playAlertSound(sound)} title="Preview" aria-label={`Preview: ${def.label}`}>
                     <Icon name="play" size="xs" />

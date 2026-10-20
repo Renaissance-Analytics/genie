@@ -334,7 +334,7 @@ export type FeatureAction =
     | { kind: 'inbox.markRead'; messageId: string }
     | { kind: 'settings.set'; key: string; value: boolean | string }
     /** Pick your own sound file for an alert (Tynn #766 B2): the host's picker; the alert is set to Custom file. */
-    | { kind: 'settings.pickSound'; key: string }
+    | { kind: 'settings.setSoundFile'; key: string; path: string }
     | { kind: 'settings.reset'; key: string }
     | { kind: 'browser.navigate'; url: string }
     /** The Genie Browser's history and reload — the view's own (main applies them to the pane). */

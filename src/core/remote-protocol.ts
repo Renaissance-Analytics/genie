@@ -115,11 +115,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
     'host.listDir': 'read',
     'workspaces.confirmAdd': 'write',
-    'workspaces.previewAddFromGit': 'host-only',
+    'workspaces.previewAddFromGit': 'read',
     'workspaces.confirmAddFromGit': 'write',
     // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.
-    'workspaces.tynnProjects': 'host-only',
-    'workspaces.previewAddFromTynn': 'host-only',
+    'workspaces.tynnProjects': 'read',
+    'workspaces.previewAddFromTynn': 'read',
     'workspaces.confirmAddFromTynn': 'write',
     'workspaces.hibernate': 'write',
     'workspaces.wake': 'write',
@@ -129,7 +129,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
     // The folder picker is the host's; a remote window is told to do it there.
-    'workspaces.locateRepo': 'host-only',
+    'workspaces.locateRepo': 'write',
     'workspaces.commitsSince': 'read',
     'workspaces.settings': 'read',
     'workspaces.setSetting': 'write',
@@ -161,7 +161,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
 export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.commitsSince'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.commitsSince', 'workspaces.locateRepo'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }

@@ -1,5 +1,5 @@
 import { FileBrowser, Modal, type FileEntry } from '@particle-academy/react-fancy';
-import { useMemo, useState } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
 import type { HostListing } from '../../main/host-fs.js';
 
 /**
@@ -11,11 +11,25 @@ import type { HostListing } from '../../main/host-fs.js';
 
 export type ListDir = (path: string) => Promise<HostListing>;
 
-/** The host listing as FileBrowser entries; a refusal is the folder's error, in the host's words. */
-export function fileEntriesOf(listing: HostListing): FileEntry[] {
+/**
+ * The host listing as FileBrowser entries; a refusal is the folder's error, in the host's words. With `extensions`
+ * (an alert's sound), other files are listed but disabled — seen, not picked; folders stay open.
+ */
+export function fileEntriesOf(listing: HostListing, extensions?: readonly string[]): FileEntry[] {
     if (!listing.ok) throw new Error(listing.reason);
-    return listing.entries.map((e) => (e.kind === 'dir' ? { path: e.path, name: e.name, kind: 'dir' as const } : { path: e.path, name: e.name, kind: 'file' as const, hasChildren: false }));
+    const allowed = extensions ? new Set(extensions.map((x) => x.toLowerCase())) : null;
+    const pickable = (name: string) => allowed === null || allowed.has((name.split('.').pop() ?? '').toLowerCase());
+    return listing.entries.map((e) => (e.kind === 'dir'
+        ? { path: e.path, name: e.name, kind: 'dir' as const }
+        : { path: e.path, name: e.name, kind: 'file' as const, hasChildren: false, ...(pickable(e.name) ? {} : { disabled: true }) }));
 }
+
+/** Ask for a path on the HOST (Tynn #835): `null` when cancelled; `string[]` for `files`. */
+export type PickHostPath = (opts: { mode: 'directory' | 'file' | 'files'; title?: string; initialPath?: string; extensions?: readonly string[] }) => Promise<string | string[] | null>;
+
+/** The window's one picker, for components that pick (an alert's sound). Absent = nothing to pick with. */
+export const HostPathPickerContext = createContext<PickHostPath | null>(null);
+export const useHostPathPicker = (): PickHostPath | null => useContext(HostPathPickerContext);
 
 export interface HostPathPickerProps {
     /** `directory`: pick a folder; `file`: one file; `files`: several. */
@@ -24,6 +38,8 @@ export interface HostPathPickerProps {
     readonly title?: string | undefined;
     /** Where it opens (`/` = the machine's root: its drives on Windows). */
     readonly initialPath?: string | undefined;
+    /** Files with other extensions are listed but cannot be picked. */
+    readonly extensions?: readonly string[] | undefined;
     /** Pre-selected (tests, a remembered choice). */
     readonly initialSelection?: string | readonly string[] | undefined;
     readonly onPick: (picked: string | string[]) => void;
@@ -33,10 +49,10 @@ export interface HostPathPickerProps {
 const button = 'rounded-md border border-[var(--border-1)] px-3 py-1 text-xs hover:bg-[var(--bg-2)] disabled:opacity-50';
 
 /** The picker's body — FileBrowser, what is picked, Choose / Cancel. Fancy's Modal portals; this does not. */
-export function HostPathPickerForm({ mode, listDir, initialPath = '/', initialSelection, onPick, onCancel }: HostPathPickerProps) {
+export function HostPathPickerForm({ mode, listDir, initialPath = '/', initialSelection, extensions, onPick, onCancel }: HostPathPickerProps) {
     const multiple = mode === 'files';
     const [picked, setPicked] = useState<string[]>(() => (initialSelection === undefined ? [] : Array.isArray(initialSelection) ? [...initialSelection] : [initialSelection as string]));
-    const provider = useMemo(() => ({ loadChildren: async (path: string) => fileEntriesOf(await listDir(path)) }), [listDir]);
+    const provider = useMemo(() => ({ loadChildren: async (path: string) => fileEntriesOf(await listDir(path), extensions) }), [listDir, extensions]);
     return (
         <div data-host-path-picker={mode} className="flex flex-col gap-3 text-sm">
             <div className="h-[360px] overflow-hidden rounded-lg border border-[var(--border-1)]">

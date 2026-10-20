@@ -64,13 +64,17 @@ describe('the capability table', () => {
         expect(REMOTE_METHODS.length).toBe(61);
         expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setDefaultAgent');
-        expect(capabilityOf('workspaces.tynnProjects')).toBe('host-only');
+        // Tynn #835: the parent folder is picked IN THE WINDOW over the host's disk, so these are reads now (owner-only:
+        // they add to the host itself), and Locate repo is a write in its workspace.
+        expect(capabilityOf('workspaces.tynnProjects')).toBe('read');
         expect(capabilityOf('cancelTurn')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('cancelTurn');
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
-        expect(capabilityOf('workspaces.locateRepo')).toBe('host-only');
+        expect(capabilityOf('workspaces.locateRepo')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.locateRepo');
+        expect(capabilityOf('workspaces.previewAddFromGit')).toBe('read');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
-        expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('host-only');
+        expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('read');
         expect(capabilityOf('workspaces.confirmAddFromTynn')).toBe('write');
         expect(capabilityOf('inbox.sendFile')).toBe('write');
         // Tynn #835: the folder is picked in the window (FileBrowser over the host's own disk), so the preview reads a path.

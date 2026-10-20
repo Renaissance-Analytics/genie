@@ -103,8 +103,6 @@ export const FEATURE_CHANNELS = {
     changed: 'genie:features-changed',
     /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
     browserBounds: 'genie:features-browser-bounds',
-    /** The host's file picker, for attachments (§6.4): paths never typed, never guessed. */
-    pickFiles: 'genie:features-pick-files',
     /** An alert's own sound file, read by main into a data URL — asked by setting KEY, never by path (Tynn #766 B2). */
     soundData: 'genie:features-sound-data',
 } as const;
@@ -127,8 +125,6 @@ export interface GenieBridge {
         act(action: FeatureAction): Promise<FeatureData>;
         /** Where the browser surface's box is, in window coordinates; sent on mount and resize, never polled. */
         setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
-        /** The host's own file picker; the paths it answers are what `inbox.send` may attach. `[]` when cancelled. */
-        pickFiles(): Promise<string[]>;
         /** An alert's own sound file as a data URL, by its setting key (`sound_question`); `null` when it cannot be read. */
         soundData(key: string): Promise<string | null>;
     };
@@ -204,12 +200,12 @@ export interface GenieBridge {
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
-        previewAddFromGit(url: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"). */
         tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[] } | { ok: false; reason: string }>;
         /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
-        previewAddFromTynn(projectId: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -220,7 +216,7 @@ export interface GenieBridge {
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
-        locateRepo(workspaceId: string, slug: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
+        locateRepo(workspaceId: string, slug: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** The commits in the workspace's repos since a moment, newest first — git's own account (an observed agent's index). */
         commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
@@ -384,7 +380,6 @@ export const NO_FEATURES: GenieBridge['features'] = {
     subscribe: () => () => {},
     act: async () => { throw new Error('no main process to act on'); },
     setBrowserBounds: async () => {},
-    pickFiles: async () => [],
     soundData: async () => null,
 };
 

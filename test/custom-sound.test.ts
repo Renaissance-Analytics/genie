@@ -12,10 +12,10 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * `settings:choose-file` / `settings:sound-data-url` at v0.7.0-beta.342). The owner, 2026-10-17: "did you include the
  * custom sounds we had for genie 1?"
  *
- * The renderer is sandboxed and cannot read disk, so MAIN picks the file (the host's own picker) and reads it into a
- * data URL. The renderer asks by SETTING KEY, never by path — so this is not a way to read an arbitrary file — and main
- * reads only a sound file it can play, within a size cap. A file that is gone plays the alert's own sound (the caller's
- * fallback), never nothing.
+ * The file is picked IN THE WINDOW over the HOST's disk (Tynn #835: FileBrowser, not a native dialog — so a remote
+ * window picks on the host it drives) and its path handed to `settings.setSoundFile`, which keeps only a sound file
+ * Genie can play. Playing reads it by SETTING KEY, never by path — so this is not a way to read an arbitrary file —
+ * within a size cap. A file that is gone plays the alert's own sound (the caller's fallback), never nothing.
  */
 const pty: PtyPort = { open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }), write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
@@ -47,15 +47,14 @@ describe('choosing and playing your own file', () => {
         await rm(dir, { recursive: true, force: true });
     });
 
-    it('picked: the alert is set to Custom file and the path is kept; cancelled: nothing changes', async () => {
+    it('picked: the alert is set to Custom file and the path is kept; the others are untouched', async () => {
         const file = join(dir, 'ding.wav');
         await writeFile(file, WAV);
-        await handleFeatureAction(services, { kind: 'settings.pickSound', key: 'sound_question' }, state(), { pickSound: async () => file });
+        await handleFeatureAction(services, { kind: 'settings.set', key: 'sound_finished', value: 'sparkle' }, state());
+        await handleFeatureAction(services, { kind: 'settings.setSoundFile', key: 'sound_question', path: file }, state());
         expect(services.settings.get('sound_question')).toBe('custom');
         expect(services.settings.get('sound_question_custom')).toBe(file);
-        // CONTROL: a cancelled picker changes nothing — the choice and path stay as they were.
-        await handleFeatureAction(services, { kind: 'settings.set', key: 'sound_finished', value: 'sparkle' }, state());
-        await handleFeatureAction(services, { kind: 'settings.pickSound', key: 'sound_finished' }, state(), { pickSound: async () => null });
+        // CONTROL: another alert's choice stays as it was.
         expect(services.settings.get('sound_finished')).toBe('sparkle');
         expect(services.settings.get('sound_finished_custom')).toBe('');
     });
@@ -63,8 +62,8 @@ describe('choosing and playing your own file', () => {
     it('refused, with the reason: a file that is not a sound, and a key that is not an alert sound', async () => {
         const text = join(dir, 'notes.txt');
         await writeFile(text, 'hello');
-        await expect(handleFeatureAction(services, { kind: 'settings.pickSound', key: 'sound_question' }, state(), { pickSound: async () => text })).rejects.toThrow(/not a sound file/);
-        await expect(handleFeatureAction(services, { kind: 'settings.pickSound', key: 'theme' }, state(), { pickSound: async () => text })).rejects.toThrow(/not an alert sound/);
+        await expect(handleFeatureAction(services, { kind: 'settings.setSoundFile', key: 'sound_question', path: text }, state())).rejects.toThrow(/not a sound file/);
+        await expect(handleFeatureAction(services, { kind: 'settings.setSoundFile', key: 'theme', path: text }, state())).rejects.toThrow(/not an alert sound/);
         expect(services.settings.get('sound_question')).not.toBe('custom');
     });
 

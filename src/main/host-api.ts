@@ -55,6 +55,11 @@ export interface HostApiDeps {
     workspaceOps: {
         /** The plan for adding the folder picked in the window (Tynn #835) — nothing is written. */
         previewAdd?(path: string): Promise<unknown>;
+        /** The parent folder is picked in the window too (Tynn #835). */
+        previewAddFromGit?(url: string, parent: string): Promise<unknown>;
+        tynnProjects?(): Promise<unknown>;
+        previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
+        locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
@@ -180,15 +185,19 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.workspaceOps.previewAdd) throw new Error('this host cannot preview adding a folder');
                 return deps.workspaceOps.previewAdd(str(args[0]));
             case 'workspaces.previewAddFromGit':
-                throw new Error('workspaces.previewAddFromGit opens a folder picker on the host; do it there');
+                if (!deps.workspaceOps.previewAddFromGit) throw new Error('this host cannot preview a clone');
+                return deps.workspaceOps.previewAddFromGit(str(args[0]), str(args[1]));
             case 'workspaces.confirmAddFromGit':
                 return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
             case 'workspaces.locateRepo':
-                throw new Error('workspaces.locateRepo opens a folder picker on the host; do it there');
+                if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
+                return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));
             case 'workspaces.tynnProjects':
-                throw new Error('workspaces.tynnProjects leads to a folder picker on the host; add from Tynn there');
+                if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
+                return deps.workspaceOps.tynnProjects();
             case 'workspaces.previewAddFromTynn':
-                throw new Error('workspaces.previewAddFromTynn opens a folder picker on the host; do it there');
+                if (!deps.workspaceOps.previewAddFromTynn) throw new Error('this host cannot preview a Tynn envelope');
+                return deps.workspaceOps.previewAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.confirmAddFromTynn':
                 return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.confirmAdd':
