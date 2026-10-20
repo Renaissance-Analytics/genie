@@ -33,6 +33,7 @@ import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js'
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
+import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue } from './approval-queue.js';
@@ -730,7 +731,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
     const pluginsDir = join(input.userData, 'plugins');
-    const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true });
+    const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
     let plugins = await openPlugins();
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
     const remote = new RemoteHost({

@@ -1,6 +1,8 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { bridgeAccess, installDecision, parseManifest, verifyPluginSignature, type AccessDecision, type AccessRequest, type PluginManifest } from '../core/plugins.js';
+import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
+import type { OfficialPlugin } from '../core/official-plugins.js';
 
 /**
  * THE PLUGIN HOST (§6.7). Scans a plugins directory: every folder with a `genie-plugin.json` is listed
@@ -13,6 +15,10 @@ import { bridgeAccess, installDecision, parseManifest, verifyPluginSignature, ty
 import type { PluginTool } from '../core/plugins.js';
 
 export type PluginState = 'enabled' | 'disabled' | 'refused' | 'invalid';
+
+/** How an official plugin is labelled wherever it shows — where a folder plugin says who signed it. */
+export const OFFICIAL_LABEL = 'official — ships with Genie';
+const OFFICIAL_FOLDER = '(official)';
 
 export interface PluginEntry {
     readonly id: string;
@@ -43,7 +49,11 @@ export class PluginHost {
         this.#disabled = disabled;
     }
 
-    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; developerMode: boolean }): Promise<PluginHost> {
+    /**
+     * `official` = the plugins that ship IN Genie (core/official-plugins.ts): trusted by construction, so they need no
+     * publisher key and no developer mode; listed first; a folder claiming one of their ids is refused, not admitted.
+     */
+    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; developerMode: boolean; official?: readonly OfficialPlugin[] }): Promise<PluginHost> {
         const stateFile = join(input.dir, 'plugins-state.json');
         let disabled = new Set<string>();
         try {
@@ -57,6 +67,14 @@ export class PluginHost {
         } catch { /* a missing plugins directory means no plugins — not an error */ }
 
         const entries: Loaded[] = [];
+        const officialIds = new Set<string>();
+        for (const o of input.official ?? []) {
+            const parsed = parseManifest(o.manifest);
+            // An official manifest that does not parse is Genie's own bug: listed invalid with the parser's words, never hidden.
+            if (!parsed.ok) { entries.push({ id: `(official ${String(o.manifest.id)})`, folder: OFFICIAL_FOLDER, name: String(o.manifest.name), version: null, state: 'invalid', label: null, reason: parsed.reason, manifest: null }); continue; }
+            officialIds.add(parsed.manifest.id);
+            entries.push({ id: parsed.manifest.id, folder: OFFICIAL_FOLDER, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: OFFICIAL_LABEL, reason: null, manifest: parsed.manifest });
+        }
         for (const folder of folders) {
             let text: string;
             try {
@@ -69,6 +87,10 @@ export class PluginHost {
             const parsed = raw === undefined ? { ok: false as const, reason: 'genie-plugin.json is not valid JSON' } : parseManifest(raw);
             if (!parsed.ok) {
                 entries.push({ id: `(${folder})`, folder, name: folder, version: null, state: 'invalid', label: null, reason: parsed.reason, manifest: null });
+                continue;
+            }
+            if (officialIds.has(parsed.manifest.id)) {
+                entries.push({ id: `(${folder})`, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'invalid', label: null, reason: `${parsed.manifest.id} is an official plugin that ships with Genie; a folder cannot replace it`, manifest: null });
                 continue;
             }
             let signature: string | null = null;
@@ -98,6 +120,18 @@ export class PluginHost {
         return this.#entries.flatMap((e) =>
             e.state === 'enabled' && e.manifest ? e.manifest.panels.map((p) => ({ pluginId: e.id, pluginName: e.name, id: p.id, title: p.title, fancyComponent: { export: p.fancyComponent.export }, props: p.props })) : [],
         );
+    }
+
+    /** The editors ENABLED plugins declare, in list order (official first) — what the renderer routes files with. */
+    editors(): readonly ClaimingEditor[] {
+        return this.#entries.flatMap((e) => (e.state === 'enabled' && e.manifest ? (e.manifest.editors ?? []).map((ed) => ({ ...ed, pluginId: e.id, pluginName: e.name })) : []));
+    }
+
+    /** May this plugin's editor read and write this file's bytes? Only an ENABLED plugin, only its own claimed + declared types. */
+    editorBytes(pluginId: string, path: string): EditorBytesDecision {
+        const entry = this.#entries.find((e) => e.id === pluginId);
+        if (!entry || !entry.manifest || entry.state !== 'enabled') return { allowed: false, reason: `${pluginId} is not an enabled plugin` };
+        return editorBytesAccess(entry.manifest, path);
     }
 
     list(): readonly PluginEntry[] {

@@ -1,5 +1,5 @@
 import { ContextMenu, Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
 import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
 import type { Activity, ChangedGroup, FileAttribution, TreeNode } from '../../core/files-panel.js';
@@ -89,6 +89,22 @@ export interface FilesPanelProps {
     readonly onExpandedChange?: ((ids: readonly string[]) => void) | undefined;
     /** The line the open file lands on (the route's `line=`, openFileForUser's) — Fancy's FileViewer scrolls to it and highlights it. */
     readonly line?: number | null | undefined;
+    /** The tab in front. Absent = the open text file's (`open.path`); a plugin tab in front has no `open`. */
+    readonly active?: string | null | undefined;
+    /**
+     * PLUGIN TABS (beta.33 item 14): a file a plugin's editor claims opens here, in that editor. Every one stays MOUNTED —
+     * hidden when another tab is in front — because its model, unsaved edits included, lives inside it.
+     */
+    readonly pluginTabs?: readonly PluginTabView[] | undefined;
+}
+
+/** A plugin tab as the panel draws it: the editor body the container built, and its save. */
+export interface PluginTabView {
+    readonly path: string;
+    readonly pluginName: string;
+    readonly node: ReactNode;
+    readonly dirty?: boolean | undefined;
+    readonly onSave?: (() => void) | undefined;
 }
 
 /** How many files changed this session — the `Changed N` chip's number; `0` reads as plain `Changed`. */
@@ -146,7 +162,11 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [] }: FilesPanelProps) {
+    // The tab in front: the container's word when it gives one (a plugin tab has no `open`), else the open text file.
+    const activePath = activeProp !== undefined ? activeProp : (open?.path ?? null);
+    const activePlugin = pluginTabs.find((p) => p.path === activePath) ?? null;
+    const tabDirty = (t: string) => (pluginTabs.find((p) => p.path === t)?.dirty ?? false) || (edit?.dirty === true && open?.path === t);
     // The row or tab right-clicked: the menu's items depend on what it is.
     const [menuFor, setMenuFor] = useState<{ path: string; target: FileMenuTarget } | null>(null);
     const menuItems = (path: string, target: FileMenuTarget) => fileActions ? fileMenuItems(target, fileActions).map((m, i) => (m.id === '-'
@@ -160,7 +180,11 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
     const changed = changedCount(state);
     return (
         <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]"
-            onKeyDown={(e) => { if (isSaveShortcut(e) && edit && open?.ok) { e.preventDefault(); if (edit.dirty && !edit.conflict) edit.onSave(); } }}>
+            onKeyDown={(e) => {
+                if (!isSaveShortcut(e)) return;
+                if (activePlugin) { e.preventDefault(); if (activePlugin.dirty) activePlugin.onSave?.(); return; }
+                if (edit && open?.ok) { e.preventDefault(); if (edit.dirty && !edit.conflict) edit.onSave(); }
+            }}>
             {/* The board's 38px header: Files · All | Changed N · "one per workspace" · the controls. */}
             <header className="flex h-[38px] shrink-0 items-center gap-2.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 text-sm">
                 <span className="text-xs font-semibold">Files</span>
@@ -237,13 +261,13 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 <ContextMenu.Trigger className="h-full">
                                     {/* Capture runs before the row's own handler: empty space targets the root (New file / New folder, Tynn #844), a row sets its own. */}
                                     <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor({ path: '', target: 'tree-root' })}>
-                                        <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
+                                        <TreeNav nodes={decorate(tree, marks)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
                                     </div>
                                 </ContextMenu.Trigger>
                                 {menuFor && menuFor.target !== 'tab' && (menuItems(menuFor.path, menuFor.target)?.length ?? 0) > 0 ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
                             </ContextMenu>
                         ) : (
-                        <TreeNav nodes={decorate(tree, marks)} {...(open ? { selectedId: open.path } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
+                        <TreeNav nodes={decorate(tree, marks)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
                         )
                     )}
                 </aside>
@@ -251,12 +275,14 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 <div className="flex min-w-0 flex-1 flex-col">
                     <div data-file-tabs className="flex h-8 shrink-0 items-stretch border-b border-[var(--border-1)] bg-[var(--bg-1)]">
                         {shownTabs.map((t) => {
-                            const active = open?.path === t;
+                            const active = activePath === t;
                             const mark = marks.get(t);
+                            const plugin = pluginTabs.find((p) => p.path === t);
                             const tab = (
-                                <div key={t} data-file-tab={t} {...(fileActions ? { 'data-file-menu': 'tab' } : {})} {...(edit?.dirty && open?.path === t ? { 'data-dirty': 'true' } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
+                                <div key={t} data-file-tab={t} {...(fileActions ? { 'data-file-menu': 'tab' } : {})} {...(tabDirty(t) ? { 'data-dirty': 'true' } : {})} {...(plugin ? { 'data-plugin-tab': t } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
                                     <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
-                                    {edit?.dirty && open?.path === t ? <span data-dirty-dot="" title="Unsaved changes (Ctrl+S saves)" className="text-[var(--accent)]">●</span> : null}
+                                    {plugin ? <span data-plugin-name="" className="rounded bg-[var(--bg-2)] px-1 text-[10px] text-[var(--fg-3)]" title={`Open in the ${plugin.pluginName} plugin's editor`}>{plugin.pluginName}</span> : null}
+                                    {tabDirty(t) ? <span data-dirty-dot="" title="Unsaved changes (Ctrl+S saves)" className="text-[var(--accent)]">●</span> : null}
                                     {onOpenInPane && !single ? <button type="button" data-action="open-in-pane" aria-label={`open ${t} in a pane`} title="Open in its own pane beside the terminals" onClick={() => onOpenInPane(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">⧉</button> : null}
                                     <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
                                 </div>
@@ -268,7 +294,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 </ContextMenu>
                             ) : tab;
                         })}
-                        {edit && open?.ok && edit.dirty && !edit.conflict ? (
+                        {activePlugin ? (
+                            activePlugin.dirty ? <button type="button" data-action="save-file" onClick={() => activePlugin.onSave?.()} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button> : null
+                        ) : edit && open?.ok && edit.dirty && !edit.conflict ? (
                             <button type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button>
                         ) : null}
                     </div>
@@ -322,9 +350,15 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 </div>
                             )
                         ) : null}
+                        {/* PLUGIN TABS: every one mounted, the one in front shown — hiding keeps an unsaved model alive. */}
+                        {pluginTabs.map((p) => (
+                            <div key={p.path} data-plugin-body={p.path} hidden={p.path !== activePath} className="min-h-0 flex-1 flex-col" style={p.path === activePath ? { display: 'flex' } : undefined}>
+                                {p.node}
+                            </div>
+                        ))}
                         {/* The open file NEVER waits for the tree: the tree is the workspace's whole walk (single mode never
                             even draws it), and gating the body on it left a file that HAD been read as a blank pane. */}
-                        {open === null ? (
+                        {activePlugin ? null : open === null ? (
                             single ? (
                                 <p data-file-opening={single} className="p-4 text-sm text-[var(--fg-3)]">Opening {single}…</p>
                             ) : tree === null ? null : (
@@ -344,6 +378,8 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                                     {(() => {
                                         const kind = resolveFileKind({ filename: open.path });
+                                        // fancy-code 0.13+: an Office file is binary, never text. Unclaimed (its plugin off), it is said, not shown as bytes.
+                                        if (kind.kind === 'office') return <p data-office-unclaimed={open.path} className="p-4 text-sm text-[var(--fg-3)]">No enabled plugin opens .{kind.officeKind} files here. Turn one on in Settings → Plugins.</p>;
                                         return kind.kind === 'media' ? (
                                             <FileViewer filename={open.path} value={open.text} theme="auto" className="min-h-0 flex-1" />
                                         ) : (

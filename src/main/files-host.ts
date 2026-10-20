@@ -58,7 +58,12 @@ export type OpenResult = { ok: true; path: string; text: string; sha: string; gi
 /** A write that landed answers the new sha; a refused one carries the conflict (what is on disk NOW) so nothing is discarded. */
 export type WriteResult = { ok: true; sha: string } | { ok: false; reason: string; conflict?: { path: string; onDisk: string; sha: string } };
 
-const shaOf = (text: string): string => createHash('sha256').update(text).digest('hex');
+const shaOf = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
+
+/** A plugin editor's read (beta.33 item 14): the file's exact BYTES, base64, and their sha — or why not. */
+export type BytesResult = { ok: true; path: string; base64: string; sha: string } | { ok: false; path: string; error: string };
+/** A plugin editor's save: the new sha, or why not — a file that changed since it was read is a conflict, never overwritten. */
+export type BytesWriteResult = { ok: true; sha: string } | { ok: false; reason: string; conflict?: { path: string; sha: string } };
 
 export interface FilesState {
     readonly files: readonly FileAttribution[];
@@ -222,6 +227,49 @@ export class FilesHost {
         // Your own write is not an unreported change.
         this.#changedOnDisk.get(workspaceId)?.delete(rel);
         return { ok: true, sha: shaOf(text) };
+    }
+
+    /**
+     * A PLUGIN EDITOR'S BYTES (beta.33 item 14; Genie 1 editor-bridge.ts). `open` decodes UTF-8, which mangles an .xlsx,
+     * .pptx or .docx. Same rules as the text path: confined, under the cap, refusals in words.
+     */
+    async readBytes(workspaceId: string, path: string): Promise<BytesResult> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return { ok: false, path, error: 'no such workspace' };
+        const rel = confine(ws.path, path);
+        if (rel === null || rel === '') return { ok: false, path, error: OUTSIDE };
+        const full = join(ws.path, ...rel.split('/'));
+        try {
+            const info = await stat(full);
+            const refusal = openRefusal(info.size, this.#cap);
+            if (refusal) return { ok: false, path: rel, error: refusal };
+            const bytes = await readFile(full);
+            return { ok: true, path: rel, base64: bytes.toString('base64'), sha: shaOf(bytes) };
+        } catch (error) {
+            return { ok: false, path: rel, error: messageOf(error) };
+        }
+    }
+
+    /** Save a plugin editor's bytes against the sha that was read — the same no-overwrite rule as `write`. */
+    async writeBytes(workspaceId: string, path: string, base64: string, expectedSha: string | null): Promise<BytesWriteResult> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return { ok: false, reason: 'no such workspace' };
+        const rel = confine(ws.path, path);
+        if (rel === null || rel === '') return { ok: false, reason: 'that path is outside the workspace; Genie writes nothing there' };
+        const full = join(ws.path, ...rel.split('/'));
+        let onDisk: Buffer | null = null;
+        try { onDisk = await readFile(full); } catch { onDisk = null; }
+        if (onDisk !== null && (expectedSha === null || shaOf(onDisk) !== expectedSha)) {
+            return { ok: false, reason: `${rel} changed on disk since you opened it; nothing was overwritten — reload it, or keep yours`, conflict: { path: rel, sha: shaOf(onDisk) } };
+        }
+        const bytes = Buffer.from(base64, 'base64');
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, bytes);
+        const mine = this.#mine.get(workspaceId) ?? new Set<string>();
+        mine.add(rel);
+        this.#mine.set(workspaceId, mine);
+        this.#changedOnDisk.get(workspaceId)?.delete(rel);
+        return { ok: true, sha: shaOf(bytes) };
     }
 
     /*

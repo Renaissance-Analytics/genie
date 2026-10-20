@@ -1,13 +1,17 @@
 import type { FileMenuAction, FileMenuTarget } from '../../core/file-menu.js';
 import { createIn, fileOpDialog, tabsAfterDelete, tabsAfterRename, targetOf, type FileOpAction, type FileOpDialog } from '../../core/file-ops.js';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { reloadsOpenFile, routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { EMPTY_WORKBENCH, activeText, dirtyPaths, workbench, type Workbench, type WorkbenchAction } from '../../core/editor-workbench.js';
+import { editorFor } from '../../core/plugin-editors.js';
+import { usePluginEditors } from '../plugin-editors-context.js';
+import { PluginEditorBody } from './PluginEditorBody.js';
+import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import { openOrError, settle } from '../../core/files-reads.js';
 import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-lazy.js';
 import type { GenieBridge } from '../bridge.js';
 import { FileOpModal } from './FileOpModal.js';
-import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile } from './FilesPanel.js';
+import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type PluginTabView } from './FilesPanel.js';
 
 /**
  * The file panel's WIRING (§4.3): loads the tree and the attribution state from the bridge, re-reads
@@ -69,14 +73,22 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // Every open SETTLES into something the panel can say — the file, or why not. A rejected ask left `open` as it was.
     const read = useCallback((path: string) => openOrError(() => files.open(workspace.id, path), path), [files, workspace.id]);
     const [state, setState] = useState<FilesPanelState | null>(null);
-    const [tabs, setTabs] = useState<readonly string[]>([]);
-    const [open, setOpen] = useState<OpenFile | null>(null);
+    /*
+     * THE TABS, ONE BUFFER EACH (beta.33 items 14 + 15; core/editor-workbench.ts). Genie 1 kept a buffer per tab; this panel
+     * kept ONE and dropped it on every open, so an edit was lost by clicking another tab. A file an ENABLED plugin's editor
+     * claims opens as a plugin tab, in that editor (client-side routing, fail-closed: no claim = the code editor).
+     */
+    const editors = usePluginEditors();
+    const [bench, setBench] = useState<Workbench>(EMPTY_WORKBENCH);
+    const benchRef = useRef(bench);
+    benchRef.current = bench;
+    const act = useCallback((action: WorkbenchAction) => setBench((w) => workbench(w, action)), []);
+    const tabs = bench.tabs;
+    const open: OpenFile | null = activeText(bench);
     // The board's `All | Changed N` filter (§4.3): Changed shows the files grouped by who changed them.
     const [filter, setFilter] = useState<'all' | 'changed'>(routeFilter === 'changed' ? 'changed' : 'all');
     // The path last asked for, before its read lands — so the route's echo of a click does not open it twice.
     const [requested, setRequested] = useState<string | null>(null);
-    // The buffer you are typing into (§4.3): dirty while it differs from what was opened; never auto-reloaded.
-    const [buffer, setBuffer] = useState<{ path: string; text: string } | null>(null);
     const [conflict, setConflict] = useState<{ path: string; onDisk: string; sha: string; baseline?: string | undefined } | null>(null);
     // Agents asked to pause (§4.3): one ask per (agent, file) while your buffer is dirty; lifted when it is clean.
     const [paused, setPaused] = useState<readonly Pause[]>([]);
@@ -86,21 +98,27 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // `Show diff` on a change nobody reported: git's last commit for the open file, asked for on demand.
     const [blindDiff, setBlindDiff] = useState<{ path: string; before: string | null } | null>(null);
     useEffect(() => { if (conflict === null) { setTold(null); setComparing(false); } }, [conflict]);
-    const dirtyPath = buffer !== null && open?.ok && buffer.path === open.path && buffer.text !== open.text ? buffer.path : null;
+    const dirty = useMemo(() => dirtyPaths(bench), [bench]);
+    const dirtyKey = dirty.join('\n');
     // The dock's refusal rule needs to know (§4.4); reported on every change, and clean on unmount.
-    useEffect(() => { onDirtyChange?.(dirtyPath !== null); return () => { onDirtyChange?.(false); }; }, [dirtyPath, onDirtyChange]);
+    useEffect(() => { onDirtyChange?.(dirty.length > 0); return () => { onDirtyChange?.(false); }; }, [dirtyKey, onDirtyChange]);
     useEffect(() => {
-        const dirty = dirtyPath ? [dirtyPath] : [];
         const adds = pauseRequests(state?.activity ?? [], dirty, paused);
         const lifted = resumed(paused, dirty);
         if (adds.length === 0 && lifted.length === 0) return;
         for (const p of adds) onPause?.(p.agent, p.path);
         for (const p of lifted) onResume?.(p.agent, p.path);
         setPaused([...paused.filter((p) => !lifted.includes(p)), ...adds]);
-    }, [state, dirtyPath, paused, onPause, onResume]);
+    }, [state, dirtyKey, paused, onPause, onResume]);
 
-    // A code pane (§4.6) opens its one file on mount.
-    useEffect(() => { if (single) { setTabs([single]); void read(single).then(setOpen); } }, [single, read]);
+    // Read a text tab (never a plugin tab: its editor reads the bytes itself). A dirty tab's read is kept out by the workbench.
+    // One read per path at a time: a click and a disk change landing together read once.
+    const inflight = useRef(new Set<string>());
+    const load = useCallback((path: string) => {
+        if (inflight.current.has(path)) return;
+        inflight.current.add(path);
+        void read(path).then((file) => { inflight.current.delete(path); act({ kind: 'loaded', file }); });
+    }, [read, act]);
 
     const refresh = useCallback(() => {
         // Single mode draws no tree (§4.6), so it does not walk one: on a large workspace that walk is the whole disk
@@ -140,20 +158,25 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         setExpanded((e) => revealFor(routeFile, e));
     }, [routeFile]);
 
-    // A dirty buffer is NEVER auto-reloaded (§4.3); a clean one follows the disk.
-    useEffect(() => {
-        if (!open || buffer !== null) return;
-        // Only when the open file is among the changes (genie#921): a build elsewhere in the workspace re-reads nothing.
-        return files.onChange((id, paths) => { if (id === workspace.id && reloadsOpenFile(open.path, paths)) void read(open.path).then(setOpen); });
-    }, [files, workspace.id, open, buffer, read]);
+    // A dirty tab is NEVER auto-reloaded (§4.3); a clean one follows the disk — text re-read, a plugin editor remounted.
+    // Only the tabs among the changes (genie#921): a build elsewhere in the workspace re-reads nothing.
+    useEffect(() => files.onChange((id, paths) => {
+        if (id !== workspace.id) return;
+        act({ kind: 'disk-changed', paths: paths ?? benchRef.current.tabs });
+    }), [files, workspace.id, act]);
+    const rereadKey = bench.reread.join('\n');
+    useEffect(() => { for (const path of benchRef.current.reread) load(path); }, [rereadKey, load]);
 
     const openPath = useCallback((path: string) => {
         setRequested(path);
-        setTabs((t) => (t.includes(path) ? t : [...t, path]));
-        setBuffer(null);
-        setConflict(null);
-        void read(path).then(setOpen);
-    }, [read]);
+        const editor = editorFor(editors, path);
+        const w = benchRef.current;
+        act({ kind: 'open', path, editor });
+        // A text tab is (re-)read unless it holds your edits — clicking a dirty tab brings it forward as you left it.
+        if (!editor && !w.plugins[path] && w.buffers[path] === undefined) load(path);
+    }, [editors, act, load]);
+    // A code pane (§4.6) opens its one file on mount.
+    useEffect(() => { if (single) openPath(single); }, [single]);
     const select = useCallback((path: string) => {
         openPath(path);
         onRouteChange?.(path, filter === 'changed' ? 'changed' : null);
@@ -161,40 +184,43 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // The route names a file: open it unless it is the one already open (or asked for).
     useEffect(() => {
         if (routeFile === undefined) return;
-        const path = routeFileToOpen(routeFile, requested ?? open?.path ?? null);
+        const path = routeFileToOpen(routeFile, requested ?? bench.active);
         if (path) openPath(path);
     }, [routeFile]);
     useEffect(() => { if (routeFilter !== undefined) setFilter(routeFilter === 'changed' ? 'changed' : 'all'); }, [routeFilter]);
     const pickFilter = useCallback((f: 'all' | 'changed') => {
         setFilter(f);
-        onRouteChange?.(requested ?? open?.path ?? null, f === 'changed' ? 'changed' : null);
-    }, [onRouteChange, requested, open]);
+        onRouteChange?.(requested ?? bench.active, f === 'changed' ? 'changed' : null);
+    }, [onRouteChange, requested, bench.active]);
 
+    // Each plugin tab hands its save over (PluginEditorBody registerSave): the Save button and Ctrl/Cmd+S drive it.
+    const pluginSaves = useRef(new Map<string, () => Promise<void>>());
     const closeTab = useCallback((path: string) => {
-        setTabs((t) => {
-            const next = t.filter((p) => p !== path);
-            if (open?.path === path) {
-                const fallback = next[next.length - 1];
-                if (fallback) void read(fallback).then(setOpen);
-                else setOpen(null);
-                setRequested(fallback ?? null);
-                onRouteChange?.(fallback ?? null, filter === 'changed' ? 'changed' : null);
-            }
-            return next;
-        });
-    }, [read, open, onRouteChange, filter]);
+        const before = benchRef.current;
+        const after = workbench(before, { kind: 'close', path });
+        // The ref moves now, so "Close all" closing several in one go each closes from what the last one left.
+        benchRef.current = after;
+        setBench(after);
+        pluginSaves.current.delete(path);
+        if (before.active === path) {
+            setRequested(after.active);
+            onRouteChange?.(after.active, filter === 'changed' ? 'changed' : null);
+        }
+    }, [onRouteChange, filter]);
 
-    const shown: OpenFile | null = open?.ok && buffer && buffer.path === open.path ? { ...open, text: buffer.text } : open;
+    const shown: OpenFile | null = open;
     // A save that fails without a conflict is SAID (Tynn #840): it used to vanish, leaving a dirty buffer and no reason.
     const [saveError, setSaveError] = useState<string | null>(null);
     const save = (expected: string | null) => {
-        if (!open?.ok || !buffer) return;
+        const buffer = open?.ok ? bench.buffers[open.path] : undefined;
+        if (!open?.ok || buffer === undefined) return;
         setSaveError(null);
-        void files.write(workspace.id, open.path, buffer.text, expected).then((r) => {
-            if (r.ok) { setOpen({ ok: true, path: open.path, text: buffer.text, sha: r.sha }); setBuffer(null); setConflict(null); }
+        void files.write(workspace.id, open.path, buffer, expected).then((r) => {
+            if (r.ok) { act({ kind: 'saved', path: open.path, text: buffer, sha: r.sha }); setConflict(null); }
             else if (!r.conflict) setSaveError(r.reason);
             else if (r.conflict) {
-                setConflict({ ...r.conflict, baseline: open.text });
+                const based = bench.texts[open.path];
+                setConflict({ ...r.conflict, baseline: based?.ok ? based.text : open.text });
                 // The known writer is TOLD, once, and held paused until your buffer is clean (then `resumeMessage`).
                 // Without a known writer nobody is told, and the banner does not say anyone was.
                 const writer = state?.activity.find((a) => a.verb === 'writing' && a.path === open.path)?.agent ?? null;
@@ -208,13 +234,14 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     };
     const edit: FilesEdit | undefined = open?.ok
         ? {
-              dirty: buffer !== null && buffer.text !== open.text,
-              conflict,
-              onChange: (text) => setBuffer({ path: open.path, text }),
+              dirty: bench.buffers[open.path] !== undefined,
+              // A conflict belongs to the file it was met on: another tab in front does not show it.
+              conflict: conflict && conflict.path === open.path ? conflict : null,
+              onChange: (text) => act({ kind: 'edit', path: open.path, text }),
               onSave: () => save(open.sha),
               // keep mine: write against the CURRENT sha — an explicit choice, never implicit.
               onKeepMine: () => { if (conflict) save(conflict.sha); },
-              onTakeTheirs: () => { if (conflict) { setOpen({ ok: true, path: open.path, text: conflict.onDisk, sha: conflict.sha }); setBuffer(null); setConflict(null); } },
+              onTakeTheirs: () => { if (conflict) { act({ kind: 'saved', path: open.path, text: conflict.onDisk, sha: conflict.sha }); setConflict(null); } },
               // Compare (the board's primary): your buffer against the disk, read-only. Nothing is written by looking.
               told,
               comparing,
@@ -253,8 +280,10 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             setFileOp(null);
             if (dialog.action === 'rename') {
                 const from = dialog.node.path;
-                setTabs((t) => tabsAfterRename(t, from, r.path));
-                if (open && (open.path === from || open.path.startsWith(`${from}/`))) { const moved = r.path + open.path.slice(from.length); setRequested(moved); void read(moved).then(setOpen); }
+                const active = benchRef.current.active;
+                act({ kind: 'renamed', from, to: r.path });
+                const moved = active === null ? null : tabsAfterRename([active], from, r.path)[0] ?? null;
+                if (moved !== null && moved !== active) setRequested(moved);
             } else if (dialog.action === 'delete') {
                 const gone = dialog.node.path;
                 const kept = tabsAfterDelete(tabs, gone);
@@ -292,7 +321,19 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     };
     const lastCommitted = files.lastCommitted;
     const onShowDiff = lastCommitted && open?.ok ? () => { const path = open.path; void lastCommitted(workspace.id, path).then((before) => setBlindDiff({ path, before })); } : undefined;
-    const panel = <FilesPanel workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    // PLUGIN TABS (item 14): each in its plugin's editor, keyed by its rev so a disk change under a clean one re-reads it.
+    const pluginTabs: PluginTabView[] = tabs.flatMap((t) => {
+        const p = bench.plugins[t];
+        if (!p) return [];
+        return [{
+            path: t,
+            pluginName: p.editor.pluginName,
+            dirty: p.dirty,
+            onSave: () => { void pluginSaves.current.get(t)?.(); },
+            node: <PluginEditorBody key={`${t}:${p.rev}`} pluginId={p.editor.pluginId} fancyExport={p.editor.fancyEditor.export} workspaceId={workspace.id} path={t} files={files} onDirtyChange={(d) => act({ kind: 'plugin-dirty', path: t, dirty: d })} registerSave={(fn) => { pluginSaves.current.set(t, fn); }} />,
+        }];
+    });
+    const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
     return (
         <>
             {panel}

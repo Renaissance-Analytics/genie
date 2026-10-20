@@ -19,7 +19,9 @@ export interface PluginTool {
 
 // The vetted list and the panel shape live in a module with no Node imports, because the renderer draws them.
 import { VETTED_FANCY_EXPORTS, type PluginPanel, type VettedFancyExport } from './plugin-panels.js';
+import { VETTED_FANCY_EDITORS, type PluginEditor, type VettedFancyEditor } from './plugin-editors.js';
 export { VETTED_FANCY_EXPORTS, type PluginPanel, type VettedFancyExport };
+export { VETTED_FANCY_EDITORS, type PluginEditor, type VettedFancyEditor };
 
 export interface PluginCapabilities {
     readonly fs?: { scope: 'workspace'; extensions: readonly string[] };
@@ -36,12 +38,15 @@ export interface PluginManifest {
     readonly mcpTools: readonly PluginTool[];
     readonly capabilities: PluginCapabilities;
     readonly panels: readonly PluginPanel[];
+    /** The file types this plugin's editors claim (beta.33 item 14). The parser always fills it (`[]` for none). */
+    readonly editors?: readonly PluginEditor[];
 }
 
 export type ParseResult = { ok: true; manifest: PluginManifest } | { ok: false; reason: string };
 
 const TOP_KEYS = new Set(['id', 'name', 'version', 'publisher', 'engines', 'mcpTools', 'editors', 'panels', 'capabilities', 'dependencies']);
 const PANEL_KEYS = new Set(['id', 'title', 'fancyComponent', 'props']);
+const EDITOR_KEYS = new Set(['id', 'title', 'extensions', 'fancyEditor']);
 const CAP_KEYS = new Set(['fs', 'network', 'genieApi']);
 const TOOL_KEYS = new Set(['name', 'description', 'inputSchema', 'run', 'process', 'gated']);
 const REVERSE_DNS = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
@@ -114,6 +119,23 @@ export function parseManifest(raw: unknown): ParseResult {
         }
     }
 
+    // EDITORS (beta.33 item 14): accepted since the start and DROPPED until now, so no file ever reached a plugin's editor.
+    const editors: PluginEditor[] = [];
+    if (raw.editors !== undefined) {
+        if (!Array.isArray(raw.editors)) return refuse('editors must be an array');
+        for (const e of raw.editors) {
+            if (!isRecord(e)) return refuse('each editors entry must be an object');
+            for (const key of Object.keys(e)) if (!EDITOR_KEYS.has(key)) return refuse(`unknown key "${key}" in editors — an editor is an id, a title, the extensions it claims and a vetted fancyEditor; a plugin ships no UI code`);
+            if (typeof e.id !== 'string' || e.id.length === 0) return refuse('each editor needs an id');
+            if (typeof e.title !== 'string' || e.title.length === 0) return refuse(`editor "${e.id}" needs a title`);
+            if (!Array.isArray(e.extensions) || e.extensions.length === 0) return refuse(`editor "${e.id}" must claim at least one extension`);
+            if (!e.extensions.every((x) => typeof x === 'string' && /^\.[A-Za-z0-9]+$/.test(x))) return refuse(`editor "${e.id}": extensions like ".md" — a dot, then letters or digits`);
+            const exportName = isRecord(e.fancyEditor) ? e.fancyEditor.export : undefined;
+            if (typeof exportName !== 'string' || !(VETTED_FANCY_EDITORS as readonly string[]).includes(exportName)) return refuse(`editor "${e.id}": "${String(exportName)}" is not a vetted Fancy editor (one of ${VETTED_FANCY_EDITORS.join(', ')})`);
+            editors.push({ id: e.id, title: e.title, extensions: (e.extensions as string[]).map((x) => x.toLowerCase()), fancyEditor: { export: exportName as VettedFancyEditor } });
+        }
+    }
+
     return {
         ok: true,
         manifest: {
@@ -125,6 +147,7 @@ export function parseManifest(raw: unknown): ParseResult {
             mcpTools: tools,
             capabilities,
             panels,
+            editors,
         },
     };
 }
