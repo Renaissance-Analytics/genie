@@ -36,6 +36,9 @@ import { TurnStop } from './TurnStop.js';
  * the pin pointless.
  */
 
+/** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail'>>;
+
 export interface ChatThread {
     agentId: string;
     name: string;
@@ -43,7 +46,7 @@ export interface ChatThread {
     /** `null` when the count could not be read — never `0`, which claims you are up to date. */
     unread: number | null;
     /** The transcript (`core/chat-view.ts`): message events only — no thought ever appears in chat. */
-    messages: readonly (Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend'>>)[];
+    messages: readonly ChatThreadMessage[];
     /** The line under the header — what the agent is doing, in the board's words; `null` = not read yet. */
     context?: ChatContext | null | undefined;
     /** The subject's own conversation is loaded (`core/chat-view.ts`); absent = not said, drawn as not loaded. */
@@ -61,6 +64,67 @@ export function GenieMark() {
 function clock(at: number): string {
     const d = new Date(at);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * A PIECE OF AGENTINBOX MAIL in the chat (beta.33 items 7 + 18; the owner: "I need to be able to see the context in
+ * agentInbox deliveries … click an inbox post and have it open the agent inbox"). Who to whom and when, then the whole
+ * message rendered — an FTQ answer reads as its question's header, the option chosen and the note. The head opens that
+ * message in the AgentInbox; with nowhere to open it (the doctor window), it is plain text, never a dead button.
+ * Hook-free, so a test can press it.
+ */
+export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
+    const head = (
+        <>
+            <Icon name="mail" size="xs" />
+            <span>{m.from}</span>
+            <span className="text-[var(--fg-4)]">· AgentInbox{m.at !== null && m.at !== undefined ? <> · <span data-chat-time={m.at}>{clock(m.at)}</span></> : null}</span>
+        </>
+    );
+    const mailId = m.mailId ?? m.id;
+    return (
+        <div data-chat-message={m.id} data-who="mail" className="flex max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
+            {onOpenMail ? (
+                <button type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)] hover:underline">
+                    {head}
+                </button>
+            ) : (
+                <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--violet-400)]">{head}</div>
+            )}
+            <ContentRenderer value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+        </div>
+    );
+}
+
+/**
+ * GENIE'S NOTICE TURN, WITH ITS CONTEXT: `genie → atlas · told atlas about 2 AgentInbox messages`, then one entry per
+ * message — who wrote it and one line of what it says — each opening that message. The notice's own words to the agent
+ * ("collect it with agentinbox receive") are an instruction to it, not something for the person to read. Hook-free.
+ */
+export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
+    return (
+        <div data-chat-message={m.id} data-who="delivery" className="flex flex-col gap-1 font-mono text-[11px] text-[var(--fg-3)]">
+            <div className="flex items-center gap-2">
+                <span className="text-[var(--violet-400)]"><Icon name="mail" size="xs" /></span>
+                <span>{`${m.from} · ${m.text}`}</span>
+                {m.at !== null && m.at !== undefined ? <span className="text-[var(--fg-4)]">· <span data-chat-time={m.at}>{clock(m.at)}</span></span> : null}
+            </div>
+            <ul className="flex flex-col gap-0.5 pl-5">
+                {(m.mail ?? []).map((ref) => {
+                    const body = <><span className="shrink-0 text-[var(--fg-2)]">{`from ${ref.from}`}</span><span className="min-w-0 truncate font-sans text-[12px] text-[var(--fg-2)]">{ref.subject}</span></>;
+                    return (
+                        <li key={ref.id} data-delivery-mail={ref.id}>
+                            {onOpenMail ? (
+                                <button type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)]">{body}</button>
+                            ) : (
+                                <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
+                            )}
+                        </li>
+                    );
+                })}
+            </ul>
+        </div>
+    );
 }
 
 export interface ChatFlyoutProps {
@@ -82,6 +146,8 @@ export interface ChatFlyoutProps {
      * own chat), and file references stay plain text.
      */
     onOpenFile?: ((path: string, line: number | null) => void) | undefined;
+    /** Open a piece of AgentInbox mail the chat shows, by its inbox id. Absent = nowhere to open it; the rows stay text. */
+    onOpenMail?: ((messageId: string) => void) | undefined;
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
     commands?: readonly ProviderCommand[] | null | undefined;
     answeringApproval?: string | null | undefined;
@@ -131,7 +197,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onOpenFile, onRestartAndSend, onDiscardDraft, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onResumeLimit, onProviderLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -346,6 +412,8 @@ export function ChatFlyout({
                             </div>
                         );
                     }
+                    if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                    if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
                     if (who === 'system') {
                         return (
                             <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">

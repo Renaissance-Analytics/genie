@@ -27,11 +27,21 @@ import type { Attachment } from './prompt-content.js';
  */
 
 /**
- * `system`: the agent's AgentInbox mail with another agent — one line in its thread, `atlas → wren · <subject>`.
+ * `system`: one line Genie says about the thread (`Compacted the context`).
+ * `mail`: a piece of the agent's AgentInbox mail — with the person or another agent, either way — `you → atlas`, its
+ * whole text, opening that message in the AgentInbox (beta.33 items 7 + 18: an FTQ answer is one).
+ * `delivery`: Genie's notice turn — the messages it told the agent about, each by who wrote it and what it says.
  * `stopped`: a turn that was stopped — one line where its reply ends, `Stopped by you`, so a reply cut short reads as
  * stopped and not as the agent's last word.
  */
-export type ChatWho = 'you' | 'agent' | 'peer' | 'system' | 'stopped';
+export type ChatWho = 'you' | 'agent' | 'peer' | 'system' | 'mail' | 'delivery' | 'stopped';
+
+/** One message a delivery told about: its inbox id (to open it), who wrote it, and one line of what it says. */
+export interface ChatMailRef {
+    readonly id: string;
+    readonly from: string;
+    readonly subject: string;
+}
 
 export interface ChatMessage {
     id: string;
@@ -53,6 +63,10 @@ export interface ChatMessage {
     reason?: string;
     /** An undelivered draft only: how it is sent now — `send` while its agent runs again, else `restart` (start it, then send). */
     resend?: 'send' | 'restart';
+    /** A `mail` row: the inbox message it is, which a press opens in the AgentInbox. */
+    mailId?: string;
+    /** A `delivery` row: the messages Genie told the agent about. */
+    mail?: readonly ChatMailRef[];
 }
 
 
@@ -98,7 +112,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
     return { text: 'Idle', tone: 'muted' };
 }
 
-export function chatMessages(detail: ChatDetail): ChatMessage[] {
+export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
     for (const row of detail.rows) {
         const e = row.event;
@@ -114,6 +128,19 @@ export function chatMessages(detail: ChatDetail): ChatMessage[] {
             continue;
         }
         if (e.kind !== 'message') continue;
+        // GENIE'S NOTICE, WITH ITS CONTEXT (beta.33 item 18): not its instruction to the agent ("collect it with
+        // agentinbox receive") but the messages it told about — who wrote each and what it says. A notice recorded
+        // before notices carried their mail has nothing to list, and stays Genie's message as it was.
+        if (e.speaker === 'peer' && e.mail && e.mail.length > 0) {
+            const n = e.mail.length;
+            out.push({
+                id: row.id, who: 'delivery', from: `${e.peerName ?? 'genie'} → ${detail.agent.name}`,
+                text: `told ${detail.agent.name} about ${n} AgentInbox message${n === 1 ? '' : 's'}`,
+                delivered: true, at: row.at,
+                mail: e.mail.map((m) => ({ id: m.id, from: m.from === 'human' ? 'you' : rows.find((r) => r.id === m.from)?.name ?? m.fromName ?? m.from, subject: mailSubject(m.text) })),
+            });
+            continue;
+        }
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at, ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}) });
@@ -132,7 +159,7 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         name: detail?.agent.name ?? row?.name ?? subjectId,
         fidelity: detail?.agent.fidelity ?? row?.fidelity ?? 'declared',
         unread: null,
-        messages: detail ? byTime(chatMessages(detail), commsRows(detail, rows)) : [],
+        messages: detail ? byTime(chatMessages(detail, rows), commsRows(detail, rows)) : [],
         context: detail ? chatContext(detail) : null,
         loaded: detail !== null,
     };
@@ -149,27 +176,47 @@ export function rememberThread(opened: readonly string[], id: string): string[] 
     return [id, ...opened.filter((x) => x !== id)].slice(0, KEPT);
 }
 
-/** A line of a message as a row's subject: the first line, trimmed, capped. */
-function subjectOf(text: string): string {
-    const line = text.split('\n')[0]!.trim();
-    return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+/** How long a subject line runs before it is cut. */
+const SUBJECT_CHARS = 160;
+
+/**
+ * ONE LINE OF WHAT A MESSAGE SAYS — a delivery's entry. The whole message, not its first line: an FTQ answer's first line
+ * is `Answer to your question q_…:`, which says nothing, and what matters (the question's header, the option chosen, the
+ * note) is on the lines under it. Markdown marks and list bullets go, lines join, a `Note:` is set off with `·`; capped.
+ */
+export function mailSubject(text: string): string {
+    const lines = text
+        .split('\n')
+        .map((l) => l.trim().replace(/^[-*]\s+/, '').replace(/\*\*|__|`/g, '').trim())
+        .filter((l) => l.length > 0);
+    const line = lines.reduce((acc, l) => (acc === '' ? l : /^note:/i.test(l) ? `${acc} · ${l}` : `${acc} ${l}`), '');
+    return line.length > SUBJECT_CHARS ? `${line.slice(0, SUBJECT_CHARS - 1)}…` : line;
 }
 
 /**
- * The agent's mail with ANOTHER agent, as system rows (the board: `atlas → wren · drop challenges table from
- * migration`). Mail with the person is the conversation itself, not a row about it; mail between two other agents
- * is not this agent's.
+ * WHAT MAIN HANDS THE CHAT of an agent's AgentInbox mail: every message it sent or received — the person's included. It
+ * used to drop the person's, on the reading that mail with the person "is the conversation itself"; for a declared agent
+ * it is not (the session sees it only when the agent calls `receive`), so the person's FTQ answer never reached the chat
+ * at all (the owner, beta.33: "I did not see the msg post from answering the FTQ appear").
+ */
+export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
+    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt }));
+}
+
+/**
+ * The agent's AgentInbox mail as MAIL rows — with the person and with other agents, either way (beta.33 items 7 + 18):
+ * `you → atlas`, `atlas → wren`, with the whole text, each opening its message in the AgentInbox. Mail between two other
+ * agents is not this agent's.
  */
 function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[] {
     if (!detail.comms) return [];
     const self = detail.agent.id;
-    const name = (id: string): string => (id === self ? detail.agent.name : rows.find((r) => r.id === id)?.name ?? id);
+    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? detail.agent.name : rows.find((r) => r.id === id)?.name ?? id);
     return detail.comms
-        .filter((m) => m.from !== 'human' && m.to !== 'human' && (m.from === self || m.to === self))
+        .filter((m) => m.from === self || m.to === self)
         .map((m) => {
             const at = Date.parse(m.sentAt);
-            const line = `${name(m.from)} → ${name(m.to)}`;
-            return { id: m.id, who: 'system' as const, from: line, text: `${line} · ${subjectOf(m.text)}`, delivered: true, at: Number.isNaN(at) ? null : at };
+            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered: true, at: Number.isNaN(at) ? null : at, mailId: m.id };
         });
 }
 

@@ -23,6 +23,7 @@ import { runV1ScheduleImport } from './v1-schedules.js';
 import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
+import type { NoticeMail } from '../core/stream-event.js';
 import { configSync, githubAppStatus, type GithubAppStatus, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
@@ -245,7 +246,7 @@ export interface ComposedServices {
      * §6.4 THE INBOX PUSH: the notices due now — registered agents with mail they have not been told about whose session
      * can take a turn (`run` answers its run, or `null` while it cannot). Once per arrival batch. Decides; never sends.
      */
-    inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string }>;
+    inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string; mail: readonly NoticeMail[] }>;
     /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
     inboxNoticeSettled(agentId: string, delivered: boolean): void;
     /** §6.9: Tynn (optional identity), the GitHub App's two steps, Tynn-gated rows annotated. */
@@ -321,6 +322,8 @@ interface FrontDoorController {
 
 const FRONT_DOOR_ID = 'genie-front-door';
 const TRUST_STEP_ID = 'trust';
+/** How much of each message a notice's row keeps: enough to read it in the chat; the whole message stays in the inbox. */
+const NOTICE_MAIL_CHARS = 4_000;
 
 const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
 
@@ -895,7 +898,18 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             [...agents().keys()].flatMap((id) => {
                 const unread = inbox.unread(id as never);
                 const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: run(id) });
-                return text ? [{ agentId: id, text }] : [];
+                if (!text) return [];
+                // WHAT THE NOTICE IS ABOUT (beta.33 item 18): each unread message, who from and what it says, carried on
+                // the notice's row so the chat shows the context — the prompt itself stays the short instruction.
+                const roster = agents();
+                const mail = unread.map((m): NoticeMail => ({
+                    id: m.id,
+                    from: m.from,
+                    fromName: m.from === HUMAN ? null : roster.get(m.from)?.name ?? null,
+                    text: m.text.length > NOTICE_MAIL_CHARS ? `${m.text.slice(0, NOTICE_MAIL_CHARS - 1)}…` : m.text,
+                    sentAt: m.sentAt,
+                }));
+                return [{ agentId: id, text, mail }];
             }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         signals: ({ osAgentWorking }) => ({

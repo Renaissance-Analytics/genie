@@ -23,8 +23,22 @@ import type { ToolStatus } from '@particle-academy/prism-acp';
  * that said "pending".
  */
 
+/**
+ * A piece of AgentInbox mail a Genie notice told the agent about (beta.33 item 18), as it was when told: the inbox's id
+ * (so the chat can open THAT message), who sent it (`human` or an agent id) and the name that agent had then, and what
+ * it says. The notice's prompt stays short — the agent collects the mail with `receive` — so this is the context a
+ * person reads in the chat.
+ */
+export interface NoticeMail {
+    readonly id: string;
+    readonly from: string;
+    readonly fromName: string | null;
+    readonly text: string;
+    readonly sentAt: string;
+}
+
 export type StreamEvent =
-    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[] }
+    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[] }
     | {
           kind: 'think';
           text: string;

@@ -686,6 +686,8 @@ export function Shell({
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
+                        // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
+                        {...(servable.includes('inbox') ? { onOpenMail: () => onNavigate(formatRoute({ surface: 'inbox', chat: chatThread?.agentId ?? null, pin: null })) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}

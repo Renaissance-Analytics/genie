@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
+import { openDurableStore, readHistory } from '../src/core/thread-store.js';
+import { sessionsDir } from '../src/main/paths.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
@@ -144,6 +146,45 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         expect(host.start(record, dir)).toEqual({ ok: true });
         await fakes.get(record.id)!.becomeReady();
         expect(promptsOf(record.id)).toEqual([NOTICE_1]);
+    });
+
+    /*
+     * THE NOTICE CARRIES ITS CONTEXT (beta.33 item 18; the owner: "I need to be able to see the context in agentInbox
+     * deliveries"). The agent still gets the same short prompt — it collects the mail with `receive` — but the notice's
+     * row in the ledger names the messages it told about: who from, and what each says, as they were when told. The
+     * chat reads it from there, and from the recorded thread after a restart.
+     */
+    it('the notice’s ledger row names the messages it told about — who from and what each says — and is recorded so', async () => {
+        const other = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider, name: 'wren' });
+        roster.push(other);
+        const record = register();
+        await startIdle(record);
+        await mail(record.id, 'Answer to your question q_1:\n- **Deploy** — Ship it?\n  → Yes');
+        await services.inbox.receive({ participant: record.id });
+        endTurn(record.id);
+        // Two arriving mid-turn are one notice, naming both.
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        await mail(record.id, 'two', other.id);
+        endTurn(record.id);
+        const notices = host.rowsFor(record.id).map((r) => r.event).filter((e) => e.kind === 'message' && e.speaker === 'peer' && e.peerName === 'genie');
+        expect(notices.map((e) => (e.kind === 'message' ? e.text : ''))).toEqual([NOTICE_1, notice(2)]);
+        const told = notices.map((e) => (e.kind === 'message' ? (e.mail ?? []).map((m) => [m.from, m.fromName, m.text]) : []));
+        expect(told).toEqual([
+            [[HUMAN, null, 'Answer to your question q_1:\n- **Deploy** — Ship it?\n  → Yes']],
+            [[HUMAN, null, 'one'], [other.id, 'wren', 'two']],
+        ]);
+        // Each by the inbox's own id and time, so the chat can open THAT message.
+        const ids = services.inbox.unread(record.id).map((m) => m.id);
+        expect(notices[1]!.kind === 'message' ? notices[1]!.mail!.map((m) => m.id) : []).toEqual(ids.slice(-2));
+        // RECORDED: the thread holds the same context, so it survives a restart.
+        await host.settled();
+        const recorded = (await readHistory(openDurableStore(sessionsDir(dir)), record.id)).rows.map((r) => r.event)
+            .filter((e) => e.kind === 'message' && e.speaker === 'peer' && e.peerName === 'genie');
+        expect(recorded.map((e) => (e.kind === 'message' ? (e.mail ?? []).map((m) => m.text) : []))).toEqual([
+            ['Answer to your question q_1:\n- **Deploy** — Ship it?\n  → Yes'],
+            ['one', 'two'],
+        ]);
     });
 
     it('IDLE: the notice is delivered at once', async () => {
