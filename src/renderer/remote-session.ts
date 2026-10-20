@@ -99,3 +99,19 @@ export function knownHosts(storage: TokenStorage) {
         },
     };
 }
+
+/**
+ * OPEN A HOST IN ITS OWN WINDOW (Genie 1's remote.open; the two-VM proof, 2026-10-20): through the bridge that can open
+ * windows — the injected one (tests), else this window's own (`window.genie`, the real app) — and only with neither does
+ * this window connect in place. Asking the injected bridge alone meant the real app never opened a window.
+ */
+export function openRemoteHost(
+    url: string,
+    injected: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
+    own: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
+    connectHere: (url: string) => void,
+): void {
+    const windows = injected?.remoteWindows ?? own?.remoteWindows;
+    if (windows) void windows.open(url);
+    else connectHere(url);
+}

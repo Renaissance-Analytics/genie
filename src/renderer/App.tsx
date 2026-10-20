@@ -27,7 +27,7 @@ import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
-import { knownHosts, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
+import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { ipcRelayTransport, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import type { ShareLink } from '../main/tynn-share-links.js';
@@ -992,10 +992,10 @@ function DesktopApp({ bridge }: AppProps) {
                 known: remote.known, onForgetHost: remote.forget, onReconnect: remote.reconnect,
                 onUpgradeHost: remote.upgradeHost, upgrade: remote.upgrade,
                 // Its own window when this Genie can open one (Genie 1's remote.open); else this window connects.
-                onOpenHost: (url: string) => { if (bridge?.remoteWindows) void bridge.remoteWindows.open(url); else remote.connect({ host: url, pin: '', label: '' }); },
+                onOpenHost: (url: string) => openRemoteHost(url, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
                 // A Tynn workstation (Tynn #837): its own window, bound to relay:<id>.
                 tynnWorkstations: remote.tynnWorkstations,
-                onOpenWorkstation: (w: TynnWorkstationRow) => { if (bridge?.remoteWindows) void bridge.remoteWindows.open(`relay:${w.id}`); else void remote.connect({ host: `relay:${w.id}`, pin: '', label: '' }); },
+                onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
             }}
             agentOps={agentOps}
             workspaceOps={workspaceOps}
