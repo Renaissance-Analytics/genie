@@ -725,6 +725,8 @@ export function Shell({
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
                         onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
+                        // Interrupt and send (item 21): the same Stop-this-turn path; what waits is already with the provider and runs next.
+                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                     />
