@@ -164,7 +164,7 @@ describe('services add: pgvector and a custom image’s kind', () => {
         const r = await call('t-example', { action: 'catalog' });
         const engines = r.json.engines as Array<Record<string, any>>;
         expect(engines.find((e) => e.engine === 'postgres')!.variants).toEqual([
-            { variant: 'pgvector', summary: 'PostgreSQL with pgvector — the `vector` type and its ivfflat and hnsw indexes', images: ['pgvector/pgvector:pg14', 'pgvector/pgvector:pg15', 'pgvector/pgvector:pg16', 'pgvector/pgvector:pg17'] },
+            { variant: 'pgvector', summary: 'PostgreSQL with pgvector — the `vector` type and its ivfflat and hnsw indexes', images: ['pgvector/pgvector:pg14', 'pgvector/pgvector:pg15', 'pgvector/pgvector:pg16', 'pgvector/pgvector:pg17', 'pgvector/pgvector:pg18'] },
         ]);
         expect(engines.find((e) => e.engine === 'custom')!.kinds).toEqual(['postgres', 'mysql', 'mariadb', 'redis', 'mongo']);
         // Control: an engine without variants lists none.

@@ -267,7 +267,8 @@ const mailTagEnv = (namespace: string): Record<string, string> => ({ MAIL_FROM_A
 
 export const SERVICE_CATALOG: readonly EngineDef[] = [
     {
-        engine: 'postgres', image: 'postgres', internalPort: 5432, majors: ['14', '15', '16', '17'], sharing: 'shared-or-dedicated',
+        // 18 keeps its data elsewhere in its image; the driver mounts it there (service-driver.ts `dataDirOf`, hosting 3.3).
+        engine: 'postgres', image: 'postgres', internalPort: 5432, majors: ['14', '15', '16', '17', '18'], sharing: 'shared-or-dedicated',
         containerEnv: (c) => ({ POSTGRES_USER: c.user ?? 'genie', POSTGRES_PASSWORD: c.password ?? '', POSTGRES_DB: c.database ?? 'app' }),
         hostEnv: sqlEnv('pgsql', 'genie'),
         // Docker Hub publishes pgvector/pgvector:pg14…pg18 (read 2026-10-15); the stock image of that major plus pgvector,

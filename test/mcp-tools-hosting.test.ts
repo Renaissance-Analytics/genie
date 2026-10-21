@@ -115,7 +115,7 @@ describe('services: reading', () => {
         expect(engines.find((e) => e.engine === 'meilisearch')!.images).toEqual(['getmeili/meilisearch:v1']);
         expect(engines.find((e) => e.engine === 'seaweedfs')).toMatchObject({ images: ['chrislusf/seaweedfs:4.48'], scopes: ['shared'] });
         expect(engines.find((e) => e.engine === 'custom')).toMatchObject({ versions: [], images: [], scopes: ['dedicated'] });
-        expect(engines.find((e) => e.engine === 'postgres')).toMatchObject({ versions: ['14', '15', '16', '17'], scopes: ['dedicated', 'shared'] });
+        expect(engines.find((e) => e.engine === 'postgres')).toMatchObject({ versions: ['14', '15', '16', '17', '18'], scopes: ['dedicated', 'shared'] });
         expect(engines.find((e) => e.engine === 'postgres')!.images).toContain('postgres:17');
         expect(engines.find((e) => e.engine === 'mailpit')!.images).toEqual(['axllent/mailpit:v1.30']);
         expect(engines.find((e) => e.engine === 'websockets')!.scopes).toEqual(['shared']);
@@ -218,7 +218,7 @@ describe('services: add goes through the person', () => {
             await call('services', 't-example', { action: 'add', engine: 'postgres' }),
         ];
         expect(refusals.map((r) => r.isError)).toEqual([true, true, true, true]);
-        expect(refusals[0]!.json.error).toBe('postgres 12 is not a version Genie knows (14, 15, 16, 17).');
+        expect(refusals[0]!.json.error).toBe('postgres 12 is not a version Genie knows (14, 15, 16, 17, 18).');
         expect(services.approvals.deckItems()).toEqual([]);
         expect(docker.calls.filter((c) => c[0] === 'pull' || c[0] === 'create')).toEqual([]);
     });
