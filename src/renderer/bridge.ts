@@ -130,7 +130,8 @@ export interface GenieBridge {
         openWindow(host: string): Promise<void>;
     };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */
-    browserWindow?: { open(address?: string): Promise<{ ok: true } | { ok: false; error: string }> };
+    /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
+    browserWindow?: { open(address?: string, hosts?: readonly string[]): Promise<{ ok: true } | { ok: false; error: string }> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
     host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */

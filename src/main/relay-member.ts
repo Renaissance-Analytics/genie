@@ -136,11 +136,12 @@ export function openRelayMember(input: {
             const stream = streams.get(reqId);
             if (!stream) return;
             if (stream.settle) {
-                const p = frame.payload as { t?: unknown } | undefined;
+                const p = frame.payload as { t?: unknown; ca?: unknown } | undefined;
                 if (frame.kind === 'data' && p?.t === 'open') {
                     const say = (f: SiteFrame) => { if (!closed && ws.readyState === OPEN && sid !== null) ws.send(encodeFrame({ ...f, channel: 'site', sid, reqId })); };
                     stream.settle({
                         ok: true,
+                        ...(typeof p.ca === 'string' ? { ca: p.ca } : {}),
                         pipe: (socket) => {
                             if (closed || streams.get(reqId) !== stream) { socket.destroy(); return; }
                             const pipe = pipeSiteStream(socket, say, () => { if (streams.get(reqId) === stream) streams.delete(reqId); });

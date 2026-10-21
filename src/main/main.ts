@@ -8,7 +8,9 @@ import { chatCommsOf } from '../core/chat-view.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
 import type { RelaySocket } from './relay-wire.js';
 import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
-import { dialFrontDoor } from './relay-site.js';
+import { browserConnectionFor } from '../core/browser-connection.js';
+import { RemoteBrowsers } from './remote-browsers.js';
+import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
@@ -556,7 +558,9 @@ let relayAfterSwitch: (() => void) | null = null;
 let relayHostNow: RelayHostHandle | null = null;
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
-const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents }>();
+const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
+/** The Genie browser for each Tynn workstation a window here drives: a door per connection (remote-browsers.ts). */
+const remoteBrowsers = new RemoteBrowsers(siteDoor);
 let nextRelayChannel = 0;
 /** The global WebSocket, as the relay ends' socket. */
 const relaySocket = (url: string): RelaySocket => new WebSocket(url) as unknown as RelaySocket;
@@ -1328,7 +1332,21 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
-    ipcMain.handle('genie:browser-window-open', (_event, address: unknown) => genieBrowserWindow?.open(typeof address === 'string' ? address : undefined) ?? { ok: false, error: 'Genie’s browser is not ready yet' });
+    // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
+    // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
+    ipcMain.handle('genie:browser-window-open', async (event, address: unknown, rawHosts: unknown) => {
+        const browser = genieBrowserWindow;
+        if (!browser) return { ok: false, error: 'Genie’s browser is not ready yet' };
+        const at = typeof address === 'string' ? address : undefined;
+        const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
+        const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
+        if (conn.kind === 'refused') return { ok: false, error: conn.reason };
+        if (conn.kind === 'local') return browser.open(at);
+        const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
+        const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
+        const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
+        return browser.open(at, { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
+    });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
@@ -1350,7 +1368,7 @@ async function boot(): Promise<void> {
         if (!opened.ok) return opened;
         const channel = `relay_${++nextRelayChannel}`;
         const sender = event.sender;
-        relayChannels.set(channel, { transport: opened.transport, sender });
+        relayChannels.set(channel, { transport: opened.transport, sender, workstationId });
         opened.transport.onMessage((text) => { if (!sender.isDestroyed()) sender.send('genie:relay-message', channel, text); });
         opened.transport.onClose(() => {
             relayChannels.delete(channel);
@@ -1853,7 +1871,7 @@ async function boot(): Promise<void> {
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
             // The owner's windows on other workstations browse this one's `.gen` sites through its own front door.
-            site: { dial: (host) => dialFrontDoor(composed.frontDoorPort, host) },
+            site: { dial: (host) => dialFrontDoor(composed.frontDoorPort, host), ca: () => composed.browserTrust().caPem },
         });
     };
     relayAfterSwitch = () => { void applyRelayHost(); };
