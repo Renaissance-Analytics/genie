@@ -200,6 +200,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setManageTabs: (agentId, on) => answer('agents.setManageTabs', agentId, on),
+            setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
             setModel: (agentId, model) => answer('agents.setModel', agentId, model),

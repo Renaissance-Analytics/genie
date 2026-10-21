@@ -503,6 +503,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, manageTabs }));
     }
 
+    /** May drive pages (browser rebuild step 7): the page tool appears in its next tools/list. */
+    async setDrivePages(agentId: AgentId, drivePages: boolean): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, drivePages }));
+    }
+
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
     async setIssueWatch(agentId: AgentId, issueWatch: IssueWatchSetting): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, issueWatch }));

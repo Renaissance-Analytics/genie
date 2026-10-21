@@ -109,6 +109,9 @@ export interface AgentOpsProps {
     /** May manage the workspace's tabs (beta.35 item 36): the `workspaceTabs` tool. Absent = no switch. */
     readonly manageTabs?: boolean;
     readonly onSetManageTabs?: (on: boolean) => void;
+    /** May drive pages (browser rebuild step 7). */
+    readonly drivePages?: boolean;
+    readonly onSetDrivePages?: (on: boolean) => void;
     /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
     readonly issueWatch?: IssueWatchPrefs;
     readonly onSetIssueWatch?: (setting: IssueWatchSetting) => void;
@@ -1025,6 +1028,15 @@ export function AgentView({
                                                 <span>
                                                     May manage workspace tabs — {agent.name} can add, arrange and remove this workspace’s tabs and their panels.
                                                     <span className="mt-0.5 block text-[var(--fg-4)]">The workspace’s default agent always can. Each change asks you unless {agent.name} is autonomous.</span>
+                                                </span>
+                                            </label>
+                                        ) : null}
+                                        {ops.onSetDrivePages ? (
+                                            <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
+                                                <span data-drive-pages={ops.drivePages ? 'on' : 'off'} className="mt-0.5"><Switch checked={ops.drivePages === true} onCheckedChange={(checked) => ops.onSetDrivePages?.(checked)} aria-label={`${agent.name} may drive pages`} /></span>
+                                                <span>
+                                                    May drive pages — {agent.name} can read this workspace’s Genie site pages, fill their fields and click through them.
+                                                    <span className="mt-0.5 block text-[var(--fg-4)]">The workspace’s default agent always can. A submit, or a click that changes or deletes something, always asks you first — even when {agent.name} is autonomous.</span>
                                                 </span>
                                             </label>
                                         ) : null}

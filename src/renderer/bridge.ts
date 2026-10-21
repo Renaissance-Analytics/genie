@@ -76,7 +76,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -277,6 +277,8 @@ export interface GenieBridge {
         setAutoApprove(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** May manage the workspace's tabs (beta.35 item 36). */
         setManageTabs(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** May drive pages (browser rebuild step 7). */
+        setDrivePages(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What the agent hears from IssueWatch (Tynn #806). */
         setIssueWatch(agentId: string, setting: IssueWatchSetting): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** What a Claude agent may do: all tools, ask before shell commands, or edits only. Refused for a Codex agent. */

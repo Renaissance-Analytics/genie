@@ -151,6 +151,7 @@ const bridge: GenieBridge = {
         setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
         setAutoApprove: (agentId, on) => ipcRenderer.invoke('genie:agent-set-auto-approve', agentId, on) as never,
         setManageTabs: (agentId, on) => ipcRenderer.invoke('genie:agent-set-manage-tabs', agentId, on) as never,
+        setDrivePages: (agentId, on) => ipcRenderer.invoke('genie:agent-set-drive-pages', agentId, on) as never,
         setIssueWatch: (agentId, setting) => ipcRenderer.invoke('genie:agent-set-issue-watch', agentId, setting) as never,
         setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
         setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,

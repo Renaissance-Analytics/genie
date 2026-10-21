@@ -75,6 +75,7 @@ function fakes() {
             setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },
             setAutoApprove: async (id, on) => { calls.push(`agent-auto:${id}:${on}`); return { ok: true }; },
             setManageTabs: async (id, on) => { calls.push(`agent-tabs:${id}:${on}`); return { ok: true }; },
+            setDrivePages: async (id, on) => { calls.push(`agent-pages:${id}:${on}`); return { ok: true }; },
             setIssueWatch: async (id, setting) => { calls.push(`agent-issue-watch:${id}:${JSON.stringify(setting)}`); return { ok: true }; },
             setPermissions: async (id, permissions) => { calls.push(`agent-permissions:${id}:${permissions}`); return { ok: true }; },
             setModel: async (id, model) => { calls.push(`agent-model:${id}:${model}`); return { ok: true }; },
