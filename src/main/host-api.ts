@@ -64,11 +64,17 @@ export interface HostApiDeps {
         /** The parent folder is picked in the window too (Tynn #835). */
         previewAddFromGit?(url: string, parent: string): Promise<unknown>;
         tynnProjects?(): Promise<unknown>;
+        /** Creating a Tynn project from the optional link (Add workspace parity item 5); optional, refused where absent. */
+        tynnOwnerOptions?(): Promise<unknown>;
+        createTynnProject?(input: unknown): Promise<unknown>;
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
-        /** `remote`: the window's None / GitHub / Paste URL choice, unparsed (main parses it; Add workspace parity 11). */
-        create(name: string, parent: string, remote?: unknown): Promise<unknown>;
+        /**
+         * `remote`: the window's None / GitHub / Paste URL choice, unparsed (main parses it; Add workspace parity 11).
+         * `tynnProjectId`: the optional Tynn link (parity 5), looked up in Tynn's own list on the host.
+         */
+        create(name: string, parent: string, remote?: unknown, tynnProjectId?: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         /** The Open existing / Import from Git wizard (Add workspace parity item 7); optional, refused where absent. */
         readSource?(path: string): Promise<unknown>;
@@ -237,6 +243,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.locateRepo':
                 if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
                 return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));
+            case 'workspaces.tynnOwnerOptions':
+                if (!deps.workspaceOps.tynnOwnerOptions) throw new Error('this host cannot create Tynn projects');
+                return deps.workspaceOps.tynnOwnerOptions();
+            case 'workspaces.createTynnProject':
+                if (!deps.workspaceOps.createTynnProject) throw new Error('this host cannot create Tynn projects');
+                return deps.workspaceOps.createTynnProject(args[0]);
             case 'workspaces.tynnProjects':
                 if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
                 return deps.workspaceOps.tynnProjects();
@@ -246,7 +258,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.confirmAddFromTynn':
                 return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.create':
-                return deps.workspaceOps.create(str(args[0]), str(args[1]), args[2]);
+                return deps.workspaceOps.create(str(args[0]), str(args[1]), args[2], typeof args[3] === 'string' && args[3] !== '' ? args[3] : undefined);
             case 'workspaces.confirmAdd':
                 return deps.workspaceOps.confirmAdd(str(args[0]));
             case 'workspaces.hibernate':

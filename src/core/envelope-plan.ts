@@ -372,6 +372,11 @@ export interface EnvelopePlan {
     readonly knowledge: readonly PlanKnowledge[];
     /** The host repo's name; `null` = none designated (one repo is its own host). */
     readonly primary: string | null;
+    /**
+     * The Tynn project to link (Genie 1's optional "Project" on the wizard's Workspace step; Add workspace parity item 5).
+     * Only the id: the host looks it up in Tynn's own list before anything is written. Absent = no link.
+     */
+    readonly tynnProjectId?: string;
 }
 
 /** The ONE place a row becomes a submodule URL (the seam item 12's fork plugs into). */
@@ -421,7 +426,9 @@ export function parseEnvelopePlan(raw: unknown): EnvelopePlan | null {
         if (!KNOWLEDGE_TARGETS.some((t) => t.value === o.subdir) && o.to === 'ai') return null;
         knowledge.push({ from: o.from, kind: o.kind, to: o.to, subdir: o.subdir });
     }
-    return { name: p.name, parent: p.parent, source: p.source, staged: p.staged, repos, knowledge, primary: (p.primary as string | null) };
+    if (p.tynnProjectId !== undefined && p.tynnProjectId !== null && !str(p.tynnProjectId)) return null;
+    const tynnProjectId = str(p.tynnProjectId) && p.tynnProjectId !== '' ? p.tynnProjectId : null;
+    return { name: p.name, parent: p.parent, source: p.source, staged: p.staged, repos, knowledge, primary: (p.primary as string | null), ...(tynnProjectId ? { tynnProjectId } : {}) };
 }
 
 /** What makes a folder an envelope; a Root item may not replace it. */

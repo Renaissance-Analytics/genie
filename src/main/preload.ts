@@ -115,7 +115,7 @@ const bridge: GenieBridge = {
     workspaces: {
         previewAdd: (path) => ipcRenderer.invoke('genie:workspace-preview-add', path) as never,
         confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
-        create: (name, parent, remote) => ipcRenderer.invoke('genie:workspace-create', name, parent, remote) as never,
+        create: (name, parent, remote, tynnProjectId) => ipcRenderer.invoke('genie:workspace-create', name, parent, remote, tynnProjectId ?? '') as never,
         previewAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-preview-add-git', url, parent) as never,
         confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
         readSource: (path) => ipcRenderer.invoke('genie:workspace-read-source', path) as never,
@@ -124,6 +124,8 @@ const bridge: GenieBridge = {
         buildEnvelope: (plan, remote) => ipcRenderer.invoke('genie:workspace-build-envelope', plan, remote) as never,
         discardStaged: (path) => ipcRenderer.invoke('genie:workspace-discard-staged', path) as never,
         tynnProjects: () => ipcRenderer.invoke('genie:workspace-tynn-projects') as never,
+        tynnOwnerOptions: () => ipcRenderer.invoke('genie:workspace-tynn-owner-options') as never,
+        createTynnProject: (input) => ipcRenderer.invoke('genie:workspace-create-tynn-project', input) as never,
         previewAddFromTynn: (projectId, parent) => ipcRenderer.invoke('genie:workspace-preview-add-tynn', projectId, parent) as never,
         confirmAddFromTynn: (parent, projectId) => ipcRenderer.invoke('genie:workspace-confirm-add-tynn', parent, projectId) as never,
         hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,

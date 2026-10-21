@@ -2,7 +2,7 @@ import { basename, join } from 'node:path';
 import { convertCommitMessage, envelopeRepos, isLocalPathLike, planProblem, type EntryKind, type EnvelopePlan, type SourceAnalysis } from '../core/envelope-plan.js';
 import { repoFolderName } from '../core/workspace-model.js';
 import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
-import { alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, resolveTynnLink, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 
 /**
  * BUILDING A NEW `<slug>.agi` AROUND THE PERSON'S REPOS (Add workspace parity item 7) — the main-process half of
@@ -89,7 +89,10 @@ export async function registerExisting(ops: WorkspaceOpsPorts, path: string): Pr
 export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, plan: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
     const problem = planProblem(plan) ?? (remote ? remoteChoiceProblem(remote) : null);
     if (problem) return { ok: false, reason: problem };
-    const made = await makeNewEnvelope(ops, plan.name, plan.parent);
+    // The optional Tynn link (item 5): looked up in Tynn's own list BEFORE the envelope exists, and in its first commit.
+    const linked = await resolveTynnLink(ops, plan.tynnProjectId);
+    if (!linked.ok) return linked;
+    const made = await makeNewEnvelope(ops, plan.name, plan.parent, linked.link);
     if (!made.ok) return made;
     const ws = made.path;
 

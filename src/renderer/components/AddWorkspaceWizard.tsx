@@ -4,6 +4,7 @@ import { workspaceFolderName } from '../../core/add-workspace.js';
 import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
 import type { GithubView } from '../../core/github.js';
 import { PublishedView, RemoteChoiceView, type GithubAsk } from './AgiRemoteChoice.js';
+import { TynnProjectLink, type TynnLinkApi } from './TynnProjectLink.js';
 import {
     buildPlan,
     choosePrimary,
@@ -242,8 +243,8 @@ export function KnowledgeStepView({ rows, other, onPatch }: { rows: readonly Kno
     );
 }
 
-/** Step 4 — the name, where the new workspace lands, what it will hold, and where it is kept (None / GitHub / Paste URL). */
-export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github, onRemote, onGithub }: {
+/** Step 4 — the name, where the new workspace lands, an optional Tynn project (Genie 1's), what it will hold, and where it is kept (None / GitHub / Paste URL). */
+export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github, onRemote, onGithub, tynnLink }: {
     draft: WizardDraft;
     sep: string;
     onName: (name: string) => void;
@@ -252,6 +253,7 @@ export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github
     github?: GithubView | null | undefined;
     onRemote?: ((choice: RemoteChoice) => void) | undefined;
     onGithub?: ((ask: GithubAsk) => void) | undefined;
+    tynnLink?: ReactNode;
 }) {
     const plan = buildPlan(draft);
     const folder = workspaceFolderName(draft.name);
@@ -271,6 +273,7 @@ export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github
                 </div>
                 <span data-lands-at="" className={muted}>{lands ? `Lands at ${lands}` : 'Pick the folder your workspaces live in.'}</span>
             </div>
+            {tynnLink ?? null}
             <p data-wizard-summary="" className={muted}>
                 Genie makes the folder and its first commit, adds <strong>{plan.repos.length}</strong> submodule{plan.repos.length === 1 ? '' : 's'}, copies <strong>{copies}</strong> knowledge item{copies === 1 ? '' : 's'}, and commits them. {draft.staged ? 'The staging clone is removed afterwards.' : 'Your folder is not changed.'}
             </p>
@@ -326,6 +329,8 @@ export interface AddWorkspaceWizardProps {
     readonly discard: (path: string) => void;
     readonly onAdded: (id: string) => void;
     readonly onClose: () => void;
+    /** The optional Tynn project link on the Workspace step (Genie 1's ProjectPicker). Absent = no picker. */
+    readonly tynn?: TynnLinkApi | undefined;
 }
 
 /** The step a forward move may reach: Repos needs valid names; nothing moves while a build runs. */
@@ -333,8 +338,9 @@ export function canLeaveStep(draft: WizardDraft, step: number): boolean {
     return step !== 1 || repoNamesProblem(draft.repos) === null;
 }
 
-export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, build, github = null, onGithub = () => {}, registerExisting, cloneExisting, discard, onAdded, onClose }: AddWorkspaceWizardProps) {
+export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, build, github = null, onGithub = () => {}, registerExisting, cloneExisting, discard, onAdded, onClose, tynn }: AddWorkspaceWizardProps) {
     const [draft, setDraft] = useState<WizardDraft | null>(null);
+    const [projectId, setProjectId] = useState<string | null>(null);
     const [step, setStep] = useState(0);
     const [parent, setParent] = useState(primaryWorkspace);
     const [busy, setBusy] = useState(false);
@@ -346,7 +352,7 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
     const [partial, setPartial] = useState<{ id: string; path: string; published: Published } | null>(null);
     // Every new read starts the wizard over, at the Source step, landing beside the Primary workspace (else the source's parent).
     useEffect(() => {
-        setStep(0); setBusy(false); setError(null); setPicked(null); setPartial(null);
+        setStep(0); setBusy(false); setError(null); setPicked(null); setPartial(null); setProjectId(null);
         const sourceParent = read && !read.existing && !read.staged ? read.analysis.root.replace(/[\\/]+[^\\/]+[\\/]*$/, '') : '';
         const start = primaryWorkspace || sourceParent;
         setParent(start);
@@ -384,7 +390,8 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
         );
     } else if (draft) {
         const d = draft;
-        const plan = buildPlan(d);
+        // The link rides the plan as an id only; the host looks it up in Tynn's own list before writing anything.
+        const plan = { ...buildPlan(d), ...(projectId ? { tynnProjectId: projectId } : {}) };
         const finishProblem = planProblem(plan) ?? remoteChoiceProblem(remote);
         const go = (to: number) => { if (busy) return; if (to < step) { setStep(to); return; } for (let s = step; s < to; s++) if (!canLeaveStep(d, s)) return; setStep(to); };
         const knowledgeStep = usesDisposition(d.analysis.sourceKind) ? (
@@ -400,7 +407,7 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
             <SourceStepView key="source" analysis={d.analysis} staged={d.staged} url={read.url} />,
             <ReposStepView key="repos" draft={d} onPatch={(key, patch) => setDraft(patchRepo(d, key, patch))} onMode={(m) => setDraft(setMonorepoMode(d, m))} onPrimary={(n) => setDraft(choosePrimary(d, n))} />,
             knowledgeStep,
-            <WorkspaceStepView key="workspace" draft={d} sep={sep} onName={(n) => { setDraft(renameWorkspace(d, n)); setError(null); }} onBrowse={() => pickParent((p) => setDraft({ ...d, parent: p }), d.parent)} remote={remote} github={github} onRemote={(c) => { setPicked(c); setError(null); }} onGithub={onGithub} />,
+            <WorkspaceStepView key="workspace" draft={d} sep={sep} onName={(n) => { setDraft(renameWorkspace(d, n)); setError(null); }} onBrowse={() => pickParent((p) => setDraft({ ...d, parent: p }), d.parent)} remote={remote} github={github} onRemote={(c) => { setPicked(c); setError(null); }} onGithub={onGithub} tynnLink={tynn ? <TynnProjectLink api={tynn} projectId={projectId} onProject={(id) => { setProjectId(id); setError(null); }} /> : undefined} />,
         ];
         body = (
             <div className="flex flex-col gap-4">

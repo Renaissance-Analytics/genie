@@ -48,7 +48,7 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
-import { TYNN_HOST } from '../core/tynn.js';
+import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir } from './host-fs.js';
@@ -57,7 +57,7 @@ import { readRememberedPasswordStore, rememberPasswordStore } from './password-s
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit } from './envelope-wizard-host.js';
@@ -1517,6 +1517,15 @@ async function boot(): Promise<void> {
                 if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
                 return tynnAccount.projects();
             },
+            // Creating a project from the optional link (Add workspace parity item 5; Genie 1's tynn:owner-options / tynn:create-project).
+            ownerOptions() {
+                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
+                return tynnAccount.ownerOptions();
+            },
+            createProject(body) {
+                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
+                return tynnAccount.createProject(body);
+            },
         },
         // Settings → General "Env file name", read at each add (Add workspace parity 2b); before the services exist, `.env`.
         defaultEnvFile: () => {
@@ -1542,9 +1551,9 @@ async function boot(): Promise<void> {
      */
     const remoteFromWindow = (raw: unknown): RemoteChoice | null | undefined => (raw === undefined || raw === null ? undefined : parseRemoteChoice(raw));
     const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
-    const createFromWindow = (name: string, parent: string, raw: unknown) => {
+    const createFromWindow = (name: string, parent: string, raw: unknown, tynnProjectId?: string) => {
         const remote = remoteFromWindow(raw);
-        return remote === null ? Promise.resolve(NOT_A_REMOTE) : createWorkspaceOp(workspaceOps, name, parent, remote);
+        return remote === null ? Promise.resolve(NOT_A_REMOTE) : createWorkspaceOp(workspaceOps, name, parent, remote, tynnProjectId);
     };
     const buildFromWindow = (raw: unknown, rawRemote: unknown) => {
         const plan = parseEnvelopePlan(raw);
@@ -1626,8 +1635,12 @@ async function boot(): Promise<void> {
         (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote) : { ok: false, reason: 'give the workspace a name and a folder' }));
+    // Optionally linked to a Tynn project (Add workspace parity item 5): its id, looked up in Tynn's own list on this side.
+    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown, rawProject: unknown) =>
+        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
+    // The optional link's "New project" (Genie 1's CreateProjectForm): who may own it, and the project made on Tynn.
+    ipcMain.handle('genie:workspace-tynn-owner-options', () => listTynnOwners(workspaceOps));
+    ipcMain.handle('genie:workspace-create-tynn-project', (_event, raw: unknown) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : { ok: false, reason: 'give the project a name' }; });
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -1813,10 +1826,12 @@ async function boot(): Promise<void> {
                 previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
                 previewAddFromGit: (url, parent) => previewGit(url, parent),
                 tynnProjects: () => listTynnProjects(workspaceOps),
+                tynnOwnerOptions: () => listTynnOwners(workspaceOps),
+                createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
                 previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
                 locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
-                create: (name, parent, remote) => createFromWindow(name, parent, remote),
+                create: (name, parent, remote, tynnProjectId) => createFromWindow(name, parent, remote, tynnProjectId),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 readSource: (path) => readSource(workspaceOps, envelopePorts, path),
                 stageFromGit: (url) => stageFromGit(workspaceOps, envelopePorts, url),

@@ -47,6 +47,8 @@ export const REMOTE_METHODS = [
     'workspaces.buildEnvelope',
     'workspaces.discardStaged',
     'workspaces.tynnProjects',
+    'workspaces.tynnOwnerOptions',
+    'workspaces.createTynnProject',
     'workspaces.previewAddFromTynn',
     'workspaces.confirmAddFromTynn',
     'workspaces.hibernate',
@@ -143,6 +145,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.discardStaged': 'write',
     // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.
     'workspaces.tynnProjects': 'read',
+    // The optional link's "New project" (Add workspace parity item 5): who may own it is a read; creating it writes on Tynn.
+    'workspaces.tynnOwnerOptions': 'read',
+    'workspaces.createTynnProject': 'write',
     'workspaces.previewAddFromTynn': 'read',
     'workspaces.confirmAddFromTynn': 'write',
     'workspaces.hibernate': 'write',

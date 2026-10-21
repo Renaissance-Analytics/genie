@@ -35,6 +35,7 @@ import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
 import type { GithubAsk } from './components/AgiRemoteChoice.js';
 import { GITHUB_ROUTE } from '../core/github.js';
+import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
 import { PanelHostContext } from './components/PluginPane.js';
@@ -675,6 +676,17 @@ function DesktopApp({ bridge }: AppProps) {
      * wizard (an older Genie this window drives) keeps the plan-then-confirm it had.
      */
     const [wizardRead, setWizardRead] = useState<SourceReadView | null>(null);
+    // GENIE 1'S OPTIONAL TYNN PROJECT (Add workspace parity item 5), on New and on the wizard's Workspace step: the host's own
+    // list, and — where the host can — creating one. One object per bridge, so the picker reads the list once per opening.
+    const tynnLinkApi = useMemo<TynnLinkApi | undefined>(() => {
+        const ws = resolvedBridge?.workspaces;
+        if (!ws?.tynnProjects) return undefined;
+        return {
+            projects: () => ws.tynnProjects().then((r) => (r.ok ? { ok: true as const, projects: r.projects } : r)),
+            ...(ws.tynnOwnerOptions ? { ownerOptions: () => ws.tynnOwnerOptions!() } : {}),
+            ...(ws.createTynnProject ? { createProject: (input: Parameters<NonNullable<TynnLinkApi['createProject']>>[0]) => ws.createTynnProject!(input) } : {}),
+        };
+    }, [resolvedBridge]);
     const openExisting = () => {
         setAddOpen(false);
         void pickFolder('Open an existing folder', addStart).then((path) => {
@@ -1292,10 +1304,10 @@ function DesktopApp({ bridge }: AppProps) {
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
-            create={async (name, parent, remote) => {
+            create={async (name, parent, remote, tynnProjectId) => {
                 const create = resolvedBridge?.workspaces.create;
                 if (!create) return { ok: false, reason: 'This Genie cannot create a workspace.' };
-                return create(name, parent, remote);
+                return create(name, parent, remote, tynnProjectId);
             }}
             github={features.integrations?.github ?? null}
             onGithub={githubAsk}
@@ -1303,6 +1315,7 @@ function DesktopApp({ bridge }: AppProps) {
             onOpenExisting={openExisting}
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}
+            tynn={tynnLinkApi}
             onClose={() => setAddOpen(false)}
         />
         {/* OPEN EXISTING / IMPORT FROM GIT — Genie 1's four steps; a NEW workspace beside the source. Before the picker, so Browse opens on top. */}
@@ -1330,6 +1343,7 @@ function DesktopApp({ bridge }: AppProps) {
             discard={(path) => { void resolvedBridge?.workspaces.discardStaged?.(path); }}
             onAdded={(id) => { setWizardRead(null); navigate(`genie://workspace/${id}`); }}
             onClose={() => setWizardRead(null)}
+            tynn={tynnLinkApi}
         />
         {pickerAsk && resolvedBridge?.host ? (
             <HostPathPicker

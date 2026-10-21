@@ -254,4 +254,33 @@ export class TynnAccount implements TynnAccountPort {
         const body = (await res.json()) as { data?: unknown };
         return Array.isArray(body.data) ? body.data : [];
     }
+
+    /** Who a new project may belong to — Genie 1's GET /api/v1/projects/owner-options (Tynn's `data`). */
+    async ownerOptions(): Promise<unknown[]> {
+        if (!this.status().signedIn) throw new Error('Sign in to Tynn first (Settings → Accounts → Tynn → Open Tynn in your browser)');
+        const res = await this.request('/api/v1/projects/owner-options', { method: 'GET' });
+        if (!res.ok) throw new Error(await tynnRefusal(res));
+        const body = (await res.json()) as { data?: unknown } | null;
+        return Array.isArray(body?.data) ? body.data : [];
+    }
+
+    /**
+     * A new Tynn project — Genie 1's POST /api/v1/projects (MeApiController::createProject): the body as given, Tynn's
+     * `data` (the same row the project list gives) back. Tynn's own words when it refuses: a 422's message, a 403 named.
+     */
+    async createProject(body: { name: string; slug?: string; owner_type?: 'user' | 'organization' | 'team'; owner_id?: string }): Promise<unknown> {
+        if (!this.status().signedIn) throw new Error('Sign in to Tynn first (Settings → Accounts → Tynn → Open Tynn in your browser)');
+        const res = await this.request('/api/v1/projects', { method: 'POST', body });
+        if (res.status === 403) throw new Error('Tynn does not let you create a project under that owner');
+        if (!res.ok) throw new Error(await tynnRefusal(res));
+        const answer = (await res.json()) as { data?: unknown } | null;
+        return answer?.data ?? null;
+    }
+}
+
+/** A refusal in Tynn's words: its `message` (Laravel's validation and errors), else its `error` code, else the status. */
+async function tynnRefusal(res: TynnResponse): Promise<string> {
+    const body = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown } | null;
+    if (typeof body?.message === 'string' && body.message.trim() !== '') return body.message;
+    return `Tynn answered ${res.status}${typeof body?.error === 'string' ? `: ${body.error}` : ''}`;
 }

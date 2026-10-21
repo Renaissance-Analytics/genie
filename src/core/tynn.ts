@@ -208,3 +208,43 @@ export function tynnAddPlan(input: { project: TynnProject; parent: string; folde
         manifest: { name: project.name, description: project.vision ?? '', tynn: link },
     };
 }
+
+
+/**
+ * WHO A NEW TYNN PROJECT MAY BELONG TO (Add workspace parity item 5; Tynn's `GET /api/v1/projects/owner-options`,
+ * MeApiController::ownerOptions): the person's own account ("Personal (your account)", first), then each organization and
+ * team they belong to. Tynn checks membership again on create, so this list only decides what is offered.
+ */
+export interface TynnOwner {
+    readonly kind: 'user' | 'organization' | 'team';
+    readonly id: string;
+    readonly label: string;
+}
+
+const OWNER_KINDS: ReadonlySet<string> = new Set(['user', 'organization', 'team']);
+
+/** One owner-options row as Tynn names it, or `null` for anything that is not one. */
+export function parseTynnOwner(raw: unknown): TynnOwner | null {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    const id = typeof r.id === 'number' ? String(r.id) : typeof r.id === 'string' && r.id.trim() !== '' ? r.id.trim() : null;
+    const label = text(r.label);
+    if (typeof r.kind !== 'string' || !OWNER_KINDS.has(r.kind) || id === null || label === null) return null;
+    return { kind: r.kind as TynnOwner['kind'], id, label };
+}
+
+/** Genie 1's slug for a new project, derived from its name until the person edits it (CreateProjectForm). */
+export function tynnProjectSlug(name: string): string {
+    return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/** A create-project request as it arrives from a window (IPC or the remote wire): exactly these fields, or `null`. */
+export function parseTynnProjectInput(raw: unknown): { name: string; slug: string; owner: { kind: TynnOwner['kind']; id: string } | null } | null {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.name !== 'string' || typeof r.slug !== 'string') return null;
+    if (r.owner === null || r.owner === undefined) return { name: r.name, slug: r.slug, owner: null };
+    const o = r.owner as Record<string, unknown>;
+    if (typeof o !== 'object' || typeof o.kind !== 'string' || !OWNER_KINDS.has(o.kind) || typeof o.id !== 'string' || o.id === '') return null;
+    return { name: r.name, slug: r.slug, owner: { kind: o.kind as TynnOwner['kind'], id: o.id } };
+}
