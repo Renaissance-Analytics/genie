@@ -39,6 +39,7 @@ function fakeApi() {
         },
         onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
         workspaceOfAgent: (id) => snapshot.agents.find((a) => a.id === id)?.workspaceId ?? null,
+        workspaceOfTerminal: (id) => ({ term_t: 'tynn', term_f: 'fancy' } as Record<string, string>)[id] ?? null,
     };
     return { api, calls, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
 }
@@ -223,5 +224,57 @@ describe('a guest’s scope', () => {
         api.emit('snapshot', snapshot);
         expect(await o.next()).toMatchObject({ kind: 'event', channel: 'snapshot', payload: { agents: snapshot.agents } });
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'snapshot', payload: { agents: [snapshot.agents[0]] } });
+    });
+});
+
+describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECURITY)', () => {
+    /*
+     * Found by builder-lanes (2026-10-20): every push but the snapshot went to EVERY connection — another workspace's
+     * agents' ledgers (`agent:<id>`), its terminals' output (`terminal-data` / `terminal-exit`), the host's features and
+     * update state. A guest's link reaches one workspace; every push to it is scoped by the same rule its requests are,
+     * and anything that cannot be placed in its workspace is not sent to it. The owner still receives everything.
+     *
+     * "Received nothing" is proved by a positive control in the same stream: after each push a guest must not see, a push
+     * it may see (its own agent) is sent, and that is the next thing it receives.
+     */
+    async function guestAndOwner() {
+        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
+        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
+        const g = connect();
+        await g.hello({ kind: 'share', id: link.id, secret }, 'wren');
+        host.issuePin();
+        const o = connect();
+        await o.hello({ kind: 'pin', code: '482913', label: 'laptop' });
+        return { g, o };
+    }
+    const ownAgent = { agent: { id: 'agent_a' }, rows: [] };
+
+    const leaks: Array<[string, string, unknown]> = [
+        ['another workspace’s agent ledger', 'agent:agent_b', { agent: { id: 'agent_b' }, rows: [{ text: 'fancy secrets' }] }],
+        ['another workspace’s terminal output', 'terminal-data', { id: 'term_f', data: 'fancy shell output' }],
+        ['another workspace’s terminal exit', 'terminal-exit', { id: 'term_f', exitCode: 0 }],
+        ['a terminal nobody can place', 'terminal-data', { id: 'term_unknown', data: 'x' }],
+        ['the host’s features (every workspace’s hosting)', 'features', { hosting: { sites: ['fancy.gen'] } }],
+        ['the host’s update state', 'updates', { phase: 'ready' }],
+        ['a channel the host has not classified', 'something-new', { any: 'thing' }],
+    ];
+    for (const [what, channel, payload] of leaks) {
+        it(`never: ${what} — while the owner still receives it`, async () => {
+            const { g, o } = await guestAndOwner();
+            api.emit(channel, payload);
+            expect(await o.next()).toMatchObject({ kind: 'event', channel });
+            api.emit('agent:agent_a', ownAgent);
+            expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_a' });
+        });
+    }
+
+    it('its own: its agent’s ledger, its terminals’ output and exit (CONTROL — the filter is not "send a guest nothing")', async () => {
+        const { g } = await guestAndOwner();
+        api.emit('terminal-data', { id: 'term_t', data: 'tynn shell output' });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-data', payload: { id: 'term_t' } });
+        api.emit('terminal-exit', { id: 'term_t', exitCode: 0 });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-exit', payload: { id: 'term_t' } });
+        api.emit('agent:agent_a', ownAgent);
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_a' });
     });
 });
