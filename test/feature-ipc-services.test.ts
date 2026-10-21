@@ -99,14 +99,15 @@ describe('the snapshot', () => {
 describe('adding an engine', () => {
     it('services.add opens the form with the defaults for that workspace; cancel closes it', async () => {
         const open = await handleFeatureAction(services, { kind: 'services.add', workspaceId: 'tynn' }, state());
-        expect(open.services!.adding).toEqual({ workspaceId: 'tynn', defaults: form, problems: [], consent: null });
+        // The newest major is the default: 18 since hosting fixes 3.3.
+        expect(open.services!.adding).toEqual({ workspaceId: 'tynn', defaults: { ...form, major: '18' }, problems: [], consent: null });
         const closed = await handleFeatureAction(services, { kind: 'services.cancelForm' }, state({ serviceAdding: open.services!.adding }));
         expect(closed.services!.adding).toBeNull();
     });
 
     it('a submit with a problem keeps the form open with the problem beside its field; nothing is created', async () => {
         const snap = await handleFeatureAction(services, { kind: 'services.create', form: { ...form, major: '12' }, consent: false }, state());
-        expect(snap.services!.adding).toMatchObject({ workspaceId: 'tynn', problems: [{ field: 'major', message: 'postgres 12 is not a version Genie knows (14, 15, 16, 17).' }], consent: null });
+        expect(snap.services!.adding).toMatchObject({ workspaceId: 'tynn', problems: [{ field: 'major', message: 'postgres 12 is not a version Genie knows (14, 15, 16, 17, 18).' }], consent: null });
         expect(snap.services!.instances).toEqual([]);
         expect(docker.calls.some((c) => c[0] === 'create' || c[0] === 'pull')).toBe(false);
     });

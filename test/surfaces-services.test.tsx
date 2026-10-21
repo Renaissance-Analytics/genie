@@ -65,7 +65,7 @@ describe('the Services tab', () => {
     });
 
     it('with the engine form open it renders inside the surface and the list stays visible', () => {
-        const html = render(base, { adding: { kind: 'service', workspaceId: 'tynn', defaults: serviceFormDefaults({ workspaceId: 'tynn' }), problems: [{ field: 'major', message: 'postgres 12 is not a version Genie knows (14, 15, 16, 17).' }], consent: null } });
+        const html = render(base, { adding: { kind: 'service', workspaceId: 'tynn', defaults: serviceFormDefaults({ workspaceId: 'tynn' }), problems: [{ field: 'major', message: 'postgres 12 is not a version Genie knows (14, 15, 16, 17, 18).' }], consent: null } });
         expect(html).toContain('data-form="add-service"');
         expect(html).toContain('data-problem="major"');
         expect(html).toMatch(/No service engines yet/);
@@ -124,7 +124,7 @@ describe('Add an engine', () => {
         for (const e of ['postgres', 'mysql', 'mariadb', 'redis', 'mongo', 'websockets', 'mailpit', 'meilisearch', 'seaweedfs', 'custom']) expect(html).toContain(`value="${e}"`);
         // MinIO is in the catalog only so Genie 1's can be taken over: never offered (its images are gone).
         expect(html).not.toContain('value="minio"');
-        expect(html).toContain('value="17"');
+        expect(html).toContain('value="18"');
         expect(html).toMatch(/name="scope"/);
         expect(html).not.toContain('data-consent');
         expect(html).toMatch(/Add engine/);

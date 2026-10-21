@@ -103,6 +103,16 @@ export function mergeTimestampedLogs(stdout: string, stderr: string): string {
     return lines.length === 0 ? '' : `${lines.map((l) => l.text).join('\n')}\n`;
 }
 
+/**
+ * Where an engine's image keeps its data — the volume goes there. Postgres moved it at 18 (hosting fixes 3.3; measured
+ * on omarchy-test, postgres and pgvector alike): 18's image declares VOLUME /var/lib/postgresql (PGDATA
+ * /var/lib/postgresql/18/docker) and will not START on the old mount; 17 and before lose every row on the new one.
+ */
+function dataDirOf(engine: string, major: string): string {
+    if (engine === 'postgres' && Number.parseInt(major, 10) >= 18) return '/var/lib/postgresql';
+    return DATA_DIRS[engine] ?? '/data';
+}
+
 const DATA_DIRS: Record<string, string> = {
     postgres: '/var/lib/postgresql/data',
     mysql: '/var/lib/mysql',
@@ -163,7 +173,7 @@ export class ServiceDriver {
         // Every surface the plan publishes (Mailpit's SMTP AND its web inbox), each loopback-only.
         for (const p of plan.publish) args.push('-p', p);
         // No volume for a custom image or a stateless engine (Sockudo): `null` in the plan.
-        if (plan.volume !== null) args.push('-v', `${plan.volume}:${DATA_DIRS[def.engine] ?? '/data'}`);
+        if (plan.volume !== null) args.push('-v', `${plan.volume}:${dataDirOf(def.engine, input.major)}`);
         // `--mount`, not `-v`: a Windows source path's drive colon would split a `-v` spec.
         for (const m of plan.mounts ?? []) args.push('--mount', `type=bind,source=${m.source},target=${m.target},readonly`);
         args.push('--restart', 'unless-stopped');
