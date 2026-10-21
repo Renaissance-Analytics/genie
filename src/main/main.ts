@@ -8,6 +8,7 @@ import { chatCommsOf } from '../core/chat-view.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
 import type { RelaySocket } from './relay-wire.js';
 import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
+import { dialFrontDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
@@ -1851,6 +1852,8 @@ async function boot(): Promise<void> {
             attach: (transport) => remoteHub.add(transport),
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
+            // The owner's windows on other workstations browse this one's `.gen` sites through its own front door.
+            site: { dial: (host) => dialFrontDoor(composed.frontDoorPort, host) },
         });
     };
     relayAfterSwitch = () => { void applyRelayHost(); };

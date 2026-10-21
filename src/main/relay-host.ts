@@ -1,6 +1,7 @@
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 import { principalOf, type GrantCheck, type HostGrant } from './relay-grant.js';
+import { isGenHost, pipeSiteStream, type SiteDial, type SiteFrame, type SitePipe } from './relay-site.js';
 import { decodeFrame, encodeFrame, jwkThumbprint, OPEN, popSignedInput, textOf, type Frame, type RelaySocket, type RelaySocketFactory, type TicketHostHello } from './relay-wire.js';
 
 /**
@@ -32,6 +33,11 @@ export interface RelayHostLinkDeps {
     reconnect?: { minMs: number; maxMs: number };
     onState?(state: RelayLinkState, detail?: string): void;
     log?(message: string): void;
+    /**
+     * This host's own `.gen` sites, for the owner's windows on other workstations (`relay-site.ts`): CONNECT its front
+     * door for a name. Absent = every site stream is refused.
+     */
+    site?: { dial(host: string): Promise<SiteDial> };
 }
 
 export interface RelayHostLink extends ServerTransport {
@@ -48,6 +54,15 @@ interface Session {
     readonly token: string;
     readonly messages: Set<(text: string) => void>;
     readonly closes: Set<() => void>;
+    /** Its open site streams, by reqId (relay-site.ts). */
+    readonly sites: Map<string, SitePipe>;
+}
+
+/** Why this grant may not open a site stream, or null: only the owner's own control link browses this host's sites. */
+function siteRefusal(grant: HostGrant): string | null {
+    const who = principalOf(grant);
+    if (!who.ok || !who.principal.isOwner || who.principal.readonly) return "only the owner's own control link may browse this workstation's sites";
+    return null;
 }
 
 export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
@@ -80,6 +95,8 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         const session = sessions.get(sid);
         if (!session) return;
         sessions.delete(sid);
+        for (const pipe of [...session.sites.values()]) pipe.destroy();
+        session.sites.clear();
         for (const l of session.closes) l();
     };
 
@@ -89,12 +106,54 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         forget(sid);
     };
 
+    const site = (sid: string, session: Session, frame: Frame) => {
+        const reqId = frame.reqId;
+        if (!reqId) return;
+        const say = (f: SiteFrame) => { if (sessions.get(sid) === session) send({ ...f, channel: 'site', sid, reqId }); };
+        if (frame.kind !== 'open') {
+            session.sites.get(reqId)?.receive(frame);
+            return;
+        }
+        if (session.sites.has(reqId)) return;
+        const host = (frame.payload as { host?: unknown } | undefined)?.host;
+        const refusal = siteRefusal(session.grant) ?? (!deps.site ? 'this Genie does not serve its sites over the relay' : !isGenHost(host) ? 'a site stream names one .gen site' : null);
+        if (refusal !== null || !deps.site || !isGenHost(host)) {
+            say({ kind: 'error', reason: refusal ?? 'refused' });
+            return;
+        }
+        // Until the front door answers, what the member sends for this stream waits (it sends nothing before `open`).
+        const early: SiteFrame[] = [];
+        let cancelled = false;
+        const opening: SitePipe = {
+            receive: (f) => { if (early.length < MAX_PENDING_FRAMES) early.push(f); },
+            destroy: () => { cancelled = true; },
+        };
+        session.sites.set(reqId, opening);
+        void deps.site.dial(host).then((dialed) => {
+            if (cancelled || sessions.get(sid) !== session || session.sites.get(reqId) !== opening) {
+                if (dialed.ok) dialed.socket.destroy();
+                return;
+            }
+            if (!dialed.ok) {
+                session.sites.delete(reqId);
+                say({ kind: 'error', reason: dialed.reason });
+                return;
+            }
+            say({ kind: 'data', payload: { t: 'open' } });
+            const pipe = pipeSiteStream(dialed.socket, say, () => { if (session.sites.get(reqId) === pipe) session.sites.delete(reqId); });
+            session.sites.set(reqId, pipe);
+            for (const f of early) pipe.receive(f);
+        });
+    };
+
     const deliver = (frame: Frame) => {
         const session = sessions.get(frame.sid);
         if (!session) return;
         if (frame.channel === 'rest' && frame.kind === 'data' && typeof frame.payload === 'string') {
             for (const l of session.messages) l(frame.payload);
+            return;
         }
+        if (frame.channel === 'site') site(frame.sid, session, frame);
     };
 
     const accept = (sid: string, grant: HostGrant, token: string) => {
@@ -103,7 +162,7 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             reject(sid, who.reason);
             return;
         }
-        const session: Session = { grant, token, messages: new Set(), closes: new Set() };
+        const session: Session = { grant, token, messages: new Set(), closes: new Set(), sites: new Map() };
         sessions.set(sid, session);
         const connection: ServerConnection = {
             remoteAddress: `relay:${grant.name ?? grant.sub}`,
