@@ -129,7 +129,7 @@ describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
 describe('main keeps the latest entry per project and answers for a workspace', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
-        expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); pushFeatures\(\); \}/);
+        expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\); pushFeatures\(\); \}/);
         // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again (main/tynn-account.ts recheck).
         expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void tynnAccount\?\.recheck\(\); \} \}/);
     });

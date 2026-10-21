@@ -25,8 +25,8 @@ describe('reading what Tynn sends', () => {
         const e = parseIssueWatchEntry(entry([item(), item({ kind: 'dependabot', key: 'acme/app:dependabot:7', number: 7, title: 'lodash', severity: 'high' })]));
         expect(e?.projectId).toBe('w1');
         expect(e?.items).toEqual([
-            { key: 'acme/app:issue:1', kind: 'issue', number: 1, repo: 'acme/app', title: 'Login fails', url: 'https://github.com/acme/app/issues/1', updatedAt: '2026-10-17T10:00:00Z', severity: null },
-            { key: 'acme/app:dependabot:7', kind: 'dependabot', number: 7, repo: 'acme/app', title: 'lodash', url: 'https://github.com/acme/app/issues/1', updatedAt: '2026-10-17T10:00:00Z', severity: 'high' },
+            { key: 'acme/app:issue:1', kind: 'issue', number: 1, repo: 'acme/app', title: 'Login fails', url: 'https://github.com/acme/app/issues/1', updatedAt: '2026-10-17T10:00:00Z', severity: null, author: 'octo', createdAt: '2026-10-17T10:00:00Z' },
+            { key: 'acme/app:dependabot:7', kind: 'dependabot', number: 7, repo: 'acme/app', title: 'lodash', url: 'https://github.com/acme/app/issues/1', updatedAt: '2026-10-17T10:00:00Z', severity: 'high', author: 'octo', createdAt: '2026-10-17T10:00:00Z' },
         ]);
     });
 
