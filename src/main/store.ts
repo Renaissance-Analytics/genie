@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
@@ -93,14 +93,25 @@ export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
     return mine;
 }
 
+/**
+ * DURABLE, not only atomic (hosting fixes 3.1): the temp file's bytes are synced before the rename names them — after a
+ * power cut the rename could be on disk and the bytes not, and the record came back EMPTY — and on POSIX the directory
+ * is synced after, so the rename itself is kept.
+ */
 async function writeJsonAtomicNow(file: string, value: unknown): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    const handle = await open(tmp, 'w');
+    try {
+        await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        await handle.sync();
+    } finally {
+        await handle.close();
+    }
     for (let attempt = 0; ; attempt += 1) {
         try {
             await rename(tmp, file);
-            return;
+            break;
         } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;
             if (attempt < 5 && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
@@ -110,6 +121,19 @@ async function writeJsonAtomicNow(file: string, value: unknown): Promise<void> {
             await rm(tmp, { force: true }).catch(() => undefined);
             throw error;
         }
+    }
+    // After the rename, never inside its retries: a failed flush is not a failed rename.
+    await syncDirectory(dirname(file));
+}
+
+/** Flush a directory's entries (a rename into it). Windows cannot open a directory to flush it, so there it is skipped. */
+async function syncDirectory(dir: string): Promise<void> {
+    if (process.platform === 'win32') return;
+    const handle = await open(dir, 'r');
+    try {
+        await handle.sync();
+    } finally {
+        await handle.close();
     }
 }
 
