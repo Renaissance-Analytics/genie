@@ -112,6 +112,35 @@ describe('the client', () => {
         expect(h.heard[0]!.events.map((e) => [e.kind, e.item?.key])).toEqual([['pr.new', 'a:pr:2']]);
     });
 
+    /*
+     * A LIST TOO BIG FOR ONE EVENT (tynn.ai#308; the owner, 2026-10-21: "exceeds the allowed maximum (10240 bytes)"). Tynn
+     * sends a workspace whose list would not fit as a notice — counts, `truncated: true`, no `items` — and Genie pulls the
+     * whole entry over HTTP (the reconcile) at once, instead of waiting for the next reconnect.
+     */
+    it('a TRUNCATED delta pulls the whole entry over HTTP at once — what changed is heard from the pull (COUNTED)', async () => {
+        const h = harness();
+        h.client.start();
+        await h.settle();
+        await h.connect(h.sockets[0]!);
+        const pullsBefore = h.requests.filter((r) => r.path === '/api/v1/user/issue-watch').length;
+        h.setReconcile({ workspaces: [entry([item('a:issue:1'), item('a:pr:7', 'pr')])] });
+        h.sockets[0]!.emit({ event: 'issuewatch.delta', channel: 'private-App.Models.User.42', data: JSON.stringify({ workspaceId: PROJECT, projectId: PROJECT, counts: { pr: 1 }, tracking: {}, truncated: true }) });
+        await h.settle(); await h.settle();
+        expect(h.requests.filter((r) => r.path === '/api/v1/user/issue-watch').length).toBe(pullsBefore + 1);
+        expect(h.heard.at(-1)?.events.map((e) => [e.kind, e.item?.key])).toEqual([['pr.new', 'a:pr:7']]);
+    });
+
+    it('CONTROL: a whole delta pulls nothing', async () => {
+        const h = harness();
+        h.client.start();
+        await h.settle();
+        await h.connect(h.sockets[0]!);
+        const pullsBefore = h.requests.filter((r) => r.path === '/api/v1/user/issue-watch').length;
+        h.sockets[0]!.emit({ event: 'issuewatch.delta', channel: 'private-App.Models.User.42', data: JSON.stringify(entry([item('a:issue:1')])) });
+        await h.settle(); await h.settle();
+        expect(h.requests.filter((r) => r.path === '/api/v1/user/issue-watch').length).toBe(pullsBefore);
+    });
+
     it('answers a ping with a pong', async () => {
         const h = harness();
         h.client.start();
