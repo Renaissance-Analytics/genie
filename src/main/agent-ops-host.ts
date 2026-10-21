@@ -31,6 +31,7 @@ export interface AgentOpsPorts {
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
+        setDrivePages(id: AgentRecord['id'], drivePages: boolean): Promise<AgentRecord | null>;
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
@@ -246,6 +247,14 @@ export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manag
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setManageTabs(record.id, manageTabs);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/** May drive pages (browser rebuild step 7): the page tool is in or out of its next tools/list — nothing restarts. */
+export async function setDrivePages(ports: AgentOpsPorts, agentId: string, drivePages: boolean): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setDrivePages(record.id, drivePages);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

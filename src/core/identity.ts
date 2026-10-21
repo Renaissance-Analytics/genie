@@ -122,6 +122,12 @@ export interface AgentRecord {
      */
     readonly manageTabs?: boolean;
     /**
+     * MAY DRIVE PAGES (browser rebuild step 7; the owner, FTQ q_82269ca5): this agent may read, fill, click and submit
+     * Genie site pages. The workspace's default agent may regardless. Submits and destructive clicks always ask the
+     * person. Absent = no.
+     */
+    readonly drivePages?: boolean;
+    /**
      * What this agent hears from IssueWatch (Tynn #806): how and which kinds. Absent = never set, and the default applies
      * (`issueWatchPrefsFor`: the workspace's first agent hears new issues, PRs, security and feedback; the rest nothing).
      */

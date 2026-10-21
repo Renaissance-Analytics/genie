@@ -96,6 +96,7 @@ export interface HostApiDeps {
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
+        setDrivePages(agentId: string, on: boolean): Promise<unknown>;
         setIssueWatch(agentId: string, setting: unknown): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
@@ -185,6 +186,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.agentOps.setAutoApprove(str(args[0]), args[1] === true);
             case 'agents.setManageTabs':
                 return deps.agentOps.setManageTabs(str(args[0]), args[1] === true);
+            case 'agents.setDrivePages':
+                return deps.agentOps.setDrivePages(str(args[0]), args[1] === true);
             case 'agents.setIssueWatch':
                 return deps.agentOps.setIssueWatch(str(args[0]), args[1]);
             case 'agents.setAccessScope':

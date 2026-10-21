@@ -37,7 +37,7 @@ import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { issueWatchPrefsFor } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
@@ -627,6 +627,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             accessScope: record.accessScope,
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
+            drivePages: record.drivePages === true,
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
             issueWatch: issueWatchPrefsFor(record, registry?.listAgents() ?? [], registry?.defaultAgentOf(record.workspaceId) ?? null),
             permissions: record.permissions ?? 'all',
@@ -1097,6 +1098,7 @@ async function boot(): Promise<void> {
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
             setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
             setManageTabs: (id, on) => registry!.setManageTabs(id, on),
+            setDrivePages: (id, on) => registry!.setDrivePages(id, on),
             setIssueWatch: (id, setting) => registry!.setIssueWatch(id, setting),
             setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
             setModel: (id, model) => registry!.setModel(id, model),
@@ -1193,6 +1195,9 @@ async function boot(): Promise<void> {
     // May manage the workspace's tabs (beta.35 item 36): the workspaceTabs tool is in its next tools/list.
     ipcMain.handle('genie:agent-set-manage-tabs', (_event, raw: unknown, on: unknown) =>
         (typeof raw === 'string' && typeof on === 'boolean' ? setManageTabs(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'managing tabs is on or off' }));
+    // May drive pages (browser rebuild step 7): the page tool is in its next tools/list.
+    ipcMain.handle('genie:agent-set-drive-pages', (_event, raw: unknown, on: unknown) =>
+        (typeof raw === 'string' && typeof on === 'boolean' ? setDrivePages(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'driving pages is on or off' }));
     // What it hears from IssueWatch (Tynn #806): the setting is checked in setIssueWatch, which says why it refuses one.
     ipcMain.handle('genie:agent-set-issue-watch', (_event, raw: unknown, setting: unknown) =>
         (typeof raw === 'string' ? setIssueWatch(agentOps, raw, setting).finally(() => registry?.touch()) : { ok: false, reason: 'unknown agent' }));
@@ -1733,6 +1738,7 @@ async function boot(): Promise<void> {
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
                 setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
                 setManageTabs: (id, on) => setManageTabs(agentOps, id, on),
+                setDrivePages: (id, on) => setDrivePages(agentOps, id, on),
                 setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
                 setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
                 setModel: (id, model) => setModel(agentOps, id, model),
