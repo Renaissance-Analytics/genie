@@ -1,4 +1,5 @@
 import { fanOut } from '../core/fan-out.js';
+import { limitRefusal } from '../core/shell-limits.js';
 
 /**
  * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
@@ -103,6 +104,16 @@ export interface TerminalOptions {
     env?: Readonly<Record<string, string>> | undefined;
     /** Run `command` through the platform's shell (an agent's `manageTerminals create`). */
     shell?: boolean | undefined;
+    /**
+     * Counted against the workspace's terminal limit (core/shell-limits.ts) — every shell a person or an agent opens.
+     * `false` for Genie's own system terminals: a Take Over of an agent, a provider login, the OS scratch shell.
+     */
+    limited?: boolean | undefined;
+}
+
+/** The workspace's limits a host enforces, read live (the workspace's settings can change at any moment). */
+export interface TerminalLimits {
+    terminals(workspaceId: string): number;
 }
 
 export interface Terminal {
@@ -114,6 +125,8 @@ export interface Terminal {
     cwd?: string;
     /** When the cwd was last reported — the newest wins for `lastCwd`. */
     cwdAt?: number;
+    /** Not counted against the workspace's limit (`TerminalOptions.limited: false`). */
+    unlimited?: true;
 }
 
 /** A terminal's own copy of its latest output, in characters (an ended one's `read`). */
@@ -132,8 +145,11 @@ export class TerminalHost {
     /** Terminals that ended: their last output and exit code, for a `read` after the fact — the newest FINISHED_KEPT. */
     readonly #finished = new Map<string, { workspaceId: string; exitCode: number; text: string }>();
 
-    constructor(pty: PtyPort) {
+    readonly #limits: TerminalLimits | null;
+
+    constructor(pty: PtyPort, limits: TerminalLimits | null = null) {
         this.#pty = pty;
+        this.#limits = limits;
 
         this.#pty.onData((id, data) => {
             const tail = (this.#tails.get(id) ?? '') + data;
@@ -185,7 +201,22 @@ export class TerminalHost {
         return reported.reduce((a, b) => ((a.cwdAt ?? 0) >= (b.cwdAt ?? 0) ? a : b)).cwd ?? null;
     }
 
+    /**
+     * Why one more terminal would be refused in this workspace — its limit and what is running — or `null` while there is
+     * room. Asked BEFORE anyone is asked to approve one (an agent's `manageTerminals create`), so nobody approves a refusal.
+     */
+    refusal(workspaceId: string): string | null {
+        if (!this.#limits) return null;
+        const running = this.#terminals.filter((t) => t.workspaceId === workspaceId && !t.unlimited);
+        return limitRefusal('terminals', this.#limits.terminals(workspaceId), running.map((t) => `${t.shell.split(/[\\/]/).pop() || t.shell} (pid ${t.pid})`));
+    }
+
     open(options: TerminalOptions): PtyOpened {
+        // THE LIMIT (beta.33): refused before anything is spawned, in the limit's own words.
+        if (options.limited !== false) {
+            const refused = this.refusal(options.workspaceId);
+            if (refused) throw new Error(refused);
+        }
         const opened = this.#pty.open({
             cwd: options.cwd,
             command: options.command,
@@ -197,7 +228,7 @@ export class TerminalHost {
 
         this.#terminals = [
             ...this.#terminals,
-            { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell },
+            { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell, ...(options.limited === false ? { unlimited: true as const } : {}) },
         ];
         return opened;
     }

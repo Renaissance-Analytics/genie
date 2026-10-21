@@ -67,7 +67,7 @@ export class LoginHost {
         const scratch = mkdtempSync(join(tmpdir(), `genie-login-${provider}-`));
         let opened: { id: string };
         try {
-            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true });
+            opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });
         } catch (error) {
             rmSync(scratch, { recursive: true, force: true });
             return { ok: false, reason: `The ${known?.name ?? provider} login could not start: ${(error as Error).message}` };

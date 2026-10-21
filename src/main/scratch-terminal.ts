@@ -17,7 +17,7 @@ export interface ScratchTerminalOptions {
 export function openScratchTerminal(options: ScratchTerminalOptions): { ok: true; terminalId: string } | { ok: false; reason: string } {
     let opened: { id: string };
     try {
-        opened = options.terminals.open({ workspaceId: OS_WORKSPACE, cwd: options.home });
+        opened = options.terminals.open({ workspaceId: OS_WORKSPACE, cwd: options.home, limited: false });
     } catch (error) {
         return { ok: false, reason: `The scratch terminal could not start: ${(error as Error).message}` };
     }

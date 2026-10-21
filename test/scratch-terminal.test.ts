@@ -27,7 +27,7 @@ describe('the tray item', () => {
 
 describe('opening one', () => {
     it('a shell in the home folder, in Genie’s own workspace, in a window of its own (COUNTED: one terminal, one window)', () => {
-        const opened: Array<{ workspaceId: string; cwd: string; command?: string | undefined }> = [];
+        const opened: Array<{ workspaceId: string; cwd: string; command?: string | undefined; limited?: boolean }> = [];
         const windows: string[] = [];
         const result = openScratchTerminal({
             terminals: { open: (o: { workspaceId: string; cwd: string; command?: string }) => { opened.push(o); return { id: 'pty_7', pid: 1, shell: 'bash' }; } } as never,
@@ -35,7 +35,8 @@ describe('opening one', () => {
             home: '/home/example',
         });
         expect(result).toEqual({ ok: true, terminalId: 'pty_7' });
-        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example' }]);
+        // Genie's own scratch terminal is not counted against a workspace's terminal limit (core/shell-limits.ts).
+        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example', limited: false }]);
         expect(windows).toEqual(['genie://takeover/pty_7']);
     });
 

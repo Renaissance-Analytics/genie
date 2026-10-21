@@ -1,3 +1,4 @@
+import { limitOf } from '../core/shell-limits.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
@@ -853,7 +854,8 @@ async function boot(): Promise<void> {
         decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
     }, () => services?.settings.snapshot() ?? {});
-    terminals = new TerminalHost(ptyPort);
+    // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
+    terminals = new TerminalHost(ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
     // §6.5: what the terminals showed at the last quit, handed back once per workspace.
     snapshots = await TerminalSnapshots.open(genieHome());
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
@@ -1851,11 +1853,13 @@ async function boot(): Promise<void> {
         supervisor: composed.supervisor,
         envFor: (workspaceId) => composed.engines.envFor(workspaceId),
         asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+        // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
+        limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
         // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
         v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [] },
     });
     const restoredProcesses = processBook.restore();
-    if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated`);
+    if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
     updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));

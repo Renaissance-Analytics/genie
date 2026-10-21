@@ -48,6 +48,11 @@ export const SETTINGS: readonly SettingDef[] = [
     // (core/prompt-library.ts reads it forgivingly). Hidden: Settings → Agents draws it as a list, not a JSON box.
     { key: 'saved_prompts', group: 'agents', scope: 'host', label: 'Saved prompts', description: 'Prompts you send from the Command Window or with their own hotkey.', type: 'string', default: '[]', hidden: true },
     { key: 'agent_cap', group: 'agents', scope: 'workspace', label: 'Running agents cap', description: 'How many agents may run at once in a workspace. A start past the cap is refused and says so; nothing queues.', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' },
+    // A SHELLS LIMITER, PER WORKSPACE (beta.33; the owner: "we have too many running shells. we need to include a shells
+    // limiter"; FTQ q_98d1c350): SEPARATE limits, counted per workspace, the one past it refused and told why — terminals
+    // and background processes now; an agent's own shells once they are measured (core/shell-limits.ts).
+    { key: 'limit_terminals', group: 'agents', scope: 'workspace', label: 'Terminals per workspace', description: 'How many terminals may be open at once in a workspace — yours and the ones agents open. One more is refused and says why.', type: 'enum', options: ['1', '2', '3', '4', '6', '8', '12', '16', '24'], default: '8' },
+    { key: 'limit_processes', group: 'agents', scope: 'workspace', label: 'Background processes per workspace', description: 'How many background processes (queue workers, watchers, servers) may run at once in a workspace. One more is refused and says why.', type: 'enum', options: ['1', '2', '3', '4', '6', '8', '12', '16', '24'], default: '8' },
     { key: 'default_agent', group: 'agents', scope: 'workspace', label: 'Provider for new agents', description: 'The provider a new agent in this workspace uses unless told otherwise.', type: 'enum', options: ['claude', 'codex'], default: 'claude' },
     { key: 'approval_gates', group: 'agents', scope: 'workspace', label: 'Approval gates', description: 'Which tool calls park for your approval.', type: 'enum', options: ['all', 'writes', 'none'], default: 'writes' },
     // PRIMARY WORKSPACE (Genie 1's `primary_workspace`, Settings → General): where a new workspace lands, and where a folder

@@ -1,3 +1,4 @@
+import { limitRefusal } from '../core/shell-limits.js';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, normalize, relative, sep } from 'node:path';
 import type { ProcessLog } from '../core/output-tail.js';
@@ -68,6 +69,8 @@ export interface ProcessBookDeps {
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     /** Hibernated (§6.1): nothing may start there. */
     readonly asleep: (workspaceId: string) => boolean;
+    /** The workspace's background-process limit (core/shell-limits.ts), read live; absent = no limit. */
+    readonly limit?: (workspaceId: string) => number;
     readonly now?: () => number;
     /** Genie 1's database and Genie 2's workspaces: the book imports v1's background processes ONCE when it opens. */
     readonly v1?: {
@@ -205,6 +208,13 @@ export class ProcessBook {
                 heldBack.push(p.id);
                 continue;
             }
+            // Past the workspace's limit (it may have been lowered since): held back, with the limit's own words.
+            const refused = this.#refusal(p.workspaceId, p.id);
+            if (refused) {
+                this.#heldBack.set(p.id, refused);
+                heldBack.push(p.id);
+                continue;
+            }
             this.#run(p);
             started.push(p.id);
         }
@@ -223,6 +233,8 @@ export class ProcessBook {
         if (!RESTART_POLICIES.includes(input.restart)) throw new Error(`restart must be one of ${RESTART_POLICIES.join(', ')}`);
         const cwd = folderInside(input.workspacePath, input.folder);
         if (this.#deps.asleep(input.workspaceId)) throw new Error(`cannot start ${name}: ${ASLEEP_REASON}`);
+        const refused = this.#refusal(input.workspaceId, null);
+        if (refused) throw new Error(refused);
         return { name, command, cwd, restart: input.restart };
     }
 
@@ -266,7 +278,19 @@ export class ProcessBook {
         await this.#flush();
     }
 
+    /**
+     * THE WORKSPACE'S LIMIT (beta.33; the owner: "we have too many running shells"): why one more would be refused — the
+     * limit and what is running — or `null`. `self` is the process being started again, which is not counted against itself.
+     */
+    #refusal(workspaceId: string, self: string | null): string | null {
+        if (!this.#deps.limit) return null;
+        const running = this.#deps.supervisor.list(workspaceId).filter((s) => s.id !== self && (s.state === 'running' || s.state === 'restarting'));
+        return limitRefusal('processes', this.#deps.limit(workspaceId), running.map((s) => s.name));
+    }
+
     #run(p: KeptProcess): ProcessStatus {
+        const refused = this.#refusal(p.workspaceId, p.id);
+        if (refused) throw new Error(refused);
         this.#heldBack.delete(p.id);
         const env = this.#deps.envFor(p.workspaceId);
         return this.#deps.supervisor.start({

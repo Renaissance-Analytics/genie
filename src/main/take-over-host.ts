@@ -122,7 +122,7 @@ export class TakeOverHost {
         const callerId = `takeover_${randomUUID()}`;
         const env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
         // A WORKSPACE terminal. There is no agent parameter to pass, which is the point.
-        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, ...(env === undefined ? {} : { env }) });
+        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, limited: false, ...(env === undefined ? {} : { env }) });
         if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
         this.#openWindow(`genie://takeover/${opened.id}`);
