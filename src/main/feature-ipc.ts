@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import { TYNN_HOST } from '../core/tynn.js';
 import { readFile, stat } from 'node:fs/promises';
 import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
@@ -290,8 +291,8 @@ function githubAccountOf(ports: FeaturePorts): GithubAccountPort {
 /** Tynn in Settings → Integrations: who is signed in where, the sign-in under way, and the rows Tynn gates. */
 function tynnIntegration(services: ComposedServices, state: FeatureState, account: TynnAccountPort | undefined) {
     const status = account?.status() ?? { signedIn: false as const };
-    const configured = String(services.settings.snapshot().tynn_host ?? '').trim();
-    const host = account ? account.host() : configured.length > 0 ? configured.replace(/\/+$/, '') : 'https://tynn.ai';
+
+    const host = account ? account.host() : TYNN_HOST;
     return {
         tynnSignedIn: status.signedIn,
         tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? null },

@@ -43,7 +43,7 @@ describe('every setting has one place, or is deliberately not drawn', () => {
             launch_at_login: 'general', do_not_disturb: 'general', update_channel: 'general', start_minimized: 'general',
             notification_sounds: 'notifications', sound_question: 'notifications',
             command_window_hotkey: 'keyboard', theme: 'appearance', sidebar_width: 'appearance',
-            tynn_host: 'tynn', default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
+            default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
             saved_prompts: 'prompts', mcp_sync_claude: 'agent-mcp', mcp_sync_hooks: 'agent-mcp', developer_mode: 'plugins',
             track_cwd: 'terminals', detached_terminals: 'terminals',
         };

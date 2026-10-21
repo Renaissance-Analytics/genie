@@ -53,7 +53,6 @@ export const SETTINGS: readonly SettingDef[] = [
     // PRIMARY WORKSPACE (Genie 1's `primary_workspace`, Settings → General): where a new workspace lands, and where a folder
     // picker opened from the workstation starts (core/add-workspace.ts). Drawn as a folder with Browse, not a text box.
     { key: 'primary_workspace', group: 'general', scope: 'host', label: 'Primary workspace', description: 'Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.', type: 'string', default: '', hidden: true },
-    { key: 'tynn_host', group: 'general', scope: 'host', label: 'Tynn host', description: 'Where Tynn lives. Only a self-hosted Tynn changes this.', type: 'string', default: 'https://tynn.ai' },
     // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
     // Remote access as its switch, not as a row.
     { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let paired devices on your tailnet reach this Genie.', type: 'boolean', default: false, hidden: true },

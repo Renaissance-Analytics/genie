@@ -18,6 +18,12 @@ export interface TynnProject {
     readonly vision: string | null;
 }
 
+/**
+ * WHERE TYNN IS (the owner, 2026-10-21: "tynn is not a changeable host"). Testing reaches a local Tynn through the test
+ * VM's hosts file (tynn.ai → this machine's tynn.gen), never through a product setting.
+ */
+export const TYNN_HOST = 'https://tynn.ai';
+
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** The project endpoint's own shape, and nothing it did not say. Null for anything that is not a project. */

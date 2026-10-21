@@ -63,11 +63,15 @@ describe('Accounts', () => {
         expect(html).not.toMatch(/GitHub App authorized|GitHub App installed/);
     });
 
-    it('Tynn is the sign-in card, the host shown with a Change — no bare host text row', () => {
+    // Changed 2026-10-21 (the owner, of the "Change Tynn host" button: "tynn is not a changeable host wtf is this?"): Genie
+    // always talks to tynn.ai; testing reaches a local Tynn through the test VM's hosts file, never a product setting.
+    it('Tynn is the sign-in card at tynn.ai — nothing to change the host with', () => {
         const html = page('tynn');
         expect(html).toContain('data-action="tynn-sign-in"');
         expect(html).toContain('data-tynn-host="https://tynn.ai"');
-        expect(html).toContain('data-action="tynn-host-change"');
+        expect(html).not.toContain('tynn-host-change');
+        expect(html).not.toContain('data-form="tynn-host"');
+        expect(html).not.toMatch(/Change Tynn host/);
         expect(html).not.toContain('data-setting="tynn_host"');
     });
 });

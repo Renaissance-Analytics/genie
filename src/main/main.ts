@@ -42,6 +42,7 @@ import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
+import { TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir } from './host-fs.js';
@@ -1441,10 +1442,7 @@ async function boot(): Promise<void> {
     let processBook: ProcessBook | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // The Tynn this Genie uses: Help → Genie documentation opens its docs (Tynn #762).
-    const tynnHost = (): string => {
-        const host = composed.settings.get('tynn_host');
-        return typeof host === 'string' && host.trim().length > 0 ? host.trim() : 'https://tynn.ai';
-    };
+    const tynnHost = (): string => TYNN_HOST;
     // Every snapshot — pushed or answered — carries the Tynn account (late-bound: it opens once the services are composed).
     // The host's switch (Tynn #820) and, on Windows, its firewall rule (Genie 1's allowFirewall) — Settings → Remote access.
     // TAILSCALE FROM GENIE (Tynn #821; Genie 1's tailscale.status / up + openAuth / install). A sign-in link or a download
@@ -1661,7 +1659,7 @@ async function boot(): Promise<void> {
     // encryption, and nothing else Genie loads (the window, the Genie Browser) shares them.
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
-        host: () => { const h = String(composed.settings.get('tynn_host') ?? '').trim(); return h.length > 0 ? h : 'https://tynn.ai'; },
+        host: () => TYNN_HOST,
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
@@ -2013,7 +2011,6 @@ async function boot(): Promise<void> {
     issueWatchClient.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
     const restartIssueWatch = () => { issueWatchClient.stop(); issueWatchClient.start(); };
-    composed.settings.onChange((key) => { if (key === 'tynn_host') restartIssueWatch(); });
     tynnAccount.onChange(restartIssueWatch);
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.

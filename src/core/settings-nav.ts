@@ -86,7 +86,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     // Drawn as its own row (a folder + Browse) on General, not a generic one.
     primary_workspace: 'general',
     theme: 'appearance', sidebar_width: 'appearance',
-    tynn_host: 'tynn',
+
     default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
     inbox_access: 'workspace-defaults', agents_design_tabs: 'workspace-defaults',
     saved_prompts: 'prompts',
