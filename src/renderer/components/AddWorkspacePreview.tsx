@@ -1,5 +1,5 @@
 import type { FolderKind, PlanStep } from '../../core/workspace-model.js';
-import type { TynnProject } from '../../core/tynn.js';
+import type { TynnContent, TynnProject } from '../../core/tynn.js';
 
 /**
  * ADDING A FOLDER, PREVIEWED (§6.1) — what Genie found the folder to be and every step it would take,
@@ -9,8 +9,8 @@ import type { TynnProject } from '../../core/tynn.js';
 
 export type AddPreviewView =
     | { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source?: 'git'; url?: string; parent?: string }
-    /** From Tynn (§6.1): the project the token belongs to becomes the envelope; the link is recorded in project.json. */
-    | { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source: 'tynn'; project: TynnProject; host: string; parent: string }
+    /** From Tynn (§6.1): the project's envelope, or a new one with its repos, or an empty one; the link is recorded in project.json. */
+    | { ok: true; path: string; kind: FolderKind; steps: readonly PlanStep[]; source: 'tynn'; project: TynnProject; host: string; parent: string; content?: TynnContent }
     | { ok: false; reason: string };
 
 const KIND_LABEL: Record<FolderKind, string> = {
@@ -21,6 +21,16 @@ const KIND_LABEL: Record<FolderKind, string> = {
     missing: 'a folder that does not exist',
     other: 'a folder Genie cannot classify',
 };
+
+/** What a Tynn project brings (core/tynn.ts tynnContent), in words, before Confirm. */
+function tynnContentWords(content: TynnContent | undefined): string {
+    if (content?.kind === 'envelope') return `Tynn names its envelope, ${content.url}${content.branch ? ` (branch ${content.branch})` : ''}: Genie clones it with its submodules and links it back to the project.`;
+    if (content?.kind === 'repos') {
+        const n = content.repos.length;
+        return `Tynn lists ${n} ${n === 1 ? 'repository' : 'repositories'} for it: Genie makes a new envelope, adds each as a submodule under repos/, and links it back to the project.`;
+    }
+    return 'Tynn lists no repositories for it: Genie makes a new envelope with its first commit, linked back to the project.';
+}
 
 /** ADD FROM GIT (§6.1): the URL, then one button that picks the parent folder on the host and shows the plan. */
 export function AddFromGitForm({ onPreview, onCancel }: { onPreview: (url: string) => void; onCancel: () => void }) {
@@ -58,8 +68,8 @@ export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel
             <p className="font-semibold">Add <span className="font-mono">{preview.path}</span>?</p>
             {preview.source === 'git' ? <p className="text-[var(--fg-2)]">From <span className="font-mono">{preview.url}</span> — cloned into this folder first. Nothing is cloned until you confirm.</p> : null}
             {preview.source === 'tynn' ? (
-                <p className="text-[var(--fg-2)]">
-                    From Tynn project <span className="font-medium text-[var(--fg-1)]">{preview.project.name}</span> at <span className="font-mono">{preview.host}</span> — a new envelope named by its slug, linked back to the project. Repos are added afterwards through the registry. Nothing is written until you confirm.
+                <p data-tynn-content={preview.content?.kind ?? 'empty'} className="text-[var(--fg-2)]">
+                    From Tynn project <span className="font-medium text-[var(--fg-1)]">{preview.project.name}</span> at <span className="font-mono">{preview.host}</span> — {tynnContentWords(preview.content)} Nothing is written until you confirm.
                 </p>
             ) : null}
             <p className="text-[var(--fg-2)]">This is {KIND_LABEL[preview.kind]}. Nothing has been written yet. Genie would:</p>
@@ -72,7 +82,7 @@ export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel
                 ))}
             </ol>
             <div className="flex gap-2">
-                <button type="button" data-action="confirm-add" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? (busy ? 'Creating…' : 'Create and add') : preview.source === 'git' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Adding…' : 'Add this workspace'}</button>
+                <button type="button" data-action="confirm-add" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? (preview.content?.kind === 'envelope' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Creating…' : 'Create and add') : preview.source === 'git' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Adding…' : 'Add this workspace'}</button>
                 <button type="button" className={button} onClick={onCancel}>Cancel</button>
             </div>
         </section>

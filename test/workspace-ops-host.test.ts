@@ -38,9 +38,12 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
             gitFirstCommit: async (p, message) => { calls.push(`gitFirstCommit:${key(p)}:${message}`); if (over.commitFails) throw new Error(over.commitFails); },
             gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
+            gitCommit: async (p) => { calls.push(`gitCommit:${key(p)}`); },
+            gitAddSubmodule: async (p, url, at) => { calls.push(`gitAddSubmodule:${key(p)}:${url}:${at}`); return null; },
         },
         registry: {
             workspace: (id) => workspaces.get(id) ?? null,
+            list: () => [...workspaces.values()],
             addWorkspace: async (w) => { calls.push(`addWorkspace:${w.id}:${w.path}`); workspaces.set(w.id, { ...w, asleep: false }); },
             agentsOf: (id) => agents.filter((a) => a.workspaceId === id),
             setAsleep: async (id, asleep) => { const w = workspaces.get(id); if (!w) return false; w.asleep = asleep; calls.push(`asleep:${id}:${asleep}`); return true; },

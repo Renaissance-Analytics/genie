@@ -5,7 +5,8 @@ import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSc
 import { ENVELOPE_DIRS, ENVELOPE_GITIGNORE, envelopeReadme, envelopeRules, firstCommitMessage, newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { routerText } from './agent-routers.js';
-import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
+import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnLink, type TynnProject } from '../core/tynn.js';
+import { addRepo } from '../core/repo-registry.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -29,11 +30,17 @@ export interface WorkspaceOpsPorts {
         gitInit(path: string): Promise<void>;
         /** `git init` on `main`, everything staged, one commit (git-ports.ts); rejects with git's own words. */
         gitFirstCommit(path: string, message: string): Promise<void>;
-        /** `git clone <url> <into>`; rejects with git's own words. */
-        gitClone(url: string, into: string): Promise<void>;
+        /** Everything in the folder staged, one commit (git-ports.ts gitCommit); rejects with git's own words. */
+        gitCommit(path: string, message: string): Promise<void>;
+        /** `git clone --recurse-submodules [--branch <branch>] <url> <into>`; rejects with git's own words. */
+        gitClone(url: string, into: string, branch?: string | null): Promise<void>;
+        /** `git submodule add [-b <branch>] <url> <at>` in an envelope (git-ports.ts); resolves to the branch tracked. */
+        gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null): Promise<string | null>;
     };
     registry: {
         workspace(id: string): { id: string; path: string; asleep: boolean } | null;
+        /** Every registered workspace (the Tynn import's "already added" reads their project.json `tynn.projectId`). */
+        list(): readonly { id: string; path: string }[];
         addWorkspace(record: { id: string; path: string }): Promise<void>;
         agentsOf(workspaceId: string): readonly AgentRecord[];
         setAsleep(workspaceId: string, asleep: boolean): Promise<boolean>;
@@ -191,11 +198,24 @@ export async function addWorkspaceFromGit(ports: WorkspaceOpsPorts, url: string,
     return addWorkspace(ports, plan.path);
 }
 
+/** A manifest's Tynn project (`tynn.projectId`), or `null`: what links a workspace here to a project on Tynn. */
+function linkedProjectId(manifest: unknown): string | null {
+    const tynn = typeof manifest === 'object' && manifest !== null ? (manifest as { tynn?: { projectId?: unknown } }).tynn : undefined;
+    return typeof tynn?.projectId === 'string' && tynn.projectId.length > 0 ? tynn.projectId : null;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The envelope already names this project on this host (an `owner` it records is its own business, kept). */
+const sameLink = (a: unknown, b: TynnLink) => isRecord(a) && a.host === b.host && a.project === b.project && a.projectId === b.projectId;
+
 /**
  * The signed-in person's projects, as Tynn lists them (§6.1 add from Tynn — Genie 1's "your Tynn projects"). A row that is
- * not a project is left out; signed out, or Tynn refusing, is a refusal in Tynn's words.
+ * not a project is left out; signed out, or Tynn refusing, is a refusal in Tynn's words. `added`: each listed project
+ * already linked to a workspace here (its project.json `tynn.projectId`), by that workspace's id — Genie 1's
+ * tynnImportChoices, which kept such a project in the list, marked, rather than letting it silently vanish.
  */
-export async function listTynnProjects(ports: WorkspaceOpsPorts): Promise<{ ok: true; host: string; projects: TynnProject[] } | Refusal> {
+export async function listTynnProjects(ports: WorkspaceOpsPorts): Promise<{ ok: true; host: string; projects: TynnProject[]; added: Record<string, string> } | Refusal> {
     if (!ports.tynn) return { ok: false, reason: 'this Genie has no Tynn client' };
     let rows: unknown[];
     try {
@@ -203,26 +223,91 @@ export async function listTynnProjects(ports: WorkspaceOpsPorts): Promise<{ ok: 
     } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
-    return { ok: true, host: ports.tynn.host, projects: rows.map(parseTynnProject).filter((p): p is TynnProject => p !== null) };
+    const projects = rows.map(parseTynnProject).filter((p): p is TynnProject => p !== null);
+    const listed = new Set(projects.map((p) => p.id));
+    const added: Record<string, string> = {};
+    for (const w of ports.registry.list()) {
+        const projectId = linkedProjectId(await ports.fs.readJson(join(w.path, 'project.json')));
+        if (projectId !== null && listed.has(projectId) && !(projectId in added)) added[projectId] = w.id;
+    }
+    return { ok: true, host: ports.tynn.host, projects, added };
 }
 
-/** The plan for the CHOSEN Tynn project (§6.1), written nowhere: the folder derives from its slug under the parent. */
+/**
+ * The plan for the CHOSEN Tynn project (§6.1), written nowhere: `<parent>/<slug>.agi`, and what the project brings —
+ * the envelope Tynn names, its repositories, or nothing (core/tynn.ts). A project already added here is refused with the
+ * workspace to open.
+ */
 export async function previewAddFromTynn(ports: WorkspaceOpsPorts, parent: string, projectId: string): Promise<TynnAddPlan> {
     const listed = await listTynnProjects(ports);
     if (!listed.ok) return listed;
     const project = listed.projects.find((p) => p.id === projectId);
     if (!project) return { ok: false, reason: `Tynn lists no project ${projectId} for you — it may have been deleted, or shared with someone else` };
-    const path = tynnEnvelopePath(parent, project);
-    return tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(path), host: listed.host });
+    const plan = tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(tynnEnvelopePath(parent, project)), host: listed.host, addedAs: listed.added[project.id] ?? null });
+    if (plan.ok && ports.registry.workspace(plan.id)) return { ok: false, reason: alreadyNamed(plan.id) };
+    return plan;
 }
 
-/** Confirm: create the folder, then the ordinary add of an EMPTY folder with the manifest the plan showed. */
-export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: string, projectId: string): Promise<Awaited<ReturnType<typeof addWorkspace>>> {
+/**
+ * Confirm: what the plan showed, then the workspace registered (Add workspace parity item 3; Genie 1's
+ * add-workspace.ts). Tynn names an envelope → clone it with its submodules on its branch, and write the `tynn` link into
+ * its project.json only when it is not already that link (the person's envelope is otherwise left exactly as cloned).
+ * No envelope → a new one, laid out and committed as New's is, each repository a submodule under `repos/` on its branch,
+ * recorded in `repos[]`, and committed. Nothing is registered until the last write succeeded.
+ */
+export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: null } | Refusal> {
     const plan = await previewAddFromTynn(ports, parent, projectId);
     if (!plan.ok) return plan;
-    await ports.fs.mkdir(plan.path);
-    // The id is the folder without `.agi`, as New's is (createWorkspace) — the slug, which was the id before the suffix.
-    return addWorkspace(ports, plan.path, plan.manifest, basename(plan.path).replace(/\.agi$/, ''));
+    const { content, path, id } = plan;
+    const manifestPath = join(path, 'project.json');
+    const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+    if (content.kind === 'envelope') {
+        try {
+            await ports.fs.gitClone(content.url, path, content.branch);
+        } catch (error) {
+            return { ok: false, reason: `git clone failed: ${why(error)}` };
+        }
+        const current = await ports.fs.readJson(manifestPath);
+        if (!isRecord(current)) await ports.fs.writeJson(manifestPath, { ...freshManifest(path, 'empty'), ...plan.manifest });
+        else if (!sameLink(current.tynn, plan.manifest.tynn)) await ports.fs.writeJson(manifestPath, { ...current, tynn: plan.manifest.tynn });
+        await ports.registry.addWorkspace({ id, path });
+        return { ok: true, id, kind: plan.kind, stamped: null };
+    }
+
+    await ports.fs.mkdir(path);
+    const folder = basename(path);
+    const problem = await scaffoldEnvelope(ports, path, folder, { ...plan.manifest });
+    if (problem) return { ok: false, reason: problem };
+
+    if (content.kind === 'repos') {
+        // The manifest as the first commit has it; each repo is added to it as git adds the submodule.
+        const written = await ports.fs.readJson(manifestPath);
+        let manifest: Record<string, unknown> = isRecord(written) ? written : { ...freshManifest(path, 'empty'), ...plan.manifest };
+        for (const repo of content.repos) {
+            const at = `repos/${repo.name}`;
+            let branch: string | null;
+            try {
+                branch = await ports.fs.gitAddSubmodule(path, repo.url, at, repo.branch);
+            } catch (error) {
+                return { ok: false, reason: `Genie made ${path} and its first commit, but could not add ${repo.url} as ${at}: ${why(error)}` };
+            }
+            const added = addRepo(manifest, { name: repo.name, path: at, url: repo.url });
+            if (!added.ok) return { ok: false, reason: `Genie made ${path}, but could not record ${at}: ${added.reason}` };
+            const repos = (added.manifest.repos as Array<Record<string, unknown>>).map((r) => (r.slug === added.slug && branch ? { ...r, branch } : r));
+            manifest = { ...added.manifest, repos };
+        }
+        await ports.fs.writeJson(manifestPath, manifest);
+        const n = content.repos.length;
+        try {
+            await ports.fs.gitCommit(path, `Add ${n} ${n === 1 ? 'repository' : 'repositories'} from Tynn project ${plan.project.name} as submodules`);
+        } catch (error) {
+            return { ok: false, reason: `Genie added the repositories to ${path}, but git could not commit them: ${why(error)}` };
+        }
+    }
+
+    await ports.registry.addWorkspace({ id, path });
+    return { ok: true, id, kind: 'empty', stamped: null };
 }
 
 export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
@@ -265,12 +350,25 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     const there = await ports.fs.exists(target);
     if (there && (await ports.fs.entries(target)).length > 0) return { ok: false, reason: `${target} is not empty. Choose another name or folder, or use Open existing folder on it.` };
     if (!there) await ports.fs.mkdir(target);
-    const title = name.trim();
+    const failed = await scaffoldEnvelope(ports, target, folder, { name: name.trim() });
+    if (failed) return { ok: false, reason: failed };
+    await ports.registry.addWorkspace({ id, path: target });
+    return { ok: true, id, path: target };
+}
+
+/**
+ * THE NEW ENVELOPE, laid out and committed (Genie 1's createAgiEnvelope) — what New makes, and what the Tynn import makes
+ * when Tynn names no envelope: the folders with their .gitkeep, `project.json` (the fresh manifest under `manifest`),
+ * Genie 1's .gitignore plus the agent-file lines, README/RULES, the AGENTS.md and CLAUDE.md routers, and the first commit
+ * on `main`. The folder must exist. A git that refuses is the reason returned; `null` = made.
+ */
+async function scaffoldEnvelope(ports: WorkspaceOpsPorts, target: string, folder: string, manifest: { name: string } & Record<string, unknown>): Promise<string | null> {
+    const title = manifest.name;
     for (const d of ENVELOPE_DIRS) {
         await ports.fs.mkdir(join(target, d));
         await ports.fs.writeText(join(target, d, '.gitkeep'), '');
     }
-    await ports.fs.writeJson(join(target, 'project.json'), { ...freshManifest(target, 'empty'), name: title });
+    await ports.fs.writeJson(join(target, 'project.json'), { ...freshManifest(target, 'empty'), ...manifest });
     // Genie 1's ignores, then the lines Genie's agent-file sync adds (the files carrying its MCP token), so the token can
     // never be committed and the first sync has nothing left to append.
     let gitignore = ENVELOPE_GITIGNORE;
@@ -286,8 +384,7 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     try {
         await ports.fs.gitFirstCommit(target, firstCommitMessage(folder));
     } catch (error) {
-        return { ok: false, reason: `Genie made ${target}, but git could not make its first commit: ${error instanceof Error ? error.message : String(error)}` };
+        return `Genie made ${target}, but git could not make its first commit: ${error instanceof Error ? error.message : String(error)}`;
     }
-    await ports.registry.addWorkspace({ id, path: target });
-    return { ok: true, id, path: target };
+    return null;
 }

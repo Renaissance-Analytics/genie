@@ -11,6 +11,9 @@ import { addWorkspaceFromTynn, listTynnProjects, previewAddFromTynn, type Worksp
  * written. The Tynn call is a port: no network here.
  */
 
+/** What Tynn's row says when a project has no repositories and no envelope. */
+const NOTHING = { isWorkspace: false, repositories: [], envelope: null };
+
 const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json';
 
 function fakes(over: { entries?: Record<string, string[]>; tynn?: () => Promise<unknown[]> } = {}) {
@@ -29,9 +32,12 @@ function fakes(over: { entries?: Record<string, string[]>; tynn?: () => Promise<
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
             gitFirstCommit: async (p) => { calls.push(`gitFirstCommit:${key(p)}`); },
             gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
+            gitCommit: async (p) => { calls.push(`gitCommit:${key(p)}`); },
+            gitAddSubmodule: async (p, url, at) => { calls.push(`gitAddSubmodule:${key(p)}:${url}:${at}`); return null; },
         },
         registry: {
             workspace: () => null,
+            list: () => [],
             addWorkspace: async (r) => { calls.push(`register:${r.id}:${key(r.path)}`); },
             agentsOf: () => [],
             setAsleep: async () => true,
@@ -57,7 +63,7 @@ function fakes(over: { entries?: Record<string, string[]>; tynn?: () => Promise<
 describe('listTynnProjects', () => {
     it('the person’s projects as Tynn lists them; a row that is not a project is left out', async () => {
         const f = fakes({ tynn: async () => [{ id: 42, name: 'Tynn.ai', slug: 'tynn' }, { id: 3, email: 'a@b.invalid' }, { id: 'p2', name: 'Acme', slug: 'acme' }] });
-        expect(await listTynnProjects(f.ports)).toEqual({ ok: true, host: 'https://tynn.ai', projects: [{ id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null }, { id: 'p2', name: 'Acme', slug: 'acme', vision: null }] });
+        expect(await listTynnProjects(f.ports)).toEqual({ ok: true, host: 'https://tynn.ai', projects: [{ ...NOTHING, id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null }, { ...NOTHING, id: 'p2', name: 'Acme', slug: 'acme', vision: null }], added: {} });
     });
 
     it('signed out, or Tynn refusing, is a refusal in Tynn’s words', async () => {
@@ -89,7 +95,7 @@ describe('previewAddFromTynn', () => {
 });
 
 describe('addWorkspaceFromTynn', () => {
-    it('creates the folder, writes the manifest the plan showed, lays out the envelope and registers it', async () => {
+    it('a project with no content: creates `<slug>.agi`, writes the manifest the plan showed, makes the first commit, registers it', async () => {
         const f = fakes();
         const result = await addWorkspaceFromTynn(f.ports, '/w', '42');
         expect(result).toEqual({ ok: true, id: 'tynn', kind: 'empty', stamped: null });
@@ -97,7 +103,8 @@ describe('addWorkspaceFromTynn', () => {
         expect(f.calls).toContain('mkdir:/w/tynn.agi/repos');
         expect(f.calls).toContain('mkdir:/w/tynn.agi/.ai');
         expect(f.calls).toContain('writeJson:/w/tynn.agi/project.json');
-        expect(f.calls).toContain('gitInit:/w/tynn.agi');
+        expect(f.calls).toContain('gitFirstCommit:/w/tynn.agi');
+        expect(f.calls.filter((c) => c.startsWith('gitClone') || c.startsWith('gitInit'))).toEqual([]);
         expect(f.calls[f.calls.length - 1]).toBe('register:tynn:/w/tynn.agi');
         expect(f.files['/w/tynn.agi/project.json']).toMatchObject({
             $schema: SCHEMA,

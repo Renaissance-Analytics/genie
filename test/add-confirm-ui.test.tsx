@@ -13,13 +13,16 @@ import { AddWorkspacePreview, type AddPreviewView } from '../src/renderer/compon
 describe('the confirm button while the add runs', () => {
     const steps = [{ action: 'register in Genie', path: '/w/x', writes: false }];
     const git: AddPreviewView = { ok: true, source: 'git', url: 'https://github.com/example/fancy-ui.git', parent: '/w', path: '/w/fancy-ui', kind: 'simple-repo', steps };
-    const tynn: AddPreviewView = { ok: true, source: 'tynn', project: { id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null }, host: 'https://tynn.ai', parent: '/w', path: '/w/tynn.agi', kind: 'empty', steps };
+    const tynn: AddPreviewView = { ok: true, source: 'tynn', project: { id: '42', name: 'Tynn.ai', slug: 'tynn', vision: null, isWorkspace: true, repositories: [], envelope: null }, host: 'https://tynn.ai', parent: '/w', path: '/w/tynn.agi', kind: 'empty', steps };
+    // A Tynn project whose envelope Tynn names is cloned, so its button says so (parity item 3).
+    const tynnEnvelope: AddPreviewView = { ...tynn, kind: 'full-envelope', content: { kind: 'envelope', url: 'https://github.com/example-org/tynn.agi.git', branch: 'main' } };
     const folder: AddPreviewView = { ok: true, path: '/w/repo', kind: 'simple-repo', steps };
     const button = (html: string) => html.match(/<button[^>]*data-action="confirm-add"[^>]*>[^<]*<\/button>/)?.[0] ?? '';
 
     it.each([
         ['git', git, 'Clone and add', 'Cloning…'],
         ['tynn', tynn, 'Create and add', 'Creating…'],
+        ['tynn envelope', tynnEnvelope, 'Clone and add', 'Cloning…'],
         ['folder', folder, 'Add this workspace', 'Adding…'],
     ] as const)('%s: disabled and saying what it is doing while busy; live and named as before when not', (_name, preview, idle, working) => {
         const still = button(renderToStaticMarkup(<AddWorkspacePreview preview={preview} busy={false} onConfirm={() => {}} onCancel={() => {}} />));

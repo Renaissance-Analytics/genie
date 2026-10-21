@@ -52,9 +52,10 @@ afterEach(async () => {
 function ports(): WorkspaceOpsPorts {
     const workspaces = new Map<string, { id: string; path: string; asleep: boolean }>();
     return {
-        fs: { ...nodeWorkspaceFs(), gitClone: async () => { throw new Error('no clone in this test'); } },
+        fs: { ...nodeWorkspaceFs(), gitClone: async () => { throw new Error('no clone in this test'); }, gitAddSubmodule: async () => { throw new Error('no submodule in this test'); } },
         registry: {
             workspace: (id) => workspaces.get(id) ?? null,
+            list: () => [...workspaces.values()],
             addWorkspace: async (w) => { workspaces.set(w.id, { ...w, asleep: false }); },
             agentsOf: () => [],
             setAsleep: async () => false,
