@@ -899,8 +899,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         },
         inboxReminders: ({ run }) =>
             [...agents().keys()].flatMap((id) => {
+                // No run, no notice (`reminders.due` answers null for it): its mail is not read on every session event.
+                const runNow = run(id);
+                if (runNow === null) return [];
                 const unread = inbox.unread(id as never);
-                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: run(id) });
+                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: runNow });
                 if (!text) return [];
                 // WHAT THE NOTICE IS ABOUT (beta.33 item 18): each unread message, who from and what it says, carried on
                 // the notice's row so the chat shows the context — the prompt itself stays the short instruction.

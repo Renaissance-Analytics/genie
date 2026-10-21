@@ -1,7 +1,7 @@
 import { activityRows } from '../../core/stream-view.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomOf } from '../../core/headroom.js';
-import { useEffect, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
@@ -309,10 +309,11 @@ export function AgentView({
     const budgetLimit = ops?.budgetUsd ?? null;
     const plan = planFor(session);
     // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
-    const steps = planSteps(rows);
+    // Read from the rows when THEY change, not on every render of the window (the owner, 2026-10-20: "severe UI lag").
+    const steps = useMemo(() => planSteps(rows), [rows]);
     const budget = budgetFor(session, cost, turns);
     // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
-    const headroom = headroomOf(rows);
+    const headroom = useMemo(() => headroomOf(rows), [rows]);
     // Whether this provider can ask at all (the driver's claim): said once in the rail when it cannot.
     const policy = approvalPolicySentence(agent.name, agent.provider, agent.raisesApprovals);
     // The persona path and the context note — both facts, both absent when unknown (§5).
@@ -357,11 +358,12 @@ export function AgentView({
     const chatRoute = `genie://agent/${agent.id}?tab=${active}&chat=${agent.id}`;
 
     // THE INDEX COLUMN (the board): Turns / Files touched, counted from the rows; absent without turn markers.
-    const shells = agentShells(rows);
+    const shells = useMemo(() => agentShells(rows), [rows]);
     const index = active === 'stream' ? agentIndex(rows, session, workspace?.path ?? null, selectedId) : null;
     // THE SESSION TIMELINE STRIP + CHIPS ROW (the board); the Lanes drawer behind `L`.
     // The activity the Stream shows (replies live in the chat): the strip, the find and the lanes read the same rows.
-    const activity = activityRows(rows);
+    // The same array while the rows are unchanged, so the Stream's own derivations (keyed on it) are not run again.
+    const activity = useMemo(() => activityRows(rows), [rows]);
     const timeline = active === 'stream' ? sessionTimeline(activity, session) : null;
     // NEXT EDIT — `E` and the strip's button: a search ("find me the next one") that opens the edit it lands on, the
     // cursor following. `false` when there is none.
@@ -372,7 +374,7 @@ export function AgentView({
         onSelect(next);
         return true;
     };
-    const chips = chipRow(rows, lanes);
+    const chips = useMemo(() => chipRow(rows, lanes), [rows, lanes]);
     // The find's match count: content rows that say the query (structure rows are not matches); null without a query.
     const findMatches = findQuery.trim() === '' ? null : findRows(rowsInRange(activity, range), findQuery).filter((r) => r.event.kind !== 'turn' && r.event.kind !== 'divider').length;
     const drawerOpen = lanesOpenProp ?? ownLanesOpen;

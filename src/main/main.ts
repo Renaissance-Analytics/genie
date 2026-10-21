@@ -28,6 +28,9 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
+import type { TimedEvent } from '../core/stream-view.js';
+import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
+import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
@@ -594,10 +597,20 @@ function detailFor(agentId: AgentId): AgentDetail | null {
     };
 }
 
+/**
+ * AN AGENT'S DETAIL TO THE WINDOW — only for the agents it shows, at most every AGENT_PUSH_INTERVAL_MS, and only the rows
+ * that changed (main/agent-push.ts; the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all").
+ * One channel per agent, so a ledger is never broadcast to a renderer looking elsewhere.
+ */
+const agentPush = new AgentPush<AgentDetail, TimedEvent>({
+    detailFor: (agentId) => detailFor(agentId as AgentId),
+    send: (agentId, payload) => { if (window && !window.isDestroyed()) window.webContents.send(`genie:agent-changed:${agentId}`, payload); },
+    schedule: realSchedule,
+    now: () => Date.now(),
+});
+
 function pushAgent(agentId: AgentId): void {
-    if (!window || window.isDestroyed()) return;
-    // One channel per agent, so a ledger is never broadcast to a renderer looking elsewhere.
-    window.webContents.send(`genie:agent-changed:${agentId}`, detailFor(agentId));
+    agentPush.changed(agentId);
 }
 
 /** Narrow an id from the renderer. A refusal, never a repair — see the note in `open-agent`. */
@@ -859,6 +872,13 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:agent-detail', (_event, raw: unknown) => {
         const record = agentFromRenderer(raw);
         return record ? detailFor(record.id) : null;
+    });
+
+    // Which agents the window shows (its preload says, main/preload.ts `subscribeAgent`): only theirs are pushed.
+    ipcMain.on('genie:agent-watch', (event, raw: unknown, on: unknown) => {
+        if (!window || window.isDestroyed() || event.sender !== window.webContents) return;
+        if (typeof raw !== 'string' || typeof on !== 'boolean') return;
+        agentPush.watch(raw, on);
     });
 
     ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
@@ -2047,6 +2067,12 @@ async function boot(): Promise<void> {
         if (window && !window.isDestroyed()) window.webContents.send('genie:changed', snapshot);
     });
     let published = '';
+    /*
+     * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
+     * too: at most every AGENT_PUSH_INTERVAL_MS, the first at once (core/coalesce.ts). Per event it read every agent's
+     * session and pushed the whole estate to the window many times a second for one busy agent (the owner, 2026-10-20).
+     */
+    const estate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => registry?.touch(), schedule: realSchedule, now: () => Date.now() });
     host.subscribe((agentId) => {
         refreshTray();
         pushAgent(agentId);
@@ -2055,9 +2081,7 @@ async function boot(): Promise<void> {
         if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieHome(), started); }
         // A model or tool setting waiting for this agent to be free applies the moment it is.
         settingApplier?.changed(agentId);
-        // A ledger row can change a Dashboard cell — a plan step, a context figure — so the
-        // estate-wide snapshot is refreshed too. It carries no ledgers, so this is cheap.
-        registry?.touch();
+        estate.request('estate');
     });
     // A saved setting changes the agent's RECORD, not its session: the Agent view reads it from the detail.
     registry.subscribeAgentRecords(pushAgent);

@@ -43,3 +43,55 @@ export function turnNow(rows: readonly TimedEvent[]): TurnNow {
     const open = [...calls.values()].filter((c) => (c.status === 'pending' || c.status === 'in_progress') && c.label !== null).sort((a, b) => b.index - a.index);
     return { prompt, tool: open[0]?.label ?? null };
 }
+
+/**
+ * `turnNow`, KEPT AS THE ROWS ARRIVE (see `DeliveryTracker` in core/delivery.ts for why): the latest prompt, and the calls
+ * made since it with the open ones indexed, so reading it costs the calls still open — not the whole ledger.
+ * `test/live-readings.test.ts` holds it equal to `turnNow`.
+ */
+export class TurnNowTracker {
+    #start = -1;
+    #prompt: string | null = null;
+    readonly #calls = new Map<string, { label: string | null; status: string | null; index: number }>();
+    readonly #open = new Set<string>();
+
+    /** The row at `index` arrived (appended). */
+    add(rows: readonly TimedEvent[], index: number): void {
+        const e = rows[index]!.event;
+        if (e.kind === 'message') {
+            if (e.speaker !== 'agent' && firstLine(e.text).length > 0) this.#begin(index, e.text);
+            return;
+        }
+        if (e.kind !== 'tool' || !e.toolCallId) return;
+        const c = this.#calls.get(e.toolCallId);
+        const next = { label: c?.label ?? e.title ?? e.name, status: e.status ?? c?.status ?? null, index: c?.index ?? index };
+        this.#calls.set(e.toolCallId, next);
+        if ((next.status === 'pending' || next.status === 'in_progress') && next.label !== null) this.#open.add(e.toolCallId);
+        else this.#open.delete(e.toolCallId);
+    }
+
+    /** The message at `index` (the newest row) grew in place. */
+    grew(rows: readonly TimedEvent[], index: number): void {
+        const e = rows[index]!.event;
+        if (e.kind !== 'message' || e.speaker === 'agent' || firstLine(e.text).length === 0) return;
+        // The newest row: nothing came after it, so as a new prompt it opens an empty turn.
+        if (index === this.#start) this.#prompt = firstLine(e.text);
+        else this.#begin(index, e.text);
+    }
+
+    current(): TurnNow {
+        let best: { label: string | null; index: number } | null = null;
+        for (const id of this.#open) {
+            const c = this.#calls.get(id)!;
+            if (best === null || c.index > best.index) best = c;
+        }
+        return { prompt: this.#prompt, tool: best?.label ?? null };
+    }
+
+    #begin(index: number, text: string): void {
+        this.#start = index;
+        this.#prompt = firstLine(text);
+        this.#calls.clear();
+        this.#open.clear();
+    }
+}
