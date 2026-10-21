@@ -6,6 +6,7 @@ import { browserWindowOptions, overlayColorsOk, TITLE_BAR_HEIGHT } from '../core
 import { genieWindowIcon } from './app-identity.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
 import { GenieBrowser, type TabViewEvents, type TabViewPort } from './genie-browser-window.js';
+import { attachPageNavigation } from './page-navigation-electron.js';
 
 /**
  * THE GENIE BROWSER WINDOW — the Electron half (beta.35 item 36; Genie 1's main/testing-browser/index.ts). Everything
@@ -168,10 +169,12 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     };
     const hostsOf = (key: string): readonly string[] => (key === LOCAL ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
-    const createView = (window: BrowserWindow, key: string, events: TabViewEvents): TabViewPort => {
+    const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents): TabViewPort => {
         const { ses, routed: routing } = sessionFor(key);
         const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: false } });
         const wc = view.webContents;
+        // Agents may drive it (browser rebuild step 7): fancy's navigation script, in an isolated world, on every load.
+        const detachPage = attachPageNavigation(`window:${key}:${tabId}`, wc);
         view.setVisible(false);
         window.contentView.addChildView(view);
         const history = () => wc.navigationHistory;
@@ -205,6 +208,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             setBounds: (bounds) => view.setBounds(bounds),
             setVisible: (visible) => view.setVisible(visible),
             destroy: () => {
+                detachPage();
                 if (!window.isDestroyed()) window.contentView.removeChildView(view);
                 if (!wc.isDestroyed()) wc.close();
             },
@@ -223,7 +227,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         const b = new GenieBrowser({
             enabledHosts: () => hostsOf(key),
             newTabId: () => `tab-${++seq}`,
-            createView: (_id, events) => createView(window, key, events),
+            createView: (id, events) => createView(window, key, id, events),
             push: (snapshot) => { if (!window.isDestroyed()) window.webContents.send('browser-window:state', snapshot); },
         });
         // The chrome is Genie's page: it never navigates; a link in it opens in the machine's browser.

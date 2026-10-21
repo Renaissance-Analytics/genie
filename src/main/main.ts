@@ -10,6 +10,7 @@ import type { RelaySocket } from './relay-wire.js';
 import { listShareLinks, mintShareLink, revokeShareLink } from './tynn-share-links.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
 import { RemoteBrowsers } from './remote-browsers.js';
+import { drivablePages } from './page-navigation-electron.js';
 import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
@@ -1945,6 +1946,8 @@ async function boot(): Promise<void> {
                 write: (workspaceId, raw) => { void composed.settings.setFor(workspaceId, 'workspace_tabs', raw); },
                 sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
+            // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
+            pages: { open: () => drivablePages() },
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.

@@ -1,4 +1,5 @@
 import { WebContentsView, ipcMain, shell, type BrowserWindow } from 'electron';
+import { attachPageNavigation } from './page-navigation-electron.js';
 import { normalizeNavUrl } from '../core/genie-browser.js';
 import { genieBrowserSession } from './genie-browser-electron.js';
 import { SitePanelViews, type PanelViewPort } from './site-panel-views.js';
@@ -25,10 +26,12 @@ export interface SitePanelsOptions {
 
 export function sitePanels(options: SitePanelsOptions): SitePanelViews {
     const { window } = options;
-    const createView = (): PanelViewPort => {
+    const createView = (panelKey: string): PanelViewPort => {
         const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem });
         const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: false } });
         const wc = view.webContents;
+        // Agents may drive it (browser rebuild step 7): fancy's navigation script, in an isolated world, on every load.
+        const detachPage = attachPageNavigation(`panel:${panelKey}`, wc);
         view.setVisible(false);
         window.contentView.addChildView(view);
         wc.setWindowOpenHandler(({ url }) => {
@@ -46,6 +49,7 @@ export function sitePanels(options: SitePanelsOptions): SitePanelViews {
             setBounds: (bounds) => view.setBounds(bounds),
             setVisible: (visible) => view.setVisible(visible),
             destroy: () => {
+                detachPage();
                 if (!window.isDestroyed()) window.contentView.removeChildView(view);
                 if (!wc.isDestroyed()) wc.close();
             },

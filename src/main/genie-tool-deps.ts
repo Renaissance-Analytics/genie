@@ -1,4 +1,5 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
+import type { DrivablePage, PageAction } from './mcp-tools-pages.js';
 import type { Liveness } from '../core/liveness.js';
 import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
@@ -30,7 +31,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
@@ -63,6 +64,8 @@ export interface GenieToolParts {
     readonly agents?: { defaultAgentOf(workspaceId: string): string | null; register: AgentToolsDeps['register'] };
     /** `workspaceTabs` (beta.35 item 36): writing a workspace's tabs, and the sites a site panel may show. Absent = no such tool (doctor mode). */
     readonly workspaceTabs?: { write(workspaceId: string, raw: string): void; sites(workspaceId: string): readonly string[] };
+    /** `pages` (browser rebuild step 7): every page Genie has open, drivable (page-navigation-electron.ts). Absent = no such tool (doctor mode). */
+    readonly pages?: { open(): readonly DrivablePage[] };
 }
 
 export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
@@ -126,6 +129,17 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 writeTabs: (ws: string, raw: string) => p.workspaceTabs!.write(ws, raw),
                 sites: (ws: string) => p.workspaceTabs!.sites(ws),
                 approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string) => p.approve(caller, action, detail),
+            },
+        } : {}),
+        // Agents drive the workspace's open site pages (browser rebuild step 7): its default agent, or one allowed to.
+        ...(p.agents && p.workspaceTabs && p.pages ? {
+            pages: {
+                resolveCaller: p.resolveCaller,
+                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
+                roster: p.roster,
+                sites: (ws: string) => p.workspaceTabs!.sites(ws),
+                pages: () => p.pages!.open(),
+                approve: (caller: Caller, action: PageAction, detail: string) => p.approve(caller, action, detail),
             },
         } : {}),
     };
