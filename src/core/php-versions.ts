@@ -197,7 +197,27 @@ export function phpIniContents(versionDir: string): string {
         'display_errors = On',
         'error_reporting = E_ALL',
         '',
+        // OPCACHE (genie#1043; moic, 2026-10-21: Laravel /up 2,606 ms — every request recompiled the framework). Genie 1
+        // left it out because it "makes php-cgi.exe die at startup on Windows"; the file cache in a directory that EXISTS
+        // (Genie makes it: `phpCacheDir`) with the fallback on is what lets php-cgi start — measured by
+        // scripts/acceptance-php.ts on the Windows test VM. Timestamps are checked on every request: these are sites being
+        // developed, and an edited file must show at once.
+        'zend_extension=opcache',
+        'opcache.enable=1',
+        'opcache.enable_cli=0',
+        `opcache.file_cache="${phpCacheDir(versionDir)}"`,
+        'opcache.file_cache_fallback=1',
+        'opcache.validate_timestamps=1',
+        'opcache.revalidate_freq=0',
+        'opcache.memory_consumption=256',
+        'opcache.max_accelerated_files=50000',
+        '',
     ].join('\r\n');
+}
+
+/** The opcache file cache's directory for a managed version — it must exist before php-cgi starts. */
+export function phpCacheDir(versionDir: string): string {
+    return `${versionDir}\\opcache`;
 }
 
 /**

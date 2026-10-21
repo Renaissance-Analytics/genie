@@ -47,6 +47,8 @@ function make(over: Partial<SiteManagerDeps> = {}) {
         caddyBin: '/opt/genie/runtime/caddy',
         configDir: '/data/sites',
         writeConfig: (path, content) => { written.push({ path, content }); },
+        // One PHP worker: these tests are about the lifecycle; several workers are test/php-fast.test.ts's.
+        phpWorkers: 1,
         ...over,
     };
     return { pty, supervisor, written, sites: new SiteManager(deps) };

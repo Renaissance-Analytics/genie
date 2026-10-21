@@ -12,6 +12,7 @@ import {
     parseSha256Sums,
     phpCgiName,
     phpDownloadSources,
+    phpCacheDir,
     phpIniContents,
     phpZipName,
     pickPinned,
@@ -118,6 +119,20 @@ export function resolvePhpCgi(pin: string | undefined, ports: Pick<PhpVersionsPo
     return { ok: true, command: managedCgiCommand(found.dir, ports.platform) };
 }
 
+/**
+ * BEFORE A PINNED SITE'S php-cgi STARTS (genie#1043): a version installed before Genie wrote opcache into its ini gets
+ * the current ini, and the opcache file cache's directory (which must exist for php-cgi to start with it). Genie owns
+ * this ini and rewrites it whole. Separate from `resolvePhpCgi`, which is a lookup (Edit's preview, the agents' tool).
+ * Unpinned (PATH php-cgi): not Genie's ini — nothing is written.
+ */
+export function refreshManagedIni(pin: string | undefined, ports: Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'>): void {
+    if (pin === undefined || pin === '' || !PHP_VERSION.test(pin)) return;
+    const found = pickPinned(managedPhp(ports), pin);
+    if (!found) return;
+    ports.fs.writeText(join(found.dir, 'php.ini'), phpIniContents(found.dir));
+    ports.fs.mkdirp(phpCacheDir(found.dir));
+}
+
 /** What the Toolchain surface lists: Genie's own versions (with the sites on each), the PATH PHP, and what can be added. */
 export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly SitePin[] = []): Promise<PhpVersionsView> {
     const managed = managedPhp(ports);
@@ -220,6 +235,8 @@ async function putInPlace(a: { version: string; file: string; dir: string; zip: 
         ports.fs.rename(staging, dir);
         const ini = join(dir, 'php.ini');
         ports.fs.writeText(ini, phpIniContents(dir));
+        // The opcache file cache's directory must exist before php-cgi starts (core/php-versions.ts phpIniContents).
+        ports.fs.mkdirp(phpCacheDir(dir));
 
         say(`PHP ${version}: checking that it runs`);
         let banner: ReturnType<typeof parsePhpBanner> = null;

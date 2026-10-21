@@ -43,7 +43,7 @@ function make() {
     // Restarts run at once: what is measured is WHETHER the worker comes back, not the backoff.
     const supervisor = new ProcessSupervisor(pty.port, { now: () => 0, schedule: (fn: () => void) => { fn(); return () => {}; } } as never);
     let next = 4200;
-    const sites = new siteManager.SiteManager({ supervisor, allocatePort: () => ++next, caddyBin: '/opt/genie/runtime/caddy', configDir: '/data/sites', writeConfig: () => {} });
+    const sites = new siteManager.SiteManager({ supervisor, allocatePort: () => ++next, caddyBin: '/opt/genie/runtime/caddy', configDir: '/data/sites', writeConfig: () => {}, phpWorkers: 1 });
     return { pty, sites };
 }
 const workers = (opened: ReadonlyArray<PtySpawnOptions & { id: string }>) => opened.filter((o) => /php-cgi -b /.test(o.command ?? ''));

@@ -86,7 +86,7 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
-import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { osPidAlive } from './process-supervisor.js';
@@ -1514,6 +1514,8 @@ async function boot(): Promise<void> {
         phpSystemRoots: () => systemRootsPem(process.platform, (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }, toolchainPaths(toolchainDataDir()).bundle),
         // A php site's pin (T4): unpinned runs PATH php-cgi as before; pinned runs that Genie-managed version or is refused.
         resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpVersionsBase()),
+        // Right before a pinned site's php-cgi starts: its version's ini brought current (opcache, genie#1043).
+        preparePhpCgi: (pin) => refreshManagedIni(pin, phpVersionsBase()),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
         // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],

@@ -49,7 +49,7 @@ export function detectDevServer(facts: RepoFacts): DevServer | null {
 export type ServeSpec =
     | { readonly mode: 'proxy' }
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
-    | { readonly mode: 'php'; readonly root: string; readonly fcgiPort: number };
+    | { readonly mode: 'php'; readonly root: string; readonly fcgiPort: number; /** Every worker's port, the first being `fcgiPort` (genie#1043). Absent = that one alone. */ readonly fcgiPorts?: readonly number[] };
 
 const BUILT_DIRS = ['dist', 'build', 'out'];
 
@@ -119,7 +119,13 @@ export function serveCaddyfile(input: CaddyfileInput): string | null {
         // While the PHP worker restarts (an engine change restarts it alone, on the same port; a crash brings it back),
         // the dial is RETRIED instead of answered 502 (Tynn #756). Measured in WSL, Caddy 2.11.7 + php-cgi, the worker
         // gone 1.5 s: without these a request in the gap was 502 after 8 ms; with them, 200 after 1617 ms.
-        lines.push(`\tphp_fastcgi 127.0.0.1:${serve.fcgiPort} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t\theader_up X-Forwarded-Proto https', '\t\tlb_try_duration 10s', '\t\tlb_try_interval 100ms', '\t}', '\tfile_server');
+        //
+        // SEVERAL WORKERS (genie#1043; moic: 4 parallel fetches 3,267 ms, one after another): php-cgi serves one request at
+        // a time and ignores PHP_FCGI_CHILDREN on Windows, so a site runs several, and each request goes to the LEAST BUSY
+        // one — never queued behind a slow request while another worker is idle. One worker reads exactly as before.
+        const upstreams = (serve.fcgiPorts && serve.fcgiPorts.length > 0 ? serve.fcgiPorts : [serve.fcgiPort]).map((p) => `127.0.0.1:${p}`);
+        const balance = upstreams.length > 1 ? ['\t\tlb_policy least_conn'] : [];
+        lines.push(`\tphp_fastcgi ${upstreams.join(' ')} {`, '\t\tenv HTTPS on', '\t\tenv REQUEST_SCHEME https', '\t\tenv SERVER_PORT 443', '\t\theader_up X-Forwarded-Proto https', ...balance, '\t\tlb_try_duration 10s', '\t\tlb_try_interval 100ms', '\t}', '\tfile_server');
     }
     lines.push('}', '');
     return lines.join('\n');

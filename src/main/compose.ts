@@ -109,6 +109,10 @@ export interface ComposeInput {
     readonly phpSystemRoots?: () => string | null;
     /** Which php-cgi a site's PHP pin runs (main/php-versions.ts `resolvePhpCgi`); absent = PATH php-cgi, pins refused. */
     readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
+    /** Right before a pinned site's php-cgi starts (main/php-versions.ts `refreshManagedIni`). */
+    readonly preparePhpCgi?: (pin: string | undefined) => void;
+    /** php-cgi workers per PHP site (site-manager PHP_WORKERS when absent). */
+    readonly phpWorkers?: number;
     /** 0 picks a free loopback port. */
     readonly frontDoorPort?: number;
     readonly allocatePort?: () => number;
@@ -683,6 +687,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             },
         }),
         ...(input.resolvePhpCgi ? { resolvePhpCgi: input.resolvePhpCgi } : {}),
+        ...(input.preparePhpCgi ? { preparePhpCgi: input.preparePhpCgi } : {}),
+        ...(input.phpWorkers !== undefined ? { phpWorkers: input.phpWorkers } : {}),
         serviceEnv: (workspaceId) => engines.envFor(workspaceId),
     });
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.

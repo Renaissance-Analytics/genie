@@ -35,6 +35,8 @@ function make(over: Partial<SiteManagerDeps> = {}) {
             if (pin === '8.4' || pin === '8.4.26') return { ok: true, command: MANAGED };
             return { ok: false, reason: `this site is pinned to PHP ${pin}, which Genie does not manage on this machine` };
         },
+        // One worker: these tests are about the pin; several workers are test/php-fast.test.ts's.
+        phpWorkers: 1,
         ...over,
     };
     return { opened, asked, sites: new SiteManager(deps) };

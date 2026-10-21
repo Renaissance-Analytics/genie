@@ -27,7 +27,8 @@ describe('removing a site', () => {
         const { supervisor, sites } = make();
         sites.create({ name: 'shop', workspaceId: 'acme', repoPath: '/w/acme/repos/shop', serve: { mode: 'php', root: 'public' } });
         // Positive control: the scan finds both of the site's processes while it exists.
-        expect(supervisor.list().map((p) => p.id).sort()).toEqual(['site_shop', 'site_shop-fcgi']);
+        // Changed 2026-10-21 (genie#1043): a PHP site runs several workers (test/php-fast.test.ts).
+        expect(supervisor.list().map((p) => p.id).sort()).toEqual(['site_shop', 'site_shop-fcgi', 'site_shop-fcgi-2', 'site_shop-fcgi-3', 'site_shop-fcgi-4']);
         expect(sites.remove('site_shop')).toBe(true);
         expect(supervisor.list().map((p) => p.id)).toEqual([]);
     });

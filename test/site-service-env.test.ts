@@ -45,6 +45,8 @@ function make(serviceEnv: Record<string, Record<string, string>>) {
         configDir: '/data/sites',
         writeConfig: () => {},
         serviceEnv: (workspaceId: string) => serviceEnv[workspaceId] ?? {},
+        // One PHP worker: this test is about the env restart; several workers are test/php-fast.test.ts's.
+        phpWorkers: 1,
     } as SiteManagerDeps;
     return { pty, sites: new SiteManager(deps) };
 }
