@@ -1485,8 +1485,9 @@ async function boot(): Promise<void> {
         (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createWorkspaceOp(workspaceOps, rawName, rawParent) : { ok: false, reason: 'give the workspace a name and a folder' }));
+    // Optionally linked to a Tynn project: its id, looked up in Tynn's own list on this side.
+    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawProject: unknown) =>
+        (typeof rawName === 'string' && typeof rawParent === 'string' ? createWorkspaceOp(workspaceOps, rawName, rawParent, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -1673,7 +1674,7 @@ async function boot(): Promise<void> {
                 previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
                 locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
-                create: (name, parent) => createWorkspaceOp(workspaceOps, name, parent),
+                create: (name, parent, tynnProjectId) => createWorkspaceOp(workspaceOps, name, parent, tynnProjectId),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),

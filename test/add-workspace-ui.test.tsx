@@ -92,6 +92,28 @@ describe('New workspace', () => {
         expect(html).toMatch(/data-action="create-workspace"[^>]*disabled=""/);
     });
 
+    it('Project (optional): Genie 1’s picker — "No project" by default, your Tynn projects to link, its words', () => {
+        const projects = [{ id: '42', name: 'Acme', slug: 'acme', vision: null }, { id: '7', name: 'Moic Suite', slug: 'moic', vision: null }];
+        const html = renderToStaticMarkup(NewWorkspaceForm({ ...base, name: 'acme', parent: '/w', tynn: { ok: true, projects }, projectId: null, onProject: () => {} }));
+        expect(html).toContain('Project (optional)');
+        expect(html).toMatch(/data-field="tynn-project"[\s\S]*?— No project \(just a folder\) —[\s\S]*?Acme[\s\S]*?Moic Suite/);
+        expect(html).toContain('Optionally link this workspace to a Tynn project.');
+        // Tynn could not list them (signed out, offline): said, and nothing to pick.
+        const off = renderToStaticMarkup(NewWorkspaceForm({ ...base, name: 'acme', parent: '/w', tynn: { ok: false, reason: 'not signed in to Tynn' }, projectId: null, onProject: () => {} }));
+        expect(off).toContain('No Tynn projects available — not signed in to Tynn');
+        expect(off).not.toContain('data-field="tynn-project"');
+        // CONTROL: a window with no Tynn to ask offers no picker at all.
+        expect(renderToStaticMarkup(NewWorkspaceForm({ ...base, name: 'acme', parent: '/w' }))).not.toContain('Project (optional)');
+    });
+
+    it('where it is kept, said honestly: on this machine — Genie 2 creates no GitHub repository for it', () => {
+        const html = renderToStaticMarkup(NewWorkspaceForm({ ...base, name: 'acme', parent: '/w' }));
+        expect(html).toMatch(/data-storage-note=""[^>]*>[^<]*Kept on this machine\. Genie does not create a GitHub repository for a new workspace\./);
+        expect(html).not.toMatch(/Backed up to GitHub/);
+        // Nothing to say before there is a name.
+        expect(renderToStaticMarkup(NewWorkspaceForm({ ...base, parent: '/w' }))).not.toContain('data-storage-note');
+    });
+
     it('pressing Create creates; Browse browses (the buttons do what they say)', () => {
         const done: string[] = [];
         const ui = NewWorkspaceForm({ ...base, name: 'acme', parent: '/w', onCreate: () => done.push('create'), onBrowse: () => done.push('browse') });
