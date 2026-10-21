@@ -232,7 +232,9 @@ const HEADER_PROBE = `
         // a failure names its element instead of only a number.
         const box = header ? header.getBoundingClientRect() : null;
         const padRight = header ? parseFloat(getComputedStyle(header).paddingRight) || 0 : 0;
-        const spills = header && box ? [...header.querySelectorAll('*')].map((el) => {
+        // Only what is NOT clipped: an element inside a scrolling or hidden-overflow box (the agents strip) cannot widen the header.
+        const clipped = (el) => { for (let p = el.parentElement; p && p !== header; p = p.parentElement) { if (getComputedStyle(p).overflowX !== 'visible') return true; } return false; };
+        const spills = header && box ? [...header.querySelectorAll('*')].filter((el) => !clipped(el)).map((el) => {
             const r = el.getBoundingClientRect();
             const over = Math.round(r.right - (box.right - padRight));
             const tag = el.tagName.toLowerCase();
