@@ -119,11 +119,15 @@ describe('processes: what an agent sees', () => {
         expect(end.json.log.split('\n')).toEqual(['PDOException: could not connect', '[genie] exited with code 1; restarting in 1s']);
     });
 
-    it('logs reads a site’s server too; start/stop/restart/remove of one are refused, pointing at `sites` (nothing killed)', async () => {
+    // A site's server is NOT a background process (the owner, 2026-10-21: "they are two different things"): not listed,
+    // and every action on one is refused, pointing at `sites` (whose `logs` reads its output) — nothing killed.
+    it('a site’s server is not one of the processes: not listed; logs/start/stop/restart/remove refused, pointing at `sites` (nothing killed)', async () => {
         services.supervisor.start({ id: 'site:docs', workspaceId: 'example', name: 'docs dev server', command: 'npm run dev', cwd: ws('example'), restart: 'on-failure' });
         print('term_1', 'VITE ready\n');
+        expect((await call('t-example', { action: 'list' })).json.processes).toEqual([]);
         const logs = await call('t-example', { action: 'logs', process: 'site:docs' });
-        expect(logs.json.log).toContain('VITE ready');
+        expect(logs.isError).toBe(true);
+        expect(logs.json.error).toMatch(/`sites logs`/);
         const refused = await Promise.all(['start', 'stop', 'restart', 'remove'].map((action) => call('t-example', { action, process: 'docs dev server' })));
         expect(refused.filter((r) => r.isError && /`sites`/.test(r.json.error))).toHaveLength(4);
         expect(killed).toEqual([]);
@@ -136,7 +140,7 @@ describe('processes: never another workspace’s', () => {
         const s = await keep('example', 'queue');
         const before = JSON.stringify(book.kept());
         const refused = await Promise.all(['logs', 'start', 'stop', 'restart', 'remove'].map((action) => call('t-other', { action, process: s.id })));
-        expect(refused.filter((r) => r.isError && /not one of this workspace’s processes/.test(r.json.error))).toHaveLength(5);
+        expect(refused.filter((r) => r.isError && /not one of this workspace’s background processes/.test(r.json.error))).toHaveLength(5);
         // By name too: a name is looked up among the caller's own rows only.
         expect((await call('t-other', { action: 'stop', process: 'queue' })).isError).toBe(true);
         expect(killed).toEqual([]);
