@@ -189,7 +189,6 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                                 <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
                                 <span className="font-medium">{f.name}</span>
                                 <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
-                                {f.importedFrom ? <Badge variant="soft" size="sm">from Genie 1</Badge> : null}
                                 {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
                                 {last ? (
                                     <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
@@ -669,7 +668,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
  * workspace its connection, keeping its database and data; a detached one offers "Attach" (the same `use`).
  */
 export function EngineChoices({ instances, workspaces, onAction }: { instances: readonly ServiceInstance[]; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
-    const label = (i: ServiceInstance) => `${i.engine === 'custom' ? `custom ${i.version}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`}${i.adopted ? ' · Genie 1’s' : i.scope.kind === 'shared' ? ' · shared' : ''}`;
+    const label = (i: ServiceInstance) => `${i.engine === 'custom' ? `custom ${i.version}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`}${i.scope.kind === 'shared' ? ' · shared' : ''}`;
     const rows = workspaces.flatMap((w) => {
         const visible = instances.filter((i) => (i.scope.kind === 'dedicated' ? i.scope.workspaceId === w.id : true));
         return chooseEngines(visible, w.id)
@@ -1600,7 +1599,7 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
  * with genie 1 so why is it not functional anymore?"
  *
  * Signed out: ONE button. Signing in: GitHub's code, large, with Copy, and its page (opened already; again on a click) —
- * Genie waits for GitHub by itself and the card changes when it lands. Signed in: who (and that it came from Genie 1),
+ * Genie waits for GitHub by itself and the card changes when it lands. Signed in: who,
  * every account the app is installed on with its repositories and the permissions GitHub GRANTED, each with its own
  * Configure; Install on more repositories; what those permissions let Genie do; Check again; Sign out. Everything here is
  * what main read from GitHub (main/github-account.ts); the token never reaches this window.
@@ -1649,7 +1648,6 @@ function GithubBlock({ integrations, onAction }: { integrations: FeatureData['in
             <div className="flex items-center gap-2">
                 <Avatar size="sm" fallback={gh.user.login.slice(0, 2).toUpperCase()} alt={gh.user.login} />
                 <span className="flex-1">Signed in as <strong>{gh.user.login}</strong>{gh.user.name ? <span className="text-[var(--fg-3)]"> {gh.user.name}</span> : null}</span>
-                {gh.carriedFromGenie1 ? <span data-github-carried=""><Badge variant="soft" size="sm" color="emerald">Carried over from Genie 1</Badge></span> : null}
                 <Button type="button" data-action="github-refresh" variant="ghost" size="sm" disabled={gh.checking} onClick={() => onAction({ kind: 'integrations.githubRefresh' })}>{gh.checking ? 'Checking…' : 'Check again'}</Button>
                 <Button type="button" data-action="github-sign-out" variant="ghost" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignOut' })}>Sign out</Button>
             </div>

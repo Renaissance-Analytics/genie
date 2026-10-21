@@ -161,7 +161,7 @@ describe('Tynn sign-in through the account', () => {
 describe('GitHub through the account', () => {
     function fakeGithubAccount() {
         const calls: string[] = [];
-        let view: GithubView = { status: 'signed-out', user: null, carriedFromGenie1: false, device: null, installations: null, capabilities: [], checking: false, signal: null, message: null };
+        let view: GithubView = { status: 'signed-out', user: null, device: null, installations: null, capabilities: [], checking: false, signal: null, message: null };
         const account: GithubAccountPort = {
             view: () => view,
             startSignIn: async () => { calls.push('sign-in'); view = { ...view, status: 'signing-in', device: { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: 0 } }; },

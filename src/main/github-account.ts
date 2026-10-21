@@ -97,7 +97,6 @@ export class GithubAccount implements GithubAccountPort {
     #status: GithubStatus = 'signed-out';
     #token: string | null = null;
     #user: { login: string; name: string | null } | null = null;
-    #carried = false;
     #device: GithubView['device'] = null;
     #installations: GithubInstallation[] | null = null;
     #checking = false;
@@ -123,7 +122,6 @@ export class GithubAccount implements GithubAccountPort {
         return {
             status: this.#status,
             user: this.#user,
-            carriedFromGenie1: this.#carried,
             device: this.#device,
             installations: this.#installations,
             capabilities: githubCapabilities({ signedIn, installations: signedIn ? this.#installations : null }),
@@ -180,7 +178,6 @@ export class GithubAccount implements GithubAccountPort {
 
     #restore(stored: Extract<StoredFile, { state: 'signed-in' }>): void {
         this.#user = { login: stored.login, name: stored.name };
-        this.#carried = stored.source === 'genie-1';
         const t = this.#decrypt(stored.tokenEnc);
         if (t.ok) {
             this.#token = t.token;
@@ -220,7 +217,6 @@ export class GithubAccount implements GithubAccountPort {
         }
         this.#token = t.token;
         this.#user = { login, name: null };
-        this.#carried = true;
         this.#status = 'signed-in';
     }
 
@@ -422,7 +418,6 @@ export class GithubAccount implements GithubAccountPort {
         }
         this.#token = token;
         this.#user = { login: login ?? 'your GitHub account', name };
-        this.#carried = false;
         this.#status = 'signed-in';
         this.#installations = null;
         this.#message = null;
@@ -437,7 +432,6 @@ export class GithubAccount implements GithubAccountPort {
         await this.#save({ version: 1, state: 'signed-out' });
         this.#token = null;
         this.#user = null;
-        this.#carried = false;
         this.#installations = null;
         this.#status = 'signed-out';
         this.#message = null;

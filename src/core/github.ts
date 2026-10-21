@@ -55,8 +55,6 @@ export interface GithubCapability {
 export interface GithubView {
     readonly status: GithubStatus;
     readonly user: { readonly login: string; readonly name: string | null } | null;
-    /** This sign-in is Genie 1's, carried over — nobody signed in again. */
-    readonly carriedFromGenie1: boolean;
     /** The device flow under way: the code to type, where, and until when (epoch ms). */
     readonly device: { readonly userCode: string; readonly verificationUri: string; readonly expiresAt: number } | null;
     /** `null` = not read from GitHub yet (a skeleton, never an empty list). */
@@ -71,7 +69,7 @@ export interface GithubView {
 }
 
 export function signedOutGithubView(message: string | null): GithubView {
-    return { status: 'signed-out', user: null, carriedFromGenie1: false, device: null, installations: null, capabilities: githubCapabilities({ signedIn: false, installations: null }), checking: false, signal: null, message };
+    return { status: 'signed-out', user: null, device: null, installations: null, capabilities: githubCapabilities({ signedIn: false, installations: null }), checking: false, signal: null, message };
 }
 
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);

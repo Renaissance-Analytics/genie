@@ -112,7 +112,9 @@ describe('Genie 1’s login carries over', () => {
         const c = cipher('k1');
         const p = ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada', github_refresh_enc: '' }) });
         const account = await GithubAccount.open(p);
-        expect(account.view()).toMatchObject({ status: 'signed-in', user: { login: 'ada' }, carriedFromGenie1: true, device: null });
+        expect(account.view()).toMatchObject({ status: 'signed-in', user: { login: 'ada' }, device: null });
+        // No migration label (the owner, 2026-10-21): the view does not say where the login came from.
+        expect('carriedFromGenie1' in account.view()).toBe(false);
         const stored = await readFile(file, 'utf8');
         expect(stored).not.toContain(TOKEN);
         expect(JSON.parse(stored)).toMatchObject({ state: 'signed-in', login: 'ada', source: 'genie-1' });
@@ -152,7 +154,7 @@ describe('Genie 1’s login carries over', () => {
     it('a Genie 1 login this Genie cannot decrypt (another key): signed out, saying exactly why, nothing written', async () => {
         const gh = fakeGithub();
         const account = await GithubAccount.open(ports({ gh, cipher: cipher('k1'), v1Settings: () => ({ github_token_enc: v1Blob(cipher('other-user'), TOKEN), github_user: 'ada' }) }));
-        expect(account.view()).toMatchObject({ status: 'signed-out', carriedFromGenie1: false, message: expect.stringMatching(/Genie 1.*cannot decrypt/i) });
+        expect(account.view()).toMatchObject({ status: 'signed-out', message: expect.stringMatching(/Genie 1.*cannot decrypt/i) });
         await expect(readFile(file, 'utf8')).rejects.toThrow();
     });
 
@@ -204,7 +206,7 @@ describe('signing in: Genie 1’s device flow', () => {
         await account.signInSettled();
         // 5 s, 5 s (pending), then GitHub's slower 10 s.
         expect(p.sleeps).toEqual([5000, 5000, 10000]);
-        expect(account.view()).toMatchObject({ status: 'signed-in', user: { login: 'grace', name: 'Grace' }, carriedFromGenie1: false, device: null, message: null });
+        expect(account.view()).toMatchObject({ status: 'signed-in', user: { login: 'grace', name: 'Grace' }, device: null, message: null });
         expect(account.view().installations).toHaveLength(2);
         expect(changes).toContain('signed-in');
         const stored = await readFile(file, 'utf8');

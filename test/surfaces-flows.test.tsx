@@ -10,7 +10,7 @@ import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/ren
  * Delete although the action existed, and nothing about what its runs did. Now each row has Run now, Arm or
  * Disarm, and Delete; the last run's outcome and when; and under it the history — newest first, each run's
  * outcome (ran / failed / held back), whether the schedule or a Run now started it, and the reason it failed or
- * was held back. A flow brought over from Genie 1 says so.
+ * was held back.
  */
 
 const flow = (over: Partial<FlowRecord>): FlowRecord => ({
@@ -89,9 +89,12 @@ describe('a flow row', () => {
         expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Delete']);
     });
 
-    it('a flow brought over from Genie 1 says so; one made here does not (control)', () => {
+    // Changed 2026-10-21 (the owner, 2026-10-21, of the GitHub card's "Carried over from Genie 1": "this is not needed … it should be the same"): no migration labels in the product. A flow brought over from Genie 1 reads exactly
+    // like one made here.
+    it('a flow brought over from Genie 1 looks like any other: no "from Genie 1" label (CONTROL: both rows drawn)', () => {
         const html = renderToStaticMarkup(<FlowsSurface data={data([flow({ id: 'flow_v1_s-report', importedFrom: { v1SpecId: 's-report' } }), flow({ id: 'flow_b' })])} onAction={() => {}} onNavigate={() => {}} />);
-        expect(rowOf(html, 'flow_v1_s-report')).toMatch(/from Genie 1/);
-        expect(rowOf(html, 'flow_b')).not.toMatch(/from Genie 1/);
+        expect(rowOf(html, 'flow_v1_s-report')).not.toMatch(/Genie 1/);
+        expect(rowOf(html, 'flow_v1_s-report')).toContain('data-flow="flow_v1_s-report"');
+        expect(rowOf(html, 'flow_b')).toContain('data-flow="flow_b"');
     });
 });

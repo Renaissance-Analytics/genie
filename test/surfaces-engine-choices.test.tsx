@@ -25,7 +25,9 @@ describe('In use', () => {
         expect(html).toContain(`data-engine-choice="${WS}:postgres"`);
         expect(html).toContain('data-chosen="svc_own"');
         expect(html.match(/data-use="([^"]+)"/g)).toEqual(['data-use="svc_v1_postgres-17"']);
-        expect(html).toContain('Use postgres 17 · Genie 1’s');
+        // Changed 2026-10-21 (the owner, 2026-10-21, of the GitHub card's "Carried over from Genie 1": "this is not needed … it should be the same"): an engine taken over from Genie 1 is named like any other — shared.
+        expect(html).toContain('Use postgres 17 · shared');
+        expect(html).not.toContain('Genie 1');
         expect(html).not.toContain('data-detach=');
     });
 
@@ -35,7 +37,8 @@ describe('In use', () => {
         expect(attached.match(/data-detach="([^"]+)"/g)).toEqual(['data-detach="svc_v1_postgres-17"']);
         const detached = render([v1(true)]);
         expect(detached).toContain('data-chosen=""');
-        expect(detached).toContain('Attach postgres 17 · Genie 1’s');
+        expect(detached).toContain('Attach postgres 17 · shared');
+        expect(detached).not.toContain('Genie 1');
         expect(detached).not.toContain('data-detach=');
     });
 

@@ -102,7 +102,7 @@ describe('Settings → GitHub', () => {
         { id: 22, account: 'Example-Org', isOrg: true, selection: 'selected', repoCount: 2, repos: ['Example-Org/site', 'Example-Org/api'], permissions: { metadata: 'read', issues: 'read' }, settingsUrl: 'https://github.com/organizations/Example-Org/settings/installations/22' },
     ];
     const signedIn = (over: Partial<GithubView> = {}): GithubView => ({
-        status: 'signed-in', user: { login: 'ada', name: 'Ada' }, carriedFromGenie1: false, device: null, installations: installs,
+        status: 'signed-in', user: { login: 'ada', name: 'Ada' }, device: null, installations: installs,
         capabilities: githubCapabilities({ signedIn: true, installations: installs }), checking: false, signal: null, message: null, ...over,
     });
 
@@ -131,15 +131,16 @@ describe('Settings → GitHub', () => {
         expect(html).not.toContain('data-action="github-sign-in"');
     });
 
-    it('signed in: who, carried over from Genie 1 when it was, Check again and Sign out', () => {
-        const html = page(signedIn({ carriedFromGenie1: true }));
+    // Changed 2026-10-21 (the owner, 2026-10-21, of the GitHub card's "Carried over from Genie 1": "this is not needed … it should be the same"): a login carried over from Genie 1 looks exactly like a sign-in made here.
+    it('signed in: who, Check again and Sign out — and nothing says where the login came from', () => {
+        const html = page(signedIn());
         expect(html).toContain('data-github-status="signed-in"');
         expect(html).toMatch(/Signed in as <strong>ada<\/strong>/);
-        expect(html).toContain('data-github-carried');
+        expect(html).not.toContain('data-github-carried');
+        expect(html).not.toContain('Genie 1');
         expect(html).toContain('data-action="github-refresh"');
         expect(html).toContain('data-action="github-sign-out"');
         expect(html).not.toContain('data-action="github-sign-in"');
-        expect(page(signedIn())).not.toContain('data-github-carried');
     });
 
     it('every installation: the account, personal or org, its repositories (listed when selected, counted when all), the permissions granted, and its own Configure', () => {

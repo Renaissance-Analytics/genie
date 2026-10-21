@@ -163,10 +163,14 @@ function inUseBy(s: HostingServices, workspaceId: string): Set<string> {
     return new Set(s.engines.choices(workspaceId).flatMap((c) => (c.chosen ? [c.chosen.id] : [])));
 }
 
-/** An engine as the person reads it in an approval: `postgres (pgvector) 17, shared`, `custom pgvector`, `postgres 17 (Genie 1’s)`. */
+/** An engine's name alone: `postgres (pgvector) 17`, `custom pgvector`. */
+function nameOf(i: ServiceInstance): string {
+    return i.engine === 'custom' ? `custom ${i.version}${i.kind ? ` (a ${i.kind})` : ''}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`;
+}
+
+/** An engine as the person reads it in an approval: `postgres (pgvector) 17`, `postgres 17, shared`; one taken over from Genie 1 reads like any other. */
 function labelOf(i: ServiceInstance): string {
-    const name = i.engine === 'custom' ? `custom ${i.version}${i.kind ? ` (a ${i.kind})` : ''}` : `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`;
-    return `${name}${i.adopted ? ' (Genie 1’s)' : i.scope.kind === 'shared' ? ', shared' : ''}`;
+    return `${nameOf(i)}${i.scope.kind === 'shared' ? ', shared' : ''}`;
 }
 
 /** An agent's `env` argument for a custom image: an object of string values, or why not. */
@@ -214,7 +218,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
                 + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
                 + '`use` {id} — make this engine the one of its kind this workspace’s env comes from (attaches a detached shared one again); the person approves it. '
-                + '`detach` {id} — a SHARED engine (Genie 1’s included) stops giving this workspace its env; its database and data stay; the person approves it. '
+                + '`detach` {id} — a SHARED engine stops giving this workspace its env; its database and data stay; the person approves it. '
                 + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
                 + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab). On the shared WebSockets engine it removes only THIS workspace’s app.',
             {
@@ -356,7 +360,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const now = before ? labelOf(before) : `no ${kind}`;
                     const detail = action === 'use'
                         ? `${kind} for this workspace: ${now} → ${labelOf(i)} (127.0.0.1:${i.publishedPort}) — its terminals and sites get ${labelOf(i)}’s connection; nothing is deleted, and the other engine keeps its data`
-                        : `stop the shared ${labelOf(i)} (127.0.0.1:${i.publishedPort}) giving this workspace its ${kind} connection — its database and data stay in it, and \`use\` attaches it again`;
+                        : `stop the shared ${nameOf(i)} (127.0.0.1:${i.publishedPort}) giving this workspace its ${kind} connection — its database and data stay in it, and \`use\` attaches it again`;
                     const verdict = await deps.approve(caller, 'services.use', detail);
                     if (verdict !== 'allowed') return err(`${action === 'use' ? `using ${labelOf(i)}` : `detaching from ${labelOf(i)}`} was denied by the person; nothing was changed`);
                     const choice = action === 'use' ? await useService(s, caller.workspaceId, i.id) : await detachService(s, caller.workspaceId, i.id);

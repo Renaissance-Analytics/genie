@@ -106,7 +106,7 @@ describe('services detach / use: the person decides', () => {
         expect(services.engines.envFor(WS).DB_PORT).toBe(String(V1_PORT));
         const pending = call('t-example', { action: 'detach', id: v1Postgres.id });
         const item = await asked();
-        expect(item.title).toBe('atlas wants to change which service this workspace uses: stop the shared postgres 17 (Genie 1’s) (127.0.0.1:37605) giving this workspace its postgres connection — its database and data stay in it, and `use` attaches it again');
+        expect(item.title).toBe('atlas wants to change which service this workspace uses: stop the shared postgres 17 (127.0.0.1:37605) giving this workspace its postgres connection — its database and data stay in it, and `use` attaches it again');
         services.approvals.resolve(item.id, 'deny');
         const r = await pending;
         expect(r.isError).toBe(true);
@@ -130,7 +130,7 @@ describe('services detach / use: the person decides', () => {
 
         const back = call('t-example', { action: 'use', id: v1Postgres.id });
         const item = await asked();
-        expect(item.title).toBe('atlas wants to change which service this workspace uses: postgres for this workspace: no postgres → postgres 17 (Genie 1’s) (127.0.0.1:37605) — its terminals and sites get postgres 17 (Genie 1’s)’s connection; nothing is deleted, and the other engine keeps its data');
+        expect(item.title).toBe('atlas wants to change which service this workspace uses: postgres for this workspace: no postgres → postgres 17, shared (127.0.0.1:37605) — its terminals and sites get postgres 17, shared’s connection; nothing is deleted, and the other engine keeps its data');
         services.approvals.resolve(item.id, 'allow');
         expect((await back).json).toMatchObject({ ok: true, kind: 'postgres', using: { id: v1Postgres.id, inUse: true } });
         expect(services.engines.envFor(WS).DB_PORT).toBe(String(V1_PORT));
@@ -153,7 +153,7 @@ describe('services detach / use: the person decides', () => {
         // Control: the same agent's `use` of the shared one IS put to the person.
         const pending = call('t-example', { action: 'use', id: v1Postgres.id });
         const item = await asked();
-        expect(item.title).toContain('postgres (pgvector) 17 → postgres 17 (Genie 1’s)');
+        expect(item.title).toContain('postgres (pgvector) 17 → postgres 17, shared');
         services.approvals.resolve(item.id, 'deny');
         expect((await pending).isError).toBe(true);
     });
