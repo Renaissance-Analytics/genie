@@ -38,7 +38,7 @@ describe('the provider options', () => {
 });
 
 describe('SessionHost', () => {
-    const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
     let dir: string;
     beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-agent-env-')); });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });

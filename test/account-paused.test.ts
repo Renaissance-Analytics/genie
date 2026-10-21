@@ -27,7 +27,7 @@ import { trayMenuTemplate, trayTooltip } from '../src/main/tray.js';
 
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
 
 function open() {
     const dir = mkdtempSync(join(tmpdir(), 'genie2-paused-'));

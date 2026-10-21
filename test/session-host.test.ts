@@ -51,9 +51,9 @@ const fakeDriverFor: DriverFor = (record) => {
  * runner with parallel workers, that is a live sibling process. It also made a test that does
  * no I/O take six and a half seconds, which is how the problem surfaced: as a flake.
  */
-let reaped: readonly (readonly number[])[] = [];
+let reaped: readonly (readonly unknown[])[] = [];
 const noProcessTree: ProcessTree = {
-    descendantsOf: () => [],
+    snapshot: () => [],
     killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
@@ -636,7 +636,7 @@ describe('the process tree the host uses', () => {
     });
 
     it('reaps only what it owns, and the injected tree reports none', () => {
-        // `descendantsOf` returns nothing here, so the owned set is empty and the reap is a
+        // `snapshot` reads an empty machine here, so the owned set is empty and the reap is a
         // no-op. That is the correct shape for a test: assert the call, not the carnage.
         const r = record();
         host.start(r, dir);

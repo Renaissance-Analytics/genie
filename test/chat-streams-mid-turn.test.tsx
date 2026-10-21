@@ -25,7 +25,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * "when the message closes". The scroller now follows `chatFollowKey`, which moves with the last message's length too.
  */
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 let dir: string;
 let host: SessionHost;
 let events: DriverEvents = {};

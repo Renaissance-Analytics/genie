@@ -21,7 +21,7 @@ import { chatSubscriptionId } from '../src/renderer/agent-detail.js';
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function open() {
     const dir = mkdtempSync(join(tmpdir(), 'genie2-yours-'));

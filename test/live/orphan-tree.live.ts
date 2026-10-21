@@ -1,40 +1,67 @@
 /**
- * THE REAL WALK, ON WINDOWS (Tynn #796): does the stop-time walk name a shell's late child WITH its parent, and does
- * killing the session's subtree from it leave nothing behind when the provider's own kill took only the cmd.exe?
+ * THE REAL STOP ON A BUSY MACHINE (hosting plan 1.1-1.3; lifecycle review §6 steps 1-4 and 7, in miniature). Run in a
+ * TEST VM, never on a desktop: `npx tsx test/live/orphan-tree.live.ts`. Prints PASS/FAIL lines; exits non-zero on any.
  *
- * Spawned exactly as prism-acp spawns a provider on Windows: `shell: true` → `cmd.exe /d /s /c "<command>"`. The child
- * here is `ping` (a long-lived stand-in that ignores stdin closing, as the orphaned provider did). Run in a test VM:
- * `npx tsx test/live/orphan-tree.live.ts`. Prints PASS/FAIL lines and exits non-zero on any FAIL.
+ * - Step 1, the cap must bite: 30 long-lived children are started under this process first (stand-ins for a desktop's
+ *   terminals and sites), so Genie has MORE than 24 descendants — the beta.32 reap refused at exactly this point.
+ * - The session's provider is spawned the way prism-acp spawns one on Windows: `shell: true` → `cmd.exe /d /s /c …`,
+ *   whose child (`ping` here, a stand-in that ignores stdin closing as the orphaned provider did) starts its own child.
+ *   The driver's kill is `child.kill()`: the cmd.exe only.
+ * - Stop must leave 0 of the session's processes (positive control: >= 2 counted under the shell before the stop) and
+ *   all 30 of the others.
  */
-import { spawn } from 'node:child_process';
-import { subtreeOf, systemProcessTree } from '../../src/core/process-tree.js';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { mintAgentId } from '../../src/core/identity.js';
+import { stillRunning, subtreeOf, systemProcessTree } from '../../src/core/process-tree.js';
+import { AgentSession } from '../../src/core/session.js';
+import { openDurableStore } from '../../src/core/thread-store.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (ok: boolean, what: string, detail: string) => { if (!ok) failed += 1; console.log(`${ok ? 'PASS' : 'FAIL'}  ${what} — ${detail}`); };
+const win = process.platform === 'win32';
+const longSleep = (n: number): string => (win ? `ping -n ${n} 127.0.0.1` : `sleep ${n}`);
 
-const child = spawn('ping -n 120 127.0.0.1', { shell: true, stdio: 'ignore' });
-const shellPid = child.pid!;
+// Step 1: a busy machine.
+const others: ChildProcess[] = [];
+for (let i = 0; i < 30; i++) others.push(spawn(win ? 'ping' : 'sleep', win ? ['-n', '600', '127.0.0.1'] : ['600'], { stdio: 'ignore', windowsHide: true }));
+await sleep(1500);
+const baseline = systemProcessTree.snapshot();
+const genieTree = baseline ? subtreeOf(baseline, baseline.filter((p) => p.pid === process.pid)).length - 1 : -1;
+check(genieTree > 24, 'STEP 1: this process has more than 24 descendants, so the old cap would bite', `descendants ${genieTree}`);
+
+const dir = mkdtempSync(join(tmpdir(), 'genie2-orphan-live-'));
+let provider: ChildProcess | null = null;
+const session = new AgentSession({
+    agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir),
+    driverFactory: () => ({
+        // A shell whose command starts a child that starts another: cmd.exe → cmd.exe → ping (or sh → sh → sleep).
+        start: () => { provider = spawn(win ? `cmd /c "${longSleep(600)}"` : `sh -c '${longSleep(600)}; true'`, { shell: true, stdio: 'ignore', windowsHide: true }); },
+        prompt: () => {},
+        kill: (signal) => { provider?.kill(signal); },
+        cliSessionId: null,
+    }),
+});
+session.start();
 await sleep(2000);
+const before = systemProcessTree.snapshot() ?? [];
+const shell = before.find((p) => p.pid === provider?.pid);
+const sessionTree = shell ? subtreeOf(before, [shell]) : [];
+check(sessionTree.length >= 2, 'POSITIVE CONTROL: the session tree is visible under its shell before the stop', sessionTree.map((p) => `${p.pid}(${p.name})`).join(', '));
 
-const edges = systemProcessTree.walk?.(process.pid) ?? [];
-const late = edges.filter((e) => e.ppid === shellPid).map((e) => e.pid);
-check(systemProcessTree.walk !== undefined, 'the system tree reports parents', `walk ${systemProcessTree.walk ? 'present' : 'ABSENT'}`);
-check(edges.some((e) => e.pid === shellPid && e.ppid === process.pid), 'the walk names the shell under Genie (positive control)', `shell ${shellPid}; edges ${JSON.stringify(edges)}`);
-check(late.length === 1, 'the walk names exactly ONE child under the shell, with the shell as its parent', `children of ${shellPid}: ${JSON.stringify(late)}`);
+const started = Date.now();
+const verdict = await session.stop();
+const after = systemProcessTree.snapshot() ?? [];
+const survivors = stillRunning(sessionTree, after);
+check(verdict.verified, 'the stop reports VERIFIED', JSON.stringify(verdict));
+check(survivors.length === 0, 'NOTHING of the session is left', `alive after stop: ${survivors.map((p) => `${p.pid}(${p.name})`).join(', ') || 'none'} (${Date.now() - started} ms)`);
+const othersAlive = others.filter((c) => after.some((p) => p.pid === c.pid)).length;
+check(othersAlive === 30, 'CONTROL: all 30 of the machine’s other processes are untouched', `${othersAlive} of 30 alive`);
 
-// What prism-acp's kill does on Windows: TerminateProcess on the cmd.exe only.
-const walked = edges.map((e) => e.pid);
-child.kill();
-await sleep(1000);
-const orphanAlive = (systemProcessTree.walk?.(process.pid) ?? []).length; // the orphan is no longer under us
-check(late.length === 1, 'the provider\'s kill alone left the child running (the bug)', `descendants reachable from Genie after cmd kill: ${orphanAlive}`);
-
-const result = systemProcessTree.killTree(subtreeOf(edges, [shellPid]), walked);
-await sleep(1000);
-const still = late.filter((pid) => { try { process.kill(pid, 0); return true; } catch { return false; } });
-check(result.refused === false && result.killed >= 1, 'the session subtree reap ran', JSON.stringify(result));
-check(still.length === 0, 'NOTHING is left: the late child is gone', `alive after reap: ${JSON.stringify(still)}`);
-
+for (const c of others) c.kill();
+rmSync(dir, { recursive: true, force: true });
 console.log(failed === 0 ? 'ORPHAN PROBE OK' : `ORPHAN PROBE FAILED (${failed})`);
 process.exit(failed === 0 ? 0 : 1);

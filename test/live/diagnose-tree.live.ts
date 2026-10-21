@@ -9,12 +9,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeDriver } from '@particle-academy/prism-acp';
-import { systemProcessTree } from '../../src/core/process-tree.js';
+import { subtreeOf, systemProcessTree } from '../../src/core/process-tree.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'genie2-diag-'));
 
 function snap(label: string): readonly number[] {
-    const pids = systemProcessTree.descendantsOf(process.pid);
+    const table = systemProcessTree.snapshot() ?? [];
+    const pids = subtreeOf(table, table.filter((p) => p.pid === process.pid)).map((p) => p.pid).filter((p) => p !== process.pid);
     console.log(`${label.padEnd(26)} ${pids.length} descendant(s): ${pids.join(', ') || '(none)'}`);
     return pids;
 }
@@ -48,7 +49,8 @@ async function main(): Promise<void> {
     console.log(`\nSURVIVORS after driver.kill: ${survivors.join(', ') || '(none)'}`);
 
     if (survivors.length > 0) {
-        systemProcessTree.killTree(survivors);
+        const table = systemProcessTree.snapshot() ?? [];
+        systemProcessTree.killTree(table.filter((p) => survivors.includes(p.pid)), table);
         await new Promise((r) => setTimeout(r, 2_000));
         const afterReap = snap('after killTree(survivors)');
         console.log(`\nstill alive after reap: ${afterReap.filter((p) => !before.includes(p)).join(', ') || '(none)'}`);

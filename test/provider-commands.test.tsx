@@ -79,7 +79,7 @@ describe('on the running session', () => {
         };
         return factory;
     };
-    const noTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie2-commands-'));
         host = new SessionHost({ userData: dir, driverFor, clock: () => 1_760_000_000_000, processTree: noTree });

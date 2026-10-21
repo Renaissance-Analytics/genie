@@ -41,7 +41,7 @@ function memoryStore(): SessionStore {
     return store as unknown as SessionStore;
 }
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 let dir: string;
 let events: DriverEvents = {};

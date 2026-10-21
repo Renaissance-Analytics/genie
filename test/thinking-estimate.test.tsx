@@ -31,7 +31,7 @@ describe('the wire', () => {
 describe('one thought, the latest estimate', () => {
     const dirs: string[] = [];
     afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-    const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
     it('the joined thought carries the newest estimate; a chunk without one keeps the last', () => {
         const dir = mkdtempSync(join(tmpdir(), 'genie2-estimate-'));

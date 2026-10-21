@@ -34,7 +34,7 @@ import { NO_TERMINALS } from '../src/renderer/bridge.js';
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const tempDir = () => { const d = mkdtempSync(join(tmpdir(), 'genie2-login-test-')); dirs.push(d); return d; };
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 describe('the provider’s own login', () => {
     it('Claude Code and Codex: their documented login and status commands; anything else has none (COUNTED)', () => {

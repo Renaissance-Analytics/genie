@@ -16,7 +16,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * `working` — and nothing announced again. The same listeners redraw Genie's Agent view, Dashboard and chat, which kept
  * showing a finished turn as Working until some unrelated event came along. The state is now set first, then announced.
  */
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const dirs: string[] = [];
 // Sessions and hosts whose thread writes may still be in flight when a test ends — every test here returns as soon as the
 // ledger or the state says so, before the rows are on disk. Removing the folders under those writes (a write re-creates

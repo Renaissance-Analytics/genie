@@ -27,7 +27,7 @@ afterEach(async () => {
     for (const h of hosts.splice(0)) h.stopAll();
     await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function host() {
     let events: DriverEvents = {};

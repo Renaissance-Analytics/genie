@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeProcessTree, type ProcessTreeIo } from '../src/core/process-tree.js';
+import { makeProcessTree, subtreeOf, type ProcessInfo, type ProcessTreeIo } from '../src/core/process-tree.js';
 
 /**
  * THE REAPER MUST NOT BE ABLE TO KILL SOMETHING IT DOES NOT OWN.
@@ -46,88 +46,72 @@ import { makeProcessTree, type ProcessTreeIo } from '../src/core/process-tree.js
  * run anywhere — which is the other half of the lesson.
  */
 
+/** pid -> parent, with start times in creation order; a pid listed under a parent started after it. */
 function fakeIo(tree: Record<number, number[]>) {
     const killed: number[] = [];
-    let enumerateThrows = false;
-
-    const descendants = (pid: number): number[] => {
-        if (enumerateThrows) throw new Error('WMI unavailable');
-        const out: number[] = [];
-        const walk = (p: number): void => {
-            for (const child of tree[p] ?? []) {
-                if (!out.includes(child)) {
-                    out.push(child);
-                    walk(child);
-                }
-            }
-        };
-        walk(pid);
-        return out;
+    let snapshotThrows = false;
+    let snapshots = 0;
+    let clock = 0;
+    const rows: ProcessInfo[] = [{ pid: 100, ppid: 1, started: clock++, name: 'Genie.exe' }];
+    const add = (parent: number): void => {
+        for (const child of tree[parent] ?? []) {
+            if (rows.some((r) => r.pid === child)) continue;
+            rows.push({ pid: child, ppid: parent, started: clock++, name: 'proc' });
+            add(child);
+        }
     };
-
+    add(100);
     const io: ProcessTreeIo = {
-        descendants,
+        snapshot: () => { snapshots += 1; if (snapshotThrows) throw new Error('WMI unavailable'); return [...rows]; },
         killOne: (pid) => { killed.push(pid); },
     };
-
-    return { io, killed, breakEnumeration: () => { enumerateThrows = true; } };
+    const row = (pid: number): ProcessInfo => rows.find((r) => r.pid === pid) ?? { pid, ppid: 100, started: 999, name: 'proc' };
+    return { io, killed, row, rows, snapshots: () => snapshots, breakSnapshot: () => { snapshotThrows = true; } };
 }
 
 describe('reaping only what we own', () => {
-    it('kills the pids it was given, when they really are ours', () => {
-        // The ordinary case, and the positive control for everything below: a reaper that
-        // refused everything would pass every safety test in this file and reap nothing.
-        const { io, killed } = fakeIo({ 100: [200, 201], 200: [300] });
-        const tree = makeProcessTree(io, () => 100);
+    it('kills the processes it was given, when the reading shows they really are them', () => {
+        // The positive control for everything below: a reaper that refused everything would pass every safety test.
+        const { io, killed, row, rows } = fakeIo({ 100: [200, 201], 200: [300] });
+        const tree = makeProcessTree(io);
 
-        tree.killTree([200, 201, 300]);
+        tree.killTree([200, 201, 300].map(row), rows);
 
         expect(killed.sort()).toEqual([200, 201, 300]);
     });
 
-    it('REFUSES a pid that is no longer our descendant', () => {
+    it('REFUSES a process that is not in the reading, or is a different process under the same pid', () => {
         /**
-         * The pid was ours when it was recorded and is not ours now — it exited and Windows
-         * handed its number to something else. Killing it would kill a stranger, and on this
-         * machine a stranger is another agent's work.
+         * The pid was ours when it was recorded and is not ours now — it exited and Windows handed its number to
+         * something else. Killing it would kill a stranger, and on this machine a stranger is another agent's work.
          */
-        const { io, killed } = fakeIo({ 100: [200] });
-        const tree = makeProcessTree(io, () => 100);
+        const { io, killed, row, rows } = fakeIo({ 100: [200, 201] });
+        const tree = makeProcessTree(io);
 
-        tree.killTree([200, 999]);
+        tree.killTree([row(200), row(999), { ...row(201), started: row(201).started + 7 }], rows);
 
         expect(killed).toEqual([200]);
     });
 
-    it('kills NOTHING when the enumeration fails', () => {
-        /**
-         * A walk that cannot run reports nothing, and nothing must never be read as "kill
-         * everything". The read-only side already treats an empty result as unverified rather
-         * than as proof a stop worked; this is the same rule on the destructive side.
-         */
-        const { io, killed, breakEnumeration } = fakeIo({ 100: [200] });
-        const tree = makeProcessTree(io, () => 100);
-        breakEnumeration();
+    it('a reading that could not be taken is `null`, never an empty machine', () => {
+        const { io, breakSnapshot } = fakeIo({ 100: [200] });
+        const tree = makeProcessTree(io);
+        breakSnapshot();
 
-        tree.killTree([200]);
-
-        expect(killed).toEqual([]);
+        expect(tree.snapshot()).toBeNull();
     });
 
     it('REFUSES an implausibly large reap rather than attempting it', () => {
         /**
-         * The blast-radius cap, and the one that would have saved the owner's morning.
-         *
-         * A session that spawned one provider asks to reap a handful of pids. If the walk says
-         * our subtree contains dozens, the walk is wrong — a recycled parent pointer has
-         * grafted somebody else's tree onto ours. That is precisely when killing is most
-         * destructive and least needed, so it does not happen.
+         * The blast-radius cap — on what ONE session asks to reap, never on how many processes the machine has. A
+         * session that spawned one provider asks for a handful of pids; dozens means the tree under it is not what it
+         * seems, and that is precisely when killing is most destructive and least needed.
          */
         const many = Array.from({ length: 60 }, (_, i) => 500 + i);
-        const { io, killed } = fakeIo({ 100: many });
-        const tree = makeProcessTree(io, () => 100);
+        const { io, killed, row, rows } = fakeIo({ 100: many });
+        const tree = makeProcessTree(io);
 
-        const result = tree.killTree(many);
+        const result = tree.killTree(many.map(row), rows);
 
         expect(killed).toEqual([]);
         expect(result.refused).toBe(true);
@@ -135,59 +119,75 @@ describe('reaping only what we own', () => {
     });
 
     it('still reaps a normal provider tree, which is what the cap must not break', () => {
-        // POSITIVE CONTROL for the cap. The measured real case is nine provider processes —
-        // well inside it. A cap that also refused this would have quietly disabled the reaper.
+        // POSITIVE CONTROL for the cap. The measured real case is nine provider processes — well inside it.
         const nine = [201, 202, 203, 204, 205, 206, 207, 208, 209];
-        const { io, killed } = fakeIo({ 100: nine });
-        const tree = makeProcessTree(io, () => 100);
+        const { io, killed, row, rows } = fakeIo({ 100: nine });
+        const tree = makeProcessTree(io);
 
-        const result = tree.killTree(nine);
+        const result = tree.killTree(nine.map(row), rows);
 
         expect(result.refused).toBe(false);
         expect(killed.sort()).toEqual(nine.sort());
     });
 
-    it('reports what it did, so a stop can say whether it was verified', () => {
-        // `stop()` must be able to distinguish "reaped three" from "reaped nothing because the
-        // scan failed". Returning a count is what lets it tell the truth about itself.
-        const { io } = fakeIo({ 100: [200, 201] });
-        const tree = makeProcessTree(io, () => 100);
+    it('is a no-op for an empty list, without reading the machine', () => {
+        const { io, snapshots, rows } = fakeIo({ 100: [200] });
+        const tree = makeProcessTree(io);
 
-        expect(tree.killTree([200, 201])).toMatchObject({ refused: false, killed: 2 });
-    });
-
-    it('is a no-op for an empty list, without enumerating at all', () => {
-        // A session that recorded no pids of its own — the common case, since the driver
-        // normally reaps everything itself — must not trigger a machine-wide process walk on
-        // every stop. That walk shells out to PowerShell.
-        let walks = 0;
-        const io: ProcessTreeIo = {
-            descendants: () => { walks += 1; return []; },
-            killOne: () => {},
-        };
-        const tree = makeProcessTree(io, () => 100);
-
-        tree.killTree([]);
-
-        expect(walks).toBe(0);
+        expect(tree.killTree([], rows)).toEqual({ killed: 0, refused: false });
+        expect(snapshots()).toBe(0);
     });
 });
 
-describe('the read-only instrument', () => {
-    it('reports our descendants at any depth', () => {
-        const { io } = fakeIo({ 100: [200], 200: [300], 300: [400] });
-        const tree = makeProcessTree(io, () => 100);
-
-        expect([...tree.descendantsOf(100)].sort()).toEqual([200, 300, 400]);
+describe('the subtree of a process, from one reading', () => {
+    it('reports every descendant at any depth', () => {
+        const { row, rows } = fakeIo({ 100: [200], 200: [300], 300: [400] });
+        expect(subtreeOf(rows, [row(200)]).map((p) => p.pid)).toEqual([200, 300, 400]);
     });
 
-    it('reports NOTHING when it cannot look, rather than claiming an empty machine', () => {
-        // The caller must not read this as "the stop worked". `stop()` treats an empty reap as
-        // unverified, which is the only honest reading.
-        const { io, breakEnumeration } = fakeIo({ 100: [200] });
-        const tree = makeProcessTree(io, () => 100);
-        breakEnumeration();
+    it('never grafts on a process that started BEFORE its claimed parent (a recycled parent pointer)', () => {
+        /**
+         * The incident at the top of this file: Windows recycles pids, so a process whose parent exited keeps a pointer
+         * that can now name a different, LIVE process. A child cannot have started before its parent; one that did is
+         * somebody else's, whatever its pointer says.
+         */
+        const { row, rows } = fakeIo({ 100: [200] });
+        const grafted: ProcessInfo = { pid: 777, ppid: 200, started: -5, name: 'svchost.exe' };
+        expect(subtreeOf([...rows, grafted], [row(200)]).map((p) => p.pid)).toEqual([200]);
+    });
 
-        expect(tree.descendantsOf(100)).toEqual([]);
+    it('a root that is not in the reading as the same process has no subtree', () => {
+        const { row, rows } = fakeIo({ 100: [200], 200: [300] });
+        expect(subtreeOf(rows, [{ ...row(200), started: 12345 }])).toEqual([]);
+    });
+});
+
+describe('reading the machine', () => {
+    it('Windows: one Get-CimInstance listing, the scan’s own PowerShell (and what it started) left out', async () => {
+        const { parseWin32Snapshot } = await import('../src/core/process-tree.js');
+        const out = ['self|500', '100|1|1000|Genie.exe', '200|100|1100|cmd.exe', '500|100|1200|powershell.exe', '501|500|1201|conhost.exe', '', 'garbage'].join('\r\n');
+        expect(parseWin32Snapshot(out, 100).map((p) => p.pid)).toEqual([100, 200]);
+        expect(parseWin32Snapshot(out, 100)[1]).toEqual({ pid: 200, ppid: 100, started: 1100, name: 'cmd.exe' });
+    });
+
+    it('a listing without Genie itself in it is not a reading (it throws, and the tree answers null)', async () => {
+        const { parseWin32Snapshot, parsePosixSnapshot } = await import('../src/core/process-tree.js');
+        expect(() => parseWin32Snapshot('self|5\r\n7|1|1|x.exe', 100)).toThrow();
+        expect(() => parsePosixSnapshot('    7     1 Tue Oct 20 12:00:00 2026 sleep\n', 100)).toThrow();
+    });
+
+    it('Linux/macOS: `ps -A -o pid=,ppid=,lstart=,comm=`, start time to the second, its own `ps` left out', async () => {
+        const { parsePosixSnapshot } = await import('../src/core/process-tree.js');
+        const out = [
+            '  100     1 Tue Oct 20 12:00:00 2026 electron',
+            '  200   100 Mon Oct  5 09:03:07 2026 claude',
+            '  300   100 Tue Oct 20 12:00:09 2026 ps',
+            '  400   200 Tue Oct 20 12:00:01 2026 /usr/bin/node',
+        ].join('\n');
+        const rows = parsePosixSnapshot(out, 100);
+        expect(rows.map((p) => p.pid)).toEqual([100, 200, 400]);
+        expect(rows[1]!.name).toBe('claude');
+        expect(rows[1]!.started).toBe(new Date(2026, 9, 5, 9, 3, 7).getTime());
+        expect(rows[2]!.started - rows[0]!.started).toBe(1_000);
     });
 });

@@ -118,7 +118,7 @@ describe('the reported model', () => {
             };
             return factory;
         };
-        const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+        const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
         const notice = (message: string, model?: string) => ({ sessionUpdate: 'notice', notice: { level: 'info', message }, ...(model ? { _meta: { 'particle.academy/model': model } } : {}) });
 
         beforeEach(() => { host = new SessionHost({ userData: dir, driverFor, clock: () => 1_760_000_000_000, processTree: noProcessTree }); });

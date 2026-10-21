@@ -18,7 +18,7 @@ import { AgentSession, LIMIT_RESUME_PROMPT, type DriverEvents, type SessionDrive
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
 const T0 = Date.UTC(2026, 9, 17, 3, 0, 0);
 
 function open() {

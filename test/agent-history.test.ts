@@ -28,7 +28,7 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-history-'));
 // (2026-10-15; an afterEach error is reported as the test's) — a remove racing a create fails ENOTEMPTY. See
 // test/thread-writes-settle.test.ts.
 afterEach(async () => { await Promise.all(hosts.map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
-const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function host() {
     let events: DriverEvents = {};

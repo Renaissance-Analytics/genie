@@ -27,7 +27,7 @@ afterAll(() => {
     for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
-const noProcessTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function fakeDriver() {
     let events: DriverEvents = {};

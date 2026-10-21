@@ -43,7 +43,7 @@ describe('a session starts with them', () => {
     let dir: string;
     beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-sesmcp-')); });
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
-    const tree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
     it('the driver factory is given the agent\'s servers; without the port it is given none (positive control)', () => {
         const seen: unknown[] = [];

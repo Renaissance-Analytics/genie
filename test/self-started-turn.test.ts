@@ -21,7 +21,7 @@ import { openDurableStore } from '../src/core/thread-store.js';
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
-const noTree: ProcessTree = { descendantsOf: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function open() {
     const dir = mkdtempSync(join(tmpdir(), 'genie2-selfturn-'));
