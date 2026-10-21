@@ -9,7 +9,7 @@ import type { Fidelity } from '../../core/dashboard-view.js';
 import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
-import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
+import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { TurnStop } from './TurnStop.js';
 
 /**
@@ -573,7 +573,7 @@ export function ChatFlyout({
                  * 5.39.0 (react-fancy#32, asked for by this composer): a quiet footer — the paperclip and the send arrow
                  * as icons, the shortcut in the send button's tooltip instead of an inline hint — and the meter only near
                  * the limit, on the agent's REAL context (`contextUsage`), or not at all when that was never reported.
-                 * A long paste (500+ characters) is a pill where it was pasted, expanded in place when sent; a pasted
+                 * A paste of PASTE_PILL_CHARS+ characters is a pill where it was pasted, expanded in place when sent; a pasted
                  * image is a pill too, and reaches `onSubmit` as a file — sent as an image block, its marker kept in
                  * the text and the file named after it (`core/composer.ts`).
                  */}
@@ -598,7 +598,7 @@ export function ChatFlyout({
                             : { budgetTokens: 0, meter: 'hidden' as const })}
                         attachButton="icon"
                         sendButton="icon"
-                        pasteThreshold={500}
+                        pasteThreshold={PASTE_PILL_CHARS}
                         pasteImages
                         previewChars={30}
                         commands={toPromptCmds(commands)}
