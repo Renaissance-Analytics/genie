@@ -5,6 +5,7 @@ import { moreGenieTools, type MoreToolsDeps } from './mcp-tools-more.js';
 import { agentTools, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { pluginTools, type PluginToolsDeps } from './mcp-tools-plugins.js';
 import { processTools, type ProcessToolsDeps } from './mcp-tools-processes.js';
+import { flowTools, type FlowToolsDeps } from './mcp-tools-flows.js';
 import { workspaceTabsTools, type WorkspaceTabsToolDeps } from './mcp-tools-workspace-tabs.js';
 import { pagesTools, type PagesToolDeps } from './mcp-tools-pages.js';
 
@@ -20,6 +21,7 @@ export interface AllToolsDeps {
     readonly attention: AttentionToolsDeps;
     readonly hosting: HostingToolsDeps;
     readonly processes: ProcessToolsDeps;
+    readonly flows: FlowToolsDeps;
     readonly plugins: PluginToolsDeps;
     /** `createAgent`, visible to a workspace's default agent only (mcp-tools-agents.ts). Absent = not registered (doctor mode). */
     readonly agents?: AgentToolsDeps;
@@ -30,5 +32,5 @@ export interface AllToolsDeps {
 }
 
 export function allGenieTools(deps: AllToolsDeps): Registration[] {
-    return [...genieTools(deps.genie), ...moreGenieTools(deps.more), ...attentionTools(deps.attention), ...hostingTools(deps.hosting), ...processTools(deps.processes), ...(deps.agents ? agentTools(deps.agents) : []), ...(deps.workspaceTabs ? workspaceTabsTools(deps.workspaceTabs) : []), ...(deps.pages ? pagesTools(deps.pages) : []), ...pluginTools(deps.plugins)];
+    return [...genieTools(deps.genie), ...moreGenieTools(deps.more), ...attentionTools(deps.attention), ...hostingTools(deps.hosting), ...processTools(deps.processes), ...flowTools(deps.flows), ...(deps.agents ? agentTools(deps.agents) : []), ...(deps.workspaceTabs ? workspaceTabsTools(deps.workspaceTabs) : []), ...(deps.pages ? pagesTools(deps.pages) : []), ...pluginTools(deps.plugins)];
 }

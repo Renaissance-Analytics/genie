@@ -19,6 +19,7 @@ function deps(): AllToolsDeps {
         attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
+        flows: { resolveCaller: () => null, flows: null },
         plugins: { plugins: { tools: () => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }], guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller: () => null },
     };
 }
@@ -28,7 +29,7 @@ describe('terminalId', () => {
     const schemaOf = (d: (typeof tools)[number]) => d.inputSchema as { required?: string[]; properties?: Record<string, { description?: string }> };
 
     it('is required by NO tool — counted, the offenders named (the control: tools that take it exist)', () => {
-        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(14); // thirteen Genie tools (no runAgent sidecar since 2026-10-19; plan since 2026-10-20) + the plugin tool
+        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(15); // fourteen Genie tools (no runAgent sidecar since 2026-10-19; plan since 2026-10-20; flows since 2026-10-21) + the plugin tool
         expect(tools.filter((d) => schemaOf(d).required?.includes('terminalId')).map((d) => d.name)).toEqual([]);
     });
 
