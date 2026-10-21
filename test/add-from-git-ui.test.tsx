@@ -1,22 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AddFromGitForm, AddWorkspacePreview } from '../src/renderer/components/AddWorkspacePreview.js';
+import { AddWorkspacePreview } from '../src/renderer/components/AddWorkspacePreview.js';
 
 /**
- * ADD FROM GIT ON SCREEN (§6.1). A small form: the URL, and one button that picks the parent folder on the
- * host and shows the plan. The preview card names the URL and the folder and lists the clone first,
- * marked as a write; Confirm does the plan, Cancel does nothing.
+ * ADD FROM GIT ON SCREEN (§6.1). The preview card names the URL and the folder and lists the clone first, marked as a
+ * write; Confirm does the plan, Cancel does nothing. (The form itself now clones to a staging folder for the wizard —
+ * Add workspace parity item 7 — and is tested with the wizard, test/add-workspace-wizard-ui.test.tsx.)
  */
-
-describe('AddFromGitForm', () => {
-    it('takes a URL and offers to pick the parent folder and preview; nothing else', () => {
-        const html = renderToStaticMarkup(<AddFromGitForm onPreview={() => {}} onCancel={() => {}} />);
-        expect(html).toContain('data-form="add-from-git"');
-        expect(html).toMatch(/name="url"/);
-        expect(html).toContain('data-action="pick-parent-and-preview"');
-        expect(html).toMatch(/Nothing is cloned until you confirm the plan/);
-    });
-});
 
 describe('AddWorkspacePreview for a git source', () => {
     it('names the URL and the folder, lists the clone first as a write, offers Confirm', () => {

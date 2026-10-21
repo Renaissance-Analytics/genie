@@ -66,7 +66,11 @@ describe('the capability table', () => {
         // 64 since `activity` (beta.33 item 10: the Dashboard's lanes read every agent's activity feed): a read, workspace-scoped.
         // 65 since `agents.setDrivePages` (May drive pages, browser rebuild step 7): a write, agent-scoped.
         // 66 since `agents.models` (the provider's own model list for an agent's picker, 2026-10-21): a read, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(66);
+        // 71 since the Open existing / Import from Git wizard (Add workspace parity item 7, 2026-10-21): `workspaces.readSource`
+        // (a read) and `stageFromGit`, `registerExisting`, `buildEnvelope`, `discardStaged` (writes) — all owner-only on a host.
+        expect(REMOTE_METHODS.length).toBe(71);
+        expect(capabilityOf('workspaces.readSource')).toBe('read');
+        for (const m of ['workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged'] as const) expect(capabilityOf(m)).toBe('write');
         expect(capabilityOf('agents.setDrivePages')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setDrivePages');
         expect(capabilityOf('activity')).toBe('read');

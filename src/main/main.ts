@@ -59,6 +59,9 @@ import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
+import { nodeEnvelopePorts } from './envelope-fs.js';
+import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit } from './envelope-wizard-host.js';
+import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -1483,7 +1486,8 @@ async function boot(): Promise<void> {
             // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
             gitClone: (url, into, branch) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined, branch),
             // A Tynn project's repositories as submodules of the envelope Genie makes for it, with the same credential.
-            gitAddSubmodule: (envelope, url, at, branch) => gitAddSubmodule(envelope, url, at, branch, githubAccount?.cloneAuth(url) ?? undefined),
+            // The envelope wizard's Local sources (a folder on disk) need protocol.file.allow, carried the same way (git-ports.ts).
+            gitAddSubmodule: (envelope, url, at, branch, local) => gitAddSubmodule(envelope, url, at, branch, githubAccount?.cloneAuth(url) ?? undefined, local),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
@@ -1519,6 +1523,9 @@ async function boot(): Promise<void> {
             return typeof v === 'string' ? v : '';
         },
     };
+    // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
+    // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
+    const envelopePorts = nodeEnvelopePorts();
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
     const repoOps: RepoOpsPorts = {
         fs: {
@@ -1573,6 +1580,14 @@ async function boot(): Promise<void> {
         (typeof rawUrl === 'string' && typeof rawParent === 'string' && rawParent !== '' ? previewGit(rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
         (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
+    // OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7, Genie 1's wizard): read the source, then build a
+    // NEW <slug>.agi beside it — the source is never written. Submodules from a GitHub remote clone with the sign-in's
+    // credential, through git's environment, as the clone does.
+    ipcMain.handle('genie:workspace-read-source', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? readSource(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'no folder picked' }));
+    ipcMain.handle('genie:workspace-stage-git', (_event, raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? stageFromGit(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'give a git URL' }));
+    ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
+    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown) => { const plan = parseEnvelopePlan(raw); return plan ? buildEnvelope(workspaceOps, envelopePorts, plan) : { ok: false, reason: 'that is not a plan Genie can build' }; });
+    ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
     ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
@@ -1774,6 +1789,11 @@ async function boot(): Promise<void> {
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
                 create: (name, parent) => createWorkspaceOp(workspaceOps, name, parent),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
+                readSource: (path) => readSource(workspaceOps, envelopePorts, path),
+                stageFromGit: (url) => stageFromGit(workspaceOps, envelopePorts, url),
+                registerExisting: (path) => registerExisting(workspaceOps, path),
+                buildEnvelope: (raw) => { const plan = parseEnvelopePlan(raw); return plan ? buildEnvelope(workspaceOps, envelopePorts, plan) : Promise.resolve({ ok: false, reason: 'that is not a plan Genie can build' }); },
+                discardStaged: (path) => discardStaged(envelopePorts, path),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
